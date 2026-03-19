@@ -365,6 +365,28 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError):
             await client.refresh_token(refresh_token="some-refresh")
 
+    async def test_refresh_custom_permanent_error_code(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=400,
+            json={"error": "token_revoked", "error_description": "Token was revoked"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config, permanent_error_codes={"token_revoked"})
+        with pytest.raises(PermanentOAuthError, match="token_revoked"):
+            await client.refresh_token(refresh_token="revoked-refresh")
+
+    async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=400,
+            json={"error": "invalid_grant", "error_description": "Token expired"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config, permanent_error_codes={"custom_error"})
+        with pytest.raises(PermanentOAuthError, match="invalid_grant"):
+            await client.refresh_token(refresh_token="expired-refresh")
+
 
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
