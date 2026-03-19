@@ -1,5 +1,5 @@
 [project]
-name = "any-auth"
+name = "apron-auth"
 dynamic = ["version"]
 description = "Stateless OAuth 2.0 protocol library with PKCE, token refresh, and provider-specific revocation."
 readme = "README.md"

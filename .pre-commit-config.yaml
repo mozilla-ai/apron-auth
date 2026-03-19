@@ -22,7 +22,7 @@ repos:
     hooks:
       - id: ty-check
         name: ty
-        entry: uvx ty check src/any_auth --python .venv
+        entry: uvx ty check src/apron_auth --python .venv
         language: system
         pass_filenames: false
         types: [python]

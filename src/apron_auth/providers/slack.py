@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from any_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig
 
 if TYPE_CHECKING:
-    from any_auth.protocols import RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 class SlackRevocationHandler:

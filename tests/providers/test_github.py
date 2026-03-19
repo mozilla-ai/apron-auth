@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from pytest_httpx import HTTPXMock
 
-from any_auth.models import ProviderConfig
-from any_auth.protocols import RevocationHandler
+from apron_auth.models import ProviderConfig
+from apron_auth.protocols import RevocationHandler
 
 
 class TestGitHubPreset:
     def test_returns_config_and_handler(self):
-        from any_auth.providers.github import preset
+        from apron_auth.providers.github import preset
 
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(handler, RevocationHandler)
 
     def test_config_has_correct_endpoints(self):
-        from any_auth.providers.github import preset
+        from apron_auth.providers.github import preset
 
         config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert config.authorize_url == "https://github.com/login/oauth/authorize"
@@ -26,7 +26,7 @@ class TestGitHubPreset:
 class TestGitHubRevocationHandler:
     async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=204)
-        from any_auth.providers.github import preset
+        from apron_auth.providers.github import preset
 
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         result = await handler.revoke("access-abc", config)

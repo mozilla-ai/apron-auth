@@ -3,8 +3,8 @@ from __future__ import annotations
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from any_auth.models import OAuthPendingState, ProviderConfig
-from any_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
+from apron_auth.models import OAuthPendingState, ProviderConfig
+from apron_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
 
 
 def _make_config(**overrides: object) -> ProviderConfig:

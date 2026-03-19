@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from any_auth.scopes import join_scopes, parse_scope
+from apron_auth.scopes import join_scopes, parse_scope
 
 
 class TestParseScope:

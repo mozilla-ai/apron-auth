@@ -1,8 +1,8 @@
-# any-auth
+# apron-auth
 
 Stateless OAuth 2.0 protocol library with PKCE, token refresh, and provider-specific revocation.
 
-## What is any-auth?
+## What is apron-auth?
 
 Provider-specific OAuth knowledge — endpoints, auth methods, PKCE quirks, error classification, and revocation — encoded as a library so your application doesn't have to maintain it.
 
@@ -14,16 +14,16 @@ Provider-specific OAuth knowledge — endpoints, auth methods, PKCE quirks, erro
 | Auth method handling | `client_secret_post` vs `client_secret_basic` — picked from your config and handled by authlib under the hood.                            |
 | PKCE (S256)          | Generated automatically when the provider supports it, no setup needed.                                                                   |
 
-any-auth is stateless. It doesn't store tokens, manage sessions, or hold database connections — you bring your own storage, any-auth handles the protocol.
+apron-auth is stateless. It doesn't store tokens, manage sessions, or hold database connections — you bring your own storage, apron-auth handles the protocol.
 
 ## Installation
 
 ```bash
 # via uv
-uv add any-auth
+uv add apron-auth
 
 # via pip
-pip install any-auth
+pip install apron-auth
 ```
 
 Requires Python 3.11+.
@@ -35,7 +35,7 @@ Requires Python 3.11+.
 Presets bundle the endpoints, auth method, PKCE config, and revocation handler for a given provider into a single call.
 
 ```python
-from any_auth.providers import google
+from apron_auth.providers import google
 
 config, revocation_handler = google.preset(
     client_id="your-client-id",
@@ -44,10 +44,10 @@ config, revocation_handler = google.preset(
 )
 ```
 
-If you use [any-tool](https://github.com/mozilla-ai/any-tool), scopes come from capability groups instead of being hardcoded:
+If you use [apron-tools](https://github.com/mozilla-ai/apron-tools), scopes come from capability groups instead of being hardcoded:
 
 ```python
-from any_tool.providers.google.gmail.scopes import CAPABILITY_GROUP as GMAIL
+from apron_tools.providers.google.gmail.scopes import CAPABILITY_GROUP as GMAIL
 
 config, revocation_handler = google.preset(
     client_id="your-client-id",
@@ -62,7 +62,7 @@ If your provider doesn't have a preset, configure it directly.
 
 ```python
 from pydantic import SecretStr
-from any_auth import ProviderConfig
+from apron_auth import ProviderConfig
 
 config = ProviderConfig(
     client_id="your-client-id",
@@ -78,7 +78,7 @@ config = ProviderConfig(
 Build the URL to redirect the user to. State and PKCE are included automatically.
 
 ```python
-from any_auth import OAuthClient
+from apron_auth import OAuthClient
 
 client = OAuthClient(config)
 url, pending_state = await client.get_authorization_url(
@@ -104,10 +104,10 @@ print(tokens.refresh_token)
 
 ### Token refresh
 
-Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). any-auth tells you which.
+Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.
 
 ```python
-from any_auth import PermanentOAuthError
+from apron_auth import PermanentOAuthError
 
 try:
     tokens = await client.refresh_token(tokens.refresh_token)
@@ -139,7 +139,7 @@ await client.revoke_token(tokens.access_token)
 If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol.
 
 ```python
-from any_auth import StateStore, OAuthPendingState
+from apron_auth import StateStore, OAuthPendingState
 
 class MyStateStore:
     async def save(self, state: OAuthPendingState) -> None:

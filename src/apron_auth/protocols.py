@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import httpx
 
 if TYPE_CHECKING:
-    from any_auth.models import OAuthPendingState, ProviderConfig
+    from apron_auth.models import OAuthPendingState, ProviderConfig
 
 
 @runtime_checkable

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from any_auth.pkce import generate_code_challenge, generate_code_verifier
+from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 
 
 def test_verifier_length():
