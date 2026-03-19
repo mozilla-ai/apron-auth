@@ -23,7 +23,7 @@ def test_verifier_uniqueness():
 
 
 def test_challenge_is_s256():
-    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+    verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"  # pragma: allowlist secret
     challenge = generate_code_challenge(verifier)
     expected_digest = hashlib.sha256(verifier.encode("utf-8")).digest()
     expected = base64.urlsafe_b64encode(expected_digest).decode("utf-8").rstrip("=")

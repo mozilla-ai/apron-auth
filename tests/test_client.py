@@ -4,12 +4,19 @@ import time
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
 from any_auth.client import OAuthClient
-import httpx
-from any_auth.errors import ConfigurationError, PermanentOAuthError, RevocationError, StateError, TokenExchangeError, TokenRefreshError
+from any_auth.errors import (
+    ConfigurationError,
+    PermanentOAuthError,
+    RevocationError,
+    StateError,
+    TokenExchangeError,
+    TokenRefreshError,
+)
 from any_auth.models import OAuthPendingState, ProviderConfig, TokenSet
 
 

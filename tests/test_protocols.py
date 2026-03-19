@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 

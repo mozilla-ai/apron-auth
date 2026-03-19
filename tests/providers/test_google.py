@@ -34,7 +34,9 @@ class TestGooglePreset:
         from any_auth.providers.google import preset
 
         config, _ = preset(
-            client_id="gid", client_secret="gsecret", scopes=["openid"],
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["openid"],
             extra_params={"prompt": "select_account"},
         )
         assert config.extra_params["prompt"] == "select_account"
@@ -44,7 +46,9 @@ class TestGooglePreset:
         from any_auth.providers.google import preset
 
         config, _ = preset(
-            client_id="gid", client_secret="gsecret", scopes=["openid"],
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["openid"],
             redirect_uri="https://custom.example.com/callback",
         )
         assert config.redirect_uri == "https://custom.example.com/callback"

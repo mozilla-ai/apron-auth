@@ -25,7 +25,9 @@ select = [
     "D",
 ]
 
-ignore = []
+ignore = [
+    "D107",  # Missing docstring in __init__ — class docstring suffices.
+]
 
 unfixable = [
     "B",
