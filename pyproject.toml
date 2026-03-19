@@ -1,0 +1,51 @@
+[project]
+name = "any-auth"
+dynamic = ["version"]
+description = "Stateless OAuth 2.0 protocol library with PKCE, token refresh, and provider-specific revocation."
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "authlib>=1.3",
+    "httpx>=0.27",
+    "pydantic>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    { include-group = "lint" },
+    { include-group = "tests" },
+]
+lint = [
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.4",
+    "ty>=0.0.23",
+]
+tests = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-httpx>=0.35.0",
+    "setuptools>=82.0",
+    "setuptools-scm[toml]>=9.2",
+]
+
+[build-system]
+requires = ["setuptools>=48", "setuptools_scm[toml]>=6.3.1"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests", "tests.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.setuptools_scm]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: tests that call real OAuth providers (require credentials)",
+]
