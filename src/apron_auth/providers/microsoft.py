@@ -6,10 +6,10 @@ from typing import TYPE_CHECKING
 
 from pydantic import SecretStr
 
-from any_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig
 
 if TYPE_CHECKING:
-    from any_auth.protocols import RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 def preset(

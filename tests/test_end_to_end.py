@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from any_auth import (
+from apron_auth import (
     ConfigurationError,
     OAuthClient,
     OAuthError,
@@ -116,7 +116,7 @@ class TestPublicApiExports:
         assert ConfigurationError is not None
 
     def test_provider_presets_importable(self):
-        from any_auth.providers import (
+        from apron_auth.providers import (
             atlassian,
             github,
             google,

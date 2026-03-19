@@ -8,8 +8,8 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from any_auth.client import OAuthClient
-from any_auth.errors import (
+from apron_auth.client import OAuthClient
+from apron_auth.errors import (
     ConfigurationError,
     PermanentOAuthError,
     RevocationError,
@@ -17,7 +17,7 @@ from any_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from any_auth.models import OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import OAuthPendingState, ProviderConfig, TokenSet
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -390,7 +390,7 @@ class TestRefreshToken:
 
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
-        from any_auth.protocols import StandardRevocationHandler
+        from apron_auth.protocols import StandardRevocationHandler
 
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config(revocation_url="https://provider.example.com/revoke")

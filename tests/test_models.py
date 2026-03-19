@@ -5,7 +5,7 @@ import time
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from any_auth.models import OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import OAuthPendingState, ProviderConfig, TokenSet
 
 
 class TestProviderConfig:

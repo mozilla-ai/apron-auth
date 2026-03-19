@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pytest_httpx import HTTPXMock
 
-from any_auth.models import ProviderConfig
-from any_auth.protocols import RevocationHandler
+from apron_auth.models import ProviderConfig
+from apron_auth.protocols import RevocationHandler
 
 
 class TestGooglePreset:
     def test_returns_config_and_handler(self):
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, handler = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         assert isinstance(config, ProviderConfig)
@@ -16,7 +16,7 @@ class TestGooglePreset:
         assert isinstance(handler, RevocationHandler)
 
     def test_config_has_correct_endpoints(self):
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         assert config.authorize_url == "https://accounts.google.com/o/oauth2/v2/auth"
@@ -24,14 +24,14 @@ class TestGooglePreset:
         assert config.revocation_url == "https://oauth2.googleapis.com/revoke"
 
     def test_extra_params_include_offline_access(self):
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         assert config.extra_params["access_type"] == "offline"
         assert config.extra_params["prompt"] == "consent"
 
     def test_extra_params_can_be_overridden(self):
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, _ = preset(
             client_id="gid",
@@ -43,7 +43,7 @@ class TestGooglePreset:
         assert config.extra_params["access_type"] == "offline"
 
     def test_redirect_uri_override(self):
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, _ = preset(
             client_id="gid",
@@ -57,7 +57,7 @@ class TestGooglePreset:
 class TestGoogleRevocationHandler:
     async def test_revokes_via_post_with_query_param(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=200)
-        from any_auth.providers.google import preset
+        from apron_auth.providers.google import preset
 
         config, handler = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         result = await handler.revoke("access-abc", config)

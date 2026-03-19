@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from any_auth.errors import (
+from apron_auth.errors import (
     ConfigurationError,
     OAuthError,
     PermanentOAuthError,

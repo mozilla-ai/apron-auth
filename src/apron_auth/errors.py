@@ -1,10 +1,10 @@
-"""Exception hierarchy for any-auth OAuth operations."""
+"""Exception hierarchy for apron-auth OAuth operations."""
 
 from __future__ import annotations
 
 
 class OAuthError(Exception):
-    """Base exception for all any-auth errors."""
+    """Base exception for all apron-auth errors."""
 
 
 class TokenExchangeError(OAuthError):

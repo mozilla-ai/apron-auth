@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
-from any_auth.errors import (
+from apron_auth.errors import (
     ConfigurationError,
     PermanentOAuthError,
     RevocationError,
@@ -17,14 +17,14 @@ from any_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from any_auth.models import OAuthPendingState, TokenSet
-from any_auth.pkce import generate_code_challenge, generate_code_verifier
-from any_auth.protocols import StandardRevocationHandler
-from any_auth.scopes import join_scopes
+from apron_auth.models import OAuthPendingState, TokenSet
+from apron_auth.pkce import generate_code_challenge, generate_code_verifier
+from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
-    from any_auth.models import ProviderConfig
-    from any_auth.protocols import RevocationHandler, StateStore
+    from apron_auth.models import ProviderConfig
+    from apron_auth.protocols import RevocationHandler, StateStore
 
 
 class _TokenEndpointError(Exception):
