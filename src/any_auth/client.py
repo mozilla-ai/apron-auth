@@ -38,17 +38,29 @@ class _TokenEndpointError(Exception):
 class OAuthClient:
     """Stateless OAuth 2.0 client for authorization code flows."""
 
-    _PERMANENT_ERROR_CODES = frozenset({"invalid_grant", "unauthorized_client", "invalid_client"})
+    DEFAULT_PERMANENT_ERROR_CODES = frozenset({"invalid_grant", "unauthorized_client", "invalid_client"})
 
     def __init__(
         self,
         config: ProviderConfig,
         state_store: StateStore | None = None,
         revocation_handler: RevocationHandler | None = None,
+        permanent_error_codes: set[str] | None = None,
     ) -> None:
+        """Create an OAuth client.
+
+        Args:
+            config: Provider endpoints, credentials, and behavior.
+            state_store: Optional persistence for OAuth state across requests.
+            revocation_handler: Optional provider-specific token revocation.
+            permanent_error_codes: Additional OAuth error codes that should be
+                treated as irrecoverable during token refresh. These merge
+                with, rather than replace, DEFAULT_PERMANENT_ERROR_CODES.
+        """
         self._config = config
         self._state_store = state_store
         self._revocation_handler = revocation_handler
+        self._permanent_error_codes = self.DEFAULT_PERMANENT_ERROR_CODES | (permanent_error_codes or set())
 
     async def get_authorization_url(
         self,
@@ -153,7 +165,7 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            if exc.error_code in self._PERMANENT_ERROR_CODES:
+            if exc.error_code in self._permanent_error_codes:
                 raise PermanentOAuthError(str(exc)) from exc
             raise TokenRefreshError(str(exc)) from exc
         except Exception as exc:
