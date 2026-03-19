@@ -12,7 +12,7 @@ test:
 
 .PHONY: test-integration
 test-integration:
-	@ANY_AUTH_INTEGRATION_TESTS=1 uv run -m pytest tests -m integration -v
+	@APRON_AUTH_INTEGRATION_TESTS=1 uv run -m pytest tests -m integration -v
 
 .PHONY: lint
 lint:
