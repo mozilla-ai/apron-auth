@@ -186,7 +186,12 @@ class OAuthClient:
         if handler is None:
             handler = StandardRevocationHandler()
 
-        result = await handler.revoke(token, self._config)
+        try:
+            result = await handler.revoke(token, self._config)
+        except RevocationError:
+            raise
+        except Exception as exc:
+            raise RevocationError(str(exc)) from exc
         if not result:
             msg = "Token revocation failed"
             raise RevocationError(msg)
