@@ -418,3 +418,26 @@ class TestRevokeToken:
         client = OAuthClient(config=config)
         with pytest.raises(RevocationError):
             await client.revoke_token(token="access-token")
+
+    async def test_revocation_handler_exception_wrapped(self):
+        class BrokenHandler:
+            async def revoke(self, token: str, config) -> bool:
+                msg = "something unexpected"
+                raise RuntimeError(msg)
+
+        config = _make_config(revocation_url="https://provider.example.com/revoke")
+        client = OAuthClient(config=config, revocation_handler=BrokenHandler())
+        with pytest.raises(RevocationError, match="something unexpected") as exc_info:
+            await client.revoke_token(token="access-token")
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+    async def test_revocation_error_not_double_wrapped(self):
+        class ErrorHandler:
+            async def revoke(self, token: str, config) -> bool:
+                raise RevocationError("handler error")
+
+        config = _make_config(revocation_url="https://provider.example.com/revoke")
+        client = OAuthClient(config=config, revocation_handler=ErrorHandler())
+        with pytest.raises(RevocationError, match="handler error") as exc_info:
+            await client.revoke_token(token="access-token")
+        assert exc_info.value.__cause__ is None

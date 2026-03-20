@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import httpx
+import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth.errors import RevocationError
 from apron_auth.models import OAuthPendingState, ProviderConfig
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
 
@@ -58,3 +61,42 @@ class TestStandardRevocationHandler:
         handler = StandardRevocationHandler()
         result = await handler.revoke("bad-token", config)
         assert result is False
+
+    async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config()
+        client = httpx.AsyncClient()
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        assert not client.is_closed
+        await client.aclose()
+
+    async def test_failed_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
+        config = _make_config()
+        client = httpx.AsyncClient()
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("bad-token", config)
+        assert result is False
+        assert not client.is_closed
+        await client.aclose()
+
+    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        config = _make_config()
+        handler = StandardRevocationHandler()
+        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+            await handler.revoke("access-token-abc", config)
+        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+    async def test_network_error_with_injected_client(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        config = _make_config()
+        client = httpx.AsyncClient()
+        handler = StandardRevocationHandler(client=client)
+        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+            await handler.revoke("access-token-abc", config)
+        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert not client.is_closed
+        await client.aclose()

@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 
+from apron_auth.errors import RevocationError
+
 if TYPE_CHECKING:
     from apron_auth.models import OAuthPendingState, ProviderConfig
 
@@ -50,15 +52,34 @@ class RevocationHandler(Protocol):
 class StandardRevocationHandler:
     """RFC 7009 token revocation via POST with token in form body."""
 
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
+
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token using standard RFC 7009 POST."""
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
+        revocation_url = config.revocation_url
+        if self._client is not None:
+            return await self._send(self._client, token, revocation_url, config)
         async with httpx.AsyncClient() as client:
+            return await self._send(client, token, revocation_url, config)
+
+    async def _send(
+        self,
+        client: httpx.AsyncClient,
+        token: str,
+        revocation_url: str,
+        config: ProviderConfig,
+    ) -> bool:
+        """Send the revocation request and return success status."""
+        try:
             response = await client.post(
-                config.revocation_url,
+                revocation_url,
                 data={"token": token},
                 auth=(config.client_id, config.client_secret.get_secret_value()),
             )
+        except httpx.RequestError as exc:
+            raise RevocationError(str(exc)) from exc
         return response.is_success
