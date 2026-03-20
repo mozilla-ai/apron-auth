@@ -12,7 +12,16 @@ if TYPE_CHECKING:
 
 @runtime_checkable
 class StateStore(Protocol):
-    """Caller provides persistence for OAuth state."""
+    """Caller provides persistence for OAuth state.
+
+    Implementations are responsible for expiring stale entries.
+    Each OAuthPendingState carries a created_at timestamp that
+    implementations should use to enforce a maximum age (typically
+    under 10 minutes for OAuth authorization flows).
+
+    See MemoryStateStore for a reference implementation with
+    automatic expiry.
+    """
 
     async def save(self, state: OAuthPendingState) -> None:
         """Store pending state during authorization URL generation."""

@@ -5,6 +5,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth import (
     ConfigurationError,
+    MemoryStateStore,
     OAuthClient,
     OAuthError,
     OAuthPendingState,
@@ -19,19 +20,6 @@ from apron_auth import (
     TokenRefreshError,
     TokenSet,
 )
-
-
-class MemoryStateStore:
-    """In-memory StateStore for testing."""
-
-    def __init__(self) -> None:
-        self._states: dict[str, OAuthPendingState] = {}
-
-    async def save(self, state: OAuthPendingState) -> None:
-        self._states[state.state] = state
-
-    async def consume(self, state_key: str) -> OAuthPendingState | None:
-        return self._states.pop(state_key, None)
 
 
 class TestFullOAuthFlow:
@@ -105,6 +93,7 @@ class TestPublicApiExports:
         assert TokenSet is not None
         assert OAuthPendingState is not None
         assert StateStore is not None
+        assert MemoryStateStore is not None
         assert RevocationHandler is not None
         assert StandardRevocationHandler is not None
         assert OAuthError is not None
