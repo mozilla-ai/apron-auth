@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
@@ -58,3 +59,23 @@ class TestStandardRevocationHandler:
         handler = StandardRevocationHandler()
         result = await handler.revoke("bad-token", config)
         assert result is False
+
+    async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config()
+        client = httpx.AsyncClient()
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        assert not client.is_closed
+        await client.aclose()
+
+    async def test_failed_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
+        config = _make_config()
+        client = httpx.AsyncClient()
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("bad-token", config)
+        assert result is False
+        assert not client.is_closed
+        await client.aclose()
