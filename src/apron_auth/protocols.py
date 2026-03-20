@@ -60,22 +60,23 @@ class StandardRevocationHandler:
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
+        revocation_url = config.revocation_url
         if self._client is not None:
-            return await self._send(self._client, token, config)
+            return await self._send(self._client, token, revocation_url, config)
         async with httpx.AsyncClient() as client:
-            return await self._send(client, token, config)
+            return await self._send(client, token, revocation_url, config)
 
     async def _send(
         self,
         client: httpx.AsyncClient,
         token: str,
+        revocation_url: str,
         config: ProviderConfig,
     ) -> bool:
         """Send the revocation request and return success status."""
-        assert config.revocation_url is not None
         try:
             response = await client.post(
-                config.revocation_url,
+                revocation_url,
                 data={"token": token},
                 auth=(config.client_id, config.client_secret.get_secret_value()),
             )
