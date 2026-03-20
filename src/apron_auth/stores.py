@@ -54,7 +54,7 @@ class MemoryStateStore:
         if self._is_expired(pending):
             age = time.time() - pending.created_at
             logger.debug(
-                "State %s expired (age=%.1fs, max_age=%.1fs)",
+                "State %.8s… expired (age=%.1fs, max_age=%.1fs)",
                 state_key,
                 age,
                 self._max_age,
