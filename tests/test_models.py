@@ -95,6 +95,16 @@ class TestTokenSet:
         assert token.expires_in == 3600
         assert token.metadata == {"team_id": "T123"}
 
+    def test_context_defaults_to_empty_dict(self):
+        token = TokenSet(access_token="access-abc")
+        assert token.context == {}
+
+    def test_context_round_trips(self):
+        ctx = {"user_id": "U123", "tenant_id": "T456"}
+        token = TokenSet(access_token="access-abc", context=ctx)
+        assert token.context == ctx
+        assert token.context["user_id"] == "U123"
+
     def test_frozen(self):
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ValidationError):
@@ -121,6 +131,25 @@ class TestOAuthPendingState:
             created_at=time.time(),
         )
         assert state.code_verifier is None
+
+    def test_metadata_defaults_to_empty_dict(self):
+        state = OAuthPendingState(
+            state="random-state-token",
+            redirect_uri="https://app.example.com/callback",
+            created_at=time.time(),
+        )
+        assert state.metadata == {}
+
+    def test_metadata_round_trips(self):
+        meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
+        state = OAuthPendingState(
+            state="random-state-token",
+            redirect_uri="https://app.example.com/callback",
+            created_at=time.time(),
+            metadata=meta,
+        )
+        assert state.metadata == meta
+        assert state.metadata["user_id"] == "U123"
 
     def test_frozen(self):
         state = OAuthPendingState(

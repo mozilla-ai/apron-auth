@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
@@ -65,11 +65,24 @@ class OAuthClient:
     async def get_authorization_url(
         self,
         redirect_uri: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[str, OAuthPendingState]:
         """Build an authorization URL with state and optional PKCE.
 
-        If a StateStore is configured, the pending state is saved
+        If a ``StateStore`` is configured, the pending state is saved
         automatically before returning.
+
+        Args:
+            redirect_uri: Override the redirect URI from ``ProviderConfig``.
+            metadata: Opaque caller context attached to the pending state.
+                Carried through ``StateStore`` save/consume and surfaced
+                on ``TokenSet.context`` when ``exchange_code`` auto-consumes.
+
+        Returns:
+            A tuple of the authorization URL and the pending state.
+
+        Raises:
+            ConfigurationError: If no redirect URI is available.
         """
         effective_redirect_uri = redirect_uri or self._config.redirect_uri
         if not effective_redirect_uri:
@@ -107,6 +120,7 @@ class OAuthClient:
             redirect_uri=effective_redirect_uri,
             code_verifier=code_verifier,
             created_at=time.time(),
+            metadata=metadata or {},
         )
 
         if self._state_store is not None:
@@ -128,6 +142,7 @@ class OAuthClient:
           redirect_uri and code_verifier.
         - Pass redirect_uri and code_verifier directly.
         """
+        context: dict[str, Any] = {}
         if state is not None and self._state_store is not None:
             pending = await self._state_store.consume(state)
             if pending is None:
@@ -135,6 +150,7 @@ class OAuthClient:
                 raise StateError(msg)
             redirect_uri = pending.redirect_uri
             code_verifier = pending.code_verifier
+            context = pending.metadata
 
         data: dict[str, str] = {
             "grant_type": "authorization_code",
@@ -149,7 +165,7 @@ class OAuthClient:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc)) from exc
-        return self._parse_token_response(response)
+        return self._parse_token_response(response, context=context)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
         """Refresh an access token using a refresh token.
@@ -244,7 +260,7 @@ class OAuthClient:
             # errors, or anything else. No error_code available.
             raise _TokenEndpointError(str(exc), error_code="") from exc
 
-    def _parse_token_response(self, data: dict) -> TokenSet:
+    def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> TokenSet:
         """Parse a token endpoint response into a TokenSet."""
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
         metadata = {k: v for k, v in data.items() if k not in known_fields}
@@ -262,4 +278,5 @@ class OAuthClient:
             expires_at=expires_at,
             scope=data.get("scope"),
             metadata=metadata,
+            context=context or {},
         )

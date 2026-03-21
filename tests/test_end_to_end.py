@@ -86,6 +86,67 @@ class TestFullOAuthFlow:
         assert result is True
 
 
+class TestMetadataFlowsThroughStateStore:
+    async def test_metadata_survives_save_and_consume(self, httpx_mock: HTTPXMock):
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            scopes=["openid"],
+            use_pkce=True,
+        )
+        store = MemoryStateStore()
+        client = OAuthClient(config=config, state_store=store)
+
+        meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+            metadata=meta,
+        )
+        assert pending_state.metadata == meta
+
+        # Consume from store and verify metadata survived round-trip.
+        consumed = await store.consume(pending_state.state)
+        assert consumed is not None
+        assert consumed.metadata == meta
+        assert consumed.metadata["user_id"] == "U123"
+
+    async def test_metadata_flows_through_to_token_set_context(self, httpx_mock: HTTPXMock):
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            scopes=["openid"],
+            use_pkce=True,
+        )
+        store = MemoryStateStore()
+        client = OAuthClient(config=config, state_store=store)
+
+        meta = {"user_id": "U123", "tenant_id": "T456"}
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+            metadata=meta,
+        )
+
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={
+                "access_token": "access-token-abc",
+                "token_type": "Bearer",
+                "team_id": "T-provider",
+            },
+        )
+        tokens = await client.exchange_code(
+            code="authorization-code",
+            state=pending_state.state,
+        )
+        assert tokens.context == meta
+        assert tokens.context["user_id"] == "U123"
+        assert tokens.metadata["team_id"] == "T-provider"
+
+
 class TestPublicApiExports:
     def test_all_public_types_importable(self):
         assert OAuthClient is not None

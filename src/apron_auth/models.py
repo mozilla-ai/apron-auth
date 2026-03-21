@@ -24,7 +24,23 @@ class ProviderConfig(BaseModel, frozen=True):
 
 
 class TokenSet(BaseModel, frozen=True):
-    """Token data returned from code exchange or refresh."""
+    """Token data returned from code exchange or refresh.
+
+    Attributes:
+        access_token: The access token issued by the provider.
+        token_type: Token type, typically ``"Bearer"``.
+        refresh_token: Optional refresh token for obtaining new access tokens.
+        expires_in: Token lifetime in seconds as reported by the provider.
+        expires_at: Absolute expiry time as a Unix timestamp.
+        scope: Space-separated scopes granted by the provider.
+        metadata: Additional fields from the provider's token endpoint
+            response that are not captured by the named attributes above
+            (e.g. Slack's ``team_id``).  Populated automatically.
+        context: Caller-supplied context carried opaquely from
+            ``OAuthPendingState.metadata`` through the authorization flow.
+            Populated when ``exchange_code`` auto-consumes from a
+            ``StateStore``; empty otherwise.
+    """
 
     access_token: str
     token_type: str = "Bearer"
@@ -33,12 +49,26 @@ class TokenSet(BaseModel, frozen=True):
     expires_at: float | None = None
     scope: str | None = None
     metadata: dict[str, Any] = {}
+    context: dict[str, Any] = {}
 
 
 class OAuthPendingState(BaseModel, frozen=True):
-    """State stored during the OAuth authorization flow."""
+    """State stored during the OAuth authorization flow.
+
+    Attributes:
+        state: Unique token identifying this authorization request.
+        redirect_uri: Redirect URI for this flow.
+        code_verifier: PKCE code verifier, if PKCE is enabled.
+        created_at: Unix timestamp when this state was created.
+        metadata: Opaque caller-supplied context that apron-auth carries
+            but never interprets.  Attach application-specific data
+            (e.g. ``user_id``, ``tenant_id``) here; it will be preserved
+            through ``StateStore`` save/consume and surfaced on
+            ``TokenSet.context`` when ``exchange_code`` auto-consumes.
+    """
 
     state: str
     redirect_uri: str
     code_verifier: str | None = None
     created_at: float
+    metadata: dict[str, Any] = {}
