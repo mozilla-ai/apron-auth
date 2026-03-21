@@ -79,7 +79,7 @@ class TestTokenSet:
         assert token.expires_in is None
         assert token.expires_at is None
         assert token.scope is None
-        assert token.extra == {}
+        assert token.metadata == {}
 
     def test_full_token(self):
         token = TokenSet(
@@ -89,11 +89,11 @@ class TestTokenSet:
             expires_in=3600,
             expires_at=1700000000.0,
             scope="read write",
-            extra={"team_id": "T123"},
+            metadata={"team_id": "T123"},
         )
         assert token.refresh_token == "refresh-xyz"
         assert token.expires_in == 3600
-        assert token.extra == {"team_id": "T123"}
+        assert token.metadata == {"team_id": "T123"}
 
     def test_frozen(self):
         token = TokenSet(access_token="access-abc")
