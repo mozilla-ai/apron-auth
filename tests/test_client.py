@@ -147,6 +147,37 @@ class TestGetAuthorizationUrl:
         )
         assert pending_state is not None
 
+    async def test_metadata_defaults_to_empty(self):
+        config = _make_config()
+        client = OAuthClient(config=config)
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert pending_state.metadata == {}
+
+    async def test_metadata_attached_to_pending_state(self):
+        config = _make_config()
+        client = OAuthClient(config=config)
+        meta = {"user_id": "U123", "tenant_id": "T456"}
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+            metadata=meta,
+        )
+        assert pending_state.metadata == meta
+
+    async def test_metadata_saved_to_state_store(self):
+        config = _make_config()
+        store = AsyncMock()
+        store.save = AsyncMock()
+        client = OAuthClient(config=config, state_store=store)
+        meta = {"user_id": "U123"}
+        await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+            metadata=meta,
+        )
+        saved_state = store.save.call_args[0][0]
+        assert saved_state.metadata == meta
+
     async def test_state_is_unique_per_call(self):
         config = _make_config()
         client = OAuthClient(config=config)
@@ -213,6 +244,78 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         store.consume.assert_awaited_once_with("stored-state")
         assert tokens.access_token == "access-abc"
+
+    async def test_exchange_auto_consume_preserves_context(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        pending = OAuthPendingState(
+            state="stored-state",
+            redirect_uri="https://app.example.com/callback",
+            code_verifier="stored-verifier",
+            created_at=time.time(),
+            metadata={"user_id": "U123", "tenant_id": "T456"},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=pending)
+        config = _make_config()
+        client = OAuthClient(config=config, state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
+        assert tokens.context == {"user_id": "U123", "tenant_id": "T456"}
+
+    async def test_exchange_auto_consume_empty_metadata(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        pending = OAuthPendingState(
+            state="stored-state",
+            redirect_uri="https://app.example.com/callback",
+            created_at=time.time(),
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=pending)
+        config = _make_config()
+        client = OAuthClient(config=config, state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
+        assert tokens.context == {}
+
+    async def test_exchange_direct_params_context_empty(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.context == {}
+
+    async def test_exchange_no_key_collision(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={
+                "access_token": "access-abc",
+                "token_type": "Bearer",
+                "user_id": "provider-U",
+            },
+        )
+        pending = OAuthPendingState(
+            state="stored-state",
+            redirect_uri="https://app.example.com/callback",
+            created_at=time.time(),
+            metadata={"user_id": "caller-U"},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=pending)
+        config = _make_config()
+        client = OAuthClient(config=config, state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
+        assert tokens.metadata["user_id"] == "provider-U"
+        assert tokens.context["user_id"] == "caller-U"
 
     async def test_exchange_state_not_found_raises(self):
         store = AsyncMock()
