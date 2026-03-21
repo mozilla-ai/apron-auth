@@ -32,7 +32,7 @@ class TokenSet(BaseModel, frozen=True):
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
-    extra: dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
 
 
 class OAuthPendingState(BaseModel, frozen=True):

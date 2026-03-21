@@ -247,7 +247,7 @@ class OAuthClient:
     def _parse_token_response(self, data: dict) -> TokenSet:
         """Parse a token endpoint response into a TokenSet."""
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
-        extra = {k: v for k, v in data.items() if k not in known_fields}
+        metadata = {k: v for k, v in data.items() if k not in known_fields}
 
         expires_at = data.get("expires_at")
         expires_in = data.get("expires_in")
@@ -261,5 +261,5 @@ class OAuthClient:
             expires_in=int(expires_in) if expires_in is not None else None,
             expires_at=expires_at,
             scope=data.get("scope"),
-            extra=extra,
+            metadata=metadata,
         )

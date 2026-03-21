@@ -252,8 +252,8 @@ class TestExchangeCode:
             code="auth-code-123",
             redirect_uri="https://app.example.com/callback",
         )
-        assert tokens.extra["team_id"] == "T123"
-        assert tokens.extra["authed_user"] == {"id": "U456"}
+        assert tokens.metadata["team_id"] == "T123"
+        assert tokens.metadata["authed_user"] == {"id": "U456"}
 
     async def test_exchange_client_secret_post(self, httpx_mock):
         httpx_mock.add_response(
