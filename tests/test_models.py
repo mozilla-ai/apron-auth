@@ -105,6 +105,18 @@ class TestTokenSet:
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
+    def test_metadata_isolated_from_caller_mutation(self):
+        original = {"team_id": "T123"}
+        token = TokenSet(access_token="access-abc", metadata=original)
+        original["team_id"] = "mutated"
+        assert token.metadata["team_id"] == "T123"
+
+    def test_context_isolated_from_caller_mutation(self):
+        original = {"user_id": "U123"}
+        token = TokenSet(access_token="access-abc", context=original)
+        original["user_id"] = "mutated"
+        assert token.context["user_id"] == "U123"
+
     def test_frozen(self):
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ValidationError):
@@ -149,6 +161,17 @@ class TestOAuthPendingState:
             metadata=meta,
         )
         assert state.metadata == meta
+        assert state.metadata["user_id"] == "U123"
+
+    def test_metadata_isolated_from_caller_mutation(self):
+        original = {"user_id": "U123"}
+        state = OAuthPendingState(
+            state="random-state-token",
+            redirect_uri="https://app.example.com/callback",
+            created_at=time.time(),
+            metadata=original,
+        )
+        original["user_id"] = "mutated"
         assert state.metadata["user_id"] == "U123"
 
     def test_frozen(self):
