@@ -160,6 +160,25 @@ url, pending_state = await client.get_authorization_url(
 tokens = await client.exchange_code(code="...", state="state-from-callback")
 ```
 
+#### Carrying context through the flow
+
+If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `metadata` when building the authorization URL. apron-auth carries it opaquely through the `StateStore` and surfaces it on `TokenSet.context` after auto-consume.
+
+```python
+url, pending_state = await client.get_authorization_url(
+    redirect_uri="https://yourapp.com/callback",
+    metadata={"user_id": "U123", "tenant_id": "T456"},
+)
+
+# On callback, context comes back on the TokenSet.
+tokens = await client.exchange_code(code="...", state="state-from-callback")
+print(tokens.context["user_id"])    # "U123"
+print(tokens.context["tenant_id"])  # "T456"
+
+# Provider response extras (e.g. Slack's team_id) are separate.
+print(tokens.metadata)  # {"team_id": "T123", ...}
+```
+
 ## Provider presets
 
 | Provider   | Preset                   | Revocation             |
