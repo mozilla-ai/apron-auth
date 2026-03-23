@@ -29,6 +29,12 @@ class GoogleRevocationHandler:
         return response.is_success
 
 
+BASE_SCOPES = [
+    "openid",
+    "https://www.googleapis.com/auth/userinfo.email",
+]
+
+
 def preset(
     client_id: str,
     client_secret: str,
@@ -39,11 +45,13 @@ def preset(
     """Create a Google OAuth provider configuration.
 
     Default extra_params include access_type=offline and prompt=consent
-    for offline access.
+    for offline access. Scopes from BASE_SCOPES are merged automatically.
     """
     defaults = {"access_type": "offline", "prompt": "consent"}
     if extra_params:
         defaults.update(extra_params)
+
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
         client_id=client_id,
@@ -52,7 +60,7 @@ def preset(
         token_url="https://oauth2.googleapis.com/token",
         revocation_url="https://oauth2.googleapis.com/revoke",
         redirect_uri=redirect_uri,
-        scopes=scopes,
+        scopes=merged_scopes,
         extra_params=defaults,
     )
     return config, GoogleRevocationHandler()

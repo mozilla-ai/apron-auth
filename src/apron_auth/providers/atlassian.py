@@ -13,6 +13,12 @@ if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
 
 
+BASE_SCOPES = [
+    "offline_access",
+    "read:me",
+]
+
+
 def preset(
     client_id: str,
     client_secret: str,
@@ -20,10 +26,15 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
-    """Create an Atlassian OAuth provider configuration."""
+    """Create an Atlassian OAuth provider configuration.
+
+    Scopes from BASE_SCOPES are merged automatically.
+    """
     defaults = {"audience": "api.atlassian.com", "prompt": "consent"}
     if extra_params:
         defaults.update(extra_params)
+
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
         client_id=client_id,
@@ -32,7 +43,7 @@ def preset(
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/revoke",
         redirect_uri=redirect_uri,
-        scopes=scopes,
+        scopes=merged_scopes,
         extra_params=defaults,
     )
     return config, StandardRevocationHandler()
