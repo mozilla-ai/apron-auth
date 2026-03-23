@@ -193,6 +193,14 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 | Salesforce | `salesforce.preset(...)` | RFC 7009 POST          |
 | Typeform   | `typeform.preset(...)`   | —                      |
 
+### Trello
+
+Trello's API uses OAuth 1.0 exclusively — there is no OAuth 2.0 support yet. Atlassian has [announced plans](https://community.developer.atlassian.com/t/rfc-89-introducing-oauth2-to-trello/90359) to introduce OAuth 2.0 (3LO) for Trello, but no launch date has been committed.
+
+Because apron-auth is an OAuth 2.0 library, Trello is not supported. If your application needs Trello, handle its OAuth 1.0 flow separately (e.g. with [authlib](https://docs.authlib.org/en/latest/client/oauth1.html)). [apron-tools](https://github.com/mozilla-ai/apron-tools) provides Trello tool definitions — you just need to bring your own token.
+
+When Trello ships OAuth 2.0, a preset will be added here.
+
 ## Error hierarchy
 
 All exceptions inherit from `OAuthError`.
