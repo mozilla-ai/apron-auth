@@ -147,6 +147,27 @@ class TestMetadataFlowsThroughStateStore:
         assert tokens.metadata["team_id"] == "T-provider"
 
 
+class TestSlackUserScopesInAuthorizationUrl:
+    async def test_user_scope_appears_in_url(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="slack-id",
+            client_secret="slack-secret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read", "channels:history"],
+        )
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        from urllib.parse import parse_qs, urlparse
+
+        params = parse_qs(urlparse(url).query)
+        assert params["user_scope"] == ["users:read,channels:history"]
+        assert params["scope"] == ["channels:read"]
+
+
 class TestPublicApiExports:
     def test_all_public_types_importable(self):
         assert OAuthClient is not None

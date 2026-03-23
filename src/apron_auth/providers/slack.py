@@ -36,10 +36,25 @@ def preset(
     client_id: str,
     client_secret: str,
     scopes: list[str],
+    user_scopes: list[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
-    """Create a Slack OAuth provider configuration."""
+    """Create a Slack OAuth provider configuration.
+
+    Slack's OAuth v2 uses separate query parameters for bot scopes
+    (``scope``) and user scopes (``user_scope``). Pass ``user_scopes``
+    to have the preset build the ``user_scope`` param automatically
+    using the provider's scope separator.
+    """
+    scope_separator = ","
+
+    merged_extra: dict[str, str] = {}
+    if user_scopes:
+        merged_extra["user_scope"] = scope_separator.join(user_scopes)
+    if extra_params:
+        merged_extra.update(extra_params)
+
     config = ProviderConfig(
         client_id=client_id,
         client_secret=SecretStr(client_secret),
@@ -48,7 +63,7 @@ def preset(
         revocation_url="https://slack.com/api/auth.revoke",
         redirect_uri=redirect_uri,
         scopes=scopes,
-        scope_separator=",",
-        extra_params=extra_params or {},
+        scope_separator=scope_separator,
+        extra_params=merged_extra,
     )
     return config, SlackRevocationHandler()

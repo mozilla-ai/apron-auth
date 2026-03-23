@@ -28,6 +28,40 @@ class TestSlackPreset:
         config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read", "chat:write"])
         assert config.scope_separator == ","
 
+    def test_user_scopes_added_to_extra_params(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read", "channels:history"],
+        )
+        assert config.extra_params["user_scope"] == "users:read,channels:history"
+
+    def test_user_scopes_omitted_when_none(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+        )
+        assert "user_scope" not in config.extra_params
+
+    def test_user_scopes_coexist_with_extra_params(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read"],
+            extra_params={"team": "T123"},
+        )
+        assert config.extra_params["user_scope"] == "users:read"
+        assert config.extra_params["team"] == "T123"
+
 
 class TestSlackRevocationHandler:
     async def test_revokes_via_get(self, httpx_mock: HTTPXMock):
