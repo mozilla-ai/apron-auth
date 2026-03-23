@@ -53,6 +53,28 @@ class TestGooglePreset:
         )
         assert config.redirect_uri == "https://custom.example.com/callback"
 
+    def test_base_scopes_merged_with_caller_scopes(self):
+        from apron_auth.providers.google import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        )
+        for scope in BASE_SCOPES:
+            assert scope in config.scopes
+        assert "https://www.googleapis.com/auth/gmail.readonly" in config.scopes
+
+    def test_duplicate_scopes_deduplicated(self):
+        from apron_auth.providers.google import preset
+
+        config, _ = preset(
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["openid", "https://www.googleapis.com/auth/gmail.readonly"],
+        )
+        assert config.scopes.count("openid") == 1
+
 
 class TestGoogleRevocationHandler:
     async def test_revokes_via_post_with_query_param(self, httpx_mock: HTTPXMock):

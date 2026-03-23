@@ -24,3 +24,25 @@ class TestMicrosoftPreset:
 
         config, _ = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
         assert config.extra_params["prompt"] == "consent"
+
+    def test_base_scopes_merged_with_caller_scopes(self):
+        from apron_auth.providers.microsoft import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="mid",
+            client_secret="msecret",  # pragma: allowlist secret
+            scopes=["Mail.Read"],
+        )
+        for scope in BASE_SCOPES:
+            assert scope in config.scopes
+        assert "Mail.Read" in config.scopes
+
+    def test_duplicate_scopes_deduplicated(self):
+        from apron_auth.providers.microsoft import preset
+
+        config, _ = preset(
+            client_id="mid",
+            client_secret="msecret",  # pragma: allowlist secret
+            scopes=["offline_access", "Mail.Read"],
+        )
+        assert config.scopes.count("offline_access") == 1
