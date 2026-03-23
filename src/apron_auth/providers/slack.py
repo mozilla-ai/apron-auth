@@ -49,11 +49,9 @@ def preset(
     """
     scope_separator = ","
 
-    merged_extra: dict[str, str] = {}
+    merged_extra: dict[str, str] = dict(extra_params or {})
     if user_scopes:
         merged_extra["user_scope"] = scope_separator.join(user_scopes)
-    if extra_params:
-        merged_extra.update(extra_params)
 
     config = ProviderConfig(
         client_id=client_id,

@@ -62,6 +62,19 @@ class TestSlackPreset:
         assert config.extra_params["user_scope"] == "users:read"
         assert config.extra_params["team"] == "T123"
 
+    def test_user_scopes_takes_precedence_over_extra_params(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read"],
+            extra_params={"user_scope": "should_be_overridden", "team": "T123"},
+        )
+        assert config.extra_params["user_scope"] == "users:read"
+        assert config.extra_params["team"] == "T123"
+
 
 class TestSlackRevocationHandler:
     async def test_revokes_via_get(self, httpx_mock: HTTPXMock):
