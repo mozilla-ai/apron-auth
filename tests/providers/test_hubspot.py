@@ -112,10 +112,7 @@ class TestHubSpotRevocationHandler:
 
         request = httpx_mock.get_request()
         assert request is not None
-        expected = (
-            "https://api.hubapi.com/oauth/v1/refresh-tokens/"
-            "a%2Fb%2Bc%3Dd%20e"
-        )
+        expected = "https://api.hubapi.com/oauth/v1/refresh-tokens/a%2Fb%2Bc%3Dd%20e"
         assert str(request.url) == expected
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
