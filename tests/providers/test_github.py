@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
@@ -55,8 +57,8 @@ class TestGitHubRevocationHandler:
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         await handler.revoke("access-abc", config)
         request = httpx_mock.get_request()
-        assert b'"access_token"' in request.content
-        assert b"access-abc" in request.content
+        payload = json.loads(request.content)
+        assert payload == {"access_token": "access-abc"}
 
     async def test_not_found_is_idempotent_success(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=404)
