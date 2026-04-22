@@ -39,18 +39,17 @@ class HubSpotRevocationHandler:
         """Revoke a HubSpot refresh token.
 
         The ``token`` argument must be the refresh token issued by
-        HubSpot. Returns True on 204 (revoked) or 404 (already gone —
+        HubSpot. The final request URL is built by appending the
+        URL-encoded refresh token to ``config.revocation_url``.
+        Returns True on 204 (revoked) or 404 (already gone —
         idempotent). Returns False for other non-success statuses.
         Raises :class:`RevocationError` on network failure.
-
-        The ``config`` argument is accepted to satisfy the
-        :class:`~apron_auth.protocols.RevocationHandler` protocol but
-        is not used: HubSpot's revocation endpoint is fixed and takes
-        no client credentials.
         """
-        del config
+        if config.revocation_url is None:
+            msg = "revocation_url is required but not set in ProviderConfig"
+            raise ValueError(msg)
         encoded = quote(token, safe="")
-        url = f"https://api.hubapi.com/oauth/v1/refresh-tokens/{encoded}"
+        url = f"{config.revocation_url.rstrip('/')}/{encoded}"
         if self._client is not None:
             return await self._send(self._client, url)
         async with httpx.AsyncClient() as client:
@@ -91,6 +90,7 @@ def preset(
         client_secret=SecretStr(client_secret),
         authorize_url="https://app.hubspot.com/oauth/authorize",
         token_url="https://api.hubapi.com/oauth/v1/token",
+        revocation_url="https://api.hubapi.com/oauth/v1/refresh-tokens",
         redirect_uri=redirect_uri,
         scopes=scopes,
         token_endpoint_auth_method="client_secret_post",

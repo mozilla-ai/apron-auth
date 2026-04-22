@@ -4,6 +4,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from apron_auth.client import OAuthClient
 from apron_auth.errors import RevocationError
 from apron_auth.models import ProviderConfig
 from apron_auth.protocols import RevocationHandler
@@ -31,7 +32,7 @@ class TestHubSpotPreset:
         )
         assert config.authorize_url == "https://app.hubspot.com/oauth/authorize"
         assert config.token_url == "https://api.hubapi.com/oauth/v1/token"
-        assert config.revocation_url is None
+        assert config.revocation_url == "https://api.hubapi.com/oauth/v1/refresh-tokens"
 
     def test_token_endpoint_auth_method_is_client_secret_post(self):
         from apron_auth.providers.hubspot import preset
@@ -143,3 +144,37 @@ class TestHubSpotRevocationHandler:
         assert result is True
         assert not client.is_closed
         await client.aclose()
+
+    async def test_raises_when_revocation_url_missing(self):
+        from apron_auth.providers.hubspot import HubSpotRevocationHandler
+
+        config = ProviderConfig(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            authorize_url="https://app.hubspot.com/oauth/authorize",
+            token_url="https://api.hubapi.com/oauth/v1/token",
+            scopes=["contacts"],
+        )
+        handler = HubSpotRevocationHandler()
+        with pytest.raises(ValueError, match="revocation_url"):
+            await handler.revoke("refresh-abc", config)
+
+
+class TestHubSpotRevocationViaOAuthClient:
+    async def test_revoke_token_succeeds_with_preset(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(status_code=204)
+        from apron_auth.providers.hubspot import preset
+
+        config, handler = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        client = OAuthClient(config=config, revocation_handler=handler)
+        result = await client.revoke_token("refresh-abc")
+        assert result is True
+
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.method == "DELETE"
+        assert str(request.url) == "https://api.hubapi.com/oauth/v1/refresh-tokens/refresh-abc"
