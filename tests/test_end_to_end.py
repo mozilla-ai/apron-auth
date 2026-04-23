@@ -191,6 +191,7 @@ class TestPublicApiExports:
             atlassian,
             github,
             google,
+            hubspot,
             linear,
             microsoft,
             notion,
@@ -199,5 +200,5 @@ class TestPublicApiExports:
             typeform,
         )
 
-        for module in (atlassian, github, google, linear, microsoft, notion, salesforce, slack, typeform):
+        for module in (atlassian, github, google, hubspot, linear, microsoft, notion, salesforce, slack, typeform):
             assert callable(module.preset)
