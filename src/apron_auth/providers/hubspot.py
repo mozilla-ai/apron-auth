@@ -42,7 +42,7 @@ class HubSpotRevocationHandler:
         HubSpot. The final request URL is built by appending the
         URL-encoded refresh token to ``config.revocation_url``.
         Returns True on 204 (revoked) or 404 (already gone —
-        idempotent). Returns False for other non-success statuses.
+        idempotent). Returns False for any other status code.
         Raises :class:`RevocationError` on network failure.
         """
         if config.revocation_url is None:
