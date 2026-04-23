@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import httpx
 import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth.client import OAuthClient
 from apron_auth.errors import RevocationError
 from apron_auth.models import ProviderConfig
 from apron_auth.protocols import RevocationHandler
@@ -30,6 +32,7 @@ class TestNotionPreset:
         config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
         assert config.authorize_url == "https://api.notion.com/v1/oauth/authorize"
         assert config.token_url == "https://api.notion.com/v1/oauth/token"
+        assert config.revocation_url == NOTION_REVOKE_URL
 
     def test_extra_params_include_owner(self) -> None:
         config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
@@ -42,6 +45,7 @@ def _make_config() -> ProviderConfig:
         client_secret=SecretStr("nsecret"),
         authorize_url="https://api.notion.com/v1/oauth/authorize",
         token_url="https://api.notion.com/v1/oauth/token",
+        revocation_url=NOTION_REVOKE_URL,
         token_endpoint_auth_method="client_secret_basic",
     )
 
@@ -59,7 +63,7 @@ class TestNotionRevocationHandler:
         assert request.headers["content-type"].startswith("application/json")
         expected = base64.b64encode(b"nid:nsecret").decode()
         assert request.headers["authorization"] == f"Basic {expected}"
-        assert request.content == b'{"token":"access-token-abc"}'
+        assert json.loads(request.content) == {"token": "access-token-abc"}
 
     async def test_already_revoked_returns_true(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=400)
@@ -98,3 +102,29 @@ class TestNotionRevocationHandler:
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
         assert not client.is_closed
         await client.aclose()
+
+    async def test_raises_when_revocation_url_missing(self) -> None:
+        config = ProviderConfig(
+            client_id="nid",
+            client_secret=SecretStr("nsecret"),
+            authorize_url="https://api.notion.com/v1/oauth/authorize",
+            token_url="https://api.notion.com/v1/oauth/token",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        handler = NotionRevocationHandler()
+        with pytest.raises(ValueError, match="revocation_url"):
+            await handler.revoke("access-token-abc", config)
+
+
+class TestNotionRevocationViaOAuthClient:
+    async def test_revoke_token_succeeds_with_preset(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=200)
+        config, handler = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        client = OAuthClient(config=config, revocation_handler=handler)
+        result = await client.revoke_token("access-token-abc")
+        assert result is True
+
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.method == "POST"
+        assert request.url == NOTION_REVOKE_URL

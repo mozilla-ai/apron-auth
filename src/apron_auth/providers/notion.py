@@ -31,21 +31,26 @@ class NotionRevocationHandler:
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a Notion access token."""
+        if config.revocation_url is None:
+            msg = "revocation_url is required but not set in ProviderConfig"
+            raise ValueError(msg)
+        revocation_url = config.revocation_url
         if self._client is not None:
-            return await self._send(self._client, token, config)
+            return await self._send(self._client, token, revocation_url, config)
         async with httpx.AsyncClient() as client:
-            return await self._send(client, token, config)
+            return await self._send(client, token, revocation_url, config)
 
     async def _send(
         self,
         client: httpx.AsyncClient,
         token: str,
+        revocation_url: str,
         config: ProviderConfig,
     ) -> bool:
         """Send the revocation request and return success status."""
         try:
             response = await client.post(
-                NOTION_REVOCATION_URL,
+                revocation_url,
                 json={"token": token},
                 auth=(config.client_id, config.client_secret.get_secret_value()),
             )
@@ -69,8 +74,10 @@ def preset(
 ) -> tuple[ProviderConfig, RevocationHandler]:
     """Create a Notion OAuth provider configuration.
 
-    Notion uses client_secret_basic auth. Revocation targets the hardcoded
-    endpoint https://api.notion.com/v1/oauth/revoke.
+    Notion uses client_secret_basic auth. Revocation targets
+    https://api.notion.com/v1/oauth/revoke, set as
+    ``config.revocation_url`` so that ``OAuthClient.revoke_token()``
+    can dispatch to the returned :class:`NotionRevocationHandler`.
     """
     defaults = {"owner": "user"}
     if extra_params:
@@ -81,6 +88,7 @@ def preset(
         client_secret=SecretStr(client_secret),
         authorize_url="https://api.notion.com/v1/oauth/authorize",
         token_url="https://api.notion.com/v1/oauth/token",
+        revocation_url=NOTION_REVOCATION_URL,
         redirect_uri=redirect_uri,
         scopes=scopes,
         token_endpoint_auth_method="client_secret_basic",
