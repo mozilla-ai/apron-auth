@@ -95,6 +95,26 @@ class TestProviderConfig:
         )
         assert config.scope_metadata == [meta]
 
+    def test_required_scope_families_defaults_to_empty_list(self):
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.required_scope_families == []
+
+    def test_required_scope_families_round_trips(self):
+        families = [["bot:read", "bot:write"], ["user:read"]]
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            required_scope_families=families,
+        )
+        assert config.required_scope_families == families
+
 
 class TestScopeMetadata:
     def test_minimal_fields(self):
