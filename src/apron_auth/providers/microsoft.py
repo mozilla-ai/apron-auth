@@ -14,17 +14,37 @@ from typing import TYPE_CHECKING
 
 from pydantic import SecretStr
 
-from apron_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
 
 
-BASE_SCOPES = [
-    "offline_access",
-    "openid",
-    "User.Read",
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="offline_access",
+        label="Offline Access",
+        description="Maintain access to data you have given it access to",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="openid",
+        label="OpenID",
+        description="Sign you in",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="User.Read",
+        label="User Profile",
+        description="Sign you in and read your profile",
+        access_type="read",
+        required=True,
+    ),
 ]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(
@@ -53,5 +73,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=defaults,
+        scope_metadata=BASE_SCOPE_METADATA,
     )
     return config, None

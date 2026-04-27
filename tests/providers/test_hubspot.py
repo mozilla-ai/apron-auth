@@ -55,6 +55,40 @@ class TestHubSpotPreset:
         )
         assert config.extra_params == {"optional_scope": "sales"}
 
+    def test_base_scopes_merged_with_caller_scopes(self):
+        from apron_auth.providers.hubspot import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        for scope in BASE_SCOPES:
+            assert scope in config.scopes
+        assert "contacts" in config.scopes
+
+    def test_duplicate_scopes_deduplicated(self):
+        from apron_auth.providers.hubspot import preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["oauth", "contacts"],
+        )
+        assert config.scopes.count("oauth") == 1
+
+    def test_scope_metadata_covers_base_scopes(self):
+        from apron_auth.providers.hubspot import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        metadata_scopes = {meta.scope for meta in config.scope_metadata}
+        assert metadata_scopes == set(BASE_SCOPES)
+        assert all(meta.required for meta in config.scope_metadata)
+
 
 class TestHubSpotRevocationHandler:
     async def test_revokes_refresh_token_via_delete(self, httpx_mock: HTTPXMock):

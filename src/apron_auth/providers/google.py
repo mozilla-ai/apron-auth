@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
@@ -37,10 +37,24 @@ class GoogleRevocationHandler:
         return response.is_success
 
 
-BASE_SCOPES = [
-    "openid",
-    "https://www.googleapis.com/auth/userinfo.email",
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="openid",
+        label="OpenID",
+        description="Authenticate your Google identity",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="https://www.googleapis.com/auth/userinfo.email",
+        label="Email Address",
+        description="View your email address for account identification",
+        access_type="read",
+        required=True,
+    ),
 ]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(
@@ -71,5 +85,6 @@ def preset(
         scopes=merged_scopes,
         extra_params=defaults,
         disconnect_fully_revokes=True,
+        scope_metadata=BASE_SCOPE_METADATA,
     )
     return config, GoogleRevocationHandler()

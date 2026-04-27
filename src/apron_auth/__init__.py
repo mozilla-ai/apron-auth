@@ -12,7 +12,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import OAuthPendingState, ProviderConfig, ScopeMetadata, TokenSet
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
 from apron_auth.stores import MemoryStateStore
 
@@ -26,6 +26,7 @@ __all__ = [
     "ProviderConfig",
     "RevocationError",
     "RevocationHandler",
+    "ScopeMetadata",
     "StandardRevocationHandler",
     "StateError",
     "StateStore",
