@@ -1,4 +1,10 @@
-"""Slack OAuth provider preset and revocation handler."""
+"""Slack OAuth provider preset and revocation handler.
+
+``disconnect_fully_revokes=True``: per Slack's published documentation
+for ``auth.revoke``. The method ends the granted authorization for the
+token rather than only invalidating the session, so a subsequent
+re-auth presents a fresh consent screen.
+"""
 
 from __future__ import annotations
 
@@ -63,5 +69,6 @@ def preset(
         scopes=scopes,
         scope_separator=scope_separator,
         extra_params=merged_extra,
+        disconnect_fully_revokes=True,
     )
     return config, SlackRevocationHandler()
