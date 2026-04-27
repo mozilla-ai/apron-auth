@@ -56,9 +56,7 @@ def test_injected_scopes_have_matching_metadata(name: str, preset_fn: Callable[.
     injected = set(config.scopes) - set(PROBE_CONSUMER_SCOPES)
     declared = {meta.scope for meta in config.scope_metadata}
     missing = injected - declared
-    assert not missing, (
-        f"{name} preset injects scopes without ScopeMetadata: {sorted(missing)}"
-    )
+    assert not missing, f"{name} preset injects scopes without ScopeMetadata: {sorted(missing)}"
 
 
 @pytest.mark.parametrize(("name", "preset_fn"), PRESETS, ids=[name for name, _ in PRESETS])
@@ -77,6 +75,4 @@ def test_scope_metadata_only_describes_injected_scopes(name: str, preset_fn: Cal
     )
     declared = {meta.scope for meta in config.scope_metadata}
     overlap = declared & set(PROBE_CONSUMER_SCOPES)
-    assert not overlap, (
-        f"{name} preset declared metadata for caller-passed scopes: {sorted(overlap)}"
-    )
+    assert not overlap, f"{name} preset declared metadata for caller-passed scopes: {sorted(overlap)}"
