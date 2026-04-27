@@ -181,17 +181,41 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 
 ## Provider presets
 
-| Provider   | Preset                   | Revocation             |
-|------------|--------------------------|------------------------|
-| Google     | `google.preset(...)`     | POST with query param  |
-| GitHub     | `github.preset(...)`     | DELETE with Basic auth |
-| Slack      | `slack.preset(...)`      | GET with query param   |
-| Microsoft  | `microsoft.preset(...)`  | —                      |
-| Atlassian  | `atlassian.preset(...)`  | RFC 7009 POST          |
-| Linear     | `linear.preset(...)`     | RFC 7009 POST          |
-| Notion     | `notion.preset(...)`     | —                      |
-| Salesforce | `salesforce.preset(...)` | RFC 7009 POST          |
-| Typeform   | `typeform.preset(...)`   | —                      |
+| Provider   | Preset                   | Revocation             | `disconnect_fully_revokes` |
+|------------|--------------------------|------------------------|----------------------------|
+| Google     | `google.preset(...)`     | POST with query param  | `True`                     |
+| GitHub     | `github.preset(...)`     | DELETE with Basic auth | `True`                     |
+| Slack      | `slack.preset(...)`      | GET with query param   | `True`                     |
+| Notion     | `notion.preset(...)`     | POST with Basic auth   | `True`                     |
+| Microsoft  | `microsoft.preset(...)`  | —                      | `False`                    |
+| Atlassian  | `atlassian.preset(...)`  | RFC 7009 POST          | `False`                    |
+| Linear     | `linear.preset(...)`     | RFC 7009 POST          | `False`                    |
+| Salesforce | `salesforce.preset(...)` | RFC 7009 POST          | `False`                    |
+| Typeform   | `typeform.preset(...)`   | —                      | `False`                    |
+| HubSpot    | `hubspot.preset(...)`    | DELETE refresh-token   | `False`                    |
+
+## Scope reduction tiers
+
+Some providers' revocation endpoints fully remove the user's portal-level OAuth grant; others only invalidate the current token while the grant lingers. apron-auth surfaces this difference as `ProviderConfig.disconnect_fully_revokes` so consumers can offer the right scope-reduction UX without rebuilding the per-provider truth table inline.
+
+| Tier | Meaning                                                                                                             | When                                |
+|------|---------------------------------------------------------------------------------------------------------------------|-------------------------------------|
+| 1    | Automatic scope reduction: revoke + re-auth presents a fresh consent screen, narrower scopes take effect.           | `disconnect_fully_revokes is True`  |
+| 3    | Manual via provider settings: deep-link the user to the provider's app management page; revoke alone is not enough. | `disconnect_fully_revokes is False` |
+
+```python
+from apron_auth.providers import google, hubspot
+
+google_config, _ = google.preset(...)
+hubspot_config, _ = hubspot.preset(...)
+
+if google_config.disconnect_fully_revokes:
+    ...  # tier 1: trigger revoke + re-auth in-app
+else:
+    ...  # tier 3: open the provider's app-management page
+```
+
+The default for unconfigured `ProviderConfig` is `False` — under-claiming the capability harmlessly falls back to the manual deep-link path.
 
 ### Trello
 

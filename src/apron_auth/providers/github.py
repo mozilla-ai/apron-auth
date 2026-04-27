@@ -1,4 +1,12 @@
-"""GitHub OAuth provider preset and revocation handler."""
+"""GitHub OAuth provider preset and revocation handler.
+
+``disconnect_fully_revokes=True``: verified per GitHub's REST API
+documentation for ``DELETE /applications/{client_id}/grant``. The
+endpoint removes the user's entire OAuth authorization for the app
+(204 on success), so a subsequent re-auth presents a fresh consent
+screen and the next granted scope set is exactly what the
+authorization request asks for.
+"""
 
 from __future__ import annotations
 
@@ -101,5 +109,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=scopes,
         extra_params=extra_params or {},
+        disconnect_fully_revokes=True,
     )
     return config, GitHubRevocationHandler()

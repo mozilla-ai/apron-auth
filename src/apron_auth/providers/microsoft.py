@@ -1,4 +1,12 @@
-"""Microsoft OAuth provider preset."""
+"""Microsoft OAuth provider preset.
+
+``disconnect_fully_revokes=False``: Microsoft does not expose a token
+revocation endpoint usable by the application's own OAuth scopes —
+removing the user's grant requires the user (or a tenant admin) to
+remove the application from
+``account.live.com/consent/Manage`` or the equivalent enterprise
+admin surface. Consumers must surface a deep link to that page.
+"""
 
 from __future__ import annotations
 

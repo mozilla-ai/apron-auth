@@ -1,4 +1,9 @@
-"""Typeform OAuth provider preset."""
+"""Typeform OAuth provider preset.
+
+``disconnect_fully_revokes=False``: Typeform does not expose an OAuth
+revocation endpoint at all (no revocation handler is returned), so
+apron-auth has no way to remove the portal-level grant.
+"""
 
 from __future__ import annotations
 

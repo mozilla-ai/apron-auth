@@ -8,7 +8,30 @@ from pydantic import BaseModel, SecretStr
 
 
 class ProviderConfig(BaseModel, frozen=True):
-    """OAuth provider configuration — endpoints, credentials, behaviour."""
+    """OAuth provider configuration — endpoints, credentials, behaviour.
+
+    Attributes:
+        disconnect_fully_revokes: Whether ``revoke_token`` removes the
+            user's portal-level OAuth grant.
+
+            When ``True``, calling
+            :meth:`~apron_auth.client.OAuthClient.revoke_token` is
+            sufficient to force a fresh consent screen on the next
+            authorization flow — enabling automatic scope-reduction
+            (tier 1) end-to-end inside the OAuth flow.
+
+            When ``False``, revocation only invalidates the current
+            token. A subsequent authorization flow reuses the existing
+            portal-level grant and the user keeps their previously-
+            granted scopes regardless of what's requested. Consumers
+            must surface a deep link to the provider's app-management
+            settings (tier 3) for the user to remove the grant
+            manually.
+
+            Defaults to ``False``. Over-claiming silently breaks scope
+            reduction; under-claiming harmlessly falls back to the
+            manual deep-link path.
+    """
 
     client_id: str
     client_secret: SecretStr
@@ -21,6 +44,7 @@ class ProviderConfig(BaseModel, frozen=True):
     use_pkce: bool = True
     token_endpoint_auth_method: str = "client_secret_post"
     extra_params: dict[str, str] = {}
+    disconnect_fully_revokes: bool = False
 
 
 class TokenSet(BaseModel, frozen=True):

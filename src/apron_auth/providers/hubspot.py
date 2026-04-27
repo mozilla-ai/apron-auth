@@ -1,4 +1,12 @@
-"""HubSpot OAuth provider preset and revocation handler."""
+"""HubSpot OAuth provider preset and revocation handler.
+
+``disconnect_fully_revokes=False``: per HubSpot's own documentation,
+deleting a refresh token invalidates that token (and any access
+tokens issued from it) but does not uninstall the app or remove the
+portal-level OAuth grant. A subsequent re-auth reuses the existing
+grant without a fresh consent screen, so consumers must surface a
+deep link to HubSpot's connected-apps settings for manual removal.
+"""
 
 from __future__ import annotations
 
