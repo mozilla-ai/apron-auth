@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.models import ProviderConfig
@@ -7,6 +8,12 @@ from apron_auth.protocols import RevocationHandler
 
 
 class TestSlackPreset:
+    def test_raises_when_bot_and_user_scopes_are_empty(self):
+        from apron_auth.providers.slack import preset
+
+        with pytest.raises(ValueError, match="at least one scope"):
+            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=[])
+
     def test_returns_config_and_handler(self):
         from apron_auth.providers.slack import preset
 

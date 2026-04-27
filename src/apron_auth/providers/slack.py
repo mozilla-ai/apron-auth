@@ -59,7 +59,14 @@ def preset(
     :attr:`ProviderConfig.required_scope_families` — one family per
     non-empty token family — so a consent picker can enforce the rule
     without Slack-specific knowledge.
+
+    Raises:
+        ValueError: If both ``scopes`` and ``user_scopes`` are empty.
     """
+    if not scopes and not user_scopes:
+        msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
+        raise ValueError(msg)
+
     scope_separator = ","
 
     merged_extra: dict[str, str] = dict(extra_params or {})
