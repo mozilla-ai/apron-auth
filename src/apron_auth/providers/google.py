@@ -1,4 +1,12 @@
-"""Google OAuth provider preset and revocation handler."""
+"""Google OAuth provider preset and revocation handler.
+
+``disconnect_fully_revokes=True``: verified per Google's published
+OAuth 2.0 documentation. Revoking a token at
+``https://oauth2.googleapis.com/revoke`` removes the user's
+authorization grant for the client; a subsequent re-auth presents a
+fresh consent screen, so the next granted scope set is exactly what
+the authorization request asks for.
+"""
 
 from __future__ import annotations
 
@@ -62,5 +70,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=defaults,
+        disconnect_fully_revokes=True,
     )
     return config, GoogleRevocationHandler()

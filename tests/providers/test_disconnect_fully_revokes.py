@@ -14,7 +14,7 @@ preset module's docstring (with the verification source) and the
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 
@@ -33,7 +33,7 @@ from apron_auth.providers import (
 )
 
 EXPECTED: dict[str, tuple[Callable[..., tuple[ProviderConfig, object]], bool]] = {
-    "google": (google.preset, False),
+    "google": (google.preset, True),
     "github": (github.preset, False),
     "slack": (slack.preset, False),
     "notion": (notion.preset, False),
