@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.models import ProviderConfig
@@ -7,6 +8,12 @@ from apron_auth.protocols import RevocationHandler
 
 
 class TestSlackPreset:
+    def test_raises_when_bot_and_user_scopes_are_empty(self):
+        from apron_auth.providers.slack import preset
+
+        with pytest.raises(ValueError, match="at least one scope"):
+            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=[])
+
     def test_returns_config_and_handler(self):
         from apron_auth.providers.slack import preset
 
@@ -74,6 +81,99 @@ class TestSlackPreset:
         )
         assert config.extra_params["user_scope"] == "users:read"
         assert config.extra_params["team"] == "T123"
+
+    def test_bot_scopes_only_declares_single_required_family(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read", "chat:write"],
+        )
+        assert config.required_scope_families == [["channels:read", "chat:write"]]
+
+    def test_bot_and_user_scopes_declare_two_required_families(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read", "channels:history"],
+        )
+        assert config.required_scope_families == [
+            ["channels:read"],
+            ["users:read", "channels:history"],
+        ]
+
+    def test_empty_user_scopes_omitted_from_required_families(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=[],
+        )
+        assert config.required_scope_families == [["channels:read"]]
+
+
+class TestSlackConsentPickerInvariant:
+    """The set-level constraint must be enforceable from ProviderConfig
+    fields alone — a generic consent picker validates a Slack scope
+    selection without any Slack-specific knowledge.
+    """
+
+    @staticmethod
+    def _families_satisfied(selected: set[str], families: list[list[str]]) -> bool:
+        """Generic at-least-one-of-some-family check — no provider knowledge."""
+        if not families:
+            return True
+        return any(any(scope in selected for scope in family) for family in families)
+
+    def test_empty_selection_fails_every_required_family(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read", "chat:write"],
+            user_scopes=["users:read"],
+        )
+        assert not self._families_satisfied(set(), config.required_scope_families)
+
+    def test_one_bot_scope_satisfies_constraint(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read", "chat:write"],
+            user_scopes=["users:read"],
+        )
+        assert self._families_satisfied({"channels:read"}, config.required_scope_families)
+
+    def test_only_user_scope_satisfies_constraint(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read"],
+        )
+        assert self._families_satisfied({"users:read"}, config.required_scope_families)
+
+    def test_unrelated_scope_does_not_satisfy_constraint(self):
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["users:read"],
+        )
+        assert not self._families_satisfied({"unrelated:scope"}, config.required_scope_families)
 
 
 class TestSlackRevocationHandler:

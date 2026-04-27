@@ -73,6 +73,16 @@ class ProviderConfig(BaseModel, frozen=True):
             should concatenate apron-tools' ``CapabilityGroup.metadata()``
             with this list to cover both tool-level and cross-cutting
             scopes without a parallel hand-maintained table.
+        required_scope_families: Set-level scope constraints expressing
+            "at least one of these scope sets must be requested".  Each
+            inner list is an "at-least-one-of" group; the constraint is
+            satisfied when the final scope selection contains at least
+            one scope drawn from at least one family.  Used by providers
+            (e.g. Slack) whose token endpoint applies a set-level OR
+            rule that cannot be expressed as per-scope
+            :attr:`ScopeMetadata.required`.  A consent picker can
+            enforce the constraint generically without provider-specific
+            knowledge.  Defaults to empty (no set-level constraint).
     """
 
     client_id: str
@@ -88,6 +98,7 @@ class ProviderConfig(BaseModel, frozen=True):
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
+    required_scope_families: list[list[str]] = []
 
 
 class TokenSet(BaseModel, frozen=True):

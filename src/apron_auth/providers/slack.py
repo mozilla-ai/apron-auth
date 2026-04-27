@@ -52,12 +52,32 @@ def preset(
     (``scope``) and user scopes (``user_scope``). Pass ``user_scopes``
     to have the preset build the ``user_scope`` param automatically
     using the provider's scope separator.
+
+    Slack's token exchange enforces a set-level rule: the request must
+    ask for at least one bot scope **or** at least one user scope.
+    The preset declares this on
+    :attr:`ProviderConfig.required_scope_families` — one family per
+    non-empty token family — so a consent picker can enforce the rule
+    without Slack-specific knowledge.
+
+    Raises:
+        ValueError: If both ``scopes`` and ``user_scopes`` are empty.
     """
+    if not scopes and not user_scopes:
+        msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
+        raise ValueError(msg)
+
     scope_separator = ","
 
     merged_extra: dict[str, str] = dict(extra_params or {})
     if user_scopes:
         merged_extra["user_scope"] = scope_separator.join(user_scopes)
+
+    required_scope_families: list[list[str]] = []
+    if scopes:
+        required_scope_families.append(list(scopes))
+    if user_scopes:
+        required_scope_families.append(list(user_scopes))
 
     config = ProviderConfig(
         client_id=client_id,
@@ -70,5 +90,6 @@ def preset(
         scope_separator=scope_separator,
         extra_params=merged_extra,
         disconnect_fully_revokes=True,
+        required_scope_families=required_scope_families,
     )
     return config, SlackRevocationHandler()
