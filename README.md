@@ -186,7 +186,7 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 | Google     | `google.preset(...)`     | POST with query param  | `True`                     |
 | GitHub     | `github.preset(...)`     | DELETE with Basic auth | `True`                     |
 | Slack      | `slack.preset(...)`      | GET with query param   | `True`                     |
-| Notion     | `notion.preset(...)`     | POST with Basic auth   | `False`                    |
+| Notion     | `notion.preset(...)`     | POST with Basic auth   | `True`                     |
 | Microsoft  | `microsoft.preset(...)`  | —                      | `False`                    |
 | Atlassian  | `atlassian.preset(...)`  | RFC 7009 POST          | `False`                    |
 | Linear     | `linear.preset(...)`     | RFC 7009 POST          | `False`                    |

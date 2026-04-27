@@ -1,4 +1,11 @@
-"""Notion OAuth provider preset and revocation handler."""
+"""Notion OAuth provider preset and revocation handler.
+
+``disconnect_fully_revokes=True``: verified per Notion's documentation
+for ``POST /v1/oauth/revoke`` and confirmed by the integration that
+landed alongside the revocation handler (#31). Revocation removes the
+integration's portal-level access so a subsequent re-auth presents a
+fresh consent screen.
+"""
 
 from __future__ import annotations
 
@@ -93,5 +100,6 @@ def preset(
         scopes=scopes,
         token_endpoint_auth_method="client_secret_basic",
         extra_params=defaults,
+        disconnect_fully_revokes=True,
     )
     return config, NotionRevocationHandler()
