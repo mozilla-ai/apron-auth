@@ -2,9 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, SecretStr
+
+AccessType = Literal["read", "write", "admin"]
+
+
+class ScopeMetadata(BaseModel, frozen=True):
+    """Consent-UI metadata for a single OAuth scope.
+
+    Field shape mirrors apron-tools' ``ScopeMetadata`` so a consumer can
+    concatenate ``CapabilityGroup.metadata()`` from apron-tools with
+    :attr:`ProviderConfig.scope_metadata` to produce a complete
+    ``list[ScopeMetadata]`` for a consent picker. apron-auth declares
+    metadata only for the cross-cutting scopes its presets inject;
+    apron-tools owns metadata for tool-level scopes.
+
+    Attributes:
+        scope: The OAuth scope string sent to the provider, exactly as it
+            appears in :attr:`ProviderConfig.scopes`.
+        label: Short human-readable name for the consent picker.
+        description: Longer explanation of what granting this scope does;
+            should match the provider's authorize-page wording where
+            possible so the consent picker stays in sync with what the
+            user sees at the provider.
+        access_type: Coarse classification used for visual grouping in
+            the consent picker.
+        required: When ``True``, the consumer's UI should not allow the
+            user to deselect the scope — typically because the OAuth
+            flow itself depends on it (e.g. ``openid`` for identity,
+            ``offline_access`` for refresh tokens).
+    """
+
+    scope: str
+    label: str
+    description: str
+    access_type: AccessType
+    required: bool = False
 
 
 class ProviderConfig(BaseModel, frozen=True):
@@ -31,6 +66,13 @@ class ProviderConfig(BaseModel, frozen=True):
             Defaults to ``False``. Over-claiming silently breaks scope
             reduction; under-claiming harmlessly falls back to the
             manual deep-link path.
+        scope_metadata: Consent-UI metadata for the cross-cutting scopes
+            the preset injects into :attr:`scopes` (e.g. ``openid``,
+            ``offline_access``). Empty when the preset does not inject
+            any scopes of its own. Consumers building a consent picker
+            should concatenate apron-tools' ``CapabilityGroup.metadata()``
+            with this list to cover both tool-level and cross-cutting
+            scopes without a parallel hand-maintained table.
     """
 
     client_id: str
@@ -45,6 +87,7 @@ class ProviderConfig(BaseModel, frozen=True):
     token_endpoint_auth_method: str = "client_secret_post"
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
+    scope_metadata: list[ScopeMetadata] = []
 
 
 class TokenSet(BaseModel, frozen=True):

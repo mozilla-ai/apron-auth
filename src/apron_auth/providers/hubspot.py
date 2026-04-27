@@ -18,13 +18,26 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
 
 
 logger = logging.getLogger(__name__)
+
+
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="oauth",
+        label="App Authorization",
+        description="Authorize this app to act on your behalf in HubSpot",
+        access_type="read",
+        required=True,
+    ),
+]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 class HubSpotRevocationHandler:
@@ -92,7 +105,12 @@ def preset(
     expects the refresh token (not the access token) as the ``token``
     argument to :meth:`~HubSpotRevocationHandler.revoke`. See the
     handler docstring for the consent-screen caveat on reauthorization.
+
+    Scopes from BASE_SCOPES are merged automatically — HubSpot requires
+    the ``oauth`` scope on every app authorization.
     """
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+
     config = ProviderConfig(
         client_id=client_id,
         client_secret=SecretStr(client_secret),
@@ -100,8 +118,9 @@ def preset(
         token_url="https://api.hubapi.com/oauth/v1/token",
         revocation_url="https://api.hubapi.com/oauth/v1/refresh-tokens",
         redirect_uri=redirect_uri,
-        scopes=scopes,
+        scopes=merged_scopes,
         token_endpoint_auth_method="client_secret_post",
         extra_params=extra_params or {},
+        scope_metadata=BASE_SCOPE_METADATA,
     )
     return config, HubSpotRevocationHandler()

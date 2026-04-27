@@ -5,7 +5,7 @@ import time
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from apron_auth.models import OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import OAuthPendingState, ProviderConfig, ScopeMetadata, TokenSet
 
 
 class TestProviderConfig:
@@ -68,6 +68,74 @@ class TestProviderConfig:
     def test_missing_required_fields(self):
         with pytest.raises(ValidationError):
             ProviderConfig(client_id="test")
+
+    def test_scope_metadata_defaults_to_empty_list(self):
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.scope_metadata == []
+
+    def test_scope_metadata_round_trips(self):
+        meta = ScopeMetadata(
+            scope="openid",
+            label="OpenID",
+            description="Authenticate the user",
+            access_type="read",
+            required=True,
+        )
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            scope_metadata=[meta],
+        )
+        assert config.scope_metadata == [meta]
+
+
+class TestScopeMetadata:
+    def test_minimal_fields(self):
+        meta = ScopeMetadata(
+            scope="openid",
+            label="OpenID",
+            description="Sign you in",
+            access_type="read",
+        )
+        assert meta.scope == "openid"
+        assert meta.access_type == "read"
+        assert meta.required is False
+
+    def test_required_round_trips(self):
+        meta = ScopeMetadata(
+            scope="offline_access",
+            label="Offline Access",
+            description="Issue refresh tokens",
+            access_type="read",
+            required=True,
+        )
+        assert meta.required is True
+
+    def test_invalid_access_type_rejected(self):
+        with pytest.raises(ValidationError):
+            ScopeMetadata(
+                scope="openid",
+                label="OpenID",
+                description="Sign you in",
+                access_type="bogus",  # type: ignore[arg-type]
+            )
+
+    def test_frozen(self):
+        meta = ScopeMetadata(
+            scope="openid",
+            label="OpenID",
+            description="Sign you in",
+            access_type="read",
+        )
+        with pytest.raises(ValidationError):
+            meta.scope = "other"
 
 
 class TestTokenSet:

@@ -27,6 +27,40 @@ class TestGitHubPreset:
         assert config.token_url == "https://github.com/login/oauth/access_token"
         assert config.revocation_url == "https://api.github.com/applications/ghid/grant"
 
+    def test_base_scopes_merged_with_caller_scopes(self):
+        from apron_auth.providers.github import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="ghid",
+            client_secret="ghsecret",  # pragma: allowlist secret
+            scopes=["repo"],
+        )
+        for scope in BASE_SCOPES:
+            assert scope in config.scopes
+        assert "repo" in config.scopes
+
+    def test_duplicate_scopes_deduplicated(self):
+        from apron_auth.providers.github import preset
+
+        config, _ = preset(
+            client_id="ghid",
+            client_secret="ghsecret",  # pragma: allowlist secret
+            scopes=["read:user", "repo"],
+        )
+        assert config.scopes.count("read:user") == 1
+
+    def test_scope_metadata_covers_base_scopes(self):
+        from apron_auth.providers.github import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="ghid",
+            client_secret="ghsecret",  # pragma: allowlist secret
+            scopes=["repo"],
+        )
+        metadata_scopes = {meta.scope for meta in config.scope_metadata}
+        assert metadata_scopes == set(BASE_SCOPES)
+        assert all(meta.required for meta in config.scope_metadata)
+
 
 class TestGitHubRevocationHandler:
     async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock):

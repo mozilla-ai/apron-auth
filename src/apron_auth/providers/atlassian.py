@@ -13,17 +13,31 @@ from typing import TYPE_CHECKING
 
 from pydantic import SecretStr
 
-from apron_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig, ScopeMetadata
 from apron_auth.protocols import StandardRevocationHandler
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
 
 
-BASE_SCOPES = [
-    "offline_access",
-    "read:me",
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="offline_access",
+        label="Offline Access",
+        description="Issue refresh tokens for continued access without re-authorization",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="read:me",
+        label="User Profile",
+        description="View your Atlassian account profile for account identification",
+        access_type="read",
+        required=True,
+    ),
 ]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(
@@ -52,5 +66,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=defaults,
+        scope_metadata=BASE_SCOPE_METADATA,
     )
     return config, StandardRevocationHandler()

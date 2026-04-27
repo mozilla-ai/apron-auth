@@ -75,6 +75,18 @@ class TestGooglePreset:
         )
         assert config.scopes.count("openid") == 1
 
+    def test_scope_metadata_covers_base_scopes(self):
+        from apron_auth.providers.google import BASE_SCOPES, preset
+
+        config, _ = preset(
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+        )
+        metadata_scopes = {meta.scope for meta in config.scope_metadata}
+        assert metadata_scopes == set(BASE_SCOPES)
+        assert all(meta.required for meta in config.scope_metadata)
+
 
 class TestGoogleRevocationHandler:
     async def test_revokes_via_post_with_query_param(self, httpx_mock: HTTPXMock):

@@ -17,7 +17,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
@@ -29,6 +29,25 @@ _GITHUB_API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="read:user",
+        label="User Profile",
+        description="Read access to your GitHub profile data",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="user:email",
+        label="Email Address",
+        description="Read access to your email addresses for account identification",
+        access_type="read",
+        required=True,
+    ),
+]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 class GitHubRevocationHandler:
@@ -99,7 +118,14 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
-    """Create a GitHub OAuth provider configuration."""
+    """Create a GitHub OAuth provider configuration.
+
+    Scopes from BASE_SCOPES are merged automatically — ``read:user`` and
+    ``user:email`` are required for account identification on the
+    consent screen.
+    """
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+
     config = ProviderConfig(
         client_id=client_id,
         client_secret=SecretStr(client_secret),
@@ -107,8 +133,9 @@ def preset(
         token_url="https://github.com/login/oauth/access_token",
         revocation_url=f"https://api.github.com/applications/{client_id}/grant",
         redirect_uri=redirect_uri,
-        scopes=scopes,
+        scopes=merged_scopes,
         extra_params=extra_params or {},
         disconnect_fully_revokes=True,
+        scope_metadata=BASE_SCOPE_METADATA,
     )
     return config, GitHubRevocationHandler()
