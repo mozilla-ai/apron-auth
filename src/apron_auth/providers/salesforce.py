@@ -1,4 +1,10 @@
-"""Salesforce OAuth provider preset."""
+"""Salesforce OAuth provider preset.
+
+``disconnect_fully_revokes`` defaults to ``False``: Salesforce's
+RFC 7009 ``/services/oauth2/revoke`` invalidates the supplied token
+but its effect on the org-level Connected App authorization has not
+been verified end-to-end. Tracking issue: #35.
+"""
 
 from __future__ import annotations
 

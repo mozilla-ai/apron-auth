@@ -1,4 +1,11 @@
-"""Atlassian OAuth provider preset."""
+"""Atlassian OAuth provider preset.
+
+``disconnect_fully_revokes=False``: Atlassian does not document an
+OAuth revoke endpoint that removes the user's portal-level grant.
+Token revocation alone (where supported) does not clear the entry
+under ``id.atlassian.com/manage-profile/apps``, so consumers must
+surface a deep link to that page for manual removal.
+"""
 
 from __future__ import annotations
 

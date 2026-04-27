@@ -1,4 +1,10 @@
-"""Linear OAuth provider preset."""
+"""Linear OAuth provider preset.
+
+``disconnect_fully_revokes`` defaults to ``False``: Linear's RFC 7009
+``POST /oauth/revoke`` invalidates the supplied token but its effect
+on the workspace-level OAuth grant has not been verified end-to-end.
+Tracking issue: #34.
+"""
 
 from __future__ import annotations
 
