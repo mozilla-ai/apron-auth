@@ -184,7 +184,7 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 | Provider   | Preset                   | Revocation             | `disconnect_fully_revokes` |
 |------------|--------------------------|------------------------|----------------------------|
 | Google     | `google.preset(...)`     | POST with query param  | `True`                     |
-| GitHub     | `github.preset(...)`     | DELETE with Basic auth | `False`                    |
+| GitHub     | `github.preset(...)`     | DELETE with Basic auth | `True`                     |
 | Slack      | `slack.preset(...)`      | GET with query param   | `False`                    |
 | Notion     | `notion.preset(...)`     | POST with Basic auth   | `False`                    |
 | Microsoft  | `microsoft.preset(...)`  | —                      | `False`                    |

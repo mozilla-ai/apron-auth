@@ -34,7 +34,7 @@ from apron_auth.providers import (
 
 EXPECTED: dict[str, tuple[Callable[..., tuple[ProviderConfig, object]], bool]] = {
     "google": (google.preset, True),
-    "github": (github.preset, False),
+    "github": (github.preset, True),
     "slack": (slack.preset, False),
     "notion": (notion.preset, False),
     "linear": (linear.preset, False),
