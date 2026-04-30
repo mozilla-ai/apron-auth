@@ -45,21 +45,26 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    host: str = "login.salesforce.com",
 ) -> tuple[ProviderConfig, RevocationHandler]:
     """Create a Salesforce OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically — Salesforce
     requires both ``refresh_token`` and ``offline_access`` to issue
     a refresh token at the code-exchange step.
+
+    ``host`` selects the Salesforce login host. Use
+    ``test.salesforce.com`` for sandboxes, or a My Domain host (e.g.
+    ``acme.my.salesforce.com``) for orgs that require it.
     """
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
         client_id=client_id,
         client_secret=SecretStr(client_secret),
-        authorize_url="https://login.salesforce.com/services/oauth2/authorize",
-        token_url="https://login.salesforce.com/services/oauth2/token",
-        revocation_url="https://login.salesforce.com/services/oauth2/revoke",
+        authorize_url=f"https://{host}/services/oauth2/authorize",
+        token_url=f"https://{host}/services/oauth2/token",
+        revocation_url=f"https://{host}/services/oauth2/revoke",
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=extra_params or {},
