@@ -38,6 +38,8 @@ BASE_SCOPE_METADATA = [
 
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
+_FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
+
 
 def preset(
     client_id: str,
@@ -55,8 +57,15 @@ def preset(
 
     ``host`` selects the Salesforce login host. Use
     ``test.salesforce.com`` for sandboxes, or a My Domain host (e.g.
-    ``acme.my.salesforce.com``) for orgs that require it.
+    ``acme.my.salesforce.com``) for orgs that require it. It must be a
+    bare hostname — no scheme, path, query, or whitespace — and is
+    rejected with :class:`ValueError` otherwise so misconfiguration
+    fails fast rather than producing a malformed OAuth endpoint.
     """
+    if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
+        msg = f"host must be a bare hostname like 'login.salesforce.com' (no scheme, path, or whitespace); got {host!r}"
+        raise ValueError(msg)
+
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
