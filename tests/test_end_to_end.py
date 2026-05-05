@@ -5,6 +5,10 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth import (
     ConfigurationError,
+    IdentityFetchError,
+    IdentityHandler,
+    IdentityNotSupportedError,
+    IdentityProfile,
     MemoryStateStore,
     OAuthClient,
     OAuthError,
@@ -185,6 +189,10 @@ class TestPublicApiExports:
         assert RevocationError is not None
         assert StateError is not None
         assert ConfigurationError is not None
+        assert IdentityProfile is not None
+        assert IdentityHandler is not None
+        assert IdentityFetchError is not None
+        assert IdentityNotSupportedError is not None
 
     def test_provider_presets_importable(self):
         from apron_auth.providers import (

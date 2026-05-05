@@ -11,13 +11,15 @@ from pydantic import SecretStr
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
+    IdentityFetchError,
+    IdentityNotSupportedError,
     PermanentOAuthError,
     RevocationError,
     StateError,
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig, TokenSet
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -544,3 +546,147 @@ class TestRevokeToken:
         with pytest.raises(RevocationError, match="handler error") as exc_info:
             await client.revoke_token(token="access-token")
         assert exc_info.value.__cause__ is None
+
+
+class TestFetchIdentity:
+    async def test_google_identity_inferred_from_config(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://www.googleapis.com/oauth2/v3/userinfo",
+            json={
+                "sub": "google-user-123",
+                "email": "user@example.com",
+                "email_verified": True,
+                "name": "Test User",
+                "picture": "https://example.com/avatar.png",
+            },
+        )
+        config = _make_config(
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="google-user-123",
+            email="user@example.com",
+            email_verified=True,
+            name="Test User",
+            avatar_url="https://example.com/avatar.png",
+            raw={
+                "sub": "google-user-123",
+                "email": "user@example.com",
+                "email_verified": True,
+                "name": "Test User",
+                "picture": "https://example.com/avatar.png",
+            },
+        )
+
+    async def test_github_identity_derives_verified_primary_email(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://api.github.com/user",
+            json={
+                "id": 42,
+                "login": "octocat",
+                "name": "Octo Cat",
+                "email": None,
+                "avatar_url": "https://example.com/octo.png",
+            },
+        )
+        httpx_mock.add_response(
+            url="https://api.github.com/user/emails",
+            json=[
+                {"email": "secondary@example.com", "verified": True, "primary": False},
+                {"email": "primary@example.com", "verified": True, "primary": True},
+            ],
+        )
+        config = _make_config(
+            authorize_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity.subject == "42"
+        assert identity.email == "primary@example.com"
+        assert identity.email_verified is True
+        assert identity.username == "octocat"
+        assert identity.name == "Octo Cat"
+
+    async def test_fetch_identity_unsupported_provider_raises(self):
+        config = _make_config(
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_fetch_identity_custom_handler(self):
+        class DummyIdentityHandler:
+            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+                assert access_token == "access-abc"
+                assert config.client_id == "test-client"
+                return IdentityProfile(email="custom@example.com")
+
+        config = _make_config(
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity.email == "custom@example.com"
+
+    async def test_fetch_identity_provider_error_wrapped(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://www.googleapis.com/oauth2/v3/userinfo",
+            status_code=401,
+            json={"error": "invalid_token"},
+        )
+        config = _make_config(
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
+            await client.fetch_identity("bad-token")
+
+    async def test_fetch_identity_lookalike_google_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilgoogle.com/authorize",
+            token_url="https://evilgoogle.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_fetch_identity_lookalike_github_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilgithub.com/login/oauth/authorize",
+            token_url="https://evilgithub.com/login/oauth/access_token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
+        class BoomHandler:
+            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+                raise RuntimeError("boom")
+
+        config = _make_config(
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        client = OAuthClient(config=config, identity_handler=BoomHandler())
+
+        with pytest.raises(IdentityFetchError, match="boom"):
+            await client.fetch_identity("access-abc")

@@ -11,16 +11,17 @@ authorization request asks for.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig, ScopeMetadata
+from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,9 @@ _GITHUB_API_HEADERS = {
     "Accept": "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
 }
+_GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+_GITHUB_IDENTITY_HOST_SUFFIXES = ("github.com",)
+_GITHUB_USER_URL = "https://api.github.com/user"
 
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
@@ -48,6 +52,65 @@ BASE_SCOPE_METADATA = [
 ]
 
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+
+def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> tuple[str | None, bool | None]:
+    if isinstance(emails_payload, list):
+        for item in emails_payload:
+            if not isinstance(item, dict):
+                continue
+            if item.get("primary") and item.get("verified") and item.get("email"):
+                return str(item["email"]), True
+
+        for item in emails_payload:
+            if not isinstance(item, dict):
+                continue
+            if item.get("verified") and item.get("email"):
+                return str(item["email"]), True
+
+    email = user_payload.get("email")
+    if email:
+        return str(email), False
+    return None, None
+
+
+class GitHubIdentityHandler:
+    """Fetch identity fields from GitHub profile and email APIs."""
+
+    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+        """Fetch normalized identity fields using a GitHub access token."""
+        del config
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            **_GITHUB_API_HEADERS,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                user_response = await client.get(_GITHUB_USER_URL, headers=headers)
+                user_response.raise_for_status()
+                emails_response = await client.get(_GITHUB_EMAILS_URL, headers=headers)
+                emails_response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise IdentityFetchError(f"Failed to fetch GitHub identity: {exc}") from exc
+
+        try:
+            user_payload = user_response.json()
+            emails_payload = emails_response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse GitHub identity response: {exc}") from exc
+
+        email, email_verified = _derive_github_email(user_payload, emails_payload)
+        subject = user_payload.get("id")
+
+        return IdentityProfile(
+            subject=str(subject) if subject is not None else None,
+            email=email,
+            email_verified=email_verified,
+            name=user_payload.get("name") or user_payload.get("login"),
+            username=user_payload.get("login"),
+            avatar_url=user_payload.get("avatar_url"),
+            raw={"user": user_payload, "emails": emails_payload},
+        )
 
 
 class GitHubRevocationHandler:
@@ -109,6 +172,16 @@ class GitHubRevocationHandler:
             response.status_code,
         )
         return False
+
+
+def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
+    """Return the GitHub identity handler when config matches GitHub hosts."""
+    hosts = (config.authorize_url, config.token_url)
+    for url in hosts:
+        host = urlparse(url).hostname or ""
+        if any(host == suffix or host.endswith("." + suffix) for suffix in _GITHUB_IDENTITY_HOST_SUFFIXES):
+            return GitHubIdentityHandler()
+    return None
 
 
 def preset(

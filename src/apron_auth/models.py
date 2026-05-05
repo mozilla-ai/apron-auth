@@ -130,6 +130,28 @@ class TokenSet(BaseModel, frozen=True):
     context: dict[str, Any] = {}
 
 
+class IdentityProfile(BaseModel, frozen=True):
+    """Normalized identity fields fetched from a provider.
+
+    Attributes:
+        subject: Provider user identifier when available.
+        email: User email address when available.
+        email_verified: Whether the provider reports the email as verified.
+        name: Human-readable display name.
+        username: Provider handle/login where available.
+        avatar_url: Provider profile image URL when available.
+        raw: Full provider response payload(s) for advanced callers.
+    """
+
+    subject: str | None = None
+    email: str | None = None
+    email_verified: bool | None = None
+    name: str | None = None
+    username: str | None = None
+    avatar_url: str | None = None
+    raw: dict[str, Any] = {}
+
+
 class OAuthPendingState(BaseModel, frozen=True):
     """State stored during the OAuth authorization flow.
 

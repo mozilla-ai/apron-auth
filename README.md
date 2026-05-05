@@ -102,6 +102,29 @@ print(tokens.access_token)
 print(tokens.refresh_token)
 ```
 
+### Identity fetch (optional)
+
+If you need normalized identity fields for login or account-linking flows,
+fetch them after token exchange:
+
+```python
+tokens = await client.exchange_code(
+    code="authorization-code-from-callback",
+    redirect_uri="https://yourapp.com/callback",
+    code_verifier=pending_state.code_verifier,
+)
+identity = await client.fetch_identity(tokens.access_token)
+print(identity.email)
+print(identity.email_verified)
+```
+
+Built-in identity handlers are inferred from standard Google and GitHub
+endpoint hostnames, so they apply to both the bundled `preset(...)` configs
+and any manually constructed `ProviderConfig` pointing at those hosts. For
+other providers, pass a custom `identity_handler` to `OAuthClient`. OAuth
+protocol endpoints come from the provider config; identity API endpoints
+are provider-specific internals handled by the identity handler.
+
 ### Token refresh
 
 Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.

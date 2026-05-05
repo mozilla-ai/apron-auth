@@ -11,14 +11,54 @@ the authorization request asks for.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.models import ProviderConfig, ScopeMetadata
+from apron_auth.errors import IdentityFetchError
+from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    from apron_auth.protocols import IdentityHandler, RevocationHandler
+
+
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+_GOOGLE_IDENTITY_HOST_SUFFIXES = ("google.com", "googleapis.com")
+
+
+class GoogleIdentityHandler:
+    """Fetch identity fields from Google's OIDC userinfo endpoint."""
+
+    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+        """Fetch normalized identity fields using a Google access token."""
+        del config
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    _GOOGLE_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise IdentityFetchError(f"Failed to fetch Google identity: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse Google identity response: {exc}") from exc
+        email_verified = None
+        if "email_verified" in payload:
+            email_verified = bool(payload.get("email_verified"))
+
+        return IdentityProfile(
+            subject=payload.get("sub"),
+            email=payload.get("email"),
+            email_verified=email_verified,
+            name=payload.get("name"),
+            avatar_url=payload.get("picture"),
+            raw=payload,
+        )
 
 
 class GoogleRevocationHandler:
@@ -35,6 +75,16 @@ class GoogleRevocationHandler:
                 params={"token": token},
             )
         return response.is_success
+
+
+def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
+    """Return the Google identity handler when config matches Google hosts."""
+    hosts = (config.authorize_url, config.token_url)
+    for url in hosts:
+        host = urlparse(url).hostname or ""
+        if any(host == suffix or host.endswith("." + suffix) for suffix in _GOOGLE_IDENTITY_HOST_SUFFIXES):
+            return GoogleIdentityHandler()
+    return None
 
 
 BASE_SCOPE_METADATA = [

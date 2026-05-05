@@ -7,12 +7,16 @@ class OAuthError(Exception):
     """Base exception for all apron-auth errors."""
 
 
-class TokenExchangeError(OAuthError):
-    """Authorization code exchange failed."""
+class ConfigurationError(OAuthError):
+    """Provider configuration is invalid or incomplete."""
 
 
-class TokenRefreshError(OAuthError):
-    """Token refresh failed (transient — retry may succeed)."""
+class IdentityFetchError(OAuthError):
+    """Fetching user identity from the provider failed."""
+
+
+class IdentityNotSupportedError(OAuthError):
+    """Identity fetching is not supported for this provider configuration."""
 
 
 class PermanentOAuthError(OAuthError):
@@ -31,5 +35,9 @@ class StateError(OAuthError):
     """OAuth state invalid, expired, or already consumed."""
 
 
-class ConfigurationError(OAuthError):
-    """Provider configuration is invalid or incomplete."""
+class TokenExchangeError(OAuthError):
+    """Authorization code exchange failed."""
+
+
+class TokenRefreshError(OAuthError):
+    """Token refresh failed (transient — retry may succeed)."""
