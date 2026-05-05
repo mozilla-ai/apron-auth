@@ -118,12 +118,13 @@ print(identity.email)
 print(identity.email_verified)
 ```
 
-Built-in identity handlers are inferred from standard Google and GitHub
-endpoint hostnames, so they apply to both the bundled `preset(...)` configs
-and any manually constructed `ProviderConfig` pointing at those hosts. For
-other providers, pass a custom `identity_handler` to `OAuthClient`. OAuth
-protocol endpoints come from the provider config; identity API endpoints
-are provider-specific internals handled by the identity handler.
+Built-in identity handlers are inferred from standard Google, GitHub, and
+Microsoft endpoint hostnames, so they apply to both the bundled
+`preset(...)` configs and any manually constructed `ProviderConfig`
+pointing at those hosts. For other providers, pass a custom
+`identity_handler` to `OAuthClient`. OAuth protocol endpoints come from
+the provider config; identity API endpoints are provider-specific
+internals handled by the identity handler.
 
 ### Token refresh
 
