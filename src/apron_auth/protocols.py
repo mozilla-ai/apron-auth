@@ -9,7 +9,7 @@ import httpx
 from apron_auth.errors import RevocationError
 
 if TYPE_CHECKING:
-    from apron_auth.models import OAuthPendingState, ProviderConfig
+    from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig
 
 
 @runtime_checkable
@@ -46,6 +46,15 @@ class RevocationHandler(Protocol):
 
         Returns True if revocation succeeded.
         """
+        ...
+
+
+@runtime_checkable
+class IdentityHandler(Protocol):
+    """Provider-specific identity retrieval."""
+
+    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+        """Fetch normalized identity fields using the provider API."""
         ...
 
 

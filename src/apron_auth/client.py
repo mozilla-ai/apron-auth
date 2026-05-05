@@ -11,6 +11,7 @@ import httpx
 
 from apron_auth.errors import (
     ConfigurationError,
+    IdentityNotSupportedError,
     PermanentOAuthError,
     RevocationError,
     StateError,
@@ -20,11 +21,12 @@ from apron_auth.errors import (
 from apron_auth.models import OAuthPendingState, TokenSet
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.providers.identity import infer_identity_handler
 from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
-    from apron_auth.models import ProviderConfig
-    from apron_auth.protocols import RevocationHandler, StateStore
+    from apron_auth.models import IdentityProfile, ProviderConfig
+    from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore
 
 
 class _TokenEndpointError(Exception):
@@ -45,6 +47,7 @@ class OAuthClient:
         config: ProviderConfig,
         state_store: StateStore | None = None,
         revocation_handler: RevocationHandler | None = None,
+        identity_handler: IdentityHandler | None = None,
         permanent_error_codes: set[str] | None = None,
     ) -> None:
         """Create an OAuth client.
@@ -53,6 +56,7 @@ class OAuthClient:
             config: Provider endpoints, credentials, and behavior.
             state_store: Optional persistence for OAuth state across requests.
             revocation_handler: Optional provider-specific token revocation.
+            identity_handler: Optional provider-specific identity fetcher.
             permanent_error_codes: Additional OAuth error codes that should be
                 treated as irrecoverable during token refresh. These merge
                 with, rather than replace, DEFAULT_PERMANENT_ERROR_CODES.
@@ -60,6 +64,7 @@ class OAuthClient:
         self._config = config
         self._state_store = state_store
         self._revocation_handler = revocation_handler
+        self._identity_handler = identity_handler
         self._permanent_error_codes = self.DEFAULT_PERMANENT_ERROR_CODES | (permanent_error_codes or set())
 
     async def get_authorization_url(
@@ -212,6 +217,18 @@ class OAuthClient:
             msg = "Token revocation failed"
             raise RevocationError(msg)
         return True
+
+    async def fetch_identity(self, access_token: str) -> IdentityProfile:
+        """Fetch normalized user identity fields from the provider API.
+
+        Uses the configured identity handler when provided, otherwise tries
+        to infer a built-in handler from the provider endpoints.
+        """
+        handler = self._identity_handler or infer_identity_handler(self._config)
+        if handler is None:
+            msg = "No identity handler is available for this provider configuration"
+            raise IdentityNotSupportedError(msg)
+        return await handler.fetch_identity(access_token, self._config)
 
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.
