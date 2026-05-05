@@ -677,6 +677,48 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_microsoft_identity_inferred_from_config(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={
+                "sub": "ms-user-123",
+                "email": "user@example.com",
+                "name": "Test User",
+                "picture": "https://example.com/avatar.png",
+            },
+        )
+        config = _make_config(
+            authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="ms-user-123",
+            email="user@example.com",
+            email_verified=None,
+            name="Test User",
+            avatar_url="https://example.com/avatar.png",
+            raw={
+                "sub": "ms-user-123",
+                "email": "user@example.com",
+                "name": "Test User",
+                "picture": "https://example.com/avatar.png",
+            },
+        )
+
+    async def test_fetch_identity_lookalike_microsoft_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/authorize",
+            token_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
