@@ -1,7 +1,7 @@
 """Notion OAuth provider preset and revocation handler.
 
-``disconnect_fully_revokes=False``: Notion documents ``POST
-/v1/oauth/revoke`` for token invalidation, but does not explicitly
+``disconnect_fully_revokes=False``: Notion documents
+``POST /v1/oauth/revoke`` for token invalidation, but does not explicitly
 confirm that revoke removes the workspace installation/grant. Until
 provider docs or end-to-end verification confirm full grant removal,
 this preset keeps the conservative tier-3 value.
