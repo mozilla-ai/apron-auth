@@ -10,7 +10,7 @@ Provider-specific OAuth knowledge — endpoints, auth methods, PKCE quirks, erro
 |----------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
 | Provider presets     | Endpoints, auth methods, PKCE toggles, scope separators, and revocation for multiple providers out of the box.                            |
 | Error classification | Distinguishes permanent failures (revoked token, invalid client) from transient ones so callers know whether to retry or re-authenticate. |
-| Revocation handlers  | Providers all revoke tokens differently (POST, DELETE, GET, Basic auth, query params) — presets include the right handler for each.       |
+| Revocation support   | Providers all revoke differently (POST, DELETE, GET, Basic auth, query params) — presets include the right handler when available.          |
 | Auth method handling | `client_secret_post` vs `client_secret_basic` — picked from your config and handled by authlib under the hood.                            |
 | PKCE (S256)          | Generated automatically when the provider supports it, no setup needed.                                                                   |
 
