@@ -93,8 +93,11 @@ class GitHubIdentityHandler:
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             raise IdentityFetchError(f"Failed to fetch GitHub identity: {exc}") from exc
 
-        user_payload = user_response.json()
-        emails_payload = emails_response.json()
+        try:
+            user_payload = user_response.json()
+            emails_payload = emails_response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse GitHub identity response: {exc}") from exc
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")
@@ -176,7 +179,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     hosts = (config.authorize_url, config.token_url)
     for url in hosts:
         host = urlparse(url).hostname or ""
-        if any(host.endswith(suffix) for suffix in _GITHUB_IDENTITY_HOST_SUFFIXES):
+        if any(host == suffix or host.endswith("." + suffix) for suffix in _GITHUB_IDENTITY_HOST_SUFFIXES):
             return GitHubIdentityHandler()
     return None
 

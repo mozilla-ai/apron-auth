@@ -43,7 +43,10 @@ class GoogleIdentityHandler:
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
             raise IdentityFetchError(f"Failed to fetch Google identity: {exc}") from exc
 
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse Google identity response: {exc}") from exc
         email_verified = None
         if "email_verified" in payload:
             email_verified = bool(payload.get("email_verified"))
@@ -79,7 +82,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     hosts = (config.authorize_url, config.token_url)
     for url in hosts:
         host = urlparse(url).hostname or ""
-        if any(host.endswith(suffix) for suffix in _GOOGLE_IDENTITY_HOST_SUFFIXES):
+        if any(host == suffix or host.endswith("." + suffix) for suffix in _GOOGLE_IDENTITY_HOST_SUFFIXES):
             return GoogleIdentityHandler()
     return None
 

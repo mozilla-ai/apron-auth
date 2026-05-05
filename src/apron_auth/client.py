@@ -11,6 +11,7 @@ import httpx
 
 from apron_auth.errors import (
     ConfigurationError,
+    IdentityFetchError,
     IdentityNotSupportedError,
     PermanentOAuthError,
     RevocationError,
@@ -228,7 +229,12 @@ class OAuthClient:
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)
-        return await handler.fetch_identity(access_token, self._config)
+        try:
+            return await handler.fetch_identity(access_token, self._config)
+        except IdentityFetchError:
+            raise
+        except Exception as exc:
+            raise IdentityFetchError(str(exc)) from exc
 
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.

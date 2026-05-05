@@ -656,3 +656,37 @@ class TestFetchIdentity:
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
             await client.fetch_identity("bad-token")
+
+    async def test_fetch_identity_lookalike_google_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilgoogle.com/authorize",
+            token_url="https://evilgoogle.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_fetch_identity_lookalike_github_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilgithub.com/login/oauth/authorize",
+            token_url="https://evilgithub.com/login/oauth/access_token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
+        class BoomHandler:
+            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+                raise RuntimeError("boom")
+
+        config = _make_config(
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        client = OAuthClient(config=config, identity_handler=BoomHandler())
+
+        with pytest.raises(IdentityFetchError, match="boom"):
+            await client.fetch_identity("access-abc")
