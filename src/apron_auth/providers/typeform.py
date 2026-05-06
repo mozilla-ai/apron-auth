@@ -30,11 +30,11 @@ class TypeformIdentityHandler:
     Requires the ``accounts:read`` OAuth scope. The Typeform response
     documents only ``alias``, ``email``, and ``language``, so
     ``IdentityProfile.subject`` is always ``None`` for this provider —
-    Typeform does not expose a stable, opaque user identifier. Callers
-    that need a non-PII user handle should use ``email`` and accept
-    that the value is the user's email address rather than an opaque
-    id, or rely on ``username`` (the Typeform ``alias``) which is
-    user-mutable.
+    Typeform does not expose a stable, opaque user identifier. The
+    available alternatives are ``email`` (stable but PII) and
+    ``username`` (the Typeform ``alias``, which is user-mutable);
+    callers that need a non-PII stable handle must derive one
+    themselves, for example by hashing ``email``.
     """
 
     async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:

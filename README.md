@@ -129,9 +129,11 @@ handler.
 
 Typeform's `/me` response does not include a stable, opaque user
 identifier, so `IdentityProfile.subject` is always `None` for that
-provider — callers that need a non-PII handle should use
-`IdentityProfile.email` or accept that `username` (the Typeform
-alias) is user-mutable.
+provider. The available alternatives are `IdentityProfile.email`
+(stable but PII) and `IdentityProfile.username` (the Typeform
+alias, which is user-mutable); callers that need a non-PII stable
+handle must derive one themselves, for example by hashing
+`email`.
 
 ### Token refresh
 
