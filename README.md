@@ -119,11 +119,11 @@ print(identity.email_verified)
 ```
 
 Built-in identity handlers are inferred from standard Google, GitHub,
-Microsoft, Atlassian, Typeform, and Salesforce endpoint hostnames, so
-they apply to both the bundled `preset(...)` configs and any manually
-constructed `ProviderConfig` pointing at those hosts. For other
-providers, pass a custom `identity_handler` to `OAuthClient`. OAuth
-protocol endpoints come from the provider config; identity API
+Microsoft, Atlassian, Typeform, Salesforce, and Notion endpoint
+hostnames, so they apply to both the bundled `preset(...)` configs and
+any manually constructed `ProviderConfig` pointing at those hosts. For
+other providers, pass a custom `identity_handler` to `OAuthClient`.
+OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
 
@@ -134,6 +134,13 @@ provider. The available alternatives are `IdentityProfile.email`
 alias, which is user-mutable); callers that need a non-PII stable
 handle must derive one themselves, for example by hashing
 `email`.
+
+Notion's `/v1/users/me` returns a bot user object. For external (public
+OAuth) integrations where `bot.owner.type == "user"`, `fetch_identity`
+maps owner user fields into `IdentityProfile`. For internal
+workspace-owned integrations where `bot.owner.type == "workspace"`,
+Notion does not expose end-user email, so `IdentityProfile.email` is
+`None` by design.
 
 ### Token refresh
 

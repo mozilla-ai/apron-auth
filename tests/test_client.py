@@ -794,6 +794,57 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_notion_fetch_identity_lookalike_notion_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://api.notion.com.attacker.test/v1/oauth/authorize",
+            token_url="https://api.notion.com.attacker.test/v1/oauth/token",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
+    async def test_notion_identity_inferred_from_config(self, httpx_mock):
+        payload = {
+            "object": "user",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "name": "Integration Bot",
+            "avatar_url": "https://example.com/notion-bot.png",
+            "type": "bot",
+            "bot": {
+                "owner": {
+                    "type": "user",
+                    "user": {
+                        "id": "22222222-2222-2222-2222-222222222222",
+                        "name": "Notion Owner",
+                        "person": {"email": "owner@example.com"},
+                    },
+                },
+                "workspace_id": "33333333-3333-3333-3333-333333333333",
+                "workspace_name": "Example Workspace",
+            },
+        }
+        httpx_mock.add_response(url="https://api.notion.com/v1/users/me", json=payload)
+        config = _make_config(
+            authorize_url="https://api.notion.com/v1/oauth/authorize",
+            token_url="https://api.notion.com/v1/oauth/token",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="22222222-2222-2222-2222-222222222222",
+            email="owner@example.com",
+            email_verified=None,
+            name="Notion Owner",
+            username=None,
+            avatar_url="https://example.com/notion-bot.png",
+            raw=payload,
+        )
+
     async def test_salesforce_identity_inferred_from_config(self, httpx_mock):
         payload = {
             "sub": "https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
