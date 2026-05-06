@@ -119,12 +119,19 @@ print(identity.email_verified)
 ```
 
 Built-in identity handlers are inferred from standard Google, GitHub,
-Microsoft, and Atlassian endpoint hostnames, so they apply to both the
-bundled `preset(...)` configs and any manually constructed
-`ProviderConfig` pointing at those hosts. For other providers, pass a
-custom `identity_handler` to `OAuthClient`. OAuth protocol endpoints
-come from the provider config; identity API endpoints are
-provider-specific internals handled by the identity handler.
+Microsoft, Atlassian, and Typeform endpoint hostnames, so they apply
+to both the bundled `preset(...)` configs and any manually
+constructed `ProviderConfig` pointing at those hosts. For other
+providers, pass a custom `identity_handler` to `OAuthClient`. OAuth
+protocol endpoints come from the provider config; identity API
+endpoints are provider-specific internals handled by the identity
+handler.
+
+Typeform's `/me` response does not include a stable, opaque user
+identifier, so `IdentityProfile.subject` is always `None` for that
+provider — callers that need a non-PII handle should use
+`IdentityProfile.email` or accept that `username` (the Typeform
+alias) is user-mutable.
 
 ### Token refresh
 

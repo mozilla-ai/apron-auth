@@ -758,6 +758,42 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_typeform_identity_inferred_from_config(self, httpx_mock):
+        payload = {
+            "alias": "octouser",
+            "email": "user@example.com",
+            "language": "en",
+        }
+        httpx_mock.add_response(url="https://api.typeform.com/me", json=payload)
+        config = _make_config(
+            authorize_url="https://api.typeform.com/oauth/authorize",
+            token_url="https://api.typeform.com/oauth/token",
+            use_pkce=False,
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject=None,
+            email="user@example.com",
+            email_verified=None,
+            name=None,
+            username="octouser",
+            avatar_url=None,
+            raw=payload,
+        )
+
+    async def test_fetch_identity_lookalike_typeform_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://eviltypeform.com/oauth/authorize",
+            token_url="https://eviltypeform.com/oauth/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:

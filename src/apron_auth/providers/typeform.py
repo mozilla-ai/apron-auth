@@ -1,4 +1,4 @@
-"""Typeform OAuth provider preset.
+"""Typeform OAuth provider preset and identity handler.
 
 ``disconnect_fully_revokes=False``: Typeform does not expose an OAuth
 revocation endpoint at all (no revocation handler is returned), so
@@ -8,13 +8,72 @@ apron-auth has no way to remove the portal-level grant.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
+import httpx
 from pydantic import SecretStr
 
-from apron_auth.models import ProviderConfig
+from apron_auth.errors import IdentityFetchError
+from apron_auth.models import IdentityProfile, ProviderConfig
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    from apron_auth.protocols import IdentityHandler, RevocationHandler
+
+
+_TYPEFORM_USERINFO_URL = "https://api.typeform.com/me"
+_TYPEFORM_IDENTITY_HOST_SUFFIXES = ("api.typeform.com",)
+
+
+class TypeformIdentityHandler:
+    """Fetch identity fields from Typeform's ``/me`` endpoint.
+
+    Requires the ``accounts:read`` OAuth scope. The Typeform response
+    documents only ``alias``, ``email``, and ``language``, so
+    ``IdentityProfile.subject`` is always ``None`` for this provider —
+    Typeform does not expose a stable, opaque user identifier. Callers
+    that need a non-PII user handle should use ``email`` and accept
+    that the value is the user's email address rather than an opaque
+    id, or rely on ``username`` (the Typeform ``alias``) which is
+    user-mutable.
+    """
+
+    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+        """Fetch normalized identity fields using a Typeform access token."""
+        del config
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    _TYPEFORM_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise IdentityFetchError(f"Failed to fetch Typeform identity: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse Typeform identity response: {exc}") from exc
+
+        return IdentityProfile(
+            subject=None,
+            email=payload.get("email"),
+            email_verified=None,
+            name=None,
+            username=payload.get("alias"),
+            avatar_url=None,
+            raw=payload,
+        )
+
+
+def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
+    """Return the Typeform identity handler when config matches Typeform hosts."""
+    hosts = (config.authorize_url, config.token_url)
+    for url in hosts:
+        host = urlparse(url).hostname or ""
+        if any(host == suffix or host.endswith("." + suffix) for suffix in _TYPEFORM_IDENTITY_HOST_SUFFIXES):
+            return TypeformIdentityHandler()
+    return None
 
 
 def preset(
