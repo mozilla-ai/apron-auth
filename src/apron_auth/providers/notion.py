@@ -22,6 +22,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -152,6 +153,12 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     if oauth_hosts_match(config, _NOTION_IDENTITY_HOST_SUFFIXES):
         return NotionIdentityHandler()
     return None
+
+
+IDENTITY_RESOLVER = IdentityResolverRegistration(
+    provider="notion",
+    resolver=maybe_identity_handler,
+)
 
 
 def preset(
