@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -176,11 +176,8 @@ class GitHubRevocationHandler:
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Return the GitHub identity handler when config matches GitHub hosts."""
-    hosts = (config.authorize_url, config.token_url)
-    for url in hosts:
-        host = urlparse(url).hostname or ""
-        if any(host == suffix or host.endswith("." + suffix) for suffix in _GITHUB_IDENTITY_HOST_SUFFIXES):
-            return GitHubIdentityHandler()
+    if oauth_hosts_match(config, _GITHUB_IDENTITY_HOST_SUFFIXES):
+        return GitHubIdentityHandler()
     return None
 
 

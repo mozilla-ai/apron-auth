@@ -8,13 +8,13 @@ apron-auth has no way to remove the portal-level grant.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -68,11 +68,8 @@ class TypeformIdentityHandler:
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Return the Typeform identity handler when config matches Typeform hosts."""
-    hosts = (config.authorize_url, config.token_url)
-    for url in hosts:
-        host = urlparse(url).hostname or ""
-        if any(host == suffix or host.endswith("." + suffix) for suffix in _TYPEFORM_IDENTITY_HOST_SUFFIXES):
-            return TypeformIdentityHandler()
+    if oauth_hosts_match(config, _TYPEFORM_IDENTITY_HOST_SUFFIXES):
+        return TypeformIdentityHandler()
     return None
 
 

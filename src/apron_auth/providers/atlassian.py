@@ -10,7 +10,6 @@ surface a deep link to that page for manual removal.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
@@ -18,6 +17,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
 from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -67,11 +67,8 @@ class AtlassianIdentityHandler:
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Return the Atlassian identity handler when config matches Atlassian hosts."""
-    hosts = (config.authorize_url, config.token_url)
-    for url in hosts:
-        host = urlparse(url).hostname or ""
-        if any(host == suffix or host.endswith("." + suffix) for suffix in _ATLASSIAN_IDENTITY_HOST_SUFFIXES):
-            return AtlassianIdentityHandler()
+    if oauth_hosts_match(config, _ATLASSIAN_IDENTITY_HOST_SUFFIXES):
+        return AtlassianIdentityHandler()
     return None
 
 

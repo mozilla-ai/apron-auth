@@ -160,3 +160,29 @@ class TestMicrosoftMaybeIdentityHandler:
             token_url="https://oauth2.googleapis.com/token",
         )
         assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.microsoft import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="mid",
+            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
+            authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            token_url="https://attacker.example.com/common/oauth2/v2.0/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.microsoft import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="mid",
+            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/common/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        )
+        assert maybe_identity_handler(config) is None
