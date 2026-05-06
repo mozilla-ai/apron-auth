@@ -719,6 +719,45 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_atlassian_identity_inferred_from_config(self, httpx_mock):
+        payload = {
+            "account_id": "557058:abc-123",
+            "email": "user@example.com",
+            "name": "Test User",
+            "nickname": "tuser",
+            "picture": "https://example.com/avatar.png",
+            "account_type": "atlassian",
+            "account_status": "active",
+        }
+        httpx_mock.add_response(url="https://api.atlassian.com/me", json=payload)
+        config = _make_config(
+            authorize_url="https://auth.atlassian.com/authorize",
+            token_url="https://auth.atlassian.com/oauth/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="557058:abc-123",
+            email="user@example.com",
+            email_verified=None,
+            name="Test User",
+            username="tuser",
+            avatar_url="https://example.com/avatar.png",
+            raw=payload,
+        )
+
+    async def test_fetch_identity_lookalike_atlassian_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilatlassian.com/authorize",
+            token_url="https://evilatlassian.com/oauth/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
