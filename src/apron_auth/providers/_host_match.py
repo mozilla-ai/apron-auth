@@ -1,16 +1,10 @@
 """Boundary-aware host-suffix matchers.
 
-These functions compare hostnames (or the hostnames in a
-:class:`ProviderConfig`'s OAuth URLs) against a tuple of known
-suffixes using a label-boundary rule, so callers can decide whether
-a runtime hostname falls inside a trusted suffix list without
-restating the matching rules at each call site.
-
-Nothing in this module assumes anything about how callers organise
-their code; it exposes two pure functions and that is the whole
-contract. The only Protocol enforced at runtime in this package is
-:class:`apron_auth.protocols.IdentityHandler`, which requires
-``fetch_identity`` and nothing else.
+These helpers compare hostnames (or hostnames parsed from a
+:class:`ProviderConfig` OAuth configuration) against trusted
+suffixes using a label-boundary rule. They provide a shared, pure
+matching implementation so provider modules can enforce consistent
+host checks.
 """
 
 from __future__ import annotations
