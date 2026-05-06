@@ -205,6 +205,23 @@ class TestSalesforceIdentityHandler:
         with pytest.raises(IdentityFetchError, match="Failed to parse Salesforce identity response"):
             await handler.fetch_identity("access-abc", config)
 
+    async def test_non_salesforce_authorize_url_refuses_to_send_token(self, httpx_mock: HTTPXMock):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config = ProviderConfig(
+            client_id="sfid",
+            client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/services/oauth2/authorize",
+            token_url="https://login.salesforce.com/services/oauth2/token",
+        )
+        handler = SalesforceIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="not a Salesforce host"):
+            await handler.fetch_identity("access-abc", config)
+        assert httpx_mock.get_requests() == []
+
 
 class TestSalesforceMaybeIdentityHandler:
     def test_canonical_login_host_returns_handler(self):
@@ -261,5 +278,31 @@ class TestSalesforceMaybeIdentityHandler:
             client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.salesforce import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="sfid",
+            client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
+            authorize_url="https://login.salesforce.com/services/oauth2/authorize",
+            token_url="https://attacker.example.com/services/oauth2/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.salesforce import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="sfid",
+            client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/services/oauth2/authorize",
+            token_url="https://login.salesforce.com/services/oauth2/token",
         )
         assert maybe_identity_handler(config) is None
