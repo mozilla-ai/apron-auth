@@ -901,6 +901,46 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_linear_identity_inferred_from_config(self, httpx_mock):
+        viewer = {
+            "id": "user-123",
+            "name": "Linear User",
+            "displayName": "luser",
+            "email": "user@example.com",
+            "avatarUrl": "https://example.com/avatar.png",
+        }
+        httpx_mock.add_response(
+            url="https://api.linear.app/graphql",
+            json={"data": {"viewer": viewer}},
+        )
+        config = _make_config(
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="user-123",
+            email="user@example.com",
+            email_verified=None,
+            name="Linear User",
+            username="luser",
+            avatar_url="https://example.com/avatar.png",
+            raw=viewer,
+        )
+
+    async def test_fetch_identity_lookalike_linear_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://linear.app.attacker.test/oauth/authorize",
+            token_url="https://linear.app.attacker.test/oauth/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:

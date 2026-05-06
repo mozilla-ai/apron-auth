@@ -119,10 +119,11 @@ print(identity.email_verified)
 ```
 
 Built-in identity handlers are inferred from standard Google, GitHub,
-HubSpot, Microsoft, Atlassian, Typeform, Salesforce, and Notion endpoint
-hostnames, so they apply to both the bundled `preset(...)` configs and
-any manually constructed `ProviderConfig` pointing at those hosts. For
-other providers, pass a custom `identity_handler` to `OAuthClient`.
+HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear
+endpoint hostnames, so they apply to both the bundled `preset(...)`
+configs and any manually constructed `ProviderConfig` pointing at those
+hosts. For other providers, pass a custom `identity_handler` to
+`OAuthClient`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
