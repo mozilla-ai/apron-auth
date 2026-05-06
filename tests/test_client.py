@@ -794,6 +794,62 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity("access-abc")
 
+    async def test_salesforce_identity_inferred_from_config(self, httpx_mock):
+        payload = {
+            "sub": "https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
+            "email": "user@example.com",
+            "email_verified": True,
+            "name": "Test User",
+            "nickname": "tuser",
+            "picture": "https://example.com/avatar.png",
+            "user_id": "005xx000001SwiUAAS",
+            "organization_id": "00Dxx0000001gZWEAY",
+            "urls": {"rest": "https://acme.my.salesforce.com/services/data/v{version}/"},
+        }
+        httpx_mock.add_response(url="https://login.salesforce.com/services/oauth2/userinfo", json=payload)
+        config = _make_config(
+            authorize_url="https://login.salesforce.com/services/oauth2/authorize",
+            token_url="https://login.salesforce.com/services/oauth2/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity == IdentityProfile(
+            subject="https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
+            email="user@example.com",
+            email_verified=True,
+            name="Test User",
+            username="tuser",
+            avatar_url="https://example.com/avatar.png",
+            raw=payload,
+        )
+
+    async def test_salesforce_my_domain_identity_inferred(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://acme.my.salesforce.com/services/oauth2/userinfo",
+            json={"sub": "https://acme.my.salesforce.com/id/X/Y", "email": "user@acme.com"},
+        )
+        config = _make_config(
+            authorize_url="https://acme.my.salesforce.com/services/oauth2/authorize",
+            token_url="https://acme.my.salesforce.com/services/oauth2/token",
+        )
+        client = OAuthClient(config=config)
+
+        identity = await client.fetch_identity("access-abc")
+
+        assert identity.email == "user@acme.com"
+
+    async def test_fetch_identity_lookalike_salesforce_host_not_inferred(self):
+        config = _make_config(
+            authorize_url="https://evilsalesforce.com/services/oauth2/authorize",
+            token_url="https://evilsalesforce.com/services/oauth2/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity("access-abc")
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:

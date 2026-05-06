@@ -119,8 +119,8 @@ print(identity.email_verified)
 ```
 
 Built-in identity handlers are inferred from standard Google, GitHub,
-Microsoft, Atlassian, and Typeform endpoint hostnames, so they apply
-to both the bundled `preset(...)` configs and any manually
+Microsoft, Atlassian, Typeform, and Salesforce endpoint hostnames, so
+they apply to both the bundled `preset(...)` configs and any manually
 constructed `ProviderConfig` pointing at those hosts. For other
 providers, pass a custom `identity_handler` to `OAuthClient`. OAuth
 protocol endpoints come from the provider config; identity API
