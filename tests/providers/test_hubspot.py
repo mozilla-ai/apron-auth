@@ -1,13 +1,227 @@
 from __future__ import annotations
 
+import traceback
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.models import IdentityProfile, ProviderConfig
 from apron_auth.protocols import RevocationHandler
+
+
+class TestHubSpotIdentityHandler:
+    async def test_4xx_does_not_leak_access_token_in_error_message(self, httpx_mock: HTTPXMock):
+        secret = "secret-access-token-DO-NOT-LEAK"  # pragma: allowlist secret
+        httpx_mock.add_response(
+            url=f"https://api.hubapi.com/oauth/v1/access-tokens/{secret}",
+            status_code=401,
+            json={"error": "invalid_token"},
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as exc_info:
+            await handler.fetch_identity(secret, config)
+        assert secret not in str(exc_info.value)
+        assert secret not in repr(exc_info.value)
+        assert "401" in str(exc_info.value)
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in formatted
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
+
+    async def test_happy_path_returns_identity_profile(self, httpx_mock: HTTPXMock):
+        payload = {
+            "user_id": 1234567,
+            "user": "user@example.com",
+            "hub_id": 7654321,
+            "hub_domain": "acme.example.com",
+            "app_id": 999,
+            "scopes": ["contacts", "oauth"],
+            "token_type": "access",
+            "expires_in": 21600,
+        }
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            json=payload,
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity == IdentityProfile(
+            subject="1234567",
+            email="user@example.com",
+            email_verified=None,
+            name=None,
+            username="acme.example.com",
+            avatar_url=None,
+            raw=payload,
+        )
+
+    async def test_network_error_does_not_leak_access_token_in_error_message(self, httpx_mock: HTTPXMock):
+        secret = "secret-access-token-DO-NOT-LEAK"  # pragma: allowlist secret
+        httpx_mock.add_exception(
+            httpx.ConnectError(
+                f"Connection refused to https://api.hubapi.com/oauth/v1/access-tokens/{secret}",
+            ),
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as exc_info:
+            await handler.fetch_identity(secret, config)
+        assert secret not in str(exc_info.value)
+        assert secret not in repr(exc_info.value)
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in formatted
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__suppress_context__ is True
+        assert "ConnectError" in str(exc_info.value)
+
+    async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            status_code=200,
+            content=b"not-json",
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="Failed to parse HubSpot identity response"):
+            await handler.fetch_identity("access-abc", config)
+
+    async def test_subject_is_none_when_user_id_missing(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            json={"user": "user@example.com", "hub_domain": "acme.example.com"},
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.subject is None
+        assert identity.email == "user@example.com"
+        assert identity.username == "acme.example.com"
+
+    async def test_url_encodes_path_significant_chars_in_token(self, httpx_mock: HTTPXMock):
+        raw_token = "a/b+c=d e"
+        encoded_path = "a%2Fb%2Bc%3Dd%20e"
+        httpx_mock.add_response(
+            url=f"https://api.hubapi.com/oauth/v1/access-tokens/{encoded_path}",
+            json={"user_id": 1, "user": "u@example.com", "hub_domain": "acme.example.com"},
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity(raw_token, config)
+        assert identity.email == "u@example.com"
+
+
+class TestHubSpotMaybeIdentityHandler:
+    def test_canonical_hubspot_hosts_returns_handler(self):
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, maybe_identity_handler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = maybe_identity_handler(config)
+        assert isinstance(handler, HubSpotIdentityHandler)
+
+    def test_lookalike_host_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.hubspot import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="hsid",
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
+            authorize_url="https://evilhubspot.com/oauth/authorize",
+            token_url="https://evilhubapi.com/oauth/v1/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_non_hubspot_host_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.hubspot import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="hsid",
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.hubspot import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="hsid",
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
+            authorize_url="https://app.hubspot.com/oauth/authorize",
+            token_url="https://attacker.example.com/oauth/v1/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.hubspot import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="hsid",
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/oauth/authorize",
+            token_url="https://api.hubapi.com/oauth/v1/token",
+        )
+        assert maybe_identity_handler(config) is None
 
 
 class TestHubSpotPreset:

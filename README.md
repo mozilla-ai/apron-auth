@@ -119,7 +119,7 @@ print(identity.email_verified)
 ```
 
 Built-in identity handlers are inferred from standard Google, GitHub,
-Microsoft, Atlassian, Typeform, Salesforce, and Notion endpoint
+HubSpot, Microsoft, Atlassian, Typeform, Salesforce, and Notion endpoint
 hostnames, so they apply to both the bundled `preset(...)` configs and
 any manually constructed `ProviderConfig` pointing at those hosts. For
 other providers, pass a custom `identity_handler` to `OAuthClient`.
@@ -141,6 +141,16 @@ maps owner user fields into `IdentityProfile`. For internal
 workspace-owned integrations where `bot.owner.type == "workspace"`,
 Notion does not expose end-user email, so `IdentityProfile.email` is
 `None` by design.
+
+HubSpot's `fetch_identity` calls the access-token introspection
+endpoint, which mixes user and portal/account identity in one
+response. `IdentityProfile.subject` and `IdentityProfile.email` map to
+the HubSpot user (`user_id` and `user`), while
+`IdentityProfile.username` carries the portal `hub_domain`; the full
+response — including `hub_id`, `app_id`, `scopes`, and `expires_in` —
+is preserved on `IdentityProfile.raw`. HubSpot does not return an
+`email_verified` claim or a display name, so those fields are always
+`None`.
 
 ### Token refresh
 
