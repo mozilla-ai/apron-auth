@@ -11,13 +11,13 @@ admin surface. Consumers must surface a deep link to that page.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -60,11 +60,8 @@ class MicrosoftIdentityHandler:
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Return the Microsoft identity handler when config matches Microsoft hosts."""
-    hosts = (config.authorize_url, config.token_url)
-    for url in hosts:
-        host = urlparse(url).hostname or ""
-        if any(host == suffix or host.endswith("." + suffix) for suffix in _MICROSOFT_IDENTITY_HOST_SUFFIXES):
-            return MicrosoftIdentityHandler()
+    if oauth_hosts_match(config, _MICROSOFT_IDENTITY_HOST_SUFFIXES):
+        return MicrosoftIdentityHandler()
     return None
 
 

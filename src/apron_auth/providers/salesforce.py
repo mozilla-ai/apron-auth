@@ -17,17 +17,34 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
 from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
-_SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="refresh_token",
+        label="Refresh Token",
+        description="Issue a refresh token so access can be renewed without re-authorization",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="offline_access",
+        label="Offline Access",
+        description="Maintain access to your Salesforce data when you are not actively using the app",
+        access_type="read",
+        required=True,
+    ),
+]
+
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+_FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
 _SALESFORCE_IDENTITY_HOST_SUFFIXES = ("salesforce.com",)
-
-
-def _is_salesforce_host(host: str) -> bool:
-    return any(host == suffix or host.endswith("." + suffix) for suffix in _SALESFORCE_IDENTITY_HOST_SUFFIXES)
+_SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
 
 
 class SalesforceIdentityHandler:
@@ -53,9 +70,8 @@ class SalesforceIdentityHandler:
 
     async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Salesforce access token."""
-        parsed = urlparse(config.authorize_url)
-        host = parsed.hostname or ""
-        if not _is_salesforce_host(host):
+        host = urlparse(config.authorize_url).hostname or ""
+        if not matches_suffix(host, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
             msg = (
                 f"Salesforce identity fetch refused: authorize_url host {host!r} is not a "
                 f"Salesforce host. The bearer token would otherwise be sent to a non-Salesforce "
@@ -105,33 +121,9 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     then leaking the bearer token to a non-Salesforce host (the
     userinfo URL is derived from ``authorize_url`` at fetch time).
     """
-    authorize_host = urlparse(config.authorize_url).hostname or ""
-    token_host = urlparse(config.token_url).hostname or ""
-    if _is_salesforce_host(authorize_host) and _is_salesforce_host(token_host):
+    if oauth_hosts_match(config, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
         return SalesforceIdentityHandler()
     return None
-
-
-BASE_SCOPE_METADATA = [
-    ScopeMetadata(
-        scope="refresh_token",
-        label="Refresh Token",
-        description="Issue a refresh token so access can be renewed without re-authorization",
-        access_type="read",
-        required=True,
-    ),
-    ScopeMetadata(
-        scope="offline_access",
-        label="Offline Access",
-        description="Maintain access to your Salesforce data when you are not actively using the app",
-        access_type="read",
-        required=True,
-    ),
-]
-
-BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
-
-_FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
 
 
 def preset(

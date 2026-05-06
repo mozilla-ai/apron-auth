@@ -6,6 +6,67 @@ from apron_auth.models import ProviderConfig
 from apron_auth.protocols import RevocationHandler
 
 
+class TestGoogleMaybeIdentityHandler:
+    def test_canonical_google_host_returns_handler(self):
+        from apron_auth.providers.google import GoogleIdentityHandler, maybe_identity_handler, preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        handler = maybe_identity_handler(config)
+        assert isinstance(handler, GoogleIdentityHandler)
+
+    def test_lookalike_host_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.google import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="gid",
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
+            authorize_url="https://evilgoogle.com/o/oauth2/v2/auth",
+            token_url="https://evilgoogle.com/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_non_google_host_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.google import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="gid",
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
+            authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.google import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="gid",
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://attacker.example.com/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.google import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="gid",
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+
 class TestGooglePreset:
     def test_returns_config_and_handler(self):
         from apron_auth.providers.google import preset

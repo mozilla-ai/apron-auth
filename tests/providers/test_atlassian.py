@@ -162,3 +162,29 @@ class TestAtlassianMaybeIdentityHandler:
             token_url="https://oauth2.googleapis.com/token",
         )
         assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.atlassian import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="aid",
+            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
+            authorize_url="https://auth.atlassian.com/authorize",
+            token_url="https://attacker.example.com/oauth/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.atlassian import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="aid",
+            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/authorize",
+            token_url="https://auth.atlassian.com/oauth/token",
+        )
+        assert maybe_identity_handler(config) is None

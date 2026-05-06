@@ -139,3 +139,29 @@ class TestTypeformMaybeIdentityHandler:
             token_url="https://oauth2.googleapis.com/token",
         )
         assert maybe_identity_handler(config) is None
+
+    def test_only_authorize_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.typeform import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="tid",
+            client_secret=SecretStr("tsecret"),  # pragma: allowlist secret
+            authorize_url="https://api.typeform.com/oauth/authorize",
+            token_url="https://attacker.example.com/oauth/token",
+        )
+        assert maybe_identity_handler(config) is None
+
+    def test_only_token_url_matching_returns_none(self):
+        from pydantic import SecretStr
+
+        from apron_auth.providers.typeform import maybe_identity_handler
+
+        config = ProviderConfig(
+            client_id="tid",
+            client_secret=SecretStr("tsecret"),  # pragma: allowlist secret
+            authorize_url="https://attacker.example.com/oauth/authorize",
+            token_url="https://api.typeform.com/oauth/token",
+        )
+        assert maybe_identity_handler(config) is None
