@@ -156,6 +156,7 @@ class TestIdentityResolverRegistrations:
             "microsoft",
             "notion",
             "salesforce",
+            "slack",
             "typeform",
         }
 
@@ -169,6 +170,7 @@ class TestIdentityResolverRegistrations:
             "microsoft",
             "notion",
             "salesforce",
+            "slack",
             "typeform",
         }
 
