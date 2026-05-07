@@ -16,7 +16,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -52,12 +52,34 @@ class GoogleIdentityHandler:
         if "email_verified" in payload:
             email_verified = bool(payload.get("email_verified"))
 
+        # Google Workspace accounts return the workspace domain via the
+        # ``hd`` (hosted domain) claim; consumer (@gmail.com) accounts
+        # do not — those legitimately have no tenancy.
+        #
+        # ``TenancyContext.id`` is intentionally ``None`` for Google:
+        # the OIDC userinfo endpoint exposes no Workspace customer ID,
+        # which requires the Admin SDK Directory API and admin-only
+        # scopes (``admin.directory.customer.readonly``) that consumer
+        # apps cannot request. ``hd`` is not repurposed as a synthetic
+        # ``id`` because that would conflate "domain" and "tenant
+        # identifier" semantically — they coincide for Google but not
+        # for providers like Atlassian.
+        #
+        # ``TenancyContext.name`` is intentionally ``None``: there is
+        # no human-readable Workspace display name on the OIDC
+        # userinfo response (again, Admin SDK only).
+        hd = payload.get("hd")
+        tenancies: tuple[TenancyContext, ...] = ()
+        if hd:
+            tenancies = (TenancyContext(domain=hd),)
+
         return IdentityProfile(
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
             name=payload.get("name"),
             avatar_url=payload.get("picture"),
+            tenancies=tenancies,
             raw=payload,
         )
 

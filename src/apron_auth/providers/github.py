@@ -103,6 +103,14 @@ class GitHubIdentityHandler:
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")
 
+        # GitHub OAuth Apps issue user-scoped tokens; org membership
+        # (``/user/orgs``) is a permission, not a token-scoping context.
+        # SAML SSO scoping is enforced at request time and surfaces only
+        # as a 403 with no field on the token to inspect, so there is
+        # no normalized tenancy to populate. GitHub Apps (a separate
+        # auth model from OAuth Apps) ARE installation-scoped — if
+        # apron-auth ever supports GitHub Apps as a distinct provider,
+        # that installation should populate ``tenancies``.
         return IdentityProfile(
             subject=str(subject) if subject is not None else None,
             email=email,
@@ -110,6 +118,7 @@ class GitHubIdentityHandler:
             name=user_payload.get("name") or user_payload.get("login"),
             username=user_payload.get("login"),
             avatar_url=user_payload.get("avatar_url"),
+            tenancies=(),
             raw={"user": user_payload, "emails": emails_payload},
         )
 

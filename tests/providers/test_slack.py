@@ -5,7 +5,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
 SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
@@ -82,6 +82,8 @@ class TestSlackIdentityHandler:
             "picture": "https://example.com/avatar.png",
             "https://slack.com/user_id": "U12345",
             "https://slack.com/team_id": "T67890",
+            "https://slack.com/team_name": "Example Team",
+            "https://slack.com/team_domain": "example",
         }
         httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
         config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
@@ -96,8 +98,42 @@ class TestSlackIdentityHandler:
             name="Slack User",
             username="U12345",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(
+                TenancyContext(
+                    id="T67890",
+                    name="Example Team",
+                    domain="example",
+                ),
+            ),
             raw=payload,
         )
+
+    async def test_missing_team_id_yields_empty_tenancies(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler, preset
+
+        payload = {"ok": True, "sub": "U12345"}
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
+        config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("user-token-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_team_id_present_but_team_name_and_domain_missing(self, httpx_mock: HTTPXMock) -> None:
+        """``team_id`` is the canonical anchor — the entry is still
+        emitted when ``team_name`` and ``team_domain`` are absent, with
+        those fields surfacing as ``None``."""
+        from apron_auth.providers.slack import SlackIdentityHandler, preset
+
+        payload = {"ok": True, "https://slack.com/team_id": "T67890"}
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
+        config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("user-token-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="T67890", name=None, domain=None),)
         request = httpx_mock.get_request()
         assert request is not None
         assert request.method == "POST"

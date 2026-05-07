@@ -146,12 +146,43 @@ Notion does not expose end-user email, so `IdentityProfile.email` is
 HubSpot's `fetch_identity` calls the access-token introspection
 endpoint, which mixes user and portal/account identity in one
 response. `IdentityProfile.subject` and `IdentityProfile.email` map to
-the HubSpot user (`user_id` and `user`), while
-`IdentityProfile.username` carries the portal `hub_domain`; the full
-response — including `hub_id`, `app_id`, `scopes`, and `expires_in` —
-is preserved on `IdentityProfile.raw`. HubSpot does not return an
-`email_verified` claim or a display name, so those fields are always
-`None`.
+the HubSpot user (`user_id` and `user`); the portal (`hub_id`,
+`hub_domain`) populates `IdentityProfile.tenancies` (see "Tenancy"
+below). The full response — including `app_id`, `scopes`, and
+`expires_in` — is preserved on `IdentityProfile.raw`. HubSpot does not
+return an `email_verified` claim, a display name, or a user handle,
+so those fields are always `None`.
+
+#### Tenancy
+
+`IdentityProfile.tenancies` answers "what scope of resources does this
+token operate within?" — the workspace, organization, tenant,
+instance, portal, or site the OAuth access token is bound to. It is a
+tuple of `TenancyContext` entries because Atlassian OAuth 2.0 (3LO)
+tokens can grant access to several Cloud sites at once and a singleton
+shape would force a lossy "pick one" decision in the handler.
+
+| Provider count | Provider examples                                                 |
+|----------------|-------------------------------------------------------------------|
+| `()`           | GitHub OAuth Apps, Typeform, consumer Google, personal Microsoft |
+| 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Google Workspace |
+| Many entries   | Atlassian (Jira, Jira Service Management, Confluence)            |
+
+Each `TenancyContext` exposes three normalized fields — `id`, `name`,
+`domain` — plus a provider-specific `raw` payload for fields that do
+not normalize cleanly. **Each normalized field may independently be
+`None`** when the provider's response does not expose that fact (for
+example, Microsoft populates only `id` from the access-token `tid`
+claim; Google Workspace populates only `domain` from the `hd` claim;
+HubSpot populates only `id` and `domain`). Persist `id` as the
+canonical key — provider-mutable handles like Linear's `urlKey`
+should not be treated as permanent identifiers.
+
+```python
+identity = await client.fetch_identity(tokens.access_token)
+for tenancy in identity.tenancies:
+    print(tenancy.id, tenancy.name, tenancy.domain)
+```
 
 ### Token refresh
 

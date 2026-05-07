@@ -27,7 +27,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -35,8 +35,11 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
-_SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 _SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
+_SLACK_TEAM_DOMAIN_CLAIM = "https://slack.com/team_domain"
+_SLACK_TEAM_ID_CLAIM = "https://slack.com/team_id"
+_SLACK_TEAM_NAME_CLAIM = "https://slack.com/team_name"
+_SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 _SLACK_USER_ID_CLAIM = "https://slack.com/user_id"
 
 
@@ -95,6 +98,23 @@ class SlackIdentityHandler:
         if "email_verified" in payload:
             email_verified = bool(payload.get("email_verified"))
 
+        # Sign-in-with-Slack tokens are single-workspace, so a populated
+        # ``team_id`` always maps to exactly one TenancyContext. Slack
+        # reliably returns ``team_name`` and ``team_domain`` alongside
+        # ``team_id`` for SiwS tokens, but the model contract allows
+        # either to be ``None``; gating on ``team_id`` (the canonical
+        # anchor) keeps the entry meaningful even on unexpected shapes.
+        team_id = payload.get(_SLACK_TEAM_ID_CLAIM)
+        tenancies: tuple[TenancyContext, ...] = ()
+        if team_id:
+            tenancies = (
+                TenancyContext(
+                    id=team_id,
+                    name=payload.get(_SLACK_TEAM_NAME_CLAIM),
+                    domain=payload.get(_SLACK_TEAM_DOMAIN_CLAIM),
+                ),
+            )
+
         return IdentityProfile(
             subject=payload.get("sub"),
             email=payload.get("email"),
@@ -102,6 +122,7 @@ class SlackIdentityHandler:
             name=payload.get("name"),
             username=payload.get(_SLACK_USER_ID_CLAIM),
             avatar_url=payload.get("picture"),
+            tenancies=tenancies,
             raw=payload,
         )
 

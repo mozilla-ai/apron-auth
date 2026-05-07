@@ -4,8 +4,11 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
+
+ATLASSIAN_ME_URL = "https://api.atlassian.com/me"
+ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 
 
 class TestAtlassianPreset:
@@ -80,7 +83,17 @@ class TestAtlassianIdentityHandler:
             "zoneinfo": "Europe/London",
             "locale": "en-GB",
         }
-        httpx_mock.add_response(url="https://api.atlassian.com/me", json=payload)
+        resources = [
+            {
+                "id": "cloud-1",
+                "name": "Acme Corp",
+                "url": "https://acme.atlassian.net",
+                "scopes": ["read:jira-work"],
+                "avatarUrl": "https://example.com/site-avatar.png",
+            }
+        ]
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
 
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
@@ -95,14 +108,129 @@ class TestAtlassianIdentityHandler:
             name="Test User",
             username="tuser",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(
+                TenancyContext(
+                    id="cloud-1",
+                    name="Acme Corp",
+                    domain="https://acme.atlassian.net",
+                    raw={
+                        "scopes": ["read:jira-work"],
+                        "avatarUrl": "https://example.com/site-avatar.png",
+                    },
+                ),
+            ),
             raw=payload,
         )
-        request = httpx_mock.get_request()
-        assert request.headers.get("authorization") == "Bearer access-abc"
+        requests = httpx_mock.get_requests()
+        assert {str(r.url) for r in requests} == {
+            ATLASSIAN_ME_URL,
+            ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+        }
+        for request in requests:
+            assert request.headers.get("authorization") == "Bearer access-abc"
+
+    async def test_multi_tenant_token_emits_one_context_per_resource(self, httpx_mock: HTTPXMock):
+        """Atlassian is the canonical multi-tenant case — load-bearing
+        validation that ``tenancies`` is a tuple, not a singleton."""
+        payload = {"account_id": "557058:abc-123", "name": "Test User"}
+        resources = [
+            {
+                "id": "cloud-1",
+                "name": "Acme Corp",
+                "url": "https://acme.atlassian.net",
+                "scopes": ["read:jira-work"],
+            },
+            {
+                "id": "cloud-2",
+                "name": "Beta Org",
+                "url": "https://beta.atlassian.net",
+                "scopes": ["read:confluence-content.summary"],
+            },
+        ]
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert len(identity.tenancies) == 2
+        assert identity.tenancies[0].id == "cloud-1"
+        assert identity.tenancies[1].id == "cloud-2"
+        assert identity.tenancies[1].domain == "https://beta.atlassian.net"
+
+    async def test_empty_accessible_resources_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        payload = {"account_id": "557058:abc-123"}
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=[])
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_resource_without_id_is_skipped(self, httpx_mock: HTTPXMock):
+        """A resource entry that lacks ``id`` cannot be keyed and must
+        be silently dropped; other entries in the same response are
+        kept so a malformed item does not poison the whole list."""
+        payload = {"account_id": "557058:abc-123"}
+        resources = [
+            {"name": "Missing ID", "url": "https://no-id.atlassian.net"},
+            {"id": "cloud-2", "name": "Acme", "url": "https://acme.atlassian.net"},
+        ]
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert len(identity.tenancies) == 1
+        assert identity.tenancies[0].id == "cloud-2"
+
+    async def test_non_dict_resource_items_are_skipped(self, httpx_mock: HTTPXMock):
+        payload = {"account_id": "557058:abc-123"}
+        resources = ["not-a-dict", None, {"id": "cloud-1", "name": "Acme"}]
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert len(identity.tenancies) == 1
+        assert identity.tenancies[0].id == "cloud-1"
+
+    async def test_non_list_accessible_resources_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        """If Atlassian returns an unexpected non-list shape (e.g. an
+        object), degrade cleanly to empty rather than raising."""
+        payload = {"account_id": "557058:abc-123"}
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        httpx_mock.add_response(
+            url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+            json={"unexpected": "object"},
+        )
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
 
     async def test_401_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
-            url="https://api.atlassian.com/me",
+            url=ATLASSIAN_ME_URL,
             status_code=401,
             json={"error": "invalid_token"},
         )
@@ -114,9 +242,44 @@ class TestAtlassianIdentityHandler:
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian identity"):
             await handler.fetch_identity("bad-token", config)
 
+    async def test_accessible_resources_failure_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
+        httpx_mock.add_response(
+            url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+            status_code=500,
+            json={"error": "internal"},
+        )
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        # Distinct message per sub-request so log triage can identify
+        # which endpoint failed without reproducing the call.
+        with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
+            await handler.fetch_identity("access-abc", config)
+
+    async def test_accessible_resources_non_json_raises_distinct_parse_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
+        httpx_mock.add_response(
+            url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+            status_code=200,
+            content=b"not-json",
+        )
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        with pytest.raises(
+            IdentityFetchError,
+            match="Failed to parse Atlassian accessible resources response",
+        ):
+            await handler.fetch_identity("access-abc", config)
+
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
-            url="https://api.atlassian.com/me",
+            url=ATLASSIAN_ME_URL,
             status_code=200,
             content=b"not-json",
         )

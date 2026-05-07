@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+
+
+def _fake_jwt(payload: dict[str, object]) -> str:
+    """Build a header.payload.signature string with a base64url payload.
+
+    The signature segment is intentionally bogus — the handler does not
+    verify access-token signatures, so the parser only cares about the
+    middle segment shape.
+    """
+
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    header = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}).encode())
+    body = _b64url(json.dumps(payload).encode())
+    return f"{header}.{body}.sig"
 
 
 class TestMicrosoftPreset:
@@ -80,6 +99,7 @@ class TestMicrosoftIdentityHandler:
         config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
         handler = MicrosoftIdentityHandler()
 
+        # Opaque (non-JWT) access token → no tid extractable → tenancies=().
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
@@ -88,6 +108,7 @@ class TestMicrosoftIdentityHandler:
             email_verified=None,
             name="Test User",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(),
             raw={
                 "sub": "ms-user-123",
                 "email": "user@example.com",
@@ -97,6 +118,99 @@ class TestMicrosoftIdentityHandler:
         )
         request = httpx_mock.get_request()
         assert request.headers.get("authorization") == "Bearer access-abc"
+
+    async def test_jwt_access_token_with_tid_populates_tenancy(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={"sub": "ms-user-123"},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
+
+        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
+        handler = MicrosoftIdentityHandler()
+        token = _fake_jwt({"tid": "tenant-abc-123", "oid": "ms-user-123"})
+
+        identity = await handler.fetch_identity(token, config)
+
+        assert identity.tenancies == (TenancyContext(id="tenant-abc-123"),)
+
+    async def test_consumer_msa_tenant_guid_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        """Personal Microsoft accounts use the well-known consumers GUID;
+        treat as no organization tenant rather than fabricating one."""
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={"sub": "ms-user-123"},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
+
+        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
+        handler = MicrosoftIdentityHandler()
+        token = _fake_jwt({"tid": "9188040d-6c67-4c5b-b112-36a304b66dad"})
+
+        identity = await handler.fetch_identity(token, config)
+
+        assert identity.tenancies == ()
+
+    async def test_jwt_without_tid_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={"sub": "ms-user-123"},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
+
+        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
+        handler = MicrosoftIdentityHandler()
+        token = _fake_jwt({"oid": "ms-user-123"})
+
+        identity = await handler.fetch_identity(token, config)
+
+        assert identity.tenancies == ()
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            "single-segment-token",
+            "header-only.",
+            "header.!!!not-valid-base64!!!.sig",
+            "header.eyJ0aWQ.sig",  # truncated payload
+            "header.aGVsbG8.sig",  # base64-decodes to "hello", not JSON
+        ],
+    )
+    async def test_malformed_jwt_access_tokens_yield_empty_tenancies(self, httpx_mock: HTTPXMock, malformed: str):
+        """Every parse failure path must degrade to ``tenancies=()`` —
+        unrecognized formats, invalid base64, truncated segments, and
+        non-JSON payloads must not raise from ``fetch_identity``."""
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={"sub": "ms-user-123"},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
+
+        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
+        handler = MicrosoftIdentityHandler()
+
+        identity = await handler.fetch_identity(malformed, config)
+
+        assert identity.tenancies == ()
+
+    @pytest.mark.parametrize("bogus_tid", [12345, "", None])
+    async def test_jwt_with_non_string_tid_yields_empty_tenancies(self, httpx_mock: HTTPXMock, bogus_tid: object):
+        """``tid`` must be a non-empty string per the contract — a
+        numeric or empty value falls back to no tenancy rather than
+        being coerced into a TenancyContext.id."""
+        httpx_mock.add_response(
+            url="https://graph.microsoft.com/oidc/userinfo",
+            json={"sub": "ms-user-123"},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
+
+        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
+        handler = MicrosoftIdentityHandler()
+        token = _fake_jwt({"tid": bogus_tid})
+
+        identity = await handler.fetch_identity(token, config)
+
+        assert identity.tenancies == ()
 
     async def test_401_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(

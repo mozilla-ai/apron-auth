@@ -54,6 +54,10 @@ class TestTypeformIdentityHandler:
             avatar_url=None,
             raw=payload,
         )
+        # Typeform "workspaces" are intra-account containers, not
+        # OAuth-scoping contexts. Assert ``()`` explicitly so a future
+        # change that surfaces workspaces as tenants trips this test.
+        assert identity.tenancies == ()
         request = httpx_mock.get_request()
         assert request.headers.get("authorization") == "Bearer access-abc"
 
