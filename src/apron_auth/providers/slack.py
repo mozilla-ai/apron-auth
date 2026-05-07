@@ -77,10 +77,17 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     ``https://kraneflannel.slack.com/`` whose host's leading label is
     the workspace's ``team_domain``. ``team.info`` exposes the domain
     directly, so this helper is only used on the ``auth.test``
-    fallback path. Returns ``None`` for missing input or any host that
-    does not end in ``.slack.com`` (e.g. Enterprise Grid org URLs on
-    ``*.enterprise.slack.com`` still match, but unrelated hosts do
-    not), preferring an absent value over a guess.
+    fallback path. Returns ``None`` for any of:
+
+    - missing input;
+    - a host that does not end in ``.slack.com``;
+    - a host that does end in ``.slack.com`` but whose leading label
+      is empty or itself multi-segment — Enterprise Grid org URLs
+      like ``myorg.enterprise.slack.com`` pass the suffix check yet
+      surface no single workspace ``team_domain``.
+
+    Preferring an absent value over a guess keeps the contract honest
+    when the URL shape is ambiguous.
     """
     if not url:
         return None
