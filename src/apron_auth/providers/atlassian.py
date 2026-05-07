@@ -32,9 +32,10 @@ _ATLASSIAN_USERINFO_URL = "https://api.atlassian.com/me"
 def _build_tenancies(resources: Any) -> tuple[TenancyContext, ...]:
     """Build a tenancies tuple from the accessible-resources response.
 
-    Skips any element that is not a dict or that lacks a ``cloudId``;
-    the ``id`` is the canonical key for an Atlassian site (``name`` and
-    ``url`` are decorative). ``name`` and ``domain`` may independently
+    Skips any element that is not a dict or that lacks an ``id`` (the
+    response field name; conceptually the Atlassian site ``cloudId``),
+    which is the canonical key for an Atlassian site — ``name`` and
+    ``url`` are decorative. ``name`` and ``domain`` may independently
     be ``None`` per the :class:`TenancyContext` contract — emit the
     entry anyway so callers retain the anchor identifier.
     """
@@ -113,12 +114,12 @@ class AtlassianIdentityHandler:
                 )
                 resources_response.raise_for_status()
             except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-                raise IdentityFetchError(f"Failed to fetch Atlassian identity: {exc}") from exc
+                raise IdentityFetchError(f"Failed to fetch Atlassian accessible resources: {exc}") from exc
 
             try:
                 resources = resources_response.json()
             except ValueError as exc:
-                raise IdentityFetchError(f"Failed to parse Atlassian identity response: {exc}") from exc
+                raise IdentityFetchError(f"Failed to parse Atlassian accessible resources response: {exc}") from exc
 
         tenancies = _build_tenancies(resources)
 

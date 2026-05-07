@@ -165,7 +165,7 @@ shape would force a lossy "pick one" decision in the handler.
 | Provider count | Provider examples                                                 |
 |----------------|-------------------------------------------------------------------|
 | `()`           | GitHub OAuth Apps, Typeform, consumer Google, personal Microsoft |
-| 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Workspace Google |
+| 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Google Workspace |
 | Many entries   | Atlassian (Jira, Jira Service Management, Confluence)            |
 
 Each `TenancyContext` exposes three normalized fields — `id`, `name`,

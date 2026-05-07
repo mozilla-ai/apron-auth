@@ -254,7 +254,27 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian identity"):
+        # Distinct message per sub-request so log triage can identify
+        # which endpoint failed without reproducing the call.
+        with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
+            await handler.fetch_identity("access-abc", config)
+
+    async def test_accessible_resources_non_json_raises_distinct_parse_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
+        httpx_mock.add_response(
+            url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+            status_code=200,
+            content=b"not-json",
+        )
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        handler = AtlassianIdentityHandler()
+
+        with pytest.raises(
+            IdentityFetchError,
+            match="Failed to parse Atlassian accessible resources response",
+        ):
             await handler.fetch_identity("access-abc", config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
