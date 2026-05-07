@@ -8,6 +8,8 @@ from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
+SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
+SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
 SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 
 
@@ -182,16 +184,22 @@ class TestSlackMaybeIdentityHandler:
         handler = maybe_identity_handler(config)
         assert isinstance(handler, SlackIdentityHandler)
 
-    def test_canonical_slack_host_without_openid_returns_none(self) -> None:
-        """Workspace-bot config (no openid in scopes) → no handler."""
-        from apron_auth.providers.slack import maybe_identity_handler, preset
+    def test_canonical_slack_host_without_openid_returns_handler(self) -> None:
+        """Workspace-bot config (no openid in scopes) also gets the handler.
+
+        The handler branches internally on ``openid`` presence, so
+        resolution is purely host-based — the workspace-bot flow
+        should reach :class:`SlackIdentityHandler` and use its
+        ``team.info``/``auth.test`` path.
+        """
+        from apron_auth.providers.slack import SlackIdentityHandler, maybe_identity_handler, preset
 
         config, _ = preset(
             client_id="sid",
             client_secret="ssecret",  # pragma: allowlist secret
             scopes=["channels:read", "chat:write"],
         )
-        assert maybe_identity_handler(config) is None
+        assert isinstance(maybe_identity_handler(config), SlackIdentityHandler)
 
     def test_lookalike_host_returns_none(self) -> None:
         from apron_auth.providers.slack import maybe_identity_handler
@@ -377,3 +385,244 @@ class TestSlackRevocationHandler:
         request = httpx_mock.get_request()
         assert request.method == "GET"
         assert "token=access-abc" in str(request.url)
+
+
+class TestSlackWorkspaceBotIdentity:
+    """``SlackIdentityHandler`` branch for tokens without ``openid``.
+
+    Workspace-bot tokens carry no person identity, so ``subject`` /
+    ``email`` / ``name`` / ``username`` / ``avatar_url`` stay ``None``
+    by design. Tenancy is fetched from ``team.info`` (preferred,
+    requires ``team:read``) or ``auth.test`` (universal fallback when
+    ``team:read`` was not granted).
+    """
+
+    @staticmethod
+    def _bot_config() -> ProviderConfig:
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read", "chat:write"],
+        )
+        return config
+
+    async def test_auth_test_failure_after_fallback_raises(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        httpx_mock.add_response(
+            url=SLACK_TEAM_INFO_URL,
+            json={"ok": False, "error": "missing_scope"},
+        )
+        httpx_mock.add_response(
+            url=SLACK_AUTH_TEST_URL,
+            json={"ok": False, "error": "token_revoked"},
+        )
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="auth.test.*token_revoked"):
+            await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+    async def test_auth_test_url_with_unrecognised_host_yields_no_domain(self, httpx_mock: HTTPXMock) -> None:
+        """Unrecognisable workspace URL → ``domain=None`` rather than a guess."""
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        httpx_mock.add_response(
+            url=SLACK_TEAM_INFO_URL,
+            json={"ok": False, "error": "missing_scope"},
+        )
+        auth_test_payload = {
+            "ok": True,
+            "url": "https://example.org/",
+            "team": "Krane Flannel",
+            "team_id": "T67890",
+        }
+        httpx_mock.add_response(url=SLACK_AUTH_TEST_URL, json=auth_test_payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert identity.tenancies == (
+            TenancyContext(
+                id="T67890",
+                name="Krane Flannel",
+                domain=None,
+                raw=auth_test_payload,
+            ),
+        )
+
+    async def test_enterprise_grid_yields_single_tenancy(self, httpx_mock: HTTPXMock) -> None:
+        """Enterprise Grid info flows through ``raw``, not into extra tenancies.
+
+        Locks the deferred multi-team contract: a future expansion to
+        one ``TenancyContext`` per accessible team must update this
+        test rather than quietly invalidating the single-tenant
+        assumption.
+        """
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        team = {
+            "id": "T67890",
+            "name": "Example Team",
+            "domain": "example",
+            "enterprise_id": "E12345",
+            "enterprise_name": "Example Enterprise",
+        }
+        payload = {"ok": True, "team": team}
+        httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert len(identity.tenancies) == 1
+        assert identity.tenancies[0].raw == team
+        assert identity.tenancies[0].raw["enterprise_id"] == "E12345"
+        assert identity.tenancies[0].raw["enterprise_name"] == "Example Enterprise"
+
+    async def test_team_info_happy_path_populates_tenancy(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        team = {
+            "id": "T67890",
+            "name": "Example Team",
+            "domain": "example",
+        }
+        payload = {"ok": True, "team": team}
+        httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert identity == IdentityProfile(
+            tenancies=(
+                TenancyContext(
+                    id="T67890",
+                    name="Example Team",
+                    domain="example",
+                    raw=team,
+                ),
+            ),
+            raw=payload,
+        )
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.method == "POST"
+        assert request.headers.get("authorization") == "Bearer xoxb-bot-token"
+
+    async def test_team_info_http_error_raises(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, status_code=500, json={"error": "internal"})
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="team.info"):
+            await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+    async def test_team_info_missing_scope_falls_back_to_auth_test(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        httpx_mock.add_response(
+            url=SLACK_TEAM_INFO_URL,
+            json={"ok": False, "error": "missing_scope"},
+        )
+        auth_test_payload = {
+            "ok": True,
+            "url": "https://kraneflannel.slack.com/",
+            "team": "Krane Flannel",
+            "team_id": "T67890",
+            "user": "bot-user",
+            "user_id": "U12345",
+            "bot_id": "B12345",
+        }
+        httpx_mock.add_response(url=SLACK_AUTH_TEST_URL, json=auth_test_payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert identity == IdentityProfile(
+            tenancies=(
+                TenancyContext(
+                    id="T67890",
+                    name="Krane Flannel",
+                    domain="kraneflannel",
+                    raw=auth_test_payload,
+                ),
+            ),
+            raw=auth_test_payload,
+        )
+
+    async def test_team_info_missing_team_object_yields_empty_tenancies(self, httpx_mock: HTTPXMock) -> None:
+        """``ok=true`` without a nested ``team`` object → no tenancy emitted."""
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        payload = {"ok": True}
+        httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert identity.tenancies == ()
+        assert identity.raw == payload
+
+    async def test_team_info_non_missing_scope_error_does_not_fall_back(self, httpx_mock: HTTPXMock) -> None:
+        """Real auth errors must surface, not be papered over by ``auth.test``."""
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        httpx_mock.add_response(
+            url=SLACK_TEAM_INFO_URL,
+            json={"ok": False, "error": "invalid_auth"},
+        )
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="team.info.*invalid_auth"):
+            await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+        # Only the team.info request should have been made; pytest-httpx
+        # otherwise fails on unused queued responses, so a missing
+        # ``auth.test`` queue is itself the assertion that no fallback
+        # request was attempted.
+        assert [str(r.url) for r in httpx_mock.get_requests()] == [SLACK_TEAM_INFO_URL]
+
+    async def test_workspace_bot_path_leaves_person_fields_none(self, httpx_mock: HTTPXMock) -> None:
+        """Person-identity fields are deliberately ``None`` (see handler docstring)."""
+        from apron_auth.providers.slack import SlackIdentityHandler
+
+        team = {"id": "T67890", "name": "Example", "domain": "example"}
+        payload = {"ok": True, "team": team}
+        httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
+        handler = SlackIdentityHandler()
+
+        identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
+
+        assert identity.subject is None
+        assert identity.email is None
+        assert identity.email_verified is None
+        assert identity.name is None
+        assert identity.username is None
+        assert identity.avatar_url is None
+
+
+class TestSlackWorkspaceDomainParsing:
+    """Domain extraction from an ``auth.test`` workspace URL host."""
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            ("https://kraneflannel.slack.com/", "kraneflannel"),
+            ("https://kraneflannel.slack.com", "kraneflannel"),
+            ("http://kraneflannel.slack.com/path", "kraneflannel"),
+            (None, None),
+            ("", None),
+            ("not a url", None),
+            ("https://example.com/", None),
+            ("https://slack.com/", None),
+            # Enterprise Grid org URLs (``*.enterprise.slack.com``) are
+            # multi-segment and intentionally fall through to ``None``
+            # — there is no single workspace ``team_domain`` to surface.
+            ("https://myorg.enterprise.slack.com/", None),
+        ],
+    )
+    def test_parse_team_domain_from_url(self, url: str | None, expected: str | None) -> None:
+        from apron_auth.providers.slack import _parse_team_domain_from_url
+
+        assert _parse_team_domain_from_url(url) == expected
