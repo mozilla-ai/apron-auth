@@ -56,6 +56,11 @@ class TypeformIdentityHandler:
         except ValueError as exc:
             raise IdentityFetchError(f"Failed to parse Typeform identity response: {exc}") from exc
 
+        # Typeform "workspaces" are intra-account containers, not
+        # OAuth-scoping contexts. A token authenticates the user and
+        # grants access — governed by ``workspaces:read`` /
+        # ``workspaces:write`` scopes — across every workspace the
+        # user can see, so there is no normalized tenancy to populate.
         return IdentityProfile(
             subject=None,
             email=payload.get("email"),
@@ -63,6 +68,7 @@ class TypeformIdentityHandler:
             name=None,
             username=payload.get("alias"),
             avatar_url=None,
+            tenancies=(),
             raw=payload,
         )
 

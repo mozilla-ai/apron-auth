@@ -15,7 +15,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -102,6 +102,32 @@ class SalesforceIdentityHandler:
 
         username = payload.get("nickname") or payload.get("preferred_username")
 
+        organization_id = payload.get("organization_id")
+        tenancies: tuple[TenancyContext, ...] = ()
+        if organization_id:
+            # ``TenancyContext.name`` is intentionally ``None`` for
+            # Salesforce: the OIDC userinfo response carries no org
+            # display name. Retrieving it requires a separate
+            # ``SELECT Name FROM Organization`` SOQL query against the
+            # Salesforce REST API, which is out of scope for the
+            # identity-fetch path.
+            #
+            # The MyDomain host is embedded in the Identity URL (form:
+            # ``https://MYDOMAIN.my.salesforce.com/id/<orgId>/<userId>``)
+            # and serves as a stable canonical domain for both
+            # production and sandbox orgs (sandbox hosts surface as
+            # ``*.sandbox.my.salesforce.com``). The Identity URL is
+            # exposed on the OIDC userinfo response as ``sub``; ``id``
+            # is the legacy Identity-URL response field and is not
+            # always present, so prefer ``sub`` and fall back.
+            identity_url = payload.get("sub") or payload.get("id") or ""
+            tenancies = (
+                TenancyContext(
+                    id=organization_id,
+                    domain=urlparse(identity_url).hostname or None,
+                ),
+            )
+
         return IdentityProfile(
             subject=payload.get("sub"),
             email=payload.get("email"),
@@ -109,6 +135,7 @@ class SalesforceIdentityHandler:
             name=payload.get("name"),
             username=username,
             avatar_url=payload.get("picture"),
+            tenancies=tenancies,
             raw=payload,
         )
 

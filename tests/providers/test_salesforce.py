@@ -4,7 +4,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.salesforce import BASE_SCOPES, preset
 
@@ -117,6 +117,12 @@ class TestSalesforceIdentityHandler:
             name="Test User",
             username="tuser",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(
+                TenancyContext(
+                    id="00Dxx0000001gZWEAY",
+                    domain="login.salesforce.com",
+                ),
+            ),
             raw=payload,
         )
         request = httpx_mock.get_request()
@@ -157,6 +163,90 @@ class TestSalesforceIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity.email == "sandbox@example.com"
+
+    async def test_tenancy_domain_parsed_from_sandbox_id_url(self, httpx_mock: HTTPXMock):
+        payload = {
+            "sub": "https://acme.sandbox.my.salesforce.com/id/00Dxx0000001gZWEAY/005xx",
+            "organization_id": "00Dxx0000001gZWEAY",
+        }
+        httpx_mock.add_response(
+            url="https://test.salesforce.com/services/oauth2/userinfo",
+            json=payload,
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config, _ = preset(
+            client_id="sfid",
+            client_secret="sfsecret",  # pragma: allowlist secret
+            scopes=["openid"],
+            host="test.salesforce.com",
+        )
+        handler = SalesforceIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (
+            TenancyContext(
+                id="00Dxx0000001gZWEAY",
+                domain="acme.sandbox.my.salesforce.com",
+            ),
+        )
+
+    async def test_no_organization_id_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://login.salesforce.com/services/oauth2/userinfo",
+            json={"sub": "https://login.salesforce.com/id/X/Y"},
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        handler = SalesforceIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_organization_id_without_sub_yields_no_domain(self, httpx_mock: HTTPXMock):
+        """If ``organization_id`` is present but neither ``sub`` nor
+        ``id`` carry a parseable Identity URL, emit the tenancy keyed
+        by the org id with ``domain=None``."""
+        httpx_mock.add_response(
+            url="https://login.salesforce.com/services/oauth2/userinfo",
+            json={"organization_id": "00Dxx0000001gZWEAY"},
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        handler = SalesforceIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="00Dxx0000001gZWEAY", domain=None),)
+
+    async def test_my_domain_host_parsed_into_tenancy_domain(self, httpx_mock: HTTPXMock):
+        """Production My Domain hosts (e.g. ``acme.my.salesforce.com``)
+        — distinct from sandbox — must surface verbatim."""
+        payload = {
+            "sub": "https://acme.my.salesforce.com/id/00Dxx0000001gZWEAY/005xx",
+            "organization_id": "00Dxx0000001gZWEAY",
+        }
+        httpx_mock.add_response(
+            url="https://acme.my.salesforce.com/services/oauth2/userinfo",
+            json=payload,
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config, _ = preset(
+            client_id="sfid",
+            client_secret="sfsecret",  # pragma: allowlist secret
+            scopes=["openid"],
+            host="acme.my.salesforce.com",
+        )
+        handler = SalesforceIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="00Dxx0000001gZWEAY", domain="acme.my.salesforce.com"),)
 
     async def test_my_domain_host_drives_userinfo_url(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(

@@ -130,8 +130,53 @@ class TokenSet(BaseModel, frozen=True):
     context: dict[str, Any] = {}
 
 
+class TenancyContext(BaseModel, frozen=True):
+    """Scoping container an OAuth access token operates within.
+
+    The generic name covers SaaS vernacular variants — workspace,
+    organization, team, instance, portal, site, tenant — without
+    privileging one term. Three normalized fields cover the common
+    cross-provider consumer needs (account binding, display, deep-
+    linking); provider-specific extras fall through to :attr:`raw`.
+
+    Each normalized field may independently be ``None`` when the
+    provider's response does not expose that fact. Callers must not
+    assume any of ``id`` / ``name`` / ``domain`` are populated.
+
+    Attributes:
+        id: Tenant identifier as exposed by the provider (e.g. Slack
+            ``team_id``, Linear organization id, Atlassian ``cloudId``,
+            HubSpot ``hub_id``). Cast to ``str`` where the provider
+            returns a numeric identifier so the contract is stable.
+        name: Human-readable display name for the tenant (e.g. Slack
+            ``team_name``, Linear organization name).
+        domain: Domain or canonical URL for the tenant (e.g. Slack
+            ``team_domain``, HubSpot ``hub_domain``, Atlassian site URL,
+            Salesforce MyDomain host).
+        raw: Provider-specific payload for this tenant (Slack-namespaced
+            claims, Notion ``workspace_id``, Atlassian ``avatarUrl`` /
+            ``scopes``, etc.). Used as the escape hatch for fields not
+            covered by the three normalized slots above.
+    """
+
+    id: str | None = None
+    name: str | None = None
+    domain: str | None = None
+    raw: dict[str, Any] = {}
+
+
 class IdentityProfile(BaseModel, frozen=True):
     """Normalized identity fields fetched from a provider.
+
+    ``IdentityProfile`` answers "who authenticated?". The companion
+    :attr:`tenancies` field answers "what scope of resources does this
+    token operate within?" — the workspace, organization, tenant,
+    instance, portal, or site the token is bound to. The two facts
+    are kept distinct because most multi-tenant SaaS providers return
+    both on the same userinfo response and conflating them forces
+    handlers to make lossy "pick one" decisions for tokens that span
+    multiple tenants (Atlassian's accessible-resources is the canonical
+    example).
 
     Attributes:
         subject: Provider user identifier when available.
@@ -140,6 +185,11 @@ class IdentityProfile(BaseModel, frozen=True):
         name: Human-readable display name.
         username: Provider handle/login where available.
         avatar_url: Provider profile image URL when available.
+        tenancies: Scoping containers the token operates within. Empty
+            for providers with no tenancy concept (GitHub OAuth Apps,
+            Typeform, personal Google). One entry for single-tenant
+            providers. Multiple entries are possible for providers
+            whose tokens span several tenants (Atlassian).
         raw: Full provider response payload(s) for advanced callers.
     """
 
@@ -149,6 +199,7 @@ class IdentityProfile(BaseModel, frozen=True):
     name: str | None = None
     username: str | None = None
     avatar_url: str | None = None
+    tenancies: tuple[TenancyContext, ...] = ()
     raw: dict[str, Any] = {}
 
 

@@ -16,11 +16,15 @@ exception, since those typically embed the URL — in the messages of
 cause chain (``raise ... from None``) on the request and parse paths
 so that default traceback rendering and ``logging.exception()`` —
 which walk ``__cause__`` and ``__context__`` — cannot surface the
-URL-embedded token through the wrapped httpx exception. The identity
-returned is best-effort and mixes user and portal/account fields:
+URL-embedded token through the wrapped httpx exception.
+
+The introspection response mixes user and portal/account fields:
 ``user`` / ``user_id`` identify the HubSpot user, while ``hub_id`` /
-``hub_domain`` identify the portal (and ``hub_domain`` is exposed via
-:attr:`IdentityProfile.username`).
+``hub_domain`` identify the portal. Portal identity now lands in
+:attr:`IdentityProfile.tenancies` rather than being shoved into
+:attr:`IdentityProfile.username` (the prior workaround), so the
+``IdentityProfile.username`` slot is ``None`` for HubSpot — there is
+no human handle in the introspection payload to put there.
 """
 
 from __future__ import annotations
@@ -33,7 +37,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -75,15 +79,17 @@ class HubSpotIdentityHandler:
 
     - ``user_id`` (number) → :attr:`IdentityProfile.subject` (cast to ``str``)
     - ``user`` (the HubSpot user's email) → :attr:`IdentityProfile.email`
-    - ``hub_domain`` (the portal account domain) → :attr:`IdentityProfile.username`
+    - ``hub_id`` (number) → ``tenancies[0].id`` (cast to ``str``)
+    - ``hub_domain`` (the portal account domain) → ``tenancies[0].domain``
 
-    HubSpot does not return an ``email_verified`` claim or a display
-    name, so :attr:`IdentityProfile.email_verified` and
-    :attr:`IdentityProfile.name` are always ``None``. The full
-    response — including ``hub_id``, ``hub_domain``, ``app_id``,
-    ``scopes``, ``token_type``, and ``expires_in`` — is preserved on
-    :attr:`IdentityProfile.raw` for callers that need the portal-level
-    fields.
+    HubSpot does not return an ``email_verified`` claim, a display
+    name, a portal display name, or a user handle on the introspection
+    payload, so :attr:`IdentityProfile.email_verified`,
+    :attr:`IdentityProfile.name`, :attr:`IdentityProfile.username`,
+    and ``tenancies[0].name`` are always ``None``. The full response —
+    including ``app_id``, ``scopes``, ``token_type``, and
+    ``expires_in`` — is preserved on :attr:`IdentityProfile.raw` for
+    callers that need the rest of the introspection fields.
     """
 
     async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
@@ -119,13 +125,34 @@ class HubSpotIdentityHandler:
             raise IdentityFetchError("Failed to parse HubSpot identity response") from None
 
         user_id = payload.get("user_id")
+        hub_id = payload.get("hub_id")
+        tenancies: tuple[TenancyContext, ...] = ()
+        if hub_id is not None:
+            # ``hub_id`` is the canonical portal anchor — gate on it.
+            # ``hub_domain`` is decorative; if it is unexpectedly absent
+            # the tenancy is still emitted with ``domain=None`` so the
+            # caller does not silently lose the portal binding. The
+            # introspection endpoint is documented to return both
+            # together, so a missing ``hub_domain`` is an unexpected
+            # response shape rather than an intentional contract.
+            # ``name`` is always ``None`` for HubSpot — the
+            # introspection response carries no portal display name,
+            # nor does any other public HubSpot endpoint.
+            tenancies = (
+                TenancyContext(
+                    id=str(hub_id),
+                    domain=payload.get("hub_domain"),
+                ),
+            )
+
         return IdentityProfile(
             subject=str(user_id) if user_id is not None else None,
             email=payload.get("user"),
             email_verified=None,
             name=None,
-            username=payload.get("hub_domain"),
+            username=None,
             avatar_url=None,
+            tenancies=tenancies,
             raw=payload,
         )
 

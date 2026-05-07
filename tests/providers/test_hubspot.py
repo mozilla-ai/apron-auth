@@ -8,7 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
 
@@ -70,10 +70,77 @@ class TestHubSpotIdentityHandler:
             email="user@example.com",
             email_verified=None,
             name=None,
-            username="acme.example.com",
+            username=None,
             avatar_url=None,
+            tenancies=(TenancyContext(id="7654321", domain="acme.example.com"),),
             raw=payload,
         )
+
+    async def test_username_is_none_when_hub_domain_present(self, httpx_mock: HTTPXMock):
+        """Regression guard: hub_domain belongs in TenancyContext.domain,
+        not IdentityProfile.username (former workaround removed)."""
+        payload = {
+            "user_id": 1,
+            "user": "u@example.com",
+            "hub_id": 42,
+            "hub_domain": "acme.example.com",
+        }
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            json=payload,
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.username is None
+        assert identity.tenancies[0].domain == "acme.example.com"
+
+    async def test_no_hub_id_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            json={"user_id": 1, "user": "u@example.com"},
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_hub_id_present_but_hub_domain_missing(self, httpx_mock: HTTPXMock):
+        """``hub_id`` is the canonical anchor; emit the tenancy with
+        ``domain=None`` when ``hub_domain`` is unexpectedly absent
+        rather than silently dropping the portal binding."""
+        httpx_mock.add_response(
+            url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
+            json={"user_id": 1, "user": "u@example.com", "hub_id": 42},
+        )
+        from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
+
+        config, _ = preset(
+            client_id="hsid",
+            client_secret="hssecret",  # pragma: allowlist secret
+            scopes=["contacts"],
+        )
+        handler = HubSpotIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="42", domain=None),)
 
     async def test_network_error_does_not_leak_access_token_in_error_message(self, httpx_mock: HTTPXMock):
         secret = "secret-access-token-DO-NOT-LEAK"  # pragma: allowlist secret
@@ -122,7 +189,7 @@ class TestHubSpotIdentityHandler:
     async def test_subject_is_none_when_user_id_missing(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
             url="https://api.hubapi.com/oauth/v1/access-tokens/access-abc",
-            json={"user": "user@example.com", "hub_domain": "acme.example.com"},
+            json={"user": "user@example.com", "hub_id": 42, "hub_domain": "acme.example.com"},
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
@@ -137,7 +204,8 @@ class TestHubSpotIdentityHandler:
 
         assert identity.subject is None
         assert identity.email == "user@example.com"
-        assert identity.username == "acme.example.com"
+        assert identity.username is None
+        assert identity.tenancies[0].domain == "acme.example.com"
 
     async def test_url_encodes_path_significant_chars_in_token(self, httpx_mock: HTTPXMock):
         raw_token = "a/b+c=d e"

@@ -10,7 +10,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.notion import NotionIdentityHandler, NotionRevocationHandler, maybe_identity_handler, preset
 
@@ -76,12 +76,54 @@ class TestNotionIdentityHandler:
             name="Notion Owner",
             username=None,
             avatar_url="https://example.com/notion-bot.png",
+            tenancies=(
+                TenancyContext(
+                    id="33333333-3333-3333-3333-333333333333",
+                    name="Example Workspace",
+                ),
+            ),
             raw=payload,
         )
         request = httpx_mock.get_request()
         assert request is not None
         assert request.headers.get("authorization") == "Bearer access-abc"
         assert request.headers.get("notion-version") == "2022-06-28"
+
+    async def test_workspace_id_missing_yields_empty_tenancies(self, httpx_mock: HTTPXMock) -> None:
+        """Bot present but workspace_id absent — degrade to empty."""
+        payload = {
+            "object": "user",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "type": "bot",
+            "bot": {"owner": {"type": "workspace"}, "workspace_name": "Stale"},
+        }
+        httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
+        config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        handler = NotionIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_workspace_id_present_but_workspace_name_missing(self, httpx_mock: HTTPXMock) -> None:
+        """``workspace_id`` is the canonical anchor; emit the tenancy
+        with ``name=None`` if the display name is absent."""
+        payload = {
+            "object": "user",
+            "id": "11111111-1111-1111-1111-111111111111",
+            "type": "bot",
+            "bot": {
+                "owner": {"type": "workspace"},
+                "workspace_id": "33333333-3333-3333-3333-333333333333",
+            },
+        }
+        httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
+        config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        handler = NotionIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="33333333-3333-3333-3333-333333333333", name=None),)
 
     async def test_internal_workspace_owned_bot_returns_workspace_shaped_identity(self, httpx_mock: HTTPXMock) -> None:
         payload = {
@@ -109,6 +151,12 @@ class TestNotionIdentityHandler:
             name=None,
             username="Workspace Alpha",
             avatar_url="https://example.com/notion-workspace-bot.png",
+            tenancies=(
+                TenancyContext(
+                    id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                    name="Workspace Alpha",
+                ),
+            ),
             raw=payload,
         )
 

@@ -5,7 +5,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.linear import LinearIdentityHandler, maybe_identity_handler, preset
 
@@ -21,7 +21,11 @@ class TestLinearIdentityHandler:
             "email": "user@example.com",
             "avatarUrl": "https://example.com/avatar.png",
         }
-        httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, json={"data": {"viewer": viewer}})
+        organization = {"id": "org-1", "name": "Acme", "urlKey": "acme"}
+        httpx_mock.add_response(
+            url=LINEAR_GRAPHQL_URL,
+            json={"data": {"viewer": viewer, "organization": organization}},
+        )
         config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
@@ -34,6 +38,7 @@ class TestLinearIdentityHandler:
             name="Linear User",
             username="luser",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(TenancyContext(id="org-1", name="Acme", domain="acme", raw=organization),),
             raw=viewer,
         )
         request = httpx_mock.get_request()
@@ -41,6 +46,48 @@ class TestLinearIdentityHandler:
         assert request.method == "POST"
         assert request.headers.get("authorization") == "Bearer access-abc"
         assert request.headers["content-type"].startswith("application/json")
+
+    async def test_missing_organization_yields_empty_tenancies(self, httpx_mock: HTTPXMock) -> None:
+        """Tokens issued before the GraphQL extension landed return only
+        ``viewer`` — the handler must degrade to ``tenancies=()``."""
+        viewer = {"id": "user-123", "email": "user@example.com"}
+        httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, json={"data": {"viewer": viewer}})
+        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        handler = LinearIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_organization_without_id_yields_empty_tenancies(self, httpx_mock: HTTPXMock) -> None:
+        """``organization.id`` is the canonical anchor; without it we
+        cannot key the tenancy and degrade to ``tenancies=()``."""
+        viewer = {"id": "user-123"}
+        organization = {"name": "Acme", "urlKey": "acme"}
+        httpx_mock.add_response(
+            url=LINEAR_GRAPHQL_URL,
+            json={"data": {"viewer": viewer, "organization": organization}},
+        )
+        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        handler = LinearIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+
+    async def test_organization_id_present_but_name_and_url_key_missing(self, httpx_mock: HTTPXMock) -> None:
+        viewer = {"id": "user-123"}
+        organization = {"id": "org-1"}
+        httpx_mock.add_response(
+            url=LINEAR_GRAPHQL_URL,
+            json={"data": {"viewer": viewer, "organization": organization}},
+        )
+        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        handler = LinearIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == (TenancyContext(id="org-1", name=None, domain=None, raw=organization),)
 
     async def test_graphql_errors_in_200_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -70,8 +117,16 @@ class TestLinearIdentityHandler:
         with pytest.raises(IdentityFetchError, match="Failed to parse Linear identity response"):
             await handler.fetch_identity("access-abc", config)
 
-    async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
+    async def test_missing_data_object_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": None})
+        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        handler = LinearIdentityHandler()
+
+        with pytest.raises(IdentityFetchError, match="missing data"):
+            await handler.fetch_identity("access-abc", config)
+
+    async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": {}})
         config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 

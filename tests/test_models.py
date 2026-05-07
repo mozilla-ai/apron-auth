@@ -5,7 +5,14 @@ import time
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from apron_auth.models import OAuthPendingState, ProviderConfig, ScopeMetadata, TokenSet
+from apron_auth.models import (
+    IdentityProfile,
+    OAuthPendingState,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+    TokenSet,
+)
 
 
 class TestProviderConfig:
@@ -209,6 +216,54 @@ class TestTokenSet:
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ValidationError):
             token.access_token = "other"
+
+
+class TestTenancyContext:
+    def test_defaults_to_all_none_and_empty_raw(self):
+        ctx = TenancyContext()
+        assert ctx.id is None
+        assert ctx.name is None
+        assert ctx.domain is None
+        assert ctx.raw == {}
+
+    def test_round_trips_normalized_fields(self):
+        ctx = TenancyContext(id="T1", name="Acme", domain="acme.example.com", raw={"team_icon": "x"})
+        assert ctx.id == "T1"
+        assert ctx.name == "Acme"
+        assert ctx.domain == "acme.example.com"
+        assert ctx.raw == {"team_icon": "x"}
+
+    def test_frozen(self):
+        ctx = TenancyContext(id="T1")
+        with pytest.raises(ValidationError):
+            ctx.id = "other"
+
+    def test_raw_isolated_from_caller_mutation(self):
+        original = {"team_icon": "x"}
+        ctx = TenancyContext(raw=original)
+        original["team_icon"] = "mutated"
+        assert ctx.raw["team_icon"] == "x"
+
+
+class TestIdentityProfile:
+    def test_tenancies_defaults_to_empty_tuple(self):
+        identity = IdentityProfile()
+        assert identity.tenancies == ()
+
+    def test_tenancies_accepts_multi_tenant_tuple(self):
+        identity = IdentityProfile(
+            tenancies=(
+                TenancyContext(id="cloud-1", name="One"),
+                TenancyContext(id="cloud-2", name="Two"),
+            ),
+        )
+        assert len(identity.tenancies) == 2
+        assert identity.tenancies[1].id == "cloud-2"
+
+    def test_frozen(self):
+        identity = IdentityProfile()
+        with pytest.raises(ValidationError):
+            identity.tenancies = (TenancyContext(id="T1"),)
 
 
 class TestOAuthPendingState:

@@ -20,7 +20,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -91,6 +91,30 @@ class NotionIdentityHandler:
                 username = bot.get("workspace_name")
 
         avatar_url = payload.get("avatar_url") if isinstance(payload, dict) else None
+
+        # ``/v1/users/me`` exposes ``workspace_id`` and ``workspace_name``
+        # on the bot object. Notion does not surface a workspace
+        # ``domain`` on this endpoint (workspaces have no public host),
+        # so ``TenancyContext.domain`` is intentionally ``None`` for
+        # this provider. ``workspace_icon`` is only returned by the
+        # OAuth token-grant response, not ``/v1/users/me``; capture it
+        # at exchange time on the consumer side if needed.
+        # ``workspace_name`` may itself be missing on rare token shapes
+        # (e.g. legacy internal-integration grants); a missing ``name``
+        # surfaces as ``None`` per the :class:`TenancyContext` contract,
+        # so the entry is still emitted as long as ``workspace_id`` —
+        # the canonical anchor — is present.
+        tenancies: tuple[TenancyContext, ...] = ()
+        if isinstance(bot, dict):
+            workspace_id = bot.get("workspace_id")
+            if workspace_id:
+                tenancies = (
+                    TenancyContext(
+                        id=workspace_id,
+                        name=bot.get("workspace_name"),
+                    ),
+                )
+
         return IdentityProfile(
             subject=subject,
             email=email,
@@ -98,6 +122,7 @@ class NotionIdentityHandler:
             name=name,
             username=username,
             avatar_url=avatar_url,
+            tenancies=tenancies,
             raw=payload,
         )
 

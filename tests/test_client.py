@@ -19,7 +19,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig, TenancyContext, TokenSet
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -614,6 +614,10 @@ class TestFetchIdentity:
         assert identity.email_verified is True
         assert identity.username == "octocat"
         assert identity.name == "Octo Cat"
+        # OAuth Apps issue user-scoped tokens — there is no normalized
+        # tenancy concept. Assert ``()`` explicitly so a future change
+        # that synthesizes a tenant from org membership trips this test.
+        assert identity.tenancies == ()
 
     async def test_fetch_identity_unsupported_provider_raises(self):
         config = _make_config(
@@ -730,6 +734,10 @@ class TestFetchIdentity:
             "account_status": "active",
         }
         httpx_mock.add_response(url="https://api.atlassian.com/me", json=payload)
+        httpx_mock.add_response(
+            url="https://api.atlassian.com/oauth/token/accessible-resources",
+            json=[],
+        )
         config = _make_config(
             authorize_url="https://auth.atlassian.com/authorize",
             token_url="https://auth.atlassian.com/oauth/token",
@@ -745,6 +753,7 @@ class TestFetchIdentity:
             name="Test User",
             username="tuser",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(),
             raw=payload,
         )
 
@@ -842,6 +851,12 @@ class TestFetchIdentity:
             name="Notion Owner",
             username=None,
             avatar_url="https://example.com/notion-bot.png",
+            tenancies=(
+                TenancyContext(
+                    id="33333333-3333-3333-3333-333333333333",
+                    name="Example Workspace",
+                ),
+            ),
             raw=payload,
         )
 
@@ -873,6 +888,12 @@ class TestFetchIdentity:
             name="Test User",
             username="tuser",
             avatar_url="https://example.com/avatar.png",
+            tenancies=(
+                TenancyContext(
+                    id="00Dxx0000001gZWEAY",
+                    domain="login.salesforce.com",
+                ),
+            ),
             raw=payload,
         )
 
