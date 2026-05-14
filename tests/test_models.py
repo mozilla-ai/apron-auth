@@ -289,6 +289,17 @@ class TestTenancyContextOwnsEmailDomain:
         assert ctx.owns_email_domain is False
 
 
+class TestIdentityProfileProvider:
+    def test_defaults_to_none(self):
+        identity = IdentityProfile()
+        assert identity.provider is None
+
+    def test_can_be_set(self):
+        identity = IdentityProfile(provider="google", subject="g-1")
+        assert identity.provider == "google"
+        assert identity.subject == "g-1"
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()

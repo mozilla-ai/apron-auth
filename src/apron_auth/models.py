@@ -196,6 +196,12 @@ class IdentityProfile(BaseModel, frozen=True):
     example).
 
     Attributes:
+        provider: Name of the OAuth provider that issued this profile
+            (e.g. ``"google"``, ``"github"``). Populated by each
+            provider's ``fetch_identity`` implementation. Used by
+            :meth:`identity_key` to produce a ``(provider, subject)``
+            tuple suitable for keying a consumer's user table without
+            cross-provider collision.
         subject: Provider user identifier when available.
         email: User email address when available.
         email_verified: Whether the provider reports the email as verified.
@@ -210,6 +216,7 @@ class IdentityProfile(BaseModel, frozen=True):
         raw: Full provider response payload(s) for advanced callers.
     """
 
+    provider: str | None = None
     subject: str | None = None
     email: str | None = None
     email_verified: bool | None = None
