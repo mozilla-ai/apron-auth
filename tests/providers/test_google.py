@@ -125,6 +125,12 @@ class TestGooglePreset:
         assert handler is not None
         assert isinstance(handler, RevocationHandler)
 
+    def test_preset_declares_domain_ownership_capability(self):
+        from apron_auth.providers.google import preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        assert config.can_assert_domain_ownership is True
+
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.google import preset
 

@@ -163,5 +163,6 @@ def preset(
         extra_params=defaults,
         disconnect_fully_revokes=True,
         scope_metadata=BASE_SCOPE_METADATA,
+        can_assert_domain_ownership=True,
     )
     return config, GoogleRevocationHandler()
