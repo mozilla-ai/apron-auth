@@ -62,6 +62,7 @@ class TypeformIdentityHandler:
         # ``workspaces:write`` scopes — across every workspace the
         # user can see, so there is no normalized tenancy to populate.
         return IdentityProfile(
+            provider="typeform",
             subject=None,
             email=payload.get("email"),
             email_verified=None,
