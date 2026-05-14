@@ -114,6 +114,7 @@ tokens = await client.exchange_code(
     code_verifier=pending_state.code_verifier,
 )
 identity = await client.fetch_identity(tokens.access_token)
+print(identity.provider)        # "google", "github", etc.
 print(identity.email)
 print(identity.email_verified)
 ```
@@ -168,21 +169,195 @@ shape would force a lossy "pick one" decision in the handler.
 | 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Google Workspace |
 | Many entries   | Atlassian (Jira, Jira Service Management, Confluence)            |
 
-Each `TenancyContext` exposes three normalized fields — `id`, `name`,
-`domain` — plus a provider-specific `raw` payload for fields that do
-not normalize cleanly. **Each normalized field may independently be
-`None`** when the provider's response does not expose that fact (for
-example, Microsoft populates only `id` from the access-token `tid`
-claim; Google Workspace populates only `domain` from the `hd` claim;
-HubSpot populates only `id` and `domain`). Persist `id` as the
-canonical key — provider-mutable handles like Linear's `urlKey`
-should not be treated as permanent identifiers.
+Each `TenancyContext` exposes four normalized fields — `id`, `name`,
+`domain`, `owns_email_domain` — plus a provider-specific `raw` payload
+for fields that do not normalize cleanly. **Each normalized field may
+independently be `None` (or `False` for `owns_email_domain`)** when
+the provider's response does not assert that fact (for example,
+Microsoft populates only `id` from the access-token `tid` claim;
+Google Workspace populates `domain` from the `hd` claim and sets
+`owns_email_domain=True`; HubSpot populates only `id` and `domain`
+with `owns_email_domain=False`). Persist `id` as the canonical key —
+provider-mutable handles like Linear's `urlKey` should not be treated
+as permanent identifiers.
 
 ```python
 identity = await client.fetch_identity(tokens.access_token)
 for tenancy in identity.tenancies:
     print(tenancy.id, tenancy.name, tenancy.domain)
 ```
+
+### Identifying users
+
+Two facts on `IdentityProfile` are load-bearing for identifying users
+safely: `provider` (which IdP issued the token) and `subject` (the
+provider's stable, opaque user ID). The recommended primary key for a
+consumer's user or identity table is the tuple `(provider, subject)`,
+exposed via the `identity_key()` helper:
+
+```python
+identity = await client.fetch_identity(tokens.access_token)
+key = identity.identity_key()  # ("google", "g-1") or None
+if key is None:
+    raise AuthError("Provider did not return a stable subject")
+user = get_or_create_by_identity_key(key)
+```
+
+Email is a **display label**, not an identity. Use `verified_email()`
+to surface the email at the call site only when the provider verified
+it; otherwise treat the address as untrusted user input:
+
+```python
+display = identity.verified_email()  # None if not verified by provider
+```
+
+The verified-email assertion proves the user once controlled the inbox
+at the time of verification. It does **not** prove ongoing control,
+current employment, or that the email's domain belongs to any
+organization the user is affiliated with. For those questions, see
+[Domain-bound tenancy access](#domain-bound-tenancy-access).
+
+#### Anti-pattern: keying users by email
+
+```python
+# DON'T
+user = get_by_email(identity.email)  # cross-provider hijack vector
+```
+
+Treating email as a stable cross-provider identifier lets any
+identity that presents a verified copy of an existing user's email —
+on any supported provider — silently link into that user's account.
+The verified flag from a provider like GitHub is sticky once acquired;
+there is no out-of-band revocation when the user loses control of the
+mailbox. Use `(provider, subject)` instead.
+
+#### Suggested schema
+
+A consumer keeping a separate identity table makes the recipe
+mechanical and supports explicit, opt-in cross-provider account
+linking:
+
+```
+oauth_identity
+  provider               TEXT     -- PK part 1: "google", "github", ...
+  subject                TEXT     -- PK part 2: provider's stable opaque user ID
+  user_id                FK -> user.id
+  email_at_link          TEXT     -- audit snapshot, not a lookup field
+  email_verified_at_link BOOLEAN
+  linked_at              TIMESTAMP
+```
+
+The `user` row keeps `email` as a display field only. Cross-provider
+linking ("the same person, multiple providers") becomes an explicit
+ceremony: an already-authenticated user adds a second identity by
+completing OAuth on the second provider while logged in via the
+first. Email lookups never silently merge accounts.
+
+### Domain-bound tenancy access
+
+When a consumer wants to grant access to an organization on the basis
+of the user's email *domain* — for example, "anyone from acme.com
+joins the Acme tenant automatically" — the verified-email signal
+alone is not sufficient. A verified email proves inbox control; it
+does not prove that the IdP issuing the token controls the email's
+domain.
+
+apron-auth surfaces the stronger fact via
+`IdentityProfile.domain_owning_tenancy()`. This returns a
+`TenancyContext` only when the provider asserts that the tenancy
+controls the user's email domain (today: Google Workspace via the
+`hd` claim; capability flag below). Returns `None` otherwise — gate
+on the `None` case to refuse domain-based grants:
+
+```python
+def join_org(identity: IdentityProfile, claimed_domain: str) -> Membership:
+    owner = identity.domain_owning_tenancy()
+    if owner is None or owner.domain != claimed_domain:
+        raise AuthError(f"No domain-owning assertion for {claimed_domain}")
+    return grant_membership(identity.identity_key(), claimed_domain)
+```
+
+#### Refusing incapable providers at startup
+
+`ProviderConfig.can_assert_domain_ownership` declares whether a
+preset's tokens can *in principle* carry a domain-owning tenancy.
+Consumers building a domain-gated tenancy flow can reject incapable
+providers at startup, rather than discovering the gap at login time:
+
+```python
+config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
+if domain_gated_signin and not config.can_assert_domain_ownership:
+    raise ConfigError(
+        "This provider cannot assert domain ownership; do not "
+        "wire it up for domain-gated tenancy."
+    )
+```
+
+Per-provider capability:
+
+| Provider     | `can_assert_domain_ownership` | Mechanism                                |
+|--------------|-------------------------------|------------------------------------------|
+| Google       | `True`                        | `hd` claim (Workspace accounts)          |
+| Microsoft    | `False`                       | Verified-domain lookup planned; see issue tracker |
+| GitHub       | `False`                       | No structural mechanism                  |
+| Slack        | `False`                       | Workspace is not a domain authority      |
+| Linear       | `False`                       | Workspace is not a domain authority      |
+| Notion       | `False`                       | Workspace is not a domain authority      |
+| HubSpot      | `False`                       | Portal is not a domain authority         |
+| Atlassian    | `False`                       | Site is not a domain authority           |
+| Salesforce   | `False`                       | Custom-domain investigation deferred     |
+| Typeform     | `False`                       | No tenancy concept                       |
+
+`False` is the security-preserving default. Future provider opt-ins
+are strictly additive — a flag flipping from `False` to `True` only
+loosens a gate, never tightens one. Pin a known-good provider list in
+your config if you want changes to require an explicit code review.
+
+#### Safe email allowlists
+
+A common pattern is granting a role (admin, member, …) based on a
+specific email address. The safe variant always pairs the email
+check with a domain-ownership check, so a verified email from an
+incapable provider cannot satisfy the allowlist alone:
+
+```python
+ADMIN_EMAILS = {"founder@example.com"}
+
+def is_admin(identity: IdentityProfile) -> bool:
+    return (
+        identity.domain_owning_tenancy() is not None
+        and identity.verified_email() in ADMIN_EMAILS
+    )
+```
+
+Without the `domain_owning_tenancy()` check, any provider returning
+`email_verified=True` for `founder@example.com` would grant admin —
+including a personal GitHub account that happens to have
+`founder@example.com` verified on it.
+
+### Deprovisioning
+
+When a user is offboarded by the IdP that controls their email's
+domain (the Workspace admin disables the account, for example), the
+provider's tokens stop refreshing. Consumers wanting their app
+sessions to reflect that change in near-real-time must refresh on a
+cadence shorter than the staleness window they are willing to accept.
+
+apron-auth does not enforce refresh cadence. The recommended shape is:
+
+- Issue your own short-lived application session (e.g. a JWT with a
+  TTL of minutes, not hours).
+- On session refresh, call `client.refresh_token(...)` against the
+  provider; if refresh fails permanently (`PermanentOAuthError`),
+  revoke the application session.
+- For long-running background tasks that hold a refresh token, run
+  the same check periodically.
+
+There is no analogous deprovisioning path for providers that lack
+domain-ownership (everything in the capability table above with
+`False`). For those providers, deprovisioning at the OAuth layer
+relies on the *user* revoking their authorization with the provider,
+or the consumer maintaining an out-of-band revocation list.
 
 ### Token refresh
 
