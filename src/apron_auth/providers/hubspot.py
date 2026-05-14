@@ -146,6 +146,7 @@ class HubSpotIdentityHandler:
             )
 
         return IdentityProfile(
+            provider="hubspot",
             subject=str(user_id) if user_id is not None else None,
             email=payload.get("user"),
             email_verified=None,

@@ -66,6 +66,7 @@ class TestHubSpotIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="hubspot",
             subject="1234567",
             email="user@example.com",
             email_verified=None,
