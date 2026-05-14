@@ -94,6 +94,7 @@ class TestSlackIdentityHandler:
         identity = await handler.fetch_identity("user-token-abc", config)
 
         assert identity == IdentityProfile(
+            provider="slack",
             subject="U12345",
             email="user@example.com",
             email_verified=True,
@@ -495,6 +496,7 @@ class TestSlackWorkspaceBotIdentity:
         identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
 
         assert identity == IdentityProfile(
+            provider="slack",
             tenancies=(
                 TenancyContext(
                     id="T67890",
@@ -541,6 +543,7 @@ class TestSlackWorkspaceBotIdentity:
         identity = await handler.fetch_identity("xoxb-bot-token", self._bot_config())
 
         assert identity == IdentityProfile(
+            provider="slack",
             tenancies=(
                 TenancyContext(
                     id="T67890",
