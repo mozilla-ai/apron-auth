@@ -946,6 +946,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="linear",
             subject="user-123",
             email="user@example.com",
             email_verified=None,

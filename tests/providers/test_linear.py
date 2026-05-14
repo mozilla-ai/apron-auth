@@ -32,6 +32,7 @@ class TestLinearIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="linear",
             subject="user-123",
             email="user@example.com",
             email_verified=None,
