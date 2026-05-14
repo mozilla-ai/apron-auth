@@ -21,6 +21,7 @@ class TestGoogleIdentityHandler:
 
         identity = await handler.fetch_identity("access-abc", config)
 
+        assert identity.provider == "google"
         assert identity.tenancies == (TenancyContext(domain="mozilla.ai"),)
 
     async def test_consumer_account_yields_empty_tenancies(self, httpx_mock: HTTPXMock):

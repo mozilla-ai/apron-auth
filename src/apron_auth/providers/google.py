@@ -74,6 +74,7 @@ class GoogleIdentityHandler:
             tenancies = (TenancyContext(domain=hd),)
 
         return IdentityProfile(
+            provider="google",
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
