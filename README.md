@@ -335,6 +335,30 @@ Without the `domain_owning_tenancy()` check, any provider returning
 including a personal GitHub account that happens to have
 `founder@example.com` verified on it.
 
+### Deprovisioning
+
+When a user is offboarded by the IdP that controls their email's
+domain (the Workspace admin disables the account, for example), the
+provider's tokens stop refreshing. Consumers wanting their app
+sessions to reflect that change in near-real-time must refresh on a
+cadence shorter than the staleness window they are willing to accept.
+
+apron-auth does not enforce refresh cadence. The recommended shape is:
+
+- Issue your own short-lived application session (e.g. a JWT with a
+  TTL of minutes, not hours).
+- On session refresh, call `client.refresh_token(...)` against the
+  provider; if refresh fails permanently (`PermanentOAuthError`),
+  revoke the application session.
+- For long-running background tasks that hold a refresh token, run
+  the same check periodically.
+
+There is no analogous deprovisioning path for providers that lack
+domain-ownership (everything in the capability table above with
+`False`). For those providers, deprovisioning at the OAuth layer
+relies on the *user* revoking their authorization with the provider,
+or the consumer maintaining an out-of-band revocation list.
+
 ### Token refresh
 
 Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.
