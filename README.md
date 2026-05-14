@@ -253,6 +253,88 @@ ceremony: an already-authenticated user adds a second identity by
 completing OAuth on the second provider while logged in via the
 first. Email lookups never silently merge accounts.
 
+### Domain-bound tenancy access
+
+When a consumer wants to grant access to an organization on the basis
+of the user's email *domain* — for example, "anyone from acme.com
+joins the Acme tenant automatically" — the verified-email signal
+alone is not sufficient. A verified email proves inbox control; it
+does not prove that the IdP issuing the token controls the email's
+domain.
+
+apron-auth surfaces the stronger fact via
+`IdentityProfile.domain_owning_tenancy()`. This returns a
+`TenancyContext` only when the provider asserts that the tenancy
+controls the user's email domain (today: Google Workspace via the
+`hd` claim; capability flag below). Returns `None` otherwise — gate
+on the `None` case to refuse domain-based grants:
+
+```python
+def join_org(identity: IdentityProfile, claimed_domain: str) -> Membership:
+    owner = identity.domain_owning_tenancy()
+    if owner is None or owner.domain != claimed_domain:
+        raise AuthError(f"No domain-owning assertion for {claimed_domain}")
+    return grant_membership(identity.identity_key(), claimed_domain)
+```
+
+#### Refusing incapable providers at startup
+
+`ProviderConfig.can_assert_domain_ownership` declares whether a
+preset's tokens can *in principle* carry a domain-owning tenancy.
+Consumers building a domain-gated tenancy flow can reject incapable
+providers at startup, rather than discovering the gap at login time:
+
+```python
+config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
+if domain_gated_signin and not config.can_assert_domain_ownership:
+    raise ConfigError(
+        "This provider cannot assert domain ownership; do not "
+        "wire it up for domain-gated tenancy."
+    )
+```
+
+Per-provider capability:
+
+| Provider     | `can_assert_domain_ownership` | Mechanism                                |
+|--------------|-------------------------------|------------------------------------------|
+| Google       | `True`                        | `hd` claim (Workspace accounts)          |
+| Microsoft    | `False`                       | Verified-domain lookup planned; see issue tracker |
+| GitHub       | `False`                       | No structural mechanism                  |
+| Slack        | `False`                       | Workspace is not a domain authority      |
+| Linear       | `False`                       | Workspace is not a domain authority      |
+| Notion       | `False`                       | Workspace is not a domain authority      |
+| HubSpot      | `False`                       | Portal is not a domain authority         |
+| Atlassian    | `False`                       | Site is not a domain authority           |
+| Salesforce   | `False`                       | Custom-domain investigation deferred     |
+| Typeform     | `False`                       | No tenancy concept                       |
+
+`False` is the security-preserving default. Future provider opt-ins
+are strictly additive — a flag flipping from `False` to `True` only
+loosens a gate, never tightens one. Pin a known-good provider list in
+your config if you want changes to require an explicit code review.
+
+#### Safe email allowlists
+
+A common pattern is granting a role (admin, member, …) based on a
+specific email address. The safe variant always pairs the email
+check with a domain-ownership check, so a verified email from an
+incapable provider cannot satisfy the allowlist alone:
+
+```python
+ADMIN_EMAILS = {"founder@example.com"}
+
+def is_admin(identity: IdentityProfile) -> bool:
+    return (
+        identity.domain_owning_tenancy() is not None
+        and identity.verified_email() in ADMIN_EMAILS
+    )
+```
+
+Without the `domain_owning_tenancy()` check, any provider returning
+`email_verified=True` for `founder@example.com` would grant admin —
+including a personal GitHub account that happens to have
+`founder@example.com` verified on it.
+
 ### Token refresh
 
 Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.
