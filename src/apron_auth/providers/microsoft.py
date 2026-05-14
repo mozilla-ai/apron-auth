@@ -125,6 +125,7 @@ class MicrosoftIdentityHandler:
             tenancies = (TenancyContext(id=tid),)
 
         return IdentityProfile(
+            provider="microsoft",
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=None,

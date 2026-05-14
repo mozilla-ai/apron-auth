@@ -702,6 +702,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="microsoft",
             subject="ms-user-123",
             email="user@example.com",
             email_verified=None,
