@@ -344,6 +344,34 @@ class TestIdentityProfileIdentityKey:
         assert identity.identity_key() is None
 
 
+class TestIdentityProfileDomainOwningTenancy:
+    def test_returns_first_owning_tenancy(self):
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.domain_owning_tenancy() == owning
+
+    def test_returns_none_when_no_owning_tenancy(self):
+        not_owning = TenancyContext(domain="example.com", owns_email_domain=False)
+        identity = IdentityProfile(tenancies=(not_owning,))
+        assert identity.domain_owning_tenancy() is None
+
+    def test_returns_none_when_no_tenancies(self):
+        identity = IdentityProfile(tenancies=())
+        assert identity.domain_owning_tenancy() is None
+
+    def test_skips_non_owning_to_find_owning(self):
+        not_owning = TenancyContext(domain="other.com", owns_email_domain=False)
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(not_owning, owning))
+        assert identity.domain_owning_tenancy() == owning
+
+    def test_returns_first_owning_when_multiple(self):
+        first = TenancyContext(domain="a.example.com", owns_email_domain=True)
+        second = TenancyContext(domain="b.example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(first, second))
+        assert identity.domain_owning_tenancy() == first
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()

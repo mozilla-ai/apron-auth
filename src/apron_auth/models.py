@@ -251,6 +251,16 @@ class IdentityProfile(BaseModel, frozen=True):
             return (self.provider, self.subject)
         return None
 
+    def domain_owning_tenancy(self) -> TenancyContext | None:
+        """Return the first tenancy that asserts the user belongs to its email domain, or ``None``.
+
+        A tenancy qualifies when :attr:`TenancyContext.owns_email_domain`
+        is ``True``. Callers gating tenant membership on domain
+        ownership should call this and reject the request when it
+        returns ``None``.
+        """
+        return next((t for t in self.tenancies if t.owns_email_domain), None)
+
 
 class OAuthPendingState(BaseModel, frozen=True):
     """State stored during the OAuth authorization flow.
