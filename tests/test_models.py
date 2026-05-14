@@ -245,6 +245,27 @@ class TestTenancyContext:
         assert ctx.raw["team_icon"] == "x"
 
 
+class TestProviderConfigCanAssertDomainOwnership:
+    def test_defaults_to_false(self):
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.can_assert_domain_ownership is False
+
+    def test_can_be_set_true(self):
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            can_assert_domain_ownership=True,
+        )
+        assert config.can_assert_domain_ownership is True
+
+
 class TestTenancyContextOwnsEmailDomain:
     def test_defaults_to_false(self):
         ctx = TenancyContext()

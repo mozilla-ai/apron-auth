@@ -83,6 +83,14 @@ class ProviderConfig(BaseModel, frozen=True):
             :attr:`ScopeMetadata.required`.  A consent picker can
             enforce the constraint generically without provider-specific
             knowledge.  Defaults to empty (no set-level constraint).
+        can_assert_domain_ownership: ``True`` only for providers whose
+            tokens can in principle carry a tenancy that asserts the
+            authenticated user belongs to the email's domain (e.g.
+            Google Workspace via the ``hd`` claim). Set by the preset
+            at construction time. Consumers building domain-gated
+            tenancy can refuse to wire up an incapable provider at
+            startup rather than discovering the gap at login time.
+            Defaults to ``False``.
     """
 
     client_id: str
@@ -99,6 +107,7 @@ class ProviderConfig(BaseModel, frozen=True):
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
     required_scope_families: list[list[str]] = []
+    can_assert_domain_ownership: bool = False
 
 
 class TokenSet(BaseModel, frozen=True):
