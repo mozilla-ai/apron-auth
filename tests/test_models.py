@@ -300,6 +300,24 @@ class TestIdentityProfileProvider:
         assert identity.subject == "g-1"
 
 
+class TestIdentityProfileVerifiedEmail:
+    def test_returns_email_when_verified(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=True)
+        assert identity.verified_email() == "user@example.com"
+
+    def test_returns_none_when_unverified(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=False)
+        assert identity.verified_email() is None
+
+    def test_returns_none_when_verification_unknown(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=None)
+        assert identity.verified_email() is None
+
+    def test_returns_none_when_email_absent(self):
+        identity = IdentityProfile(email=None, email_verified=True)
+        assert identity.verified_email() is None
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()

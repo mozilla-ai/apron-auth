@@ -226,6 +226,19 @@ class IdentityProfile(BaseModel, frozen=True):
     tenancies: tuple[TenancyContext, ...] = ()
     raw: dict[str, Any] = {}
 
+    def verified_email(self) -> str | None:
+        """Return ``email`` iff the provider asserts it as verified, else ``None``.
+
+        NOTE: a verified email proves the user controlled the inbox at
+        the time of verification. It does NOT prove ongoing control or
+        current employment. Callers must not use this as proof of
+        domain affiliation — see :meth:`domain_owning_tenancy` for that
+        question.
+        """
+        if self.email_verified and self.email:
+            return self.email
+        return None
+
 
 class OAuthPendingState(BaseModel, frozen=True):
     """State stored during the OAuth authorization flow.
