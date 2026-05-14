@@ -83,6 +83,14 @@ class ProviderConfig(BaseModel, frozen=True):
             :attr:`ScopeMetadata.required`.  A consent picker can
             enforce the constraint generically without provider-specific
             knowledge.  Defaults to empty (no set-level constraint).
+        can_assert_domain_ownership: ``True`` only for providers whose
+            tokens can in principle carry a tenancy that asserts the
+            authenticated user belongs to the email's domain (e.g.
+            Google Workspace via the ``hd`` claim). Set by the preset
+            at construction time. Consumers building domain-gated
+            tenancy can refuse to wire up an incapable provider at
+            startup rather than discovering the gap at login time.
+            Defaults to ``False``.
     """
 
     client_id: str
@@ -99,6 +107,7 @@ class ProviderConfig(BaseModel, frozen=True):
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
     required_scope_families: list[list[str]] = []
+    can_assert_domain_ownership: bool = False
 
 
 class TokenSet(BaseModel, frozen=True):
@@ -157,12 +166,20 @@ class TenancyContext(BaseModel, frozen=True):
             claims, Notion ``workspace_id``, Atlassian ``avatarUrl`` /
             ``scopes``, etc.). Used as the escape hatch for fields not
             covered by the three normalized slots above.
+        owns_email_domain: ``True`` only when the provider asserts that
+            this tenancy controls the email domain of the authenticated
+            user (e.g. Google with the ``hd`` claim present). Set per
+            identity at ``fetch_identity`` time by the provider handler.
+            Callers gating domain-bound tenant grants should use
+            :meth:`IdentityProfile.domain_owning_tenancy` rather than
+            inspecting this flag directly. Defaults to ``False``.
     """
 
     id: str | None = None
     name: str | None = None
     domain: str | None = None
     raw: dict[str, Any] = {}
+    owns_email_domain: bool = False
 
 
 class IdentityProfile(BaseModel, frozen=True):
@@ -179,6 +196,12 @@ class IdentityProfile(BaseModel, frozen=True):
     example).
 
     Attributes:
+        provider: Name of the OAuth provider that issued this profile
+            (e.g. ``"google"``, ``"github"``). Populated by each
+            provider's ``fetch_identity`` implementation. Used by
+            :meth:`identity_key` to produce a ``(provider, subject)``
+            tuple suitable for keying a consumer's user table without
+            cross-provider collision.
         subject: Provider user identifier when available.
         email: User email address when available.
         email_verified: Whether the provider reports the email as verified.
@@ -193,6 +216,7 @@ class IdentityProfile(BaseModel, frozen=True):
         raw: Full provider response payload(s) for advanced callers.
     """
 
+    provider: str | None = None
     subject: str | None = None
     email: str | None = None
     email_verified: bool | None = None
@@ -201,6 +225,41 @@ class IdentityProfile(BaseModel, frozen=True):
     avatar_url: str | None = None
     tenancies: tuple[TenancyContext, ...] = ()
     raw: dict[str, Any] = {}
+
+    def verified_email(self) -> str | None:
+        """Return ``email`` iff the provider asserts it as verified, else ``None``.
+
+        NOTE: a verified email proves the user controlled the inbox at
+        the time of verification. It does NOT prove ongoing control or
+        current employment. Callers must not use this as proof of
+        domain affiliation — see :meth:`domain_owning_tenancy` for that
+        question.
+        """
+        if self.email_verified and self.email:
+            return self.email
+        return None
+
+    def identity_key(self) -> tuple[str, str] | None:
+        """Return ``(provider, subject)``, the recommended primary key for users.
+
+        Returns ``None`` if either field is missing or empty. Consumers
+        should key their user/identity tables on this tuple rather than
+        on ``email`` to avoid cross-provider account hijack via email
+        collision.
+        """
+        if self.provider and self.subject:
+            return (self.provider, self.subject)
+        return None
+
+    def domain_owning_tenancy(self) -> TenancyContext | None:
+        """Return the first tenancy that asserts the user belongs to its email domain, or ``None``.
+
+        A tenancy qualifies when :attr:`TenancyContext.owns_email_domain`
+        is ``True``. Callers gating tenant membership on domain
+        ownership should call this and reject the request when it
+        returns ``None``.
+        """
+        return next((t for t in self.tenancies if t.owns_email_domain), None)
 
 
 class OAuthPendingState(BaseModel, frozen=True):

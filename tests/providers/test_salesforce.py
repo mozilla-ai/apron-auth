@@ -111,6 +111,7 @@ class TestSalesforceIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="salesforce",
             subject="https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
             email="user@example.com",
             email_verified=True,

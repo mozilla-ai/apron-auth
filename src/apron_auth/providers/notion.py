@@ -116,6 +116,7 @@ class NotionIdentityHandler:
                 )
 
         return IdentityProfile(
+            provider="notion",
             subject=subject,
             email=email,
             email_verified=None,

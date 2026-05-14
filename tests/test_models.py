@@ -245,6 +245,133 @@ class TestTenancyContext:
         assert ctx.raw["team_icon"] == "x"
 
 
+class TestProviderConfigCanAssertDomainOwnership:
+    def test_defaults_to_false(self):
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.can_assert_domain_ownership is False
+
+    def test_can_be_set_true(self):
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            can_assert_domain_ownership=True,
+        )
+        assert config.can_assert_domain_ownership is True
+
+
+class TestTenancyContextOwnsEmailDomain:
+    def test_defaults_to_false(self):
+        ctx = TenancyContext()
+        assert ctx.owns_email_domain is False
+
+    def test_can_be_set_true(self):
+        ctx = TenancyContext(domain="example.com", owns_email_domain=True)
+        assert ctx.owns_email_domain is True
+
+    def test_existing_fields_unchanged(self):
+        ctx = TenancyContext(
+            id="t-1",
+            name="Example",
+            domain="example.com",
+            raw={"k": "v"},
+        )
+        assert ctx.id == "t-1"
+        assert ctx.name == "Example"
+        assert ctx.domain == "example.com"
+        assert ctx.raw == {"k": "v"}
+        assert ctx.owns_email_domain is False
+
+
+class TestIdentityProfileProvider:
+    def test_defaults_to_none(self):
+        identity = IdentityProfile()
+        assert identity.provider is None
+
+    def test_can_be_set(self):
+        identity = IdentityProfile(provider="google", subject="g-1")
+        assert identity.provider == "google"
+        assert identity.subject == "g-1"
+
+
+class TestIdentityProfileVerifiedEmail:
+    def test_returns_email_when_verified(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=True)
+        assert identity.verified_email() == "user@example.com"
+
+    def test_returns_none_when_unverified(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=False)
+        assert identity.verified_email() is None
+
+    def test_returns_none_when_verification_unknown(self):
+        identity = IdentityProfile(email="user@example.com", email_verified=None)
+        assert identity.verified_email() is None
+
+    def test_returns_none_when_email_absent(self):
+        identity = IdentityProfile(email=None, email_verified=True)
+        assert identity.verified_email() is None
+
+
+class TestIdentityProfileIdentityKey:
+    def test_returns_tuple_when_both_present(self):
+        identity = IdentityProfile(provider="github", subject="12345")
+        assert identity.identity_key() == ("github", "12345")
+
+    def test_returns_none_when_provider_missing(self):
+        identity = IdentityProfile(provider=None, subject="12345")
+        assert identity.identity_key() is None
+
+    def test_returns_none_when_subject_missing(self):
+        identity = IdentityProfile(provider="github", subject=None)
+        assert identity.identity_key() is None
+
+    def test_returns_none_when_both_missing(self):
+        identity = IdentityProfile()
+        assert identity.identity_key() is None
+
+    def test_empty_provider_treated_as_missing(self):
+        identity = IdentityProfile(provider="", subject="12345")
+        assert identity.identity_key() is None
+
+    def test_empty_subject_treated_as_missing(self):
+        identity = IdentityProfile(provider="github", subject="")
+        assert identity.identity_key() is None
+
+
+class TestIdentityProfileDomainOwningTenancy:
+    def test_returns_first_owning_tenancy(self):
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.domain_owning_tenancy() == owning
+
+    def test_returns_none_when_no_owning_tenancy(self):
+        not_owning = TenancyContext(domain="example.com", owns_email_domain=False)
+        identity = IdentityProfile(tenancies=(not_owning,))
+        assert identity.domain_owning_tenancy() is None
+
+    def test_returns_none_when_no_tenancies(self):
+        identity = IdentityProfile(tenancies=())
+        assert identity.domain_owning_tenancy() is None
+
+    def test_skips_non_owning_to_find_owning(self):
+        not_owning = TenancyContext(domain="other.com", owns_email_domain=False)
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(not_owning, owning))
+        assert identity.domain_owning_tenancy() == owning
+
+    def test_returns_first_owning_when_multiple(self):
+        first = TenancyContext(domain="a.example.com", owns_email_domain=True)
+        second = TenancyContext(domain="b.example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(first, second))
+        assert identity.domain_owning_tenancy() == first
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()

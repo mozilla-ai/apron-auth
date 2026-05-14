@@ -46,6 +46,7 @@ class TestTypeformIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="typeform",
             subject=None,
             email="user@example.com",
             email_verified=None,

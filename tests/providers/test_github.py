@@ -123,6 +123,33 @@ class TestGitHubPreset:
         assert all(meta.required for meta in config.scope_metadata)
 
 
+_GITHUB_USER_URL = "https://api.github.com/user"
+_GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+
+
+class TestGitHubIdentityHandler:
+    async def test_fetch_identity_populates_provider(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(
+            url=_GITHUB_USER_URL,
+            json={"id": 12345, "login": "octocat", "name": "The Octocat", "avatar_url": "https://example.com/a"},
+        )
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[{"email": "octocat@example.com", "primary": True, "verified": True}],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        handler = GitHubIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.provider == "github"
+        assert identity.subject == "12345"
+        assert identity.email == "octocat@example.com"
+        assert identity.email_verified is True
+
+
 class TestGitHubRevocationHandler:
     async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=204)

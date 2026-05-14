@@ -71,9 +71,10 @@ class GoogleIdentityHandler:
         hd = payload.get("hd")
         tenancies: tuple[TenancyContext, ...] = ()
         if hd:
-            tenancies = (TenancyContext(domain=hd),)
+            tenancies = (TenancyContext(domain=hd, owns_email_domain=True),)
 
         return IdentityProfile(
+            provider="google",
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
@@ -162,5 +163,6 @@ def preset(
         extra_params=defaults,
         disconnect_fully_revokes=True,
         scope_metadata=BASE_SCOPE_METADATA,
+        can_assert_domain_ownership=True,
     )
     return config, GoogleRevocationHandler()

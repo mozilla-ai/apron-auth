@@ -569,6 +569,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="google",
             subject="google-user-123",
             email="user@example.com",
             email_verified=True,
@@ -609,6 +610,7 @@ class TestFetchIdentity:
 
         identity = await client.fetch_identity("access-abc")
 
+        assert identity.provider == "github"
         assert identity.subject == "42"
         assert identity.email == "primary@example.com"
         assert identity.email_verified is True
@@ -700,6 +702,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="microsoft",
             subject="ms-user-123",
             email="user@example.com",
             email_verified=None,
@@ -747,6 +750,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="atlassian",
             subject="557058:abc-123",
             email="user@example.com",
             email_verified=None,
@@ -784,6 +788,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="typeform",
             subject=None,
             email="user@example.com",
             email_verified=None,
@@ -845,6 +850,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="notion",
             subject="22222222-2222-2222-2222-222222222222",
             email="owner@example.com",
             email_verified=None,
@@ -882,6 +888,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="salesforce",
             subject="https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
             email="user@example.com",
             email_verified=True,
@@ -910,6 +917,7 @@ class TestFetchIdentity:
 
         identity = await client.fetch_identity("access-abc")
 
+        assert identity.provider == "salesforce"
         assert identity.email == "user@acme.com"
 
     async def test_fetch_identity_lookalike_salesforce_host_not_inferred(self):
@@ -943,6 +951,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="linear",
             subject="user-123",
             email="user@example.com",
             email_verified=None,

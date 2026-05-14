@@ -194,6 +194,7 @@ class SlackIdentityHandler:
             )
 
         return IdentityProfile(
+            provider="slack",
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
@@ -299,7 +300,7 @@ def _build_workspace_profile_from_auth_test(payload: dict[str, Any]) -> Identity
                 raw=payload,
             ),
         )
-    return IdentityProfile(tenancies=tenancies, raw=payload)
+    return IdentityProfile(provider="slack", tenancies=tenancies, raw=payload)
 
 
 def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> IdentityProfile:
@@ -327,7 +328,7 @@ def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> Identity
                 raw=team_payload,
             ),
         )
-    return IdentityProfile(tenancies=tenancies, raw=payload)
+    return IdentityProfile(provider="slack", tenancies=tenancies, raw=payload)
 
 
 class SlackRevocationHandler:

@@ -124,6 +124,7 @@ class AtlassianIdentityHandler:
         tenancies = _build_tenancies(resources)
 
         return IdentityProfile(
+            provider="atlassian",
             subject=payload.get("account_id"),
             email=payload.get("email"),
             email_verified=None,

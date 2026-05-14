@@ -103,6 +103,7 @@ class LinearIdentityHandler:
                 )
 
         return IdentityProfile(
+            provider="linear",
             subject=viewer.get("id"),
             email=viewer.get("email"),
             email_verified=None,

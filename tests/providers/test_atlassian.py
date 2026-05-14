@@ -102,6 +102,7 @@ class TestAtlassianIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="atlassian",
             subject="557058:abc-123",
             email="user@example.com",
             email_verified=None,
