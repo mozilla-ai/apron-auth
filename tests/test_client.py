@@ -849,6 +849,7 @@ class TestFetchIdentity:
         identity = await client.fetch_identity("access-abc")
 
         assert identity == IdentityProfile(
+            provider="notion",
             subject="22222222-2222-2222-2222-222222222222",
             email="owner@example.com",
             email_verified=None,

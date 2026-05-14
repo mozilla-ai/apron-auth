@@ -70,6 +70,7 @@ class TestNotionIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="notion",
             subject="22222222-2222-2222-2222-222222222222",
             email="owner@example.com",
             email_verified=None,
@@ -145,6 +146,7 @@ class TestNotionIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity == IdentityProfile(
+            provider="notion",
             subject="bot:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
             email=None,
             email_verified=None,
