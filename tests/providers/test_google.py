@@ -22,7 +22,43 @@ class TestGoogleIdentityHandler:
         identity = await handler.fetch_identity("access-abc", config)
 
         assert identity.provider == "google"
-        assert identity.tenancies == (TenancyContext(domain="mozilla.ai"),)
+        assert identity.tenancies == (TenancyContext(domain="mozilla.ai", owns_email_domain=True),)
+
+    async def test_workspace_account_emits_domain_owning_tenancy(self, httpx_mock: HTTPXMock):
+        """End-to-end pin: a Workspace ``hd`` claim makes the emitted
+        IdentityProfile return a non-None ``domain_owning_tenancy()``."""
+        httpx_mock.add_response(
+            url=GOOGLE_USERINFO_URL,
+            json={"sub": "g-1", "email": "user@mozilla.ai", "hd": "mozilla.ai"},
+        )
+        from apron_auth.providers.google import GoogleIdentityHandler, preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        handler = GoogleIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+        owner = identity.domain_owning_tenancy()
+
+        assert owner is not None
+        assert owner.domain == "mozilla.ai"
+        assert owner.owns_email_domain is True
+
+    async def test_consumer_account_has_no_domain_owning_tenancy(self, httpx_mock: HTTPXMock):
+        """A personal Gmail account (no ``hd`` claim) emits no tenancy,
+        so ``domain_owning_tenancy()`` must return ``None``."""
+        httpx_mock.add_response(
+            url=GOOGLE_USERINFO_URL,
+            json={"sub": "g-1", "email": "user@gmail.com"},
+        )
+        from apron_auth.providers.google import GoogleIdentityHandler, preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        handler = GoogleIdentityHandler()
+
+        identity = await handler.fetch_identity("access-abc", config)
+
+        assert identity.tenancies == ()
+        assert identity.domain_owning_tenancy() is None
 
     async def test_consumer_account_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(

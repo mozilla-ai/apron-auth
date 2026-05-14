@@ -71,7 +71,7 @@ class GoogleIdentityHandler:
         hd = payload.get("hd")
         tenancies: tuple[TenancyContext, ...] = ()
         if hd:
-            tenancies = (TenancyContext(domain=hd),)
+            tenancies = (TenancyContext(domain=hd, owns_email_domain=True),)
 
         return IdentityProfile(
             provider="google",
