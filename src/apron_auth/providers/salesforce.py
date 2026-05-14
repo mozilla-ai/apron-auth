@@ -129,6 +129,7 @@ class SalesforceIdentityHandler:
             )
 
         return IdentityProfile(
+            provider="salesforce",
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
