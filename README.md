@@ -114,6 +114,7 @@ tokens = await client.exchange_code(
     code_verifier=pending_state.code_verifier,
 )
 identity = await client.fetch_identity(tokens.access_token)
+print(identity.provider)        # "google", "github", etc.
 print(identity.email)
 print(identity.email_verified)
 ```
@@ -168,15 +169,17 @@ shape would force a lossy "pick one" decision in the handler.
 | 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Google Workspace |
 | Many entries   | Atlassian (Jira, Jira Service Management, Confluence)            |
 
-Each `TenancyContext` exposes three normalized fields — `id`, `name`,
-`domain` — plus a provider-specific `raw` payload for fields that do
-not normalize cleanly. **Each normalized field may independently be
-`None`** when the provider's response does not expose that fact (for
-example, Microsoft populates only `id` from the access-token `tid`
-claim; Google Workspace populates only `domain` from the `hd` claim;
-HubSpot populates only `id` and `domain`). Persist `id` as the
-canonical key — provider-mutable handles like Linear's `urlKey`
-should not be treated as permanent identifiers.
+Each `TenancyContext` exposes four normalized fields — `id`, `name`,
+`domain`, `owns_email_domain` — plus a provider-specific `raw` payload
+for fields that do not normalize cleanly. **Each normalized field may
+independently be `None` (or `False` for `owns_email_domain`)** when
+the provider's response does not assert that fact (for example,
+Microsoft populates only `id` from the access-token `tid` claim;
+Google Workspace populates `domain` from the `hd` claim and sets
+`owns_email_domain=True`; HubSpot populates only `id` and `domain`
+with `owns_email_domain=False`). Persist `id` as the canonical key —
+provider-mutable handles like Linear's `urlKey` should not be treated
+as permanent identifiers.
 
 ```python
 identity = await client.fetch_identity(tokens.access_token)
