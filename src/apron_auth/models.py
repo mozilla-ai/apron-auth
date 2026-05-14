@@ -157,12 +157,20 @@ class TenancyContext(BaseModel, frozen=True):
             claims, Notion ``workspace_id``, Atlassian ``avatarUrl`` /
             ``scopes``, etc.). Used as the escape hatch for fields not
             covered by the three normalized slots above.
+        owns_email_domain: ``True`` only when the provider asserts that
+            this tenancy controls the email domain of the authenticated
+            user (e.g. Google with the ``hd`` claim present). Set per
+            identity at ``fetch_identity`` time by the provider handler.
+            Callers gating domain-bound tenant grants should use
+            :meth:`IdentityProfile.domain_owning_tenancy` rather than
+            inspecting this flag directly. Defaults to ``False``.
     """
 
     id: str | None = None
     name: str | None = None
     domain: str | None = None
     raw: dict[str, Any] = {}
+    owns_email_domain: bool = False
 
 
 class IdentityProfile(BaseModel, frozen=True):

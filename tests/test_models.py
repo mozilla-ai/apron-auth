@@ -245,6 +245,29 @@ class TestTenancyContext:
         assert ctx.raw["team_icon"] == "x"
 
 
+class TestTenancyContextOwnsEmailDomain:
+    def test_defaults_to_false(self):
+        ctx = TenancyContext()
+        assert ctx.owns_email_domain is False
+
+    def test_can_be_set_true(self):
+        ctx = TenancyContext(domain="example.com", owns_email_domain=True)
+        assert ctx.owns_email_domain is True
+
+    def test_existing_fields_unchanged(self):
+        ctx = TenancyContext(
+            id="t-1",
+            name="Example",
+            domain="example.com",
+            raw={"k": "v"},
+        )
+        assert ctx.id == "t-1"
+        assert ctx.name == "Example"
+        assert ctx.domain == "example.com"
+        assert ctx.raw == {"k": "v"}
+        assert ctx.owns_email_domain is False
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()
