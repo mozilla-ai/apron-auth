@@ -239,6 +239,18 @@ class IdentityProfile(BaseModel, frozen=True):
             return self.email
         return None
 
+    def identity_key(self) -> tuple[str, str] | None:
+        """Return ``(provider, subject)``, the recommended primary key for users.
+
+        Returns ``None`` if either field is missing or empty. Consumers
+        should key their user/identity tables on this tuple rather than
+        on ``email`` to avoid cross-provider account hijack via email
+        collision.
+        """
+        if self.provider and self.subject:
+            return (self.provider, self.subject)
+        return None
+
 
 class OAuthPendingState(BaseModel, frozen=True):
     """State stored during the OAuth authorization flow.

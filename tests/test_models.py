@@ -318,6 +318,32 @@ class TestIdentityProfileVerifiedEmail:
         assert identity.verified_email() is None
 
 
+class TestIdentityProfileIdentityKey:
+    def test_returns_tuple_when_both_present(self):
+        identity = IdentityProfile(provider="github", subject="12345")
+        assert identity.identity_key() == ("github", "12345")
+
+    def test_returns_none_when_provider_missing(self):
+        identity = IdentityProfile(provider=None, subject="12345")
+        assert identity.identity_key() is None
+
+    def test_returns_none_when_subject_missing(self):
+        identity = IdentityProfile(provider="github", subject=None)
+        assert identity.identity_key() is None
+
+    def test_returns_none_when_both_missing(self):
+        identity = IdentityProfile()
+        assert identity.identity_key() is None
+
+    def test_empty_provider_treated_as_missing(self):
+        identity = IdentityProfile(provider="", subject="12345")
+        assert identity.identity_key() is None
+
+    def test_empty_subject_treated_as_missing(self):
+        identity = IdentityProfile(provider="github", subject="")
+        assert identity.identity_key() is None
+
+
 class TestIdentityProfile:
     def test_tenancies_defaults_to_empty_tuple(self):
         identity = IdentityProfile()
