@@ -187,6 +187,72 @@ for tenancy in identity.tenancies:
     print(tenancy.id, tenancy.name, tenancy.domain)
 ```
 
+### Identifying users
+
+Two facts on `IdentityProfile` are load-bearing for identifying users
+safely: `provider` (which IdP issued the token) and `subject` (the
+provider's stable, opaque user ID). The recommended primary key for a
+consumer's user or identity table is the tuple `(provider, subject)`,
+exposed via the `identity_key()` helper:
+
+```python
+identity = await client.fetch_identity(tokens.access_token)
+key = identity.identity_key()  # ("google", "g-1") or None
+if key is None:
+    raise AuthError("Provider did not return a stable subject")
+user = get_or_create_by_identity_key(key)
+```
+
+Email is a **display label**, not an identity. Use `verified_email()`
+to surface the email at the call site only when the provider verified
+it; otherwise treat the address as untrusted user input:
+
+```python
+display = identity.verified_email()  # None if not verified by provider
+```
+
+The verified-email assertion proves the user once controlled the inbox
+at the time of verification. It does **not** prove ongoing control,
+current employment, or that the email's domain belongs to any
+organization the user is affiliated with. For those questions, see
+[Domain-bound tenancy access](#domain-bound-tenancy-access).
+
+#### Anti-pattern: keying users by email
+
+```python
+# DON'T
+user = get_by_email(identity.email)  # cross-provider hijack vector
+```
+
+Treating email as a stable cross-provider identifier lets any
+identity that presents a verified copy of an existing user's email —
+on any supported provider — silently link into that user's account.
+The verified flag from a provider like GitHub is sticky once acquired;
+there is no out-of-band revocation when the user loses control of the
+mailbox. Use `(provider, subject)` instead.
+
+#### Suggested schema
+
+A consumer keeping a separate identity table makes the recipe
+mechanical and supports explicit, opt-in cross-provider account
+linking:
+
+```
+oauth_identity
+  provider               TEXT     -- PK part 1: "google", "github", ...
+  subject                TEXT     -- PK part 2: provider's stable opaque user ID
+  user_id                FK -> user.id
+  email_at_link          TEXT     -- audit snapshot, not a lookup field
+  email_verified_at_link BOOLEAN
+  linked_at              TIMESTAMP
+```
+
+The `user` row keeps `email` as a display field only. Cross-provider
+linking ("the same person, multiple providers") becomes an explicit
+ceremony: an already-authenticated user adds a second identity by
+completing OAuth on the second provider while logged in via the
+first. Email lookups never silently merge accounts.
+
 ### Token refresh
 
 Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.
