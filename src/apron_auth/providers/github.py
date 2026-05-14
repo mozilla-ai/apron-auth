@@ -112,6 +112,7 @@ class GitHubIdentityHandler:
         # apron-auth ever supports GitHub Apps as a distinct provider,
         # that installation should populate ``tenancies``.
         return IdentityProfile(
+            provider="github",
             subject=str(subject) if subject is not None else None,
             email=email,
             email_verified=email_verified,

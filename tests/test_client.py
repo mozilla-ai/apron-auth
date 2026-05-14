@@ -609,6 +609,7 @@ class TestFetchIdentity:
 
         identity = await client.fetch_identity("access-abc")
 
+        assert identity.provider == "github"
         assert identity.subject == "42"
         assert identity.email == "primary@example.com"
         assert identity.email_verified is True
