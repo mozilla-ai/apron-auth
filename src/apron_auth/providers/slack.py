@@ -36,7 +36,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -141,8 +141,9 @@ class SlackIdentityHandler:
     use Sign-in-with-Slack alongside the workspace-bot install.
     """
 
-    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+    async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields from the appropriate Slack flow."""
+        access_token = material.access_token
         if _has_openid_scope(config):
             return await self._fetch_via_oidc(access_token)
         return await self._fetch_workspace_only(access_token)
