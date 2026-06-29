@@ -360,6 +360,63 @@ class TestMicrosoftVerifiedTenancy:
         assert identity.tenancies == ()
 
 
+class TestMicrosoftEmailVerified:
+    """email_verified is honored only as a genuine boolean from the signature-unverified ID token."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("true", None),
+            ("false", None),
+            (1, None),
+            (0, None),
+            (None, None),
+        ],
+    )
+    async def test_email_verified_honors_only_real_booleans(
+        self, httpx_mock: HTTPXMock, value: object, expected: bool | None
+    ):
+        """A non-boolean email_verified is reported as unknown, not coerced —
+        a bare bool() would read the string "false" as True. Uses the
+        consumers-tenant path so no organization lookup is triggered."""
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler
+
+        id_token = _fake_jwt(
+            {
+                "tid": _CONSUMERS_TENANT,
+                "iss": f"https://login.microsoftonline.com/{_CONSUMERS_TENANT}/v2.0",
+                "sub": "ms-sub-1",
+                "email_verified": value,
+            }
+        )
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert identity.email_verified is expected
+
+    async def test_email_verified_absent_is_unknown(self, httpx_mock: HTTPXMock):
+        """An ID token with no email_verified claim yields None."""
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler
+
+        id_token = _fake_jwt(
+            {
+                "tid": _CONSUMERS_TENANT,
+                "iss": f"https://login.microsoftonline.com/{_CONSUMERS_TENANT}/v2.0",
+                "sub": "ms-sub-1",
+            }
+        )
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert identity.email_verified is None
+
+
 class TestMicrosoftIdentityErrors:
     async def test_userinfo_401_raises(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=_USERINFO_URL, status_code=401, json={"error": "invalid_token"})

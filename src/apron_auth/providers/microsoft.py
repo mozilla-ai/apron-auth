@@ -261,15 +261,19 @@ def _subject(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> str | N
 
 
 def _email_verified(claims: dict[str, Any] | None) -> bool | None:
-    """Return the ID token's ``email_verified`` claim, or ``None`` if absent.
+    """Return the ID token's ``email_verified`` claim, or ``None`` when absent or not a boolean.
 
     Entra ID does not emit ``email_verified`` for workforce sign-in by
-    default; the flag is honored only when the ID token actually carries
-    it rather than being assumed.
+    default; the flag is honored only when the ID token carries it as a
+    genuine JSON boolean. The token is decoded without signature
+    verification — its trust comes from the back-channel TLS receipt — so
+    a non-boolean value is reported as unknown rather than coerced: a
+    bare ``bool()`` would read the string ``"false"`` as ``True``.
     """
-    if claims is not None and "email_verified" in claims:
-        return bool(claims.get("email_verified"))
-    return None
+    if claims is None:
+        return None
+    value = claims.get("email_verified")
+    return value if isinstance(value, bool) else None
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
