@@ -4,7 +4,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
 ATLASSIAN_ME_URL = "https://api.atlassian.com/me"
@@ -99,7 +99,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -155,7 +155,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert len(identity.tenancies) == 2
         assert identity.tenancies[0].id == "cloud-1"
@@ -171,7 +171,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
@@ -191,7 +191,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-2"
@@ -206,7 +206,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-1"
@@ -225,7 +225,7 @@ class TestAtlassianIdentityHandler:
         config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
@@ -241,7 +241,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian identity"):
-            await handler.fetch_identity("bad-token", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
 
     async def test_accessible_resources_failure_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
@@ -258,7 +258,7 @@ class TestAtlassianIdentityHandler:
         # Distinct message per sub-request so log triage can identify
         # which endpoint failed without reproducing the call.
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_accessible_resources_non_json_raises_distinct_parse_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
@@ -276,7 +276,7 @@ class TestAtlassianIdentityHandler:
             IdentityFetchError,
             match="Failed to parse Atlassian accessible resources response",
         ):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
@@ -290,7 +290,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Atlassian identity response"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
 
 class TestAtlassianMaybeIdentityHandler:
