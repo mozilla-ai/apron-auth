@@ -15,6 +15,7 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
     ProviderConfig,
@@ -29,6 +30,7 @@ __all__ = [
     "ConfigurationError",
     "IdentityFetchError",
     "IdentityHandler",
+    "IdentityMaterial",
     "IdentityNotSupportedError",
     "IdentityProfile",
     "MemoryStateStore",

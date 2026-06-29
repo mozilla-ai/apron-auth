@@ -13,7 +13,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -38,14 +38,14 @@ class TypeformIdentityHandler:
     themselves, for example by hashing ``email``.
     """
 
-    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+    async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Typeform access token."""
         del config
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     _TYPEFORM_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {material.access_token}"},
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:

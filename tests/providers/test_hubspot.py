@@ -8,7 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
 
@@ -30,7 +30,7 @@ class TestHubSpotIdentityHandler:
         handler = HubSpotIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as exc_info:
-            await handler.fetch_identity(secret, config)
+            await handler.fetch_identity(IdentityMaterial(access_token=secret), config)
         assert secret not in str(exc_info.value)
         assert secret not in repr(exc_info.value)
         assert "401" in str(exc_info.value)
@@ -63,7 +63,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity == IdentityProfile(
             provider="hubspot",
@@ -99,7 +99,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.username is None
         assert identity.tenancies[0].domain == "acme.example.com"
@@ -118,7 +118,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
@@ -139,7 +139,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == (TenancyContext(id="42", domain=None),)
 
@@ -160,7 +160,7 @@ class TestHubSpotIdentityHandler:
         handler = HubSpotIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as exc_info:
-            await handler.fetch_identity(secret, config)
+            await handler.fetch_identity(IdentityMaterial(access_token=secret), config)
         assert secret not in str(exc_info.value)
         assert secret not in repr(exc_info.value)
         formatted = "".join(traceback.format_exception(exc_info.value))
@@ -185,7 +185,7 @@ class TestHubSpotIdentityHandler:
         handler = HubSpotIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse HubSpot identity response"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_subject_is_none_when_user_id_missing(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
@@ -201,7 +201,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.subject is None
         assert identity.email == "user@example.com"
@@ -224,7 +224,7 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        identity = await handler.fetch_identity(raw_token, config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=raw_token), config)
         assert identity.email == "u@example.com"
 
 

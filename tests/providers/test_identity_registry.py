@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from apron_auth import providers as providers_pkg
 from apron_auth.errors import ConfigurationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import IdentityMaterial, ProviderConfig
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers.identity import _identity_resolver_registrations, infer_identity_handler
 
@@ -33,13 +33,13 @@ def _clear_identity_registry_cache():
 class TestInferIdentityHandler:
     def test_multiple_matches_raise_configuration_error(self, monkeypatch):
         class HandlerA:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig):
-                del access_token, config
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig):
+                del material, config
                 return None
 
         class HandlerB:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig):
-                del access_token, config
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig):
+                del material, config
                 return None
 
         def resolver_a(config: ProviderConfig):
@@ -75,8 +75,8 @@ class TestInferIdentityHandler:
 
     def test_single_match_returns_handler(self, monkeypatch):
         class Handler:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig):
-                del access_token, config
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig):
+                del material, config
                 return None
 
         def resolver(config: ProviderConfig):

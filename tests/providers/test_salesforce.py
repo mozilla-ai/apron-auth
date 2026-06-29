@@ -4,7 +4,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.salesforce import BASE_SCOPES, preset
 
@@ -108,7 +108,7 @@ class TestSalesforceIdentityHandler:
         config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity == IdentityProfile(
             provider="salesforce",
@@ -142,7 +142,7 @@ class TestSalesforceIdentityHandler:
         config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.username == "user@example.com.dev"
 
@@ -161,7 +161,7 @@ class TestSalesforceIdentityHandler:
         )
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.email == "sandbox@example.com"
 
@@ -184,7 +184,7 @@ class TestSalesforceIdentityHandler:
         )
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == (
             TenancyContext(
@@ -203,7 +203,7 @@ class TestSalesforceIdentityHandler:
         config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
@@ -220,7 +220,7 @@ class TestSalesforceIdentityHandler:
         config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == (TenancyContext(id="00Dxx0000001gZWEAY", domain=None),)
 
@@ -245,7 +245,7 @@ class TestSalesforceIdentityHandler:
         )
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == (TenancyContext(id="00Dxx0000001gZWEAY", domain="acme.my.salesforce.com"),)
 
@@ -264,7 +264,7 @@ class TestSalesforceIdentityHandler:
         )
         handler = SalesforceIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.email == "mydomain@example.com"
 
@@ -280,7 +280,7 @@ class TestSalesforceIdentityHandler:
         handler = SalesforceIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Salesforce identity"):
-            await handler.fetch_identity("bad-token", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
@@ -294,7 +294,7 @@ class TestSalesforceIdentityHandler:
         handler = SalesforceIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Salesforce identity response"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_non_salesforce_authorize_url_refuses_to_send_token(self, httpx_mock: HTTPXMock):
         from pydantic import SecretStr
@@ -310,7 +310,7 @@ class TestSalesforceIdentityHandler:
         handler = SalesforceIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="not a Salesforce host"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
         assert httpx_mock.get_requests() == []
 
 

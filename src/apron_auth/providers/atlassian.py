@@ -15,7 +15,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -91,10 +91,10 @@ class AtlassianIdentityHandler:
     ``raise ... from exc`` chain is therefore safe here.
     """
 
-    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+    async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using an Atlassian access token."""
         del config
-        headers = {"Authorization": f"Bearer {access_token}"}
+        headers = {"Authorization": f"Bearer {material.access_token}"}
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.get(_ATLASSIAN_USERINFO_URL, headers=headers)

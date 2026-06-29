@@ -113,11 +113,17 @@ tokens = await client.exchange_code(
     redirect_uri="https://yourapp.com/callback",
     code_verifier=pending_state.code_verifier,
 )
-identity = await client.fetch_identity(tokens.access_token)
+identity = await client.fetch_identity(tokens)
 print(identity.provider)        # "google", "github", etc.
 print(identity.email)
 print(identity.email_verified)
 ```
+
+`fetch_identity` takes the `TokenSet` from `exchange_code` (or
+`refresh_token`). It is narrowed to an `IdentityMaterial` — exposing
+only the access token and, for OIDC providers, the ID token — before
+being handed to the provider's identity handler, so handlers never
+receive the refresh token or caller context.
 
 Built-in identity handlers are inferred from standard Google, GitHub,
 HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear
@@ -165,24 +171,25 @@ shape would force a lossy "pick one" decision in the handler.
 
 | Provider count | Provider examples                                                 |
 |----------------|-------------------------------------------------------------------|
-| `()`           | GitHub OAuth Apps, Typeform, consumer Google, personal Microsoft |
-| 1 entry        | Slack, Linear, Notion, Microsoft Entra, Salesforce, HubSpot, Google Workspace |
-| Many entries   | Atlassian (Jira, Jira Service Management, Confluence)            |
+| `()`           | GitHub OAuth Apps, Typeform, consumer Google, personal Microsoft, Microsoft B2B guests |
+| 1 entry        | Slack, Linear, Notion, single-domain Microsoft Entra, Salesforce, HubSpot, Google Workspace |
+| Many entries   | Atlassian (Jira, Jira Service Management, Confluence); Microsoft Entra tenants with several verified domains |
 
 Each `TenancyContext` exposes four normalized fields — `id`, `name`,
 `domain`, `owns_email_domain` — plus a provider-specific `raw` payload
 for fields that do not normalize cleanly. **Each normalized field may
 independently be `None` (or `False` for `owns_email_domain`)** when
 the provider's response does not assert that fact (for example,
-Microsoft populates only `id` from the access-token `tid` claim;
-Google Workspace populates `domain` from the `hd` claim and sets
-`owns_email_domain=True`; HubSpot populates only `id` and `domain`
-with `owns_email_domain=False`). Persist `id` as the canonical key —
+Microsoft Entra workforce sign-in populates `id`, `name`, and `domain`
+with `owns_email_domain=True` for each admin-verified domain of the
+validated tenant; Google Workspace populates `domain` from the `hd`
+claim and sets `owns_email_domain=True`; HubSpot populates only `id`
+and `domain` with `owns_email_domain=False`). Persist `id` as the canonical key —
 provider-mutable handles like Linear's `urlKey` should not be treated
 as permanent identifiers.
 
 ```python
-identity = await client.fetch_identity(tokens.access_token)
+identity = await client.fetch_identity(tokens)
 for tenancy in identity.tenancies:
     print(tenancy.id, tenancy.name, tenancy.domain)
 ```
@@ -196,7 +203,7 @@ consumer's user or identity table is the tuple `(provider, subject)`,
 exposed via the `identity_key()` helper:
 
 ```python
-identity = await client.fetch_identity(tokens.access_token)
+identity = await client.fetch_identity(tokens)
 key = identity.identity_key()  # ("google", "g-1") or None
 if key is None:
     raise AuthError("Provider did not return a stable subject")
@@ -265,9 +272,10 @@ domain.
 apron-auth surfaces the stronger fact via
 `IdentityProfile.domain_owning_tenancy()`. This returns a
 `TenancyContext` only when the provider asserts that the tenancy
-controls the user's email domain (today: Google Workspace via the
-`hd` claim; capability flag below). Returns `None` otherwise — gate
-on the `None` case to refuse domain-based grants:
+controls the user's email domain (Google Workspace via the `hd` claim,
+or Microsoft Entra workforce sign-in via the validated tenant's
+admin-verified domains; capability flag below). Returns `None`
+otherwise — gate on the `None` case to refuse domain-based grants:
 
 ```python
 def join_org(identity: IdentityProfile, claimed_domain: str) -> Membership:
@@ -298,7 +306,7 @@ Per-provider capability:
 | Provider     | `can_assert_domain_ownership` | Mechanism                                |
 |--------------|-------------------------------|------------------------------------------|
 | Google       | `True`                        | `hd` claim (Workspace accounts)          |
-| Microsoft    | `False`                       | Verified-domain lookup planned; see issue tracker |
+| Microsoft    | `True`                        | Validated ID token + tenant's admin-verified domains (workforce) |
 | GitHub       | `False`                       | No structural mechanism                  |
 | Slack        | `False`                       | Workspace is not a domain authority      |
 | Linear       | `False`                       | Workspace is not a domain authority      |

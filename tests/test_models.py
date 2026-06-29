@@ -6,6 +6,7 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from apron_auth.models import (
+    IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
     ProviderConfig,
@@ -216,6 +217,48 @@ class TestTokenSet:
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ValidationError):
             token.access_token = "other"
+
+
+class TestIdentityMaterial:
+    def test_minimal_defaults_id_token_to_none(self):
+        material = IdentityMaterial(access_token="access-abc")
+        assert material.access_token == "access-abc"
+        assert material.id_token is None
+
+    def test_frozen(self):
+        material = IdentityMaterial(access_token="access-abc")
+        with pytest.raises(ValidationError):
+            material.access_token = "other"
+
+    def test_from_token_set_extracts_id_token_from_metadata(self):
+        tokens = TokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+        material = IdentityMaterial.from_token_set(tokens)
+        assert material.access_token == "access-abc"
+        assert material.id_token == "id-jwt"
+
+    def test_from_token_set_id_token_absent_is_none(self):
+        tokens = TokenSet(access_token="access-abc", metadata={"team_id": "T123"})
+        material = IdentityMaterial.from_token_set(tokens)
+        assert material.id_token is None
+
+    def test_from_token_set_non_string_id_token_is_none(self):
+        tokens = TokenSet(access_token="access-abc", metadata={"id_token": 12345})
+        material = IdentityMaterial.from_token_set(tokens)
+        assert material.id_token is None
+
+    def test_from_token_set_omits_refresh_token_and_context(self):
+        """The narrowing must not surface the refresh token or caller
+        context — those fields are structurally absent from the type."""
+        tokens = TokenSet(
+            access_token="access-abc",
+            refresh_token="refresh-xyz",
+            metadata={"id_token": "id-jwt"},
+            context={"user_id": "U123"},
+        )
+        material = IdentityMaterial.from_token_set(tokens)
+        assert not hasattr(material, "refresh_token")
+        assert not hasattr(material, "context")
+        assert set(material.model_dump()) == {"access_token", "id_token"}
 
 
 class TestTenancyContext:

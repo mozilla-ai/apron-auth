@@ -6,7 +6,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig
+from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
 from apron_auth.protocols import IdentityResolver, RevocationHandler, StandardRevocationHandler, StateStore
 
 
@@ -46,7 +46,7 @@ class TestRevocationHandlerProtocol:
 class TestIdentityResolverProtocol:
     def test_callable_satisfies_protocol(self):
         class DummyIdentityHandler:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
                 return IdentityProfile(subject="sub")
 
         def resolver(config: ProviderConfig):

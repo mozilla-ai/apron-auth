@@ -7,7 +7,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import IdentityMaterial, ProviderConfig
 from apron_auth.protocols import RevocationHandler
 
 
@@ -142,7 +142,7 @@ class TestGitHubIdentityHandler:
         config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         handler = GitHubIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.provider == "github"
         assert identity.subject == "12345"

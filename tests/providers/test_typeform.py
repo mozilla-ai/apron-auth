@@ -4,7 +4,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 
 
 class TestTypeformPreset:
@@ -43,7 +43,7 @@ class TestTypeformIdentityHandler:
         config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity == IdentityProfile(
             provider="typeform",
@@ -78,7 +78,7 @@ class TestTypeformIdentityHandler:
         config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.subject is None
 
@@ -94,7 +94,7 @@ class TestTypeformIdentityHandler:
         handler = TypeformIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Typeform identity"):
-            await handler.fetch_identity("bad-token", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
@@ -108,7 +108,7 @@ class TestTypeformIdentityHandler:
         handler = TypeformIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Typeform identity response"):
-            await handler.fetch_identity("access-abc", config)
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
 
 class TestTypeformMaybeIdentityHandler:
