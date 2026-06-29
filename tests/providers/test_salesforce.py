@@ -138,6 +138,7 @@ class TestSalesforceIdentityHandler:
             ("false", None),
             (1, None),
             (0, None),
+            (None, None),
         ],
     )
     async def test_email_verified_honors_only_real_booleans(
