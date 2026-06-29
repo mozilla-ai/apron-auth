@@ -20,7 +20,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -43,7 +43,7 @@ _LINEAR_IDENTITY_HOST_SUFFIXES = ("linear.app",)
 class LinearIdentityHandler:
     """Fetch identity fields via Linear's GraphQL ``viewer`` query."""
 
-    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+    async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Linear access token."""
         del config
         try:
@@ -51,7 +51,7 @@ class LinearIdentityHandler:
                 response = await client.post(
                     _LINEAR_GRAPHQL_URL,
                     headers={
-                        "Authorization": f"Bearer {access_token}",
+                        "Authorization": f"Bearer {material.access_token}",
                         "Content-Type": "application/json",
                     },
                     json={"query": _LINEAR_VIEWER_QUERY},
