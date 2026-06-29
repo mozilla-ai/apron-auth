@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pytest_httpx import HTTPXMock
 
-from apron_auth.models import ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -19,7 +19,7 @@ class TestGoogleIdentityHandler:
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.provider == "google"
         assert identity.tenancies == (TenancyContext(domain="mozilla.ai", owns_email_domain=True),)
@@ -36,7 +36,7 @@ class TestGoogleIdentityHandler:
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
         owner = identity.domain_owning_tenancy()
 
         assert owner is not None
@@ -55,7 +55,7 @@ class TestGoogleIdentityHandler:
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
         assert identity.domain_owning_tenancy() is None
@@ -70,7 +70,7 @@ class TestGoogleIdentityHandler:
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
@@ -86,7 +86,7 @@ class TestGoogleIdentityHandler:
         config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity("access-abc", config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
 
