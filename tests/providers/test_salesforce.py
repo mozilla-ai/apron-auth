@@ -397,3 +397,57 @@ class TestSalesforceMaybeIdentityHandler:
             token_url="https://login.salesforce.com/services/oauth2/token",
         )
         assert maybe_identity_handler(config) is None
+
+
+class TestSalesforceEmailVerified:
+    """email_verified is honored only as a genuine JSON boolean."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("true", None),
+            ("false", None),
+            (1, None),
+            (0, None),
+            (None, None),
+        ],
+    )
+    async def test_email_verified_honors_only_real_booleans(
+        self, httpx_mock: HTTPXMock, value: object, expected: bool | None
+    ):
+        """A non-boolean email_verified is reported as unknown, not coerced —
+        a bare bool() would read the string "false" as True."""
+        httpx_mock.add_response(
+            url="https://login.salesforce.com/services/oauth2/userinfo",
+            json={
+                "sub": "https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
+                "email": "user@example.com",
+                "email_verified": value,
+            },
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler, preset
+
+        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        handler = SalesforceIdentityHandler()
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email_verified is expected
+
+    async def test_email_verified_absent_is_unknown(self, httpx_mock: HTTPXMock):
+        """A userinfo response with no email_verified claim yields None."""
+        httpx_mock.add_response(
+            url="https://login.salesforce.com/services/oauth2/userinfo",
+            json={
+                "sub": "https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
+                "email": "user@example.com",
+            },
+        )
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler, preset
+
+        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        handler = SalesforceIdentityHandler()
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email_verified is None

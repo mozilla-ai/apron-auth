@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext
@@ -251,3 +252,50 @@ class TestGoogleRevocationHandler:
         request = httpx_mock.get_request()
         assert request.method == "POST"
         assert "token=access-abc" in str(request.url)
+
+
+class TestGoogleEmailVerified:
+    """email_verified is honored only as a genuine JSON boolean."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            (True, True),
+            (False, False),
+            ("true", None),
+            ("false", None),
+            (1, None),
+            (0, None),
+            (None, None),
+        ],
+    )
+    async def test_email_verified_honors_only_real_booleans(
+        self, httpx_mock: HTTPXMock, value: object, expected: bool | None
+    ):
+        """A non-boolean email_verified is reported as unknown, not coerced —
+        a bare bool() would read the string "false" as True."""
+        httpx_mock.add_response(
+            url=GOOGLE_USERINFO_URL,
+            json={"sub": "g-1", "email": "user@gmail.com", "email_verified": value},
+        )
+        from apron_auth.providers.google import GoogleIdentityHandler, preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        handler = GoogleIdentityHandler()
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email_verified is expected
+
+    async def test_email_verified_absent_is_unknown(self, httpx_mock: HTTPXMock):
+        """An userinfo response with no email_verified claim yields None."""
+        httpx_mock.add_response(
+            url=GOOGLE_USERINFO_URL,
+            json={"sub": "g-1", "email": "user@gmail.com"},
+        )
+        from apron_auth.providers.google import GoogleIdentityHandler, preset
+
+        config, _ = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        handler = GoogleIdentityHandler()
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email_verified is None
