@@ -19,7 +19,14 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import IdentityProfile, OAuthPendingState, ProviderConfig, TenancyContext, TokenSet
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    OAuthPendingState,
+    ProviderConfig,
+    TenancyContext,
+    TokenSet,
+)
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -566,7 +573,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="google",
@@ -608,7 +615,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity.provider == "github"
         assert identity.subject == "42"
@@ -629,12 +636,12 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_custom_handler(self):
         class DummyIdentityHandler:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
-                assert access_token == "access-abc"
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                assert material.access_token == "access-abc"
                 assert config.client_id == "test-client"
                 return IdentityProfile(email="custom@example.com")
 
@@ -644,7 +651,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity.email == "custom@example.com"
 
@@ -661,7 +668,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
-            await client.fetch_identity("bad-token")
+            await client.fetch_identity(TokenSet(access_token="bad-token"))
 
     async def test_fetch_identity_lookalike_google_host_not_inferred(self):
         config = _make_config(
@@ -671,7 +678,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_lookalike_github_host_not_inferred(self):
         config = _make_config(
@@ -681,7 +688,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_microsoft_identity_inferred_from_config(self, httpx_mock):
         httpx_mock.add_response(
@@ -699,7 +706,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="microsoft",
@@ -724,7 +731,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_atlassian_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -747,7 +754,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -769,7 +776,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_typeform_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -785,7 +792,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="typeform",
@@ -806,7 +813,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_notion_fetch_identity_lookalike_notion_host_not_inferred(self):
         config = _make_config(
@@ -817,7 +824,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_notion_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -847,7 +854,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="notion",
@@ -885,7 +892,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="salesforce",
@@ -915,7 +922,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity.provider == "salesforce"
         assert identity.email == "user@acme.com"
@@ -928,7 +935,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_linear_identity_inferred_from_config(self, httpx_mock):
         viewer = {
@@ -948,7 +955,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity("access-abc")
+        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="linear",
@@ -969,11 +976,11 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
-            async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
                 raise RuntimeError("boom")
 
         config = _make_config(
@@ -983,4 +990,4 @@ class TestFetchIdentity:
         client = OAuthClient(config=config, identity_handler=BoomHandler())
 
         with pytest.raises(IdentityFetchError, match="boom"):
-            await client.fetch_identity("access-abc")
+            await client.fetch_identity(TokenSet(access_token="access-abc"))

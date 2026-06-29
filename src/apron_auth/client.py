@@ -19,7 +19,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import OAuthPendingState, TokenSet
+from apron_auth.models import IdentityMaterial, OAuthPendingState, TokenSet
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.identity import infer_identity_handler
@@ -219,8 +219,15 @@ class OAuthClient:
             raise RevocationError(msg)
         return True
 
-    async def fetch_identity(self, access_token: str) -> IdentityProfile:
+    async def fetch_identity(self, tokens: TokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.
+
+        Pass the :class:`TokenSet` returned by :meth:`exchange_code` (or
+        :meth:`refresh_token`). It is narrowed to an
+        :class:`IdentityMaterial` — exposing only the access token and,
+        for OIDC providers, the ID token — before being handed to the
+        identity handler, so handlers never receive the refresh token or
+        caller context.
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
@@ -229,8 +236,9 @@ class OAuthClient:
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)
+        material = IdentityMaterial.from_token_set(tokens)
         try:
-            return await handler.fetch_identity(access_token, self._config)
+            return await handler.fetch_identity(material, self._config)
         except IdentityFetchError:
             raise
         except Exception as exc:
