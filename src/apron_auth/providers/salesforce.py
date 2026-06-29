@@ -15,7 +15,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -69,7 +69,7 @@ class SalesforceIdentityHandler:
     general "is this address real" signal.
     """
 
-    async def fetch_identity(self, access_token: str, config: ProviderConfig) -> IdentityProfile:
+    async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Salesforce access token."""
         host = urlparse(config.authorize_url).hostname or ""
         if not matches_suffix(host, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
@@ -85,7 +85,7 @@ class SalesforceIdentityHandler:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     userinfo_url,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {material.access_token}"},
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
