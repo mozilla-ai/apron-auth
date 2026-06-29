@@ -139,6 +139,54 @@ class TokenSet(BaseModel, frozen=True):
     context: dict[str, Any] = {}
 
 
+class IdentityMaterial(BaseModel, frozen=True):
+    """The material an identity handler establishes a user's identity from.
+
+    Constructed from a :class:`TokenSet` immediately before dispatching
+    to a provider's identity handler, this type is the single boundary
+    that decides what token material crosses into handler code. It
+    deliberately exposes only the fields identity resolution needs — the
+    bearer access token and, for OpenID Connect (OIDC) providers, the ID
+    token — and omits the refresh token and caller-supplied context
+    carried on :class:`TokenSet`. Identity handlers can be consumer- or
+    third-party-supplied, so withholding the refresh token and opaque
+    caller context from them is defense in depth: the omitted fields are
+    structurally absent, not merely blanked.
+
+    NOTE: a provider-specific token-endpoint extra that a future handler
+    needs (e.g. an instance URL) should be added here as a named field
+    and populated in :meth:`from_token_set`, rather than widening the
+    handler interface to the full :class:`TokenSet`.
+
+    Attributes:
+        access_token: The bearer access token used to call the
+            provider's identity or directory APIs.
+        id_token: The OIDC ID token from the token-endpoint response
+            when present, else ``None``. Carries the issuer-asserted
+            identity and tenancy claims a handler can validate as a
+            trust boundary. ``None`` for non-OIDC providers or when the
+            ``openid`` scope was not granted.
+    """
+
+    access_token: str
+    id_token: str | None = None
+
+    @classmethod
+    def from_token_set(cls, tokens: TokenSet) -> IdentityMaterial:
+        """Narrow a :class:`TokenSet` to the material identity handlers may use.
+
+        The ID token is read from the token-endpoint response, where
+        providers return it as the ``id_token`` field that lands on
+        :attr:`TokenSet.metadata`. The refresh token and caller context
+        on the ``TokenSet`` are intentionally not carried over.
+        """
+        id_token = tokens.metadata.get("id_token")
+        return cls(
+            access_token=tokens.access_token,
+            id_token=id_token if isinstance(id_token, str) else None,
+        )
+
+
 class TenancyContext(BaseModel, frozen=True):
     """Scoping container an OAuth access token operates within.
 
@@ -156,7 +204,13 @@ class TenancyContext(BaseModel, frozen=True):
         id: Tenant identifier as exposed by the provider (e.g. Slack
             ``team_id``, Linear organization id, Atlassian ``cloudId``,
             HubSpot ``hub_id``). Cast to ``str`` where the provider
-            returns a numeric identifier so the contract is stable.
+            returns a numeric identifier so the contract is stable. It
+            is a provider-assigned identifier for binding and display —
+            not itself an authorization grant. Consumers gating
+            domain or tenant access must do so on
+            :attr:`owns_email_domain` (via
+            :meth:`IdentityProfile.domain_owning_tenancy`), never on the
+            mere presence of an ``id``.
         name: Human-readable display name for the tenant (e.g. Slack
             ``team_name``, Linear organization name).
         domain: Domain or canonical URL for the tenant (e.g. Slack
@@ -170,7 +224,11 @@ class TenancyContext(BaseModel, frozen=True):
             this tenancy controls the email domain of the authenticated
             user (e.g. Google with the ``hd`` claim present). Set per
             identity at ``fetch_identity`` time by the provider handler.
-            Callers gating domain-bound tenant grants should use
+            It must be set only from a verified, non-mutable assertion
+            (a domain-authority claim or an admin-verified directory
+            lookup) — never from a self-assertable claim such as a raw
+            email address or UPN. Callers gating domain-bound tenant
+            grants should use
             :meth:`IdentityProfile.domain_owning_tenancy` rather than
             inspecting this flag directly. Defaults to ``False``.
     """
