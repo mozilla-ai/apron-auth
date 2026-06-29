@@ -96,9 +96,11 @@ class SalesforceIdentityHandler:
         except ValueError as exc:
             raise IdentityFetchError(f"Failed to parse Salesforce identity response: {exc}") from exc
 
-        email_verified = None
-        if "email_verified" in payload:
-            email_verified = bool(payload.get("email_verified"))
+        # Honor email_verified only as a genuine boolean; a bare bool()
+        # would coerce a non-boolean (e.g. the string "false") to True.
+        email_verified = payload.get("email_verified")
+        if not isinstance(email_verified, bool):
+            email_verified = None
 
         username = payload.get("nickname") or payload.get("preferred_username")
 
