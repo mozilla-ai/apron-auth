@@ -54,6 +54,37 @@ BASE_SCOPE_METADATA = [
 
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
+# Maps a broad GitHub scope to the narrower scopes it implicitly grants.
+# Only the immediate scopes each one implies are listed;
+# ``resolve_implicit_scopes`` follows them transitively, so a chain such as
+# ``admin:org`` -> ``write:org`` -> ``read:org`` is two edges, not three.
+# Edges come from the documented scope table (each broad scope's indented
+# sub-scopes) and the admin >= write >= read access ladders its descriptions
+# establish. GitHub itself drops implicit scopes when normalizing a granted
+# set ("Normalized scopes"). Source:
+# https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps
+#
+# Keep this conservative: an edge that is not a genuine documented superset
+# makes consumers under-report genuinely missing scopes, so treat additions
+# as security-relevant. Only scopes GitHub nests as documented sub-scopes are
+# encoded. Prose that merely says one scope "can also do" another's job (e.g.
+# ``repo`` grants hook and org access) is NOT an edge: the token's real scope
+# list still omits those, so implying them would hide genuinely missing scopes.
+IMPLICIT_SCOPES: dict[str, frozenset[str]] = {
+    "admin:enterprise": frozenset({"manage_billing:enterprise", "manage_runners:enterprise", "read:enterprise"}),
+    "admin:gpg_key": frozenset({"write:gpg_key"}),
+    "admin:org": frozenset({"write:org"}),
+    "admin:public_key": frozenset({"write:public_key"}),
+    "admin:repo_hook": frozenset({"write:repo_hook"}),
+    "project": frozenset({"read:project"}),
+    "repo": frozenset({"public_repo", "repo:invite", "repo:status", "repo_deployment", "security_events"}),
+    "user": frozenset({"read:user", "user:email", "user:follow"}),
+    "write:gpg_key": frozenset({"read:gpg_key"}),
+    "write:org": frozenset({"read:org"}),
+    "write:public_key": frozenset({"read:public_key"}),
+    "write:repo_hook": frozenset({"read:repo_hook"}),
+}
+
 
 def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> tuple[str | None, bool | None]:
     if isinstance(emails_payload, list):
@@ -224,5 +255,6 @@ def preset(
         extra_params=extra_params or {},
         disconnect_fully_revokes=True,
         scope_metadata=BASE_SCOPE_METADATA,
+        implicit_scopes=IMPLICIT_SCOPES,
     )
     return config, GitHubRevocationHandler()

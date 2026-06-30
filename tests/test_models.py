@@ -17,7 +17,7 @@ from apron_auth.models import (
 
 
 class TestProviderConfig:
-    def test_minimal_config(self):
+    def test_minimal_config(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -34,7 +34,7 @@ class TestProviderConfig:
         assert config.revocation_url is None
         assert config.redirect_uri is None
 
-    def test_full_config(self):
+    def test_full_config(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -53,7 +53,7 @@ class TestProviderConfig:
         assert config.token_endpoint_auth_method == "client_secret_basic"
         assert config.extra_params == {"access_type": "offline"}
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -63,7 +63,7 @@ class TestProviderConfig:
         with pytest.raises(ValidationError):
             config.client_id = "other"
 
-    def test_secret_not_leaked_in_repr(self):
+    def test_secret_not_leaked_in_repr(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -73,11 +73,11 @@ class TestProviderConfig:
         assert "test-secret" not in repr(config)
         assert "test-secret" not in str(config)
 
-    def test_missing_required_fields(self):
+    def test_missing_required_fields(self) -> None:
         with pytest.raises(ValidationError):
             ProviderConfig(client_id="test")
 
-    def test_scope_metadata_defaults_to_empty_list(self):
+    def test_scope_metadata_defaults_to_empty_list(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -86,7 +86,7 @@ class TestProviderConfig:
         )
         assert config.scope_metadata == []
 
-    def test_scope_metadata_round_trips(self):
+    def test_scope_metadata_round_trips(self) -> None:
         meta = ScopeMetadata(
             scope="openid",
             label="OpenID",
@@ -103,7 +103,7 @@ class TestProviderConfig:
         )
         assert config.scope_metadata == [meta]
 
-    def test_required_scope_families_defaults_to_empty_list(self):
+    def test_required_scope_families_defaults_to_empty_list(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -112,7 +112,7 @@ class TestProviderConfig:
         )
         assert config.required_scope_families == []
 
-    def test_required_scope_families_round_trips(self):
+    def test_required_scope_families_round_trips(self) -> None:
         families = [["bot:read", "bot:write"], ["user:read"]]
         config = ProviderConfig(
             client_id="test-client",
@@ -123,9 +123,37 @@ class TestProviderConfig:
         )
         assert config.required_scope_families == families
 
+    def test_implicit_scopes_defaults_to_empty_dict(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.implicit_scopes == {}
+
+    def test_resolve_implicit_scopes_expands_transitively(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            implicit_scopes={"a": frozenset({"b"}), "b": frozenset({"c"})},
+        )
+        assert config.resolve_implicit_scopes({"a"}) == {"a", "b", "c"}
+
+    def test_resolve_implicit_scopes_without_map_returns_input(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.resolve_implicit_scopes({"x"}) == {"x"}
+
 
 class TestScopeMetadata:
-    def test_minimal_fields(self):
+    def test_minimal_fields(self) -> None:
         meta = ScopeMetadata(
             scope="openid",
             label="OpenID",
@@ -136,7 +164,7 @@ class TestScopeMetadata:
         assert meta.access_type == "read"
         assert meta.required is False
 
-    def test_required_round_trips(self):
+    def test_required_round_trips(self) -> None:
         meta = ScopeMetadata(
             scope="offline_access",
             label="Offline Access",
@@ -146,7 +174,7 @@ class TestScopeMetadata:
         )
         assert meta.required is True
 
-    def test_invalid_access_type_rejected(self):
+    def test_invalid_access_type_rejected(self) -> None:
         with pytest.raises(ValidationError):
             ScopeMetadata(
                 scope="openid",
@@ -155,7 +183,7 @@ class TestScopeMetadata:
                 access_type="bogus",  # type: ignore[arg-type]
             )
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         meta = ScopeMetadata(
             scope="openid",
             label="OpenID",
@@ -167,7 +195,7 @@ class TestScopeMetadata:
 
 
 class TestTokenSet:
-    def test_minimal_token(self):
+    def test_minimal_token(self) -> None:
         token = TokenSet(access_token="access-abc")
         assert token.access_token == "access-abc"
         assert token.token_type == "Bearer"
@@ -177,7 +205,7 @@ class TestTokenSet:
         assert token.scope is None
         assert token.metadata == {}
 
-    def test_full_token(self):
+    def test_full_token(self) -> None:
         token = TokenSet(
             access_token="access-abc",
             token_type="Bearer",
@@ -191,62 +219,62 @@ class TestTokenSet:
         assert token.expires_in == 3600
         assert token.metadata == {"team_id": "T123"}
 
-    def test_context_defaults_to_empty_dict(self):
+    def test_context_defaults_to_empty_dict(self) -> None:
         token = TokenSet(access_token="access-abc")
         assert token.context == {}
 
-    def test_context_round_trips(self):
+    def test_context_round_trips(self) -> None:
         ctx = {"user_id": "U123", "tenant_id": "T456"}
         token = TokenSet(access_token="access-abc", context=ctx)
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self):
+    def test_metadata_isolated_from_caller_mutation(self) -> None:
         original = {"team_id": "T123"}
         token = TokenSet(access_token="access-abc", metadata=original)
         original["team_id"] = "mutated"
         assert token.metadata["team_id"] == "T123"
 
-    def test_context_isolated_from_caller_mutation(self):
+    def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
         token = TokenSet(access_token="access-abc", context=original)
         original["user_id"] = "mutated"
         assert token.context["user_id"] == "U123"
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ValidationError):
             token.access_token = "other"
 
 
 class TestIdentityMaterial:
-    def test_minimal_defaults_id_token_to_none(self):
+    def test_minimal_defaults_id_token_to_none(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
         assert material.access_token == "access-abc"
         assert material.id_token is None
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
         with pytest.raises(ValidationError):
             material.access_token = "other"
 
-    def test_from_token_set_extracts_id_token_from_metadata(self):
+    def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
         tokens = TokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token == "access-abc"
         assert material.id_token == "id-jwt"
 
-    def test_from_token_set_id_token_absent_is_none(self):
+    def test_from_token_set_id_token_absent_is_none(self) -> None:
         tokens = TokenSet(access_token="access-abc", metadata={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
-    def test_from_token_set_non_string_id_token_is_none(self):
+    def test_from_token_set_non_string_id_token_is_none(self) -> None:
         tokens = TokenSet(access_token="access-abc", metadata={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
-    def test_from_token_set_omits_refresh_token_and_context(self):
+    def test_from_token_set_omits_refresh_token_and_context(self) -> None:
         """The narrowing must not surface the refresh token or caller
         context — those fields are structurally absent from the type."""
         tokens = TokenSet(
@@ -262,26 +290,26 @@ class TestIdentityMaterial:
 
 
 class TestTenancyContext:
-    def test_defaults_to_all_none_and_empty_raw(self):
+    def test_defaults_to_all_none_and_empty_raw(self) -> None:
         ctx = TenancyContext()
         assert ctx.id is None
         assert ctx.name is None
         assert ctx.domain is None
         assert ctx.raw == {}
 
-    def test_round_trips_normalized_fields(self):
+    def test_round_trips_normalized_fields(self) -> None:
         ctx = TenancyContext(id="T1", name="Acme", domain="acme.example.com", raw={"team_icon": "x"})
         assert ctx.id == "T1"
         assert ctx.name == "Acme"
         assert ctx.domain == "acme.example.com"
         assert ctx.raw == {"team_icon": "x"}
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         ctx = TenancyContext(id="T1")
         with pytest.raises(ValidationError):
             ctx.id = "other"
 
-    def test_raw_isolated_from_caller_mutation(self):
+    def test_raw_isolated_from_caller_mutation(self) -> None:
         original = {"team_icon": "x"}
         ctx = TenancyContext(raw=original)
         original["team_icon"] = "mutated"
@@ -289,7 +317,7 @@ class TestTenancyContext:
 
 
 class TestProviderConfigCanAssertDomainOwnership:
-    def test_defaults_to_false(self):
+    def test_defaults_to_false(self) -> None:
         config = ProviderConfig(
             client_id="cid",
             client_secret=SecretStr("csec"),  # pragma: allowlist secret
@@ -298,7 +326,7 @@ class TestProviderConfigCanAssertDomainOwnership:
         )
         assert config.can_assert_domain_ownership is False
 
-    def test_can_be_set_true(self):
+    def test_can_be_set_true(self) -> None:
         config = ProviderConfig(
             client_id="cid",
             client_secret=SecretStr("csec"),  # pragma: allowlist secret
@@ -310,15 +338,15 @@ class TestProviderConfigCanAssertDomainOwnership:
 
 
 class TestTenancyContextOwnsEmailDomain:
-    def test_defaults_to_false(self):
+    def test_defaults_to_false(self) -> None:
         ctx = TenancyContext()
         assert ctx.owns_email_domain is False
 
-    def test_can_be_set_true(self):
+    def test_can_be_set_true(self) -> None:
         ctx = TenancyContext(domain="example.com", owns_email_domain=True)
         assert ctx.owns_email_domain is True
 
-    def test_existing_fields_unchanged(self):
+    def test_existing_fields_unchanged(self) -> None:
         ctx = TenancyContext(
             id="t-1",
             name="Example",
@@ -333,82 +361,82 @@ class TestTenancyContextOwnsEmailDomain:
 
 
 class TestIdentityProfileProvider:
-    def test_defaults_to_none(self):
+    def test_defaults_to_none(self) -> None:
         identity = IdentityProfile()
         assert identity.provider is None
 
-    def test_can_be_set(self):
+    def test_can_be_set(self) -> None:
         identity = IdentityProfile(provider="google", subject="g-1")
         assert identity.provider == "google"
         assert identity.subject == "g-1"
 
 
 class TestIdentityProfileVerifiedEmail:
-    def test_returns_email_when_verified(self):
+    def test_returns_email_when_verified(self) -> None:
         identity = IdentityProfile(email="user@example.com", email_verified=True)
         assert identity.verified_email() == "user@example.com"
 
-    def test_returns_none_when_unverified(self):
+    def test_returns_none_when_unverified(self) -> None:
         identity = IdentityProfile(email="user@example.com", email_verified=False)
         assert identity.verified_email() is None
 
-    def test_returns_none_when_verification_unknown(self):
+    def test_returns_none_when_verification_unknown(self) -> None:
         identity = IdentityProfile(email="user@example.com", email_verified=None)
         assert identity.verified_email() is None
 
-    def test_returns_none_when_email_absent(self):
+    def test_returns_none_when_email_absent(self) -> None:
         identity = IdentityProfile(email=None, email_verified=True)
         assert identity.verified_email() is None
 
 
 class TestIdentityProfileIdentityKey:
-    def test_returns_tuple_when_both_present(self):
+    def test_returns_tuple_when_both_present(self) -> None:
         identity = IdentityProfile(provider="github", subject="12345")
         assert identity.identity_key() == ("github", "12345")
 
-    def test_returns_none_when_provider_missing(self):
+    def test_returns_none_when_provider_missing(self) -> None:
         identity = IdentityProfile(provider=None, subject="12345")
         assert identity.identity_key() is None
 
-    def test_returns_none_when_subject_missing(self):
+    def test_returns_none_when_subject_missing(self) -> None:
         identity = IdentityProfile(provider="github", subject=None)
         assert identity.identity_key() is None
 
-    def test_returns_none_when_both_missing(self):
+    def test_returns_none_when_both_missing(self) -> None:
         identity = IdentityProfile()
         assert identity.identity_key() is None
 
-    def test_empty_provider_treated_as_missing(self):
+    def test_empty_provider_treated_as_missing(self) -> None:
         identity = IdentityProfile(provider="", subject="12345")
         assert identity.identity_key() is None
 
-    def test_empty_subject_treated_as_missing(self):
+    def test_empty_subject_treated_as_missing(self) -> None:
         identity = IdentityProfile(provider="github", subject="")
         assert identity.identity_key() is None
 
 
 class TestIdentityProfileDomainOwningTenancy:
-    def test_returns_first_owning_tenancy(self):
+    def test_returns_first_owning_tenancy(self) -> None:
         owning = TenancyContext(domain="example.com", owns_email_domain=True)
         identity = IdentityProfile(tenancies=(owning,))
         assert identity.domain_owning_tenancy() == owning
 
-    def test_returns_none_when_no_owning_tenancy(self):
+    def test_returns_none_when_no_owning_tenancy(self) -> None:
         not_owning = TenancyContext(domain="example.com", owns_email_domain=False)
         identity = IdentityProfile(tenancies=(not_owning,))
         assert identity.domain_owning_tenancy() is None
 
-    def test_returns_none_when_no_tenancies(self):
+    def test_returns_none_when_no_tenancies(self) -> None:
         identity = IdentityProfile(tenancies=())
         assert identity.domain_owning_tenancy() is None
 
-    def test_skips_non_owning_to_find_owning(self):
+    def test_skips_non_owning_to_find_owning(self) -> None:
         not_owning = TenancyContext(domain="other.com", owns_email_domain=False)
         owning = TenancyContext(domain="example.com", owns_email_domain=True)
         identity = IdentityProfile(tenancies=(not_owning, owning))
         assert identity.domain_owning_tenancy() == owning
 
-    def test_returns_first_owning_when_multiple(self):
+    def test_returns_first_owning_when_multiple(self) -> None:
         first = TenancyContext(domain="a.example.com", owns_email_domain=True)
         second = TenancyContext(domain="b.example.com", owns_email_domain=True)
         identity = IdentityProfile(tenancies=(first, second))
@@ -416,11 +444,11 @@ class TestIdentityProfileDomainOwningTenancy:
 
 
 class TestIdentityProfile:
-    def test_tenancies_defaults_to_empty_tuple(self):
+    def test_tenancies_defaults_to_empty_tuple(self) -> None:
         identity = IdentityProfile()
         assert identity.tenancies == ()
 
-    def test_tenancies_accepts_multi_tenant_tuple(self):
+    def test_tenancies_accepts_multi_tenant_tuple(self) -> None:
         identity = IdentityProfile(
             tenancies=(
                 TenancyContext(id="cloud-1", name="One"),
@@ -430,14 +458,14 @@ class TestIdentityProfile:
         assert len(identity.tenancies) == 2
         assert identity.tenancies[1].id == "cloud-2"
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         identity = IdentityProfile()
         with pytest.raises(ValidationError):
             identity.tenancies = (TenancyContext(id="T1"),)
 
 
 class TestOAuthPendingState:
-    def test_with_pkce(self):
+    def test_with_pkce(self) -> None:
         now = time.time()
         state = OAuthPendingState(
             state="random-state-token",
@@ -449,7 +477,7 @@ class TestOAuthPendingState:
         assert state.code_verifier == "verifier-abc"
         assert state.created_at == now
 
-    def test_without_pkce(self):
+    def test_without_pkce(self) -> None:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
@@ -457,7 +485,7 @@ class TestOAuthPendingState:
         )
         assert state.code_verifier is None
 
-    def test_metadata_defaults_to_empty_dict(self):
+    def test_metadata_defaults_to_empty_dict(self) -> None:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
@@ -465,7 +493,7 @@ class TestOAuthPendingState:
         )
         assert state.metadata == {}
 
-    def test_metadata_round_trips(self):
+    def test_metadata_round_trips(self) -> None:
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
         state = OAuthPendingState(
             state="random-state-token",
@@ -476,7 +504,7 @@ class TestOAuthPendingState:
         assert state.metadata == meta
         assert state.metadata["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self):
+    def test_metadata_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
         state = OAuthPendingState(
             state="random-state-token",
@@ -487,7 +515,7 @@ class TestOAuthPendingState:
         original["user_id"] = "mutated"
         assert state.metadata["user_id"] == "U123"
 
-    def test_frozen(self):
+    def test_frozen(self) -> None:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
