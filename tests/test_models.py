@@ -123,6 +123,34 @@ class TestProviderConfig:
         )
         assert config.required_scope_families == families
 
+    def test_implicit_scopes_defaults_to_empty_dict(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.implicit_scopes == {}
+
+    def test_resolve_implicit_scopes_expands_transitively(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            implicit_scopes={"a": frozenset({"b"}), "b": frozenset({"c"})},
+        )
+        assert config.resolve_implicit_scopes({"a"}) == {"a", "b", "c"}
+
+    def test_resolve_implicit_scopes_without_map_returns_input(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.resolve_implicit_scopes({"x"}) == {"x"}
+
 
 class TestScopeMetadata:
     def test_minimal_fields(self):

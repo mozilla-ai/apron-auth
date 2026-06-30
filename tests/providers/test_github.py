@@ -123,6 +123,45 @@ class TestGitHubPreset:
         assert all(meta.required for meta in config.scope_metadata)
 
 
+class TestGitHubImplicitScopes:
+    def test_preset_populates_implicit_scopes(self) -> None:
+        from apron_auth.providers.github import IMPLICIT_SCOPES, preset
+
+        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        assert config.implicit_scopes == IMPLICIT_SCOPES
+
+    @pytest.mark.parametrize(
+        ("granted", "expected"),
+        [
+            # repo umbrella -> its five documented sub-scopes.
+            (
+                {"repo"},
+                {"repo", "public_repo", "repo:invite", "repo:status", "repo_deployment", "security_events"},
+            ),
+            # user umbrella -> read:user plus email/follow.
+            ({"user"}, {"user", "read:user", "user:email", "user:follow"}),
+            # admin >= write >= read ladders resolve transitively.
+            ({"admin:org"}, {"admin:org", "write:org", "read:org"}),
+            ({"admin:public_key"}, {"admin:public_key", "write:public_key", "read:public_key"}),
+            ({"admin:gpg_key"}, {"admin:gpg_key", "write:gpg_key", "read:gpg_key"}),
+            ({"admin:repo_hook"}, {"admin:repo_hook", "write:repo_hook", "read:repo_hook"}),
+            # project read/write implies read-only.
+            ({"project"}, {"project", "read:project"}),
+            # admin:enterprise -> its three documented children.
+            (
+                {"admin:enterprise"},
+                {"admin:enterprise", "manage_billing:enterprise", "manage_runners:enterprise", "read:enterprise"},
+            ),
+        ],
+    )
+    def test_documented_implications_resolve(self, granted: set[str], expected: set[str]) -> None:
+        from apron_auth.providers.github import preset
+
+        # Requested scopes don't affect implicit_scopes; it is fixed per provider.
+        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=[])
+        assert config.resolve_implicit_scopes(granted) == expected
+
+
 _GITHUB_USER_URL = "https://api.github.com/user"
 _GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 

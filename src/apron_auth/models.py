@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, SecretStr
 
+from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
+
 AccessType = Literal["read", "write", "admin"]
 
 
@@ -43,7 +45,7 @@ class ScopeMetadata(BaseModel, frozen=True):
 
 
 class ProviderConfig(BaseModel, frozen=True):
-    """OAuth provider configuration — endpoints, credentials, behaviour.
+    """OAuth provider configuration — endpoints, credentials, behavior.
 
     Attributes:
         disconnect_fully_revokes: Whether ``revoke_token`` removes the
@@ -91,6 +93,15 @@ class ProviderConfig(BaseModel, frozen=True):
             tenancy can refuse to wire up an incapable provider at
             startup rather than discovering the gap at login time.
             Defaults to ``False``.
+        implicit_scopes: Mapping from a high-level scope to the
+            finer-grained scopes it implicitly includes — used to avoid
+            false "missing scope" reports. Holding a high-level scope
+            often implies holding narrower ones: a token with GitHub's
+            ``repo`` implicitly holds ``public_repo``, so checking that
+            token for ``public_repo`` alone would wrongly report it as
+            missing. :meth:`resolve_implicit_scopes` expands a granted set
+            against this mapping. Set by the preset; empty when a provider
+            has no such relationships.
     """
 
     client_id: str
@@ -108,6 +119,22 @@ class ProviderConfig(BaseModel, frozen=True):
     scope_metadata: list[ScopeMetadata] = []
     required_scope_families: list[list[str]] = []
     can_assert_domain_ownership: bool = False
+    implicit_scopes: dict[str, frozenset[str]] = {}
+
+    def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
+        """Return ``granted`` expanded with every scope it transitively implies.
+
+        Implications come from this provider's :attr:`implicit_scopes`, so a
+        token holding a high-level scope also holds the finer-grained scopes
+        nested under it. The input set is not mutated.
+
+        Args:
+            granted: The scopes a token was granted.
+
+        Returns:
+            A new set: ``granted`` plus every scope it transitively implies.
+        """
+        return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
 
 class TokenSet(BaseModel, frozen=True):
