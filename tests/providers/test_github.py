@@ -12,14 +12,14 @@ from apron_auth.protocols import RevocationHandler
 
 
 class TestGitHubMaybeIdentityHandler:
-    def test_canonical_github_host_returns_handler(self):
+    def test_canonical_github_host_returns_handler(self) -> None:
         from apron_auth.providers.github import GitHubIdentityHandler, maybe_identity_handler, preset
 
         config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         handler = maybe_identity_handler(config)
         assert isinstance(handler, GitHubIdentityHandler)
 
-    def test_lookalike_host_returns_none(self):
+    def test_lookalike_host_returns_none(self) -> None:
         from pydantic import SecretStr
 
         from apron_auth.providers.github import maybe_identity_handler
@@ -32,7 +32,7 @@ class TestGitHubMaybeIdentityHandler:
         )
         assert maybe_identity_handler(config) is None
 
-    def test_non_github_host_returns_none(self):
+    def test_non_github_host_returns_none(self) -> None:
         from pydantic import SecretStr
 
         from apron_auth.providers.github import maybe_identity_handler
@@ -45,7 +45,7 @@ class TestGitHubMaybeIdentityHandler:
         )
         assert maybe_identity_handler(config) is None
 
-    def test_only_authorize_url_matching_returns_none(self):
+    def test_only_authorize_url_matching_returns_none(self) -> None:
         from pydantic import SecretStr
 
         from apron_auth.providers.github import maybe_identity_handler
@@ -58,7 +58,7 @@ class TestGitHubMaybeIdentityHandler:
         )
         assert maybe_identity_handler(config) is None
 
-    def test_only_token_url_matching_returns_none(self):
+    def test_only_token_url_matching_returns_none(self) -> None:
         from pydantic import SecretStr
 
         from apron_auth.providers.github import maybe_identity_handler
@@ -73,14 +73,14 @@ class TestGitHubMaybeIdentityHandler:
 
 
 class TestGitHubPreset:
-    def test_returns_config_and_handler(self):
+    def test_returns_config_and_handler(self) -> None:
         from apron_auth.providers.github import preset
 
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(handler, RevocationHandler)
 
-    def test_config_has_correct_endpoints(self):
+    def test_config_has_correct_endpoints(self) -> None:
         from apron_auth.providers.github import preset
 
         config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
@@ -88,7 +88,7 @@ class TestGitHubPreset:
         assert config.token_url == "https://github.com/login/oauth/access_token"
         assert config.revocation_url == "https://api.github.com/applications/ghid/grant"
 
-    def test_base_scopes_merged_with_caller_scopes(self):
+    def test_base_scopes_merged_with_caller_scopes(self) -> None:
         from apron_auth.providers.github import BASE_SCOPES, preset
 
         config, _ = preset(
@@ -100,7 +100,7 @@ class TestGitHubPreset:
             assert scope in config.scopes
         assert "repo" in config.scopes
 
-    def test_duplicate_scopes_deduplicated(self):
+    def test_duplicate_scopes_deduplicated(self) -> None:
         from apron_auth.providers.github import preset
 
         config, _ = preset(
@@ -110,7 +110,7 @@ class TestGitHubPreset:
         )
         assert config.scopes.count("read:user") == 1
 
-    def test_scope_metadata_covers_base_scopes(self):
+    def test_scope_metadata_covers_base_scopes(self) -> None:
         from apron_auth.providers.github import BASE_SCOPES, preset
 
         config, _ = preset(
@@ -167,7 +167,7 @@ _GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 
 
 class TestGitHubIdentityHandler:
-    async def test_fetch_identity_populates_provider(self, httpx_mock: HTTPXMock):
+    async def test_fetch_identity_populates_provider(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url=_GITHUB_USER_URL,
             json={"id": 12345, "login": "octocat", "name": "The Octocat", "avatar_url": "https://example.com/a"},
@@ -190,7 +190,7 @@ class TestGitHubIdentityHandler:
 
 
 class TestGitHubRevocationHandler:
-    async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock):
+    async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
@@ -201,7 +201,7 @@ class TestGitHubRevocationHandler:
         assert request.method == "DELETE"
         assert request.headers.get("authorization", "").startswith("Basic ")
 
-    async def test_sends_github_api_headers(self, httpx_mock: HTTPXMock):
+    async def test_sends_github_api_headers(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
@@ -211,7 +211,7 @@ class TestGitHubRevocationHandler:
         assert request.headers.get("accept") == "application/vnd.github+json"
         assert request.headers.get("x-github-api-version") == "2022-11-28"
 
-    async def test_sends_access_token_in_body(self, httpx_mock: HTTPXMock):
+    async def test_sends_access_token_in_body(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
@@ -221,7 +221,7 @@ class TestGitHubRevocationHandler:
         payload = json.loads(request.content)
         assert payload == {"access_token": "access-abc"}
 
-    async def test_not_found_is_idempotent_success(self, httpx_mock: HTTPXMock):
+    async def test_not_found_is_idempotent_success(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=404)
         from apron_auth.providers.github import preset
 
@@ -229,7 +229,7 @@ class TestGitHubRevocationHandler:
         result = await handler.revoke("access-abc", config)
         assert result is True
 
-    async def test_validation_failure_returns_false(self, httpx_mock: HTTPXMock):
+    async def test_validation_failure_returns_false(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=422)
         from apron_auth.providers.github import preset
 
@@ -237,7 +237,7 @@ class TestGitHubRevocationHandler:
         result = await handler.revoke("access-abc", config)
         assert result is False
 
-    async def test_unexpected_status_returns_false(self, httpx_mock: HTTPXMock):
+    async def test_unexpected_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.github import preset
 
@@ -245,7 +245,7 @@ class TestGitHubRevocationHandler:
         result = await handler.revoke("access-abc", config)
         assert result is False
 
-    async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
+    async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import GitHubRevocationHandler, preset
 
@@ -257,7 +257,7 @@ class TestGitHubRevocationHandler:
         assert not client.is_closed
         await client.aclose()
 
-    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
+    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.github import preset
 
@@ -266,7 +266,7 @@ class TestGitHubRevocationHandler:
             await handler.revoke("access-abc", config)
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
-    async def test_network_error_with_injected_client_keeps_client_open(self, httpx_mock: HTTPXMock):
+    async def test_network_error_with_injected_client_keeps_client_open(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.github import GitHubRevocationHandler, preset
 
