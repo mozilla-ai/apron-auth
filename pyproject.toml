@@ -29,6 +29,9 @@ tests = [
     "setuptools-scm[toml]>=9.2",
 ]
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [build-system]
 requires = ["setuptools>=48", "setuptools_scm[toml]>=6.3.1"]
 build-backend = "setuptools.build_meta"
