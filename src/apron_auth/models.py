@@ -267,6 +267,17 @@ class TenancyContext(BaseModel, frozen=True):
     raw: dict[str, Any] = {}
     owns_email_domain: bool = False
 
+    def _verified_domain(self) -> str | None:
+        """Return the domain this tenancy owns, normalized for comparison.
+
+        ``None`` if the tenancy asserts no ownership, and if it asserts
+        ownership without naming a domain — neither leaves anything to
+        compare against.
+        """
+        if not self.owns_email_domain or self.domain is None:
+            return None
+        return self.domain.strip().lower() or None
+
 
 class IdentityProfile(BaseModel, frozen=True):
     """Normalized identity fields fetched from a provider.
@@ -337,24 +348,25 @@ class IdentityProfile(BaseModel, frozen=True):
         return None
 
     def domain_owning_tenancies(self) -> tuple[TenancyContext, ...]:
-        """Return every tenancy that asserts the user belongs to its email domain.
+        """Return every tenancy that verifiably owns the domain it names.
 
-        A tenancy qualifies when :attr:`TenancyContext.owns_email_domain`
-        is ``True``; the result is empty when the provider asserts no
-        domain ownership at all. Providers whose assertion is inherently
-        plural — a directory tenant with several admin-verified domains —
-        contribute one entry per domain, so this is an enumeration rather
-        than a lossy "pick one" summary.
+        A directory tenant asserting several admin-verified domains
+        contributes one entry per domain, so this enumerates rather than
+        reducing to a lossy "pick one". A tenancy flagged as domain-owning
+        that names no domain offers nothing to gate on and does not
+        qualify, so a truthiness check here agrees with
+        :meth:`owns_domain`.
 
         Use :meth:`owns_domain` to gate on a specific domain; use this to
-        enumerate or display the full set.
+        enumerate or display the set. :attr:`tenancies` stays available
+        for the unfiltered view.
 
         Returns:
-            The qualifying tenancies, in the order the provider returned
-            them. Providers do not generally guarantee that order, so
-            callers must not read significance into the first entry.
+            The qualifying tenancies, in provider order. That order is
+            not generally guaranteed, so callers must not read
+            significance into the first entry.
         """
-        return tuple(tenancy for tenancy in self.tenancies if tenancy.owns_email_domain)
+        return tuple(tenancy for tenancy in self.tenancies if tenancy._verified_domain() is not None)
 
     def owns_domain(self, domain: str) -> bool:
         """Report whether any tenancy asserts the user belongs to ``domain``.
@@ -369,8 +381,9 @@ class IdentityProfile(BaseModel, frozen=True):
         in its own right.
 
         Args:
-            domain: Domain to test ownership of. A blank value never
-                matches, including against a tenancy with a blank domain.
+            domain: Domain to test ownership of. A blank value names no
+                domain and so never matches, including against a tenancy
+                whose own domain is blank.
 
         Returns:
             ``True`` when some tenancy asserts ownership of ``domain``.
@@ -378,10 +391,7 @@ class IdentityProfile(BaseModel, frozen=True):
         target = domain.strip().lower()
         if not target:
             return False
-        return any(
-            tenancy.domain is not None and tenancy.domain.strip().lower() == target
-            for tenancy in self.domain_owning_tenancies()
-        )
+        return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
 
 class OAuthPendingState(BaseModel, frozen=True):

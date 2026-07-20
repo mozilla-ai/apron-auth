@@ -442,6 +442,33 @@ class TestIdentityProfileDomainOwningTenancies:
         identity = IdentityProfile(tenancies=(not_owning, owning))
         assert identity.domain_owning_tenancies() == (owning,)
 
+    def test_skips_owning_tenancy_with_no_domain(self) -> None:
+        """An assertion that names no domain is unusable and must not qualify.
+
+        Returning it would make this method truthy while ``owns_domain``
+        answers ``False`` for every input, so a presence check would report
+        domain ownership that nothing can actually gate on.
+        """
+        domainless = TenancyContext(id="t-1", domain=None, owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(domainless,))
+        assert identity.domain_owning_tenancies() == ()
+
+    def test_skips_owning_tenancy_with_blank_domain(self) -> None:
+        blank = TenancyContext(id="t-1", domain="   ", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(blank,))
+        assert identity.domain_owning_tenancies() == ()
+
+    def test_agrees_with_owns_domain_on_what_qualifies(self) -> None:
+        """Every returned tenancy must name a domain ``owns_domain`` accepts."""
+        domainless = TenancyContext(id="t-1", domain=None, owns_email_domain=True)
+        usable = TenancyContext(id="t-1", domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(domainless, usable))
+
+        qualifying = identity.domain_owning_tenancies()
+
+        assert bool(qualifying) is any(identity.owns_domain(t.domain or "") for t in identity.tenancies)
+        assert all(t.domain is not None and identity.owns_domain(t.domain) for t in qualifying)
+
 
 class TestIdentityProfileOwnsDomain:
     def test_blank_domain_never_matches(self) -> None:
