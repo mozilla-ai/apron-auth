@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -352,7 +353,9 @@ class TestMicrosoftVerifiedTenancy:
 
         assert identity.email_verified is True
 
-    async def test_organization_id_mismatch_suppresses_tenancy(self, httpx_mock: HTTPXMock, caplog):
+    async def test_organization_id_mismatch_suppresses_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
         """If the directory lookup resolves a different tenant than the
         validated ID token, refuse to assert ownership."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
@@ -454,35 +457,81 @@ class TestMicrosoftIdentityErrors:
         with pytest.raises(IdentityFetchError, match="Failed to parse Microsoft identity response"):
             await MicrosoftIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), _config())
 
-    async def test_organization_call_failure_raises(self, httpx_mock: HTTPXMock):
+
+class TestMicrosoftOrganizationDegradation:
+    """A failed organization lookup withholds tenancy without blocking sign-in.
+
+    The lookup only enriches tenancy — identity is already established by
+    the userinfo call — so every failure mode degrades to ``tenancies=()``.
+    That withholds the domain-ownership assertion, which closes rather
+    than opens any consumer gate keyed on ``owns_domain()``.
+    """
+
+    async def test_forbidden_degrades_to_no_tenancy(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=403, json={"error": "forbidden"})
         from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch Microsoft organization"):
-            await MicrosoftIdentityHandler().fetch_identity(
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
             )
 
-    async def test_organization_non_json_raises(self, httpx_mock: HTTPXMock):
+        assert identity.subject == "ms-sub-1"
+        assert identity.email == "user@contoso.com"
+        assert identity.tenancies == ()
+        assert identity.domain_owning_tenancies() == ()
+        # The consumer-facing gate refuses the user's own email domain:
+        # degrading withholds the assertion rather than fabricating it.
+        assert identity.owns_domain("contoso.com") is False
+        assert "could not resolve the tenant's verified domains" in caplog.text
+        assert "access-abc" not in caplog.text
+
+    async def test_transport_error_degrades_to_no_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_exception(httpx.ConnectError("boom"), url=_ORGANIZATION_URL)
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler
+
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert "could not resolve the tenant's verified domains" in caplog.text
+
+    async def test_non_json_degrades_to_no_tenancy(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=200, content=b"not-json")
         from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 
-        with pytest.raises(IdentityFetchError, match="Failed to parse Microsoft organization response"):
-            await MicrosoftIdentityHandler().fetch_identity(
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
             )
 
-    async def test_organization_empty_collection_raises(self, httpx_mock: HTTPXMock):
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert "could not parse the tenant's verified domains" in caplog.text
+
+    async def test_empty_collection_degrades_to_no_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json={"value": []})
         from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 
-        with pytest.raises(IdentityFetchError, match="contained no organization"):
-            await MicrosoftIdentityHandler().fetch_identity(
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
             )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert "returned no organization" in caplog.text
 
 
 class TestMicrosoftMaybeIdentityHandler:
