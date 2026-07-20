@@ -544,6 +544,60 @@ All exceptions inherit from `OAuthError`.
 | `StateError`          | OAuth state was invalid, expired, or already used.                                                              |
 | `ConfigurationError`  | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
 
+## Logging
+
+apron-auth logs through the standard library and configures nothing on
+your behalf. It attaches a `NullHandler` to its root logger, so it stays
+silent until your application opts in — without one, Python's last-resort
+fallback would write warnings to your stderr.
+
+Loggers are named after their module, so the `apron_auth` logger is the
+single point of control for the whole library:
+
+```python
+import logging
+
+logging.getLogger("apron_auth").setLevel(logging.WARNING)
+logging.getLogger("apron_auth").addHandler(my_handler)
+
+# Or target one module.
+logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
+```
+
+| Logger                           | Emits                                                       |
+|----------------------------------|-------------------------------------------------------------|
+| `apron_auth.stores`              | Expired OAuth state discarded on lookup.                     |
+| `apron_auth.providers.microsoft` | Withheld tenancy assertions; ID-token claim parsing.         |
+| `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
+| `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
+| `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
+
+Two levels are used. `WARNING` marks a capability that degraded without
+raising — a revocation the provider would not confirm, or a
+domain-ownership assertion withheld because a directory lookup failed.
+Both deserve an operator's attention precisely because they do not
+surface as exceptions: the call returns, and the effect is silent. A
+withheld assertion in particular makes domain-gated access refuse.
+`DEBUG` carries diagnostic detail: expired state, and provider response
+parsing that is useful when a response format changes.
+
+There is no `logger` parameter to inject. The logging hierarchy is the
+injection point: because every module logs to its own `__name__`,
+configuring `apron_auth` reaches all of them, and adapters, filters, and
+`contextvars` compose with it in the usual way.
+
+### What is never logged
+
+Access tokens, refresh tokens, client secrets, and ID-token payload bytes
+are never written to logs at any level. Exception *values* are not logged
+either — only the exception class and, for HTTP failures, the status
+code. A raised exception's rendering can embed the request that carried a
+credential, and for some providers a token travels in the URL path, so
+the exception value is not safe to emit generically.
+
+This is a contract, not an implementation detail: if you find a
+credential in log output, treat it as a bug and report it.
+
 ## Development
 
 Requires [uv](https://docs.astral.sh/uv/).
