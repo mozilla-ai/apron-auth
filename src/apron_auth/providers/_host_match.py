@@ -29,9 +29,9 @@ def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool:
-    """Return True iff both OAuth URL hostnames match a provider suffix.
+    """Report whether both OAuth URL hostnames match a provider suffix.
 
-    Useful when a caller wants to gate behaviour on both
+    Useful when a caller wants to gate behavior on both
     ``authorize_url`` and ``token_url`` matching a provider's host
     suffix list. Requiring both — rather than either — closes a
     token-exfiltration path that otherwise applies to code paths
@@ -40,7 +40,7 @@ def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool
     would otherwise pass an "either" check and leak the bearer token
     to the attacker host. :class:`SalesforceIdentityHandler` is the
     in-tree example of such a code path; it also re-validates the
-    derived host with :func:`matches_suffix` at fetch time as defence
+    derived host with :func:`matches_suffix` at fetch time as defense
     in depth.
     """
     authorize_host = urlparse(config.authorize_url).hostname or ""

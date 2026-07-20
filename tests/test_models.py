@@ -415,32 +415,132 @@ class TestIdentityProfileIdentityKey:
         assert identity.identity_key() is None
 
 
-class TestIdentityProfileDomainOwningTenancy:
-    def test_returns_first_owning_tenancy(self) -> None:
-        owning = TenancyContext(domain="example.com", owns_email_domain=True)
-        identity = IdentityProfile(tenancies=(owning,))
-        assert identity.domain_owning_tenancy() == owning
-
-    def test_returns_none_when_no_owning_tenancy(self) -> None:
+class TestIdentityProfileDomainOwningTenancies:
+    def test_returns_empty_when_no_owning_tenancy(self) -> None:
         not_owning = TenancyContext(domain="example.com", owns_email_domain=False)
         identity = IdentityProfile(tenancies=(not_owning,))
-        assert identity.domain_owning_tenancy() is None
+        assert identity.domain_owning_tenancies() == ()
 
-    def test_returns_none_when_no_tenancies(self) -> None:
+    def test_returns_empty_when_no_tenancies(self) -> None:
         identity = IdentityProfile(tenancies=())
-        assert identity.domain_owning_tenancy() is None
+        assert identity.domain_owning_tenancies() == ()
 
-    def test_skips_non_owning_to_find_owning(self) -> None:
-        not_owning = TenancyContext(domain="other.com", owns_email_domain=False)
-        owning = TenancyContext(domain="example.com", owns_email_domain=True)
-        identity = IdentityProfile(tenancies=(not_owning, owning))
-        assert identity.domain_owning_tenancy() == owning
-
-    def test_returns_first_owning_when_multiple(self) -> None:
+    def test_returns_every_owning_tenancy_in_order(self) -> None:
         first = TenancyContext(domain="a.example.com", owns_email_domain=True)
         second = TenancyContext(domain="b.example.com", owns_email_domain=True)
         identity = IdentityProfile(tenancies=(first, second))
-        assert identity.domain_owning_tenancy() == first
+        assert identity.domain_owning_tenancies() == (first, second)
+
+    def test_returns_sole_owning_tenancy(self) -> None:
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.domain_owning_tenancies() == (owning,)
+
+    def test_skips_non_owning_tenancies(self) -> None:
+        not_owning = TenancyContext(domain="other.com", owns_email_domain=False)
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(not_owning, owning))
+        assert identity.domain_owning_tenancies() == (owning,)
+
+    def test_skips_owning_tenancy_with_no_domain(self) -> None:
+        """An assertion that names no domain is unusable and must not qualify.
+
+        Returning it would make this method truthy while ``owns_domain``
+        answers ``False`` for every input, so a presence check would report
+        domain ownership that nothing can actually gate on.
+        """
+        domainless = TenancyContext(id="t-1", domain=None, owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(domainless,))
+        assert identity.domain_owning_tenancies() == ()
+
+    def test_skips_owning_tenancy_with_blank_domain(self) -> None:
+        blank = TenancyContext(id="t-1", domain="   ", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(blank,))
+        assert identity.domain_owning_tenancies() == ()
+
+    def test_agrees_with_owns_domain_on_what_qualifies(self) -> None:
+        """Every returned tenancy must name a domain ``owns_domain`` accepts."""
+        domainless = TenancyContext(id="t-1", domain=None, owns_email_domain=True)
+        usable = TenancyContext(id="t-1", domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(domainless, usable))
+
+        qualifying = identity.domain_owning_tenancies()
+
+        assert bool(qualifying) is any(identity.owns_domain(t.domain or "") for t in identity.tenancies)
+        assert all(t.domain is not None and identity.owns_domain(t.domain) for t in qualifying)
+
+
+class TestIdentityProfileOwnsDomain:
+    def test_blank_domain_never_matches(self) -> None:
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("") is False
+        assert identity.owns_domain("   ") is False
+
+    def test_blank_domain_does_not_match_blank_tenancy_domain(self) -> None:
+        owning = TenancyContext(domain="", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("") is False
+
+    def test_ignores_surrounding_whitespace_on_argument(self) -> None:
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("  example.com  ") is True
+
+    def test_ignores_surrounding_whitespace_on_tenancy_domain(self) -> None:
+        owning = TenancyContext(domain=" example.com ", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("example.com") is True
+
+    def test_matches_case_insensitively(self) -> None:
+        owning = TenancyContext(domain="Example.COM", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("eXaMpLe.com") is True
+
+    def test_matches_non_first_domain_of_multi_domain_tenant(self) -> None:
+        """A tenant asserting several domains must match on any of them, not just the first.
+
+        Entra emits one tenancy per admin-verified domain with no ordering
+        guarantee, so gating on a custom domain must not depend on where the
+        directory happened to list it.
+        """
+        onmicrosoft = TenancyContext(id="t-1", domain="contoso.onmicrosoft.com", owns_email_domain=True)
+        custom = TenancyContext(id="t-1", domain="contoso.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(onmicrosoft, custom))
+        assert identity.owns_domain("contoso.com") is True
+        assert identity.owns_domain("contoso.onmicrosoft.com") is True
+
+    def test_returns_false_when_no_tenancies(self) -> None:
+        identity = IdentityProfile(tenancies=())
+        assert identity.owns_domain("example.com") is False
+
+    def test_returns_false_when_tenancy_does_not_own_domain(self) -> None:
+        not_owning = TenancyContext(domain="example.com", owns_email_domain=False)
+        identity = IdentityProfile(tenancies=(not_owning,))
+        assert identity.owns_domain("example.com") is False
+
+    def test_returns_false_when_tenancy_domain_is_none(self) -> None:
+        owning = TenancyContext(id="t-1", domain=None, owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("example.com") is False
+
+    def test_returns_true_on_exact_match(self) -> None:
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("example.com") is True
+
+    def test_unowned_domain_does_not_match(self) -> None:
+        owning = TenancyContext(domain="example.com", owns_email_domain=True)
+        identity = IdentityProfile(tenancies=(owning,))
+        assert identity.owns_domain("other.com") is False
+
+    def test_does_not_match_across_subdomain_boundary(self) -> None:
+        """Ownership of a parent domain must not confer ownership of a subdomain, or vice versa."""
+        parent = TenancyContext(domain="example.com", owns_email_domain=True)
+        assert IdentityProfile(tenancies=(parent,)).owns_domain("corp.example.com") is False
+
+        child = TenancyContext(domain="corp.example.com", owns_email_domain=True)
+        assert IdentityProfile(tenancies=(child,)).owns_domain("example.com") is False
 
 
 class TestIdentityProfile:
