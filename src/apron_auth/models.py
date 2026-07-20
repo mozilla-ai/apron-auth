@@ -324,7 +324,7 @@ class IdentityProfile(BaseModel, frozen=True):
     raw: dict[str, Any] = {}
 
     def verified_email(self) -> str | None:
-        """Return ``email`` iff the provider asserts it as verified, else ``None``.
+        """Return ``email`` if the provider asserts it as verified, otherwise ``None``.
 
         NOTE: a verified email proves the user controlled the inbox at
         the time of verification. It does NOT prove ongoing control or
