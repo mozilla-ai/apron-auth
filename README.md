@@ -278,14 +278,21 @@ Gate on the `False` case to refuse domain-based grants:
 
 ```python
 def join_org(identity: IdentityProfile, claimed_domain: str) -> Membership:
-    if not identity.owns_domain(claimed_domain):
-        raise AuthError(f"No domain-owning assertion for {claimed_domain}")
-    return grant_membership(identity.identity_key(), claimed_domain)
+    domain = claimed_domain.strip().lower()
+    if not identity.owns_domain(domain):
+        raise AuthError(f"No domain-owning assertion for {domain}")
+    return grant_membership(identity.identity_key(), domain)
 ```
 
 Matching is exact once whitespace is trimmed and case is folded. A
 parent domain does not confer ownership of its subdomains — a tenant
 verified for `acme.com` does not satisfy a gate on `corp.acme.com`.
+
+`owns_domain()` folds its argument for the comparison only; it does not
+hand back a canonical form. Whatever key you persist is yours to
+normalize. Canonicalize once and use that value for both the gate and
+the write, as above — otherwise `" Example.COM "` passes the gate and
+is then stored alongside `example.com` as a second membership row.
 
 **Test the domain; do not pick one.** A single tenant can assert
 several domains at once: every Entra tenant has an
