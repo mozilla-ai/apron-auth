@@ -316,6 +316,16 @@ verified = [t.domain for t in identity.domain_owning_tenancies()]
 # ["contoso.com", "contoso.co.uk", "contoso.onmicrosoft.com"]
 ```
 
+Microsoft's assertion resolves the tenant's admin-verified domains from
+a live directory call, so it can be withheld transiently — an outage,
+throttling, or a tenant that has not consented leaves `tenancies=()`
+and logs a warning rather than failing the sign-in. The assertion is
+never fabricated, so the failure closes a domain gate rather than
+opening one, but a consumer that *persists* the result should re-resolve
+it rather than treating one absent assertion as durable. The extra call
+needs no consent beyond the `User.Read` scope already in the preset's
+`BASE_SCOPES`.
+
 #### Refusing incapable providers at startup
 
 `ProviderConfig.can_assert_domain_ownership` declares whether a
