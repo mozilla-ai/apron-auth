@@ -283,7 +283,7 @@ class TestMicrosoftVerifiedTenancy:
         assert identity.tenancies == (
             TenancyContext(id=_TENANT_ID, name="Contoso", domain="contoso.com", owns_email_domain=True),
         )
-        assert identity.domain_owning_tenancy() is not None
+        assert identity.owns_domain("contoso.com") is True
 
     async def test_multiple_verified_domains_emit_one_tenancy_each(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
@@ -302,6 +302,28 @@ class TestMicrosoftVerifiedTenancy:
             TenancyContext(id=_TENANT_ID, name="Contoso", domain="contoso.co.uk", owns_email_domain=True),
             TenancyContext(id=_TENANT_ID, name="Contoso", domain="contoso.onmicrosoft.com", owns_email_domain=True),
         )
+
+    async def test_every_verified_domain_is_gateable(self, httpx_mock: HTTPXMock) -> None:
+        """Every verified domain of a tenant must satisfy the gate.
+
+        Graph does not guarantee the order it lists verified domains in, so
+        gating must not depend on which one it happened to return first.
+        """
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(
+            url=_ORGANIZATION_URL,
+            json=_org_response(["contoso.onmicrosoft.com", "contoso.com", "contoso.co.uk"]),
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler
+
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+        )
+
+        assert identity.owns_domain("contoso.com") is True
+        assert identity.owns_domain("contoso.co.uk") is True
+        assert identity.owns_domain("contoso.onmicrosoft.com") is True
+        assert identity.owns_domain("fabrikam.com") is False
 
     async def test_missing_display_name_still_emits_tenancy(self, httpx_mock: HTTPXMock):
         """``displayName`` is decorative; its absence must not drop the

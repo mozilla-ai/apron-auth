@@ -270,19 +270,43 @@ does not prove that the IdP issuing the token controls the email's
 domain.
 
 apron-auth surfaces the stronger fact via
-`IdentityProfile.domain_owning_tenancy()`. This returns a
-`TenancyContext` only when the provider asserts that the tenancy
-controls the user's email domain (Google Workspace via the `hd` claim,
-or Microsoft Entra workforce sign-in via the validated tenant's
-admin-verified domains; capability flag below). Returns `None`
-otherwise — gate on the `None` case to refuse domain-based grants:
+`IdentityProfile.owns_domain()`. This returns `True` only when the
+provider asserts that some tenancy controls that domain (Google
+Workspace via the `hd` claim, or Microsoft Entra workforce sign-in via
+the validated tenant's admin-verified domains; capability flag below).
+Gate on the `False` case to refuse domain-based grants:
 
 ```python
 def join_org(identity: IdentityProfile, claimed_domain: str) -> Membership:
-    owner = identity.domain_owning_tenancy()
-    if owner is None or owner.domain != claimed_domain:
+    if not identity.owns_domain(claimed_domain):
         raise AuthError(f"No domain-owning assertion for {claimed_domain}")
     return grant_membership(identity.identity_key(), claimed_domain)
+```
+
+Matching is exact once whitespace is trimmed and case is folded. A
+parent domain does not confer ownership of its subdomains — a tenant
+verified for `acme.com` does not satisfy a gate on `corp.acme.com`.
+
+**Test the domain; do not pick one.** A single tenant can assert
+several domains at once: every Entra tenant has an
+`*.onmicrosoft.com` domain alongside any custom domain, and Microsoft
+Graph does not guarantee the order it lists them in. Reducing that set
+to one entry and comparing against it yields an arbitrary answer, and
+persisting the reduction latches the arbitrary choice permanently:
+
+```python
+# DON'T — arbitrary which domain you get on a multi-domain tenant
+owner = identity.domain_owning_tenancies()[0]
+if owner.domain != claimed_domain:
+    raise AuthError(...)
+```
+
+To enumerate or display the full set rather than test one domain, use
+`domain_owning_tenancies()`, which returns every asserting tenancy:
+
+```python
+verified = [t.domain for t in identity.domain_owning_tenancies()]
+# ["contoso.com", "contoso.co.uk", "contoso.onmicrosoft.com"]
 ```
 
 #### Refusing incapable providers at startup
@@ -333,12 +357,12 @@ ADMIN_EMAILS = {"founder@example.com"}
 
 def is_admin(identity: IdentityProfile) -> bool:
     return (
-        identity.domain_owning_tenancy() is not None
+        identity.owns_domain("example.com")
         and identity.verified_email() in ADMIN_EMAILS
     )
 ```
 
-Without the `domain_owning_tenancy()` check, any provider returning
+Without the `owns_domain()` check, any provider returning
 `email_verified=True` for `founder@example.com` would grant admin —
 including a personal GitHub account that happens to have
 `founder@example.com` verified on it.

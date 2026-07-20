@@ -236,8 +236,8 @@ class TenancyContext(BaseModel, frozen=True):
             not itself an authorization grant. Consumers gating
             domain or tenant access must do so on
             :attr:`owns_email_domain` (via
-            :meth:`IdentityProfile.domain_owning_tenancy`), never on the
-            mere presence of an ``id``.
+            :meth:`IdentityProfile.owns_domain`), never on the mere
+            presence of an ``id``.
         name: Human-readable display name for the tenant (e.g. Slack
             ``team_name``, Linear organization name).
         domain: Domain or canonical URL for the tenant (e.g. Slack
@@ -254,9 +254,10 @@ class TenancyContext(BaseModel, frozen=True):
             It must be set only from a verified, non-mutable assertion
             (a domain-authority claim or an admin-verified directory
             lookup) — never from a self-assertable claim such as a raw
-            email address or UPN. Callers gating domain-bound tenant
-            grants should use
-            :meth:`IdentityProfile.domain_owning_tenancy` rather than
+            email address or UPN. A provider may set it on several
+            tenancies at once when it asserts several domains for one
+            tenant, so callers gating domain-bound tenant grants should
+            use :meth:`IdentityProfile.owns_domain` rather than
             inspecting this flag directly. Defaults to ``False``.
     """
 
@@ -317,8 +318,7 @@ class IdentityProfile(BaseModel, frozen=True):
         NOTE: a verified email proves the user controlled the inbox at
         the time of verification. It does NOT prove ongoing control or
         current employment. Callers must not use this as proof of
-        domain affiliation — see :meth:`domain_owning_tenancy` for that
-        question.
+        domain affiliation — see :meth:`owns_domain` for that question.
         """
         if self.email_verified and self.email:
             return self.email
@@ -336,15 +336,52 @@ class IdentityProfile(BaseModel, frozen=True):
             return (self.provider, self.subject)
         return None
 
-    def domain_owning_tenancy(self) -> TenancyContext | None:
-        """Return the first tenancy that asserts the user belongs to its email domain, or ``None``.
+    def domain_owning_tenancies(self) -> tuple[TenancyContext, ...]:
+        """Return every tenancy that asserts the user belongs to its email domain.
 
         A tenancy qualifies when :attr:`TenancyContext.owns_email_domain`
-        is ``True``. Callers gating tenant membership on domain
-        ownership should call this and reject the request when it
-        returns ``None``.
+        is ``True``; the result is empty when the provider asserts no
+        domain ownership at all. Providers whose assertion is inherently
+        plural — a directory tenant with several admin-verified domains —
+        contribute one entry per domain, so this is an enumeration rather
+        than a lossy "pick one" summary.
+
+        Use :meth:`owns_domain` to gate on a specific domain; use this to
+        enumerate or display the full set.
+
+        Returns:
+            The qualifying tenancies, in the order the provider returned
+            them. Providers do not generally guarantee that order, so
+            callers must not read significance into the first entry.
         """
-        return next((t for t in self.tenancies if t.owns_email_domain), None)
+        return tuple(tenancy for tenancy in self.tenancies if tenancy.owns_email_domain)
+
+    def owns_domain(self, domain: str) -> bool:
+        """Report whether any tenancy asserts the user belongs to ``domain``.
+
+        This is the sanctioned gate for "does this identity verifiably
+        belong to domain D?". Every tenancy is considered, so the answer
+        holds for providers that assert several domains for one tenant.
+
+        Matching is exact once surrounding whitespace is trimmed and case
+        is folded. A parent domain does not confer ownership of its
+        subdomains, nor a subdomain of its parent — each must be asserted
+        in its own right.
+
+        Args:
+            domain: Domain to test ownership of. A blank value never
+                matches, including against a tenancy with a blank domain.
+
+        Returns:
+            ``True`` when some tenancy asserts ownership of ``domain``.
+        """
+        target = domain.strip().lower()
+        if not target:
+            return False
+        return any(
+            tenancy.domain is not None and tenancy.domain.strip().lower() == target
+            for tenancy in self.domain_owning_tenancies()
+        )
 
 
 class OAuthPendingState(BaseModel, frozen=True):

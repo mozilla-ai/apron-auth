@@ -25,9 +25,9 @@ class TestGoogleIdentityHandler:
         assert identity.provider == "google"
         assert identity.tenancies == (TenancyContext(domain="mozilla.ai", owns_email_domain=True),)
 
-    async def test_workspace_account_emits_domain_owning_tenancy(self, httpx_mock: HTTPXMock):
+    async def test_workspace_account_owns_its_hosted_domain(self, httpx_mock: HTTPXMock):
         """End-to-end pin: a Workspace ``hd`` claim makes the emitted
-        IdentityProfile return a non-None ``domain_owning_tenancy()``."""
+        IdentityProfile assert ownership of that domain."""
         httpx_mock.add_response(
             url=GOOGLE_USERINFO_URL,
             json={"sub": "g-1", "email": "user@mozilla.ai", "hd": "mozilla.ai"},
@@ -38,15 +38,14 @@ class TestGoogleIdentityHandler:
         handler = GoogleIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
-        owner = identity.domain_owning_tenancy()
 
-        assert owner is not None
-        assert owner.domain == "mozilla.ai"
-        assert owner.owns_email_domain is True
+        assert identity.owns_domain("mozilla.ai") is True
+        assert identity.owns_domain("other.example") is False
+        assert [t.domain for t in identity.domain_owning_tenancies()] == ["mozilla.ai"]
 
-    async def test_consumer_account_has_no_domain_owning_tenancy(self, httpx_mock: HTTPXMock):
+    async def test_consumer_account_owns_no_domain(self, httpx_mock: HTTPXMock):
         """A personal Gmail account (no ``hd`` claim) emits no tenancy,
-        so ``domain_owning_tenancy()`` must return ``None``."""
+        so it must assert ownership of no domain."""
         httpx_mock.add_response(
             url=GOOGLE_USERINFO_URL,
             json={"sub": "g-1", "email": "user@gmail.com"},
@@ -59,7 +58,8 @@ class TestGoogleIdentityHandler:
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
         assert identity.tenancies == ()
-        assert identity.domain_owning_tenancy() is None
+        assert identity.domain_owning_tenancies() == ()
+        assert identity.owns_domain("gmail.com") is False
 
     async def test_consumer_account_yields_empty_tenancies(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
