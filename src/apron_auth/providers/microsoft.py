@@ -135,6 +135,11 @@ class MicrosoftIdentityHandler:
     check), identity is still returned but with ``tenancies=()``: the
     access-token ``tid`` is deliberately not used as a fallback tenancy
     because it is not a validated trust boundary.
+
+    A directory lookup that fails or cannot be trusted degrades the same
+    way, to ``tenancies=()`` and a logged warning. Only the userinfo
+    call — which establishes identity itself — raises
+    :class:`IdentityFetchError`.
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -180,17 +185,16 @@ class MicrosoftIdentityHandler:
             raise IdentityFetchError("Microsoft identity response was not a JSON object")
         return payload
 
-    async def _fetch_verified_tenancies(self, access_token: str, tenant_id: str) -> tuple[TenancyContext, ...]:
-        """Resolve the validated tenant's admin-verified domains into tenancies.
+    async def _fetch_organization(self, access_token: str) -> dict[str, Any] | None:
+        """Fetch the signed-in user's organization from the directory, or ``None``.
 
-        Emits one :class:`TenancyContext` per verified domain, all sharing
-        the validated ``tenant_id`` and the tenant's display name, with
-        ``owns_email_domain=True`` because the domains are admin-verified
-        and bound to the validated tenant.
+        ``None`` means the directory yielded no usable organization: it
+        was unreachable, refused the request, or returned a body that was
+        unparseable or named no organization. Each case is logged.
 
-        Returns an empty tuple — asserting no domain-owning tenancy — when
-        the organization's ``id`` does not match the validated tenant
-        (a broken chain of trust) or when it exposes no verified domains.
+        NOTE: this never raises. The organization only enriches an
+        already-established identity, so its absence must be reported as
+        a value rather than escalated into an error.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -199,18 +203,61 @@ class MicrosoftIdentityHandler:
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Microsoft organization: {exc}") from exc
+        except httpx.HTTPStatusError as exc:
+            # The status is the whole diagnostic here — it separates a
+            # permanent consent or permission problem from a transient
+            # one. The exception value adds only the request line.
+            logger.warning(
+                "microsoft directory lookup could not resolve the tenant's verified domains "
+                "(status %s); not asserting domain ownership",
+                exc.response.status_code,
+            )
+            return None
+        except httpx.RequestError as exc:
+            logger.warning(
+                "microsoft directory lookup could not resolve the tenant's verified domains "
+                "(%s); not asserting domain ownership",
+                type(exc).__name__,
+            )
+            return None
 
         try:
             body = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Microsoft organization response: {exc}") from exc
+        except ValueError:
+            logger.warning(
+                "microsoft directory lookup could not parse the tenant's verified domains; "
+                "not asserting domain ownership"
+            )
+            return None
 
         organizations = body.get("value") if isinstance(body, dict) else None
         organization = organizations[0] if isinstance(organizations, list) and organizations else None
         if not isinstance(organization, dict):
-            raise IdentityFetchError("Microsoft organization response contained no organization")
+            logger.warning("microsoft directory lookup returned no organization; not asserting domain ownership")
+            return None
+        return organization
+
+    async def _fetch_verified_tenancies(self, access_token: str, tenant_id: str) -> tuple[TenancyContext, ...]:
+        """Resolve the validated tenant's admin-verified domains into tenancies.
+
+        Emits one :class:`TenancyContext` per verified domain, all sharing
+        the validated ``tenant_id`` and the tenant's display name, with
+        ``owns_email_domain=True`` because the domains are admin-verified
+        and bound to the validated tenant.
+
+        Returns an empty tuple — asserting no domain-owning tenancy — for
+        every failure to establish one: the directory yields no usable
+        organization, the organization's ``id`` does not match the
+        validated tenant (a broken chain of trust), or it exposes no
+        verified domains.
+
+        NOTE: this never raises. Withholding the assertion closes
+        domain-gated access rather than opening it, so a directory
+        failure must not be escalated into a failure to identify.
+        """
+        organization = await self._fetch_organization(access_token)
+        if organization is None:
+            return ()
 
         # Bind the directory response back to the validated ID-token tenant.
         # A mismatch means the access token resolved a different tenant than
@@ -227,14 +274,22 @@ class MicrosoftIdentityHandler:
             display_name = None
 
         verified_domains = organization.get("verifiedDomains")
-        if not isinstance(verified_domains, list):
+        names = (
+            [
+                entry["name"]
+                for entry in verified_domains
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]
+            ]
+            if isinstance(verified_domains, list)
+            else []
+        )
+        if not names:
+            # Every Entra tenant has at least an ``*.onmicrosoft.com``
+            # domain, so an organization naming none is anomalous rather
+            # than a tenant legitimately owning nothing.
+            logger.warning("microsoft organization exposed no usable verified domains; not asserting domain ownership")
             return ()
 
-        names = [
-            entry["name"]
-            for entry in verified_domains
-            if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]
-        ]
         return tuple(
             TenancyContext(
                 id=tenant_id,

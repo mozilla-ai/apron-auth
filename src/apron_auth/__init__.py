@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -25,6 +27,13 @@ from apron_auth.models import (
 )
 from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler, StateStore
 from apron_auth.stores import MemoryStateStore
+
+# Keep the library silent until the application opts in. Without a
+# handler anywhere on the chain, ``logging.lastResort`` writes records of
+# WARNING and above to the consumer's stderr — output a library has no
+# standing to emit uninvited. Configuring the ``apron_auth`` logger in
+# any way replaces this.
+logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "ConfigurationError",
