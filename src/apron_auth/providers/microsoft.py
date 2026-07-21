@@ -274,14 +274,22 @@ class MicrosoftIdentityHandler:
             display_name = None
 
         verified_domains = organization.get("verifiedDomains")
-        if not isinstance(verified_domains, list):
+        names = (
+            [
+                entry["name"]
+                for entry in verified_domains
+                if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]
+            ]
+            if isinstance(verified_domains, list)
+            else []
+        )
+        if not names:
+            # Every Entra tenant has at least an ``*.onmicrosoft.com``
+            # domain, so an organization naming none is anomalous rather
+            # than a tenant legitimately owning nothing.
+            logger.warning("microsoft organization exposed no usable verified domains; not asserting domain ownership")
             return ()
 
-        names = [
-            entry["name"]
-            for entry in verified_domains
-            if isinstance(entry, dict) and isinstance(entry.get("name"), str) and entry["name"]
-        ]
         return tuple(
             TenancyContext(
                 id=tenant_id,

@@ -373,16 +373,52 @@ class TestMicrosoftVerifiedTenancy:
         assert identity.tenancies == ()
         assert "does not match the validated tenant" in caplog.text
 
-    async def test_no_verified_domains_yields_no_tenancy(self, httpx_mock: HTTPXMock):
+    async def test_no_verified_domains_yields_no_tenancy(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response([]))
         from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 
-        identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
-        )
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
 
         assert identity.tenancies == ()
+        assert "no usable verified domains" in caplog.text
+
+    @pytest.mark.parametrize(
+        "verified_domains",
+        [
+            pytest.param("contoso.com", id="not-a-list"),
+            pytest.param([{"isDefault": True}], id="entries-without-a-name"),
+            pytest.param([{"name": ""}], id="entries-with-a-blank-name"),
+        ],
+    )
+    async def test_unusable_verified_domains_warn(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, verified_domains: object
+    ):
+        """Withholding must never be silent, whatever shape the field takes.
+
+        A malformed or unusable ``verifiedDomains`` withholds domain
+        ownership exactly as a failed lookup does, so it has to be as
+        observable — the consumer-visible symptom is identical.
+        """
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(
+            url=_ORGANIZATION_URL,
+            json={"value": [{"id": _TENANT_ID, "displayName": "Contoso", "verifiedDomains": verified_domains}]},
+        )
+        from apron_auth.providers.microsoft import MicrosoftIdentityHandler
+
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert identity.owns_domain("contoso.com") is False
+        assert "no usable verified domains" in caplog.text
 
 
 class TestMicrosoftEmailVerified:
