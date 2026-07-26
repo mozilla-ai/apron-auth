@@ -43,6 +43,34 @@ class TestProviderConfig:
         )
         assert config.client_secret is None
 
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "raises"),
+        [
+            (None, "client_secret_post", True),
+            (None, "client_secret_basic", True),
+            (None, "none", False),
+            (SecretStr("s"), "client_secret_post", False),
+            (SecretStr("s"), "none", False),
+        ],
+    )
+    def test_client_secret_required_unless_auth_method_none(
+        self, secret: SecretStr | None, auth_method: str, raises: bool
+    ) -> None:
+        def build() -> ProviderConfig:
+            return ProviderConfig(
+                client_id="c",
+                client_secret=secret,
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                token_endpoint_auth_method=auth_method,
+            )
+
+        if raises:
+            with pytest.raises(ValidationError):
+                build()
+        else:
+            build()
+
     def test_full_config(self) -> None:
         config = ProviderConfig(
             client_id="test-client",

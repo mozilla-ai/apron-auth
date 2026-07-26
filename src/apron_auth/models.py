@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, model_validator
 
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -120,6 +120,19 @@ class ProviderConfig(BaseModel, frozen=True):
     required_scope_families: list[list[str]] = []
     can_assert_domain_ownership: bool = False
     implicit_scopes: dict[str, frozenset[str]] = {}
+
+    @model_validator(mode="after")
+    def _require_client_secret_for_confidential(self) -> ProviderConfig:
+        """Reject a confidential-client config that omits its client secret.
+
+        A missing secret is valid only for a public client, which declares a
+        ``token_endpoint_auth_method`` of ``"none"``. Any other method implies
+        a confidential client, for which the secret is mandatory.
+        """
+        if self.client_secret is None and self.token_endpoint_auth_method != "none":
+            msg = "client_secret is required unless token_endpoint_auth_method is 'none'"
+            raise ValueError(msg)
+        return self
 
     def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
         """Return ``granted`` expanded with every scope it transitively implies.
