@@ -432,6 +432,26 @@ class TestExchangeCode:
         request = httpx_mock.get_request()
         assert (b"client_secret=" in request.content) is expect_secret_sent
 
+    async def test_token_request_uses_transport_factory(self):
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200, json={"access_token": "access-abc", "token_type": "Bearer"})
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(handler)
+
+        config = _make_config()
+        client = OAuthClient(config=config, transport_factory=factory)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.access_token == "access-abc"
+        assert calls == ["https://provider.example.com/token"]
+
 
 class TestRefreshToken:
     async def test_successful_refresh(self, httpx_mock):

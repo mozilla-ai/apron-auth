@@ -27,7 +27,7 @@ from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityProfile, ProviderConfig
-    from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore
+    from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
 
 
 class _TokenEndpointError(Exception):
@@ -50,6 +50,7 @@ class OAuthClient:
         revocation_handler: RevocationHandler | None = None,
         identity_handler: IdentityHandler | None = None,
         permanent_error_codes: set[str] | None = None,
+        transport_factory: TransportFactory | None = None,
     ) -> None:
         """Create an OAuth client.
 
@@ -61,12 +62,17 @@ class OAuthClient:
             permanent_error_codes: Additional OAuth error codes that should be
                 treated as irrecoverable during token refresh. These merge
                 with, rather than replace, DEFAULT_PERMANENT_ERROR_CODES.
+            transport_factory: Optional factory returning an httpx transport for
+                a URL, used for token-endpoint requests. Lets the caller control
+                the outbound connection (e.g. pin DNS to validated public IPs)
+                when the token endpoint comes from untrusted discovery.
         """
         self._config = config
         self._state_store = state_store
         self._revocation_handler = revocation_handler
         self._identity_handler = identity_handler
         self._permanent_error_codes = self.DEFAULT_PERMANENT_ERROR_CODES | (permanent_error_codes or set())
+        self._transport_factory = transport_factory
 
     async def get_authorization_url(
         self,
@@ -256,10 +262,12 @@ class OAuthClient:
 
         try:
             client_secret = self._config.client_secret
+            transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
             async with AsyncOAuth2Client(
                 client_id=self._config.client_id,
                 client_secret=client_secret.get_secret_value() if client_secret is not None else None,
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
+                transport=transport,
             ) as client:
                 token = await client.fetch_token(self._config.token_url, **data)
             return dict(token)
