@@ -27,6 +27,7 @@ from apron_auth.models import (
     ScopeMetadata,
     ServerMetadata,
     TenancyContext,
+    TokenEndpointAuthMethod,
     TokenSet,
 )
 from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler, StateStore
@@ -63,6 +64,7 @@ __all__ = [
     "StateError",
     "StateStore",
     "TenancyContext",
+    "TokenEndpointAuthMethod",
     "TokenExchangeError",
     "TokenRefreshError",
     "TokenSet",

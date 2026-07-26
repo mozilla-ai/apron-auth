@@ -25,7 +25,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
-from apron_auth.models import PUBLIC_CLIENT_AUTH_METHOD, ClientRegistration, ProviderConfig, ServerMetadata
+from apron_auth.models import ClientRegistration, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 from apron_auth.protocols import TransportFactory
 
 UrlValidator = Callable[[str], None]
@@ -145,7 +145,7 @@ def to_provider_config(
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
     use_pkce = "S256" in methods if methods else True
-    auth_method = "client_secret_post" if secret is not None else PUBLIC_CLIENT_AUTH_METHOD
+    auth_method = TokenEndpointAuthMethod.CLIENT_SECRET_POST if secret is not None else TokenEndpointAuthMethod.NONE
     return ProviderConfig(
         client_id=client_id,
         client_secret=secret,
@@ -196,7 +196,7 @@ async def register_client(
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": "client_secret_post",
+        "token_endpoint_auth_method": TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     }
     transport = transport_factory(registration_url) if transport_factory is not None else None
     async with httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False) as client:
@@ -226,7 +226,9 @@ async def register_client(
     return ClientRegistration(
         client_id=client_id,
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
-        token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else "client_secret_post",
+        token_endpoint_auth_method=auth_method
+        if isinstance(auth_method, str)
+        else TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     )
 
 

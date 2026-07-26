@@ -10,8 +10,13 @@ from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scope
 
 AccessType = Literal["read", "write", "admin"]
 
-# RFC 7591/8414 token_endpoint_auth_method value for a public client (no secret).
-PUBLIC_CLIENT_AUTH_METHOD = "none"
+
+class TokenEndpointAuthMethod:
+    """RFC 7591/8414 token_endpoint_auth_method values."""
+
+    CLIENT_SECRET_POST = "client_secret_post"  # pragma: allowlist secret
+    CLIENT_SECRET_BASIC = "client_secret_basic"  # pragma: allowlist secret
+    NONE = "none"
 
 
 class ScopeMetadata(BaseModel, frozen=True):
@@ -116,7 +121,7 @@ class ProviderConfig(BaseModel, frozen=True):
     scopes: list[str] = []
     scope_separator: str = " "
     use_pkce: bool = True
-    token_endpoint_auth_method: str = "client_secret_post"
+    token_endpoint_auth_method: str = TokenEndpointAuthMethod.CLIENT_SECRET_POST
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
@@ -132,8 +137,8 @@ class ProviderConfig(BaseModel, frozen=True):
         ``token_endpoint_auth_method`` of ``"none"``. Any other method implies
         a confidential client, for which the secret is mandatory.
         """
-        if self.client_secret is None and self.token_endpoint_auth_method != PUBLIC_CLIENT_AUTH_METHOD:
-            msg = f"client_secret is required unless token_endpoint_auth_method is '{PUBLIC_CLIENT_AUTH_METHOD}'"
+        if self.client_secret is None and self.token_endpoint_auth_method != TokenEndpointAuthMethod.NONE:
+            msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
             raise ValueError(msg)
         return self
 
@@ -179,7 +184,7 @@ class ClientRegistration(BaseModel, frozen=True):
 
     client_id: str
     client_secret: SecretStr | None = None
-    token_endpoint_auth_method: str = "client_secret_post"
+    token_endpoint_auth_method: str = TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
 
 class TokenSet(BaseModel, frozen=True):
