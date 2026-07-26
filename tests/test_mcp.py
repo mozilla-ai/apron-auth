@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import McpDiscoveryError
+from apron_auth.errors import McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
     _is_blocked_host,
@@ -13,9 +15,13 @@ from apron_auth.mcp import (
     _str_list,
     _validate_url,
     discover,
+    register_client,
     to_provider_config,
 )
 from apron_auth.models import ProviderConfig, ServerMetadata
+
+_REGISTER_URL = "https://auth.example.com/register"
+_REDIRECT_URI = "https://app.example.com/callback"
 
 _PRM_ROOT = "https://mcp.example.com/.well-known/oauth-protected-resource"
 _PRM_PATH = "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
@@ -366,3 +372,78 @@ class TestValidateUrl:
         with pytest.raises(McpDiscoveryError, match="direct") as exc_info:
             _validate_url("https://mcp.example.com", validator)
         assert exc_info.value.__cause__ is None
+
+
+class TestRegisterClient:
+    async def test_returns_issued_credentials(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={
+                "client_id": "generated-id",
+                "client_secret": "generated-secret",  # pragma: allowlist secret
+                "token_endpoint_auth_method": "client_secret_post",
+            },
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_id == "generated-id"
+        assert reg.client_secret is not None
+        assert reg.client_secret.get_secret_value() == "generated-secret"
+        assert reg.token_endpoint_auth_method == "client_secret_post"
+
+    async def test_sends_rfc7591_payload(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=200, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, _REDIRECT_URI, client_name="MyApp")
+        request = httpx_mock.get_request()
+        assert request is not None
+        body = json.loads(request.content)
+        assert body["client_name"] == "MyApp"
+        assert body["redirect_uris"] == [_REDIRECT_URI]
+        assert "authorization_code" in body["grant_types"]
+        assert body["response_types"] == ["code"]
+
+    async def test_public_client_registration_without_secret(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "pub", "token_endpoint_auth_method": "none"},
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_secret is None
+        assert reg.token_endpoint_auth_method == "none"
+
+    async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
+        with pytest.raises(McpRegistrationError):
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+    @pytest.mark.parametrize("status", [400, 401, 403, 500])
+    async def test_non_success_status_raises(self, httpx_mock: HTTPXMock, status: int) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=status, json={"error": "invalid_client_metadata"})
+        with pytest.raises(McpRegistrationError):
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+    async def test_non_object_response_raises(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=["not", "a", "dict"])
+        with pytest.raises(McpRegistrationError):
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+    @pytest.mark.parametrize("url", ["http://auth.example.com/register", "https://127.0.0.1/register"])
+    async def test_unsafe_registration_url_rejected(self, url: str) -> None:
+        with pytest.raises(McpRegistrationError):
+            await register_client(url, _REDIRECT_URI)
+
+    async def test_transport_factory_used(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(201, json={"client_id": "x"})
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(handler)
+
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI, transport_factory=factory)
+        assert reg.client_id == "x"
+        assert calls == [_REGISTER_URL]

@@ -24,8 +24,8 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import McpDiscoveryError
-from apron_auth.models import PUBLIC_CLIENT_AUTH_METHOD, ProviderConfig, ServerMetadata
+from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
+from apron_auth.models import PUBLIC_CLIENT_AUTH_METHOD, ClientRegistration, ProviderConfig, ServerMetadata
 from apron_auth.protocols import TransportFactory
 
 UrlValidator = Callable[[str], None]
@@ -159,6 +159,77 @@ def to_provider_config(
     )
 
 
+async def register_client(
+    registration_url: str,
+    redirect_uri: str,
+    *,
+    client_name: str = "apron-auth",
+    url_validator: UrlValidator | None = None,
+    transport_factory: TransportFactory | None = None,
+) -> ClientRegistration:
+    """Dynamically register an OAuth client (RFC 7591) and return its credentials.
+
+    POSTs a registration request to ``registration_url`` (an authorization
+    server's registration endpoint) and returns the issued ``client_id`` plus,
+    for a confidential client, a ``client_secret``. The URL is validated (HTTPS,
+    non-public host, ``url_validator``) and the request goes through
+    ``transport_factory`` when supplied. An error never echoes the response
+    body, which carries the issued secret.
+
+    Args:
+        registration_url: The authorization server's registration endpoint.
+        redirect_uri: Redirect URI to register for the authorization flow.
+        client_name: Human-readable client name sent in the request.
+        url_validator: Optional policy invoked on the URL before the request.
+        transport_factory: Optional factory controlling the outbound connection.
+
+    Returns:
+        The issued client registration.
+
+    Raises:
+        McpRegistrationError: If the URL is rejected, the endpoint returns a
+            non-success status, or the response lacks a usable ``client_id``.
+    """
+    _validate_url(registration_url, url_validator, McpRegistrationError)
+    payload = {
+        "client_name": client_name,
+        "redirect_uris": [redirect_uri],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "client_secret_post",
+    }
+    transport = transport_factory(registration_url) if transport_factory is not None else None
+    async with httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False) as client:
+        try:
+            response = await client.post(registration_url, json=payload)
+        except httpx.RequestError as exc:
+            msg = f"client registration request failed: {type(exc).__name__}"
+            raise McpRegistrationError(msg) from exc
+        if response.status_code not in (200, 201):
+            msg = f"client registration failed: HTTP {response.status_code}"
+            raise McpRegistrationError(msg)
+        try:
+            data = response.json()
+        except ValueError:
+            msg = "client registration returned a non-JSON response"
+            raise McpRegistrationError(msg) from None
+
+    if not isinstance(data, dict):
+        msg = "client registration returned an unexpected response"
+        raise McpRegistrationError(msg)
+    client_id = data.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        msg = "client registration response is missing client_id"
+        raise McpRegistrationError(msg)
+    client_secret = data.get("client_secret")
+    auth_method = data.get("token_endpoint_auth_method")
+    return ClientRegistration(
+        client_id=client_id,
+        client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
+        token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else "client_secret_post",
+    )
+
+
 def _str_list(value: Any) -> list[str]:
     """Return the string items of value when it is a list, else an empty list."""
     if isinstance(value, list):
@@ -184,28 +255,32 @@ def _is_blocked_host(host: str) -> bool:
     )
 
 
-def _validate_url(url: str, url_validator: UrlValidator | None) -> None:
-    """Validate a discovery URL before it is requested.
+def _validate_url(
+    url: str,
+    url_validator: UrlValidator | None,
+    error_cls: type[OAuthError] = McpDiscoveryError,
+) -> None:
+    """Validate an MCP OAuth URL before it is requested.
 
-    Raises McpDiscoveryError when the URL is not HTTPS, targets a non-public
-    host, or is rejected by ``url_validator``.
+    Raises ``error_cls`` when the URL is not HTTPS, targets a non-public host,
+    or is rejected by ``url_validator``.
     """
     parsed = urlparse(url)
     if parsed.scheme != "https":
-        msg = "MCP OAuth discovery requires HTTPS URLs"
-        raise McpDiscoveryError(msg)
+        msg = "MCP OAuth requires HTTPS URLs"
+        raise error_cls(msg)
     if _is_blocked_host(parsed.hostname or ""):
-        msg = "MCP OAuth discovery blocked a non-public host"
-        raise McpDiscoveryError(msg)
+        msg = "MCP OAuth blocked a non-public host"
+        raise error_cls(msg)
     if url_validator is None:
         return
     try:
         url_validator(url)
-    except McpDiscoveryError:
+    except OAuthError:
         raise
     except Exception as exc:
-        # Any rejection from the caller's validator fails discovery.
-        raise McpDiscoveryError(str(exc)) from exc
+        # Any rejection from the caller's validator fails the operation.
+        raise error_cls(str(exc)) from exc
 
 
 def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> list[str]:

@@ -23,6 +23,10 @@ class McpDiscoveryError(OAuthError):
     """MCP OAuth metadata discovery failed."""
 
 
+class McpRegistrationError(OAuthError):
+    """MCP OAuth dynamic client registration failed."""
+
+
 class PermanentOAuthError(OAuthError):
     """Irrecoverable OAuth failure.
 

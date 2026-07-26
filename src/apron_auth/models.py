@@ -170,6 +170,18 @@ class ServerMetadata(BaseModel, frozen=True):
     token_endpoint_auth_methods: list[str] = []
 
 
+class ClientRegistration(BaseModel, frozen=True):
+    """Client credentials issued by RFC 7591 dynamic client registration.
+
+    ``client_secret`` is absent for a public client, whose
+    ``token_endpoint_auth_method`` is then ``"none"``.
+    """
+
+    client_id: str
+    client_secret: SecretStr | None = None
+    token_endpoint_auth_method: str = "client_secret_post"
+
+
 class TokenSet(BaseModel, frozen=True):
     """Token data returned from code exchange or refresh.
 
