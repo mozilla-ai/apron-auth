@@ -34,6 +34,15 @@ class TestProviderConfig:
         assert config.revocation_url is None
         assert config.redirect_uri is None
 
+    def test_public_client_omits_client_secret(self) -> None:
+        config = ProviderConfig(
+            client_id="public-client",
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="none",
+        )
+        assert config.client_secret is None
+
     def test_full_config(self) -> None:
         config = ProviderConfig(
             client_id="test-client",

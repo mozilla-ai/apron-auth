@@ -68,6 +68,25 @@ class TestStandardRevocationHandler:
         assert request.method == "POST"
         assert b"token=access-token-abc" in request.content
 
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "expect_basic_auth"),
+        [
+            (SecretStr("test-secret"), "client_secret_post", True),
+            (None, "none", False),
+        ],
+    )
+    async def test_revocation_basic_auth_only_when_secret_present(
+        self, httpx_mock: HTTPXMock, secret, auth_method, expect_basic_auth
+    ):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
+        handler = StandardRevocationHandler()
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        request = httpx_mock.get_request()
+        assert b"token=access-token-abc" in request.content
+        assert ("authorization" in request.headers) is expect_basic_auth
+
     async def test_failed_revocation(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
         config = _make_config()

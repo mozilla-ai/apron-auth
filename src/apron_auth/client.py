@@ -255,9 +255,10 @@ class OAuthClient:
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
         try:
+            client_secret = self._config.client_secret
             async with AsyncOAuth2Client(
                 client_id=self._config.client_id,
-                client_secret=self._config.client_secret.get_secret_value(),
+                client_secret=client_secret.get_secret_value() if client_secret is not None else None,
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
             ) as client:
                 token = await client.fetch_token(self._config.token_url, **data)

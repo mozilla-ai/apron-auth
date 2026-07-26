@@ -188,11 +188,17 @@ class GitHubRevocationHandler:
         config: ProviderConfig,
     ) -> bool:
         """Send the revocation request and return success status."""
+        client_secret = config.client_secret
+        auth = (
+            (config.client_id, client_secret.get_secret_value())
+            if client_secret is not None
+            else httpx.USE_CLIENT_DEFAULT
+        )
         try:
             response = await client.request(
                 "DELETE",
                 revocation_url,
-                auth=(config.client_id, config.client_secret.get_secret_value()),
+                auth=auth,
                 headers=_GITHUB_API_HEADERS,
                 json={"access_token": token},
             )

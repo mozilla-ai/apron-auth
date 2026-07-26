@@ -396,6 +396,42 @@ class TestExchangeCode:
         request = httpx_mock.get_request()
         assert request.headers.get("authorization", "").startswith("Basic ")
 
+    async def test_exchange_public_client_no_secret(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.access_token == "access-abc"
+        request = httpx_mock.get_request()
+        assert b"client_id=test-client" in request.content
+        assert b"client_secret" not in request.content
+
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "expect_secret_sent"),
+        [
+            (SecretStr("test-secret"), "client_secret_post", True),
+            (None, "none", False),
+        ],
+    )
+    async def test_token_body_includes_secret_only_when_present(
+        self, httpx_mock, secret, auth_method, expect_secret_sent
+    ):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
+        client = OAuthClient(config=config)
+        await client.exchange_code(code="code", redirect_uri="https://app.example.com/callback")
+        request = httpx_mock.get_request()
+        assert (b"client_secret=" in request.content) is expect_secret_sent
+
 
 class TestRefreshToken:
     async def test_successful_refresh(self, httpx_mock):

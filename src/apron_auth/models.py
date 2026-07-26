@@ -105,7 +105,7 @@ class ProviderConfig(BaseModel, frozen=True):
     """
 
     client_id: str
-    client_secret: SecretStr
+    client_secret: SecretStr | None = None
     authorize_url: str
     token_url: str
     revocation_url: str | None = None
