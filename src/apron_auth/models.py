@@ -10,6 +10,9 @@ from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scope
 
 AccessType = Literal["read", "write", "admin"]
 
+# RFC 7591/8414 token_endpoint_auth_method value for a public client (no secret).
+PUBLIC_CLIENT_AUTH_METHOD = "none"
+
 
 class ScopeMetadata(BaseModel, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
@@ -129,8 +132,8 @@ class ProviderConfig(BaseModel, frozen=True):
         ``token_endpoint_auth_method`` of ``"none"``. Any other method implies
         a confidential client, for which the secret is mandatory.
         """
-        if self.client_secret is None and self.token_endpoint_auth_method != "none":
-            msg = "client_secret is required unless token_endpoint_auth_method is 'none'"
+        if self.client_secret is None and self.token_endpoint_auth_method != PUBLIC_CLIENT_AUTH_METHOD:
+            msg = f"client_secret is required unless token_endpoint_auth_method is '{PUBLIC_CLIENT_AUTH_METHOD}'"
             raise ValueError(msg)
         return self
 

@@ -25,7 +25,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import McpDiscoveryError
-from apron_auth.models import ProviderConfig, ServerMetadata
+from apron_auth.models import PUBLIC_CLIENT_AUTH_METHOD, ProviderConfig, ServerMetadata
 from apron_auth.protocols import TransportFactory
 
 UrlValidator = Callable[[str], None]
@@ -145,7 +145,7 @@ def to_provider_config(
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
     use_pkce = "S256" in methods if methods else True
-    auth_method = "client_secret_post" if secret is not None else "none"
+    auth_method = "client_secret_post" if secret is not None else PUBLIC_CLIENT_AUTH_METHOD
     return ProviderConfig(
         client_id=client_id,
         client_secret=secret,
