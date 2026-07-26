@@ -485,6 +485,39 @@ print(tokens.context["tenant_id"])  # "T456"
 print(tokens.metadata)  # {"team_id": "T123", ...}
 ```
 
+## Connecting to an MCP server
+
+When the provider is not a known preset but a remote MCP (Model Context Protocol) server, `apron_auth.mcp` discovers its OAuth configuration at runtime (RFC 9728 protected-resource metadata + RFC 8414 authorization-server metadata) and, where the server supports it, registers a client dynamically (RFC 7591). The result folds into the same `ProviderConfig`/`OAuthClient` used everywhere else.
+
+```python
+from apron_auth import OAuthClient, mcp
+
+# 1. Discover the server's OAuth endpoints.
+meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transport_factory)
+
+# 2. Obtain a client identity: register dynamically, or use a pre-registered one.
+if meta.registration_url:
+    reg = await mcp.register_client(meta.registration_url, redirect_uri, transport_factory=my_transport_factory)
+    client_id, client_secret = reg.client_id, reg.client_secret
+else:
+    client_id, client_secret = my_client_id, my_client_secret  # pre-registered out of band
+
+# 3. Build a ProviderConfig and drive the normal authorization-code flow.
+config = mcp.to_provider_config(
+    meta, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri
+)
+client = OAuthClient(config, transport_factory=my_transport_factory)
+url, pending = await client.get_authorization_url()
+# Redirect the user to `url`; on the callback:
+tokens = await client.exchange_code(code="code-from-callback", code_verifier=pending.code_verifier)
+```
+
+Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+
+### SSRF safety
+
+Discovery, registration, and the token request all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and `OAuthClient` each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
+
 ## Provider presets
 
 | Provider   | Preset                   | Revocation             | `disconnect_fully_revokes` |

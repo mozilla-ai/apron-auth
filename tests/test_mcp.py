@@ -7,6 +7,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth.client import OAuthClient
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
@@ -447,3 +448,70 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI, transport_factory=factory)
         assert reg.client_id == "x"
         assert calls == [_REGISTER_URL]
+
+
+class TestEndToEndFlow:
+    async def test_discover_register_configure_exchange(self) -> None:
+        seen: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if "oauth-protected-resource" in url:
+                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
+            if "oauth-authorization-server" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "authorization_endpoint": "https://auth.example.com/authorize",
+                        "token_endpoint": "https://auth.example.com/token",
+                        "registration_endpoint": _REGISTER_URL,
+                        "code_challenge_methods_supported": ["S256"],
+                    },
+                )
+            if url == _REGISTER_URL:
+                return httpx.Response(
+                    201,
+                    json={
+                        "client_id": "dcr-client",
+                        "client_secret": "dcr-secret",  # pragma: allowlist secret
+                        "token_endpoint_auth_method": "client_secret_post",
+                    },
+                )
+            if url == "https://auth.example.com/token":
+                return httpx.Response(200, json={"access_token": "final-token", "token_type": "Bearer"})
+            return httpx.Response(404)
+
+        def transport_factory(url: str) -> httpx.MockTransport:
+            seen.append(url)
+            return httpx.MockTransport(handler)
+
+        meta = await discover("https://mcp.example.com", transport_factory=transport_factory)
+        registration_url = meta.registration_url
+        assert registration_url is not None
+
+        reg = await register_client(registration_url, _REDIRECT_URI, transport_factory=transport_factory)
+        assert reg.client_id == "dcr-client"
+
+        config = to_provider_config(
+            meta,
+            client_id=reg.client_id,
+            client_secret=reg.client_secret,
+            redirect_uri=_REDIRECT_URI,
+        )
+        assert config.token_url == "https://auth.example.com/token"
+        assert config.use_pkce is True
+
+        client = OAuthClient(config, transport_factory=transport_factory)
+        authorize_url, pending = await client.get_authorization_url()
+        assert authorize_url.startswith("https://auth.example.com/authorize")
+
+        tokens = await client.exchange_code(
+            code="auth-code",
+            redirect_uri=_REDIRECT_URI,
+            code_verifier=pending.code_verifier,
+        )
+        assert tokens.access_token == "final-token"
+
+        # Every outbound connection was made through the injected transport factory.
+        assert registration_url in seen
+        assert "https://auth.example.com/token" in seen
