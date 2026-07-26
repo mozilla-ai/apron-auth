@@ -150,6 +150,23 @@ class ProviderConfig(BaseModel, frozen=True):
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
 
+class ServerMetadata(BaseModel, frozen=True):
+    """OAuth endpoints and capabilities of an MCP server's authorization server.
+
+    Mirrors the RFC 8414 authorization-server metadata fields relevant to an
+    authorization-code flow, plus the registration endpoint from RFC 7591.
+    Holds no client identity — only the server-advertised facts.
+    """
+
+    authorize_url: str
+    token_url: str
+    registration_url: str | None = None
+    revocation_url: str | None = None
+    scopes_supported: list[str] = []
+    code_challenge_methods: list[str] = []
+    token_endpoint_auth_methods: list[str] = []
+
+
 class TokenSet(BaseModel, frozen=True):
     """Token data returned from code exchange or refresh.
 

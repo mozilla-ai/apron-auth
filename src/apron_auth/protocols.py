@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
@@ -10,6 +11,14 @@ from apron_auth.errors import RevocationError
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
+
+
+TransportFactory = Callable[[str], httpx.AsyncBaseTransport]
+"""Caller factory returning an httpx transport for a given URL.
+
+Lets a caller control the outbound connection for a URL — for example to pin
+DNS resolution to validated public addresses and prevent SSRF via rebinding.
+"""
 
 
 @runtime_checkable
