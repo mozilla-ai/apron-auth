@@ -81,7 +81,7 @@ async def discover(
     auth_servers = resource_meta.get("authorization_servers")
     auth_server = None
     if isinstance(auth_servers, list):
-        auth_server = next((item for item in auth_servers if isinstance(item, str)), None)
+        auth_server = next((item for item in auth_servers if isinstance(item, str) and item), None)
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg)

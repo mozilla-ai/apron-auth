@@ -163,6 +163,16 @@ class TestDiscover:
         with pytest.raises(McpDiscoveryError):
             await discover("https://mcp.example.com")
 
+    async def test_empty_authorization_server_entry_skipped(self, httpx_mock: HTTPXMock) -> None:
+        """An empty first entry must not mask a valid later authorization server."""
+        httpx_mock.add_response(
+            url=_PRM_ROOT,
+            json={"authorization_servers": ["", "https://auth.example.com"]},
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.token_url == "https://auth.example.com/token"
+
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json={"authorization_endpoint": "https://auth.example.com/authorize"})
