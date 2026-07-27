@@ -9,6 +9,8 @@ from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
+    McpDiscoveryError,
+    McpRegistrationError,
     OAuthError,
     PermanentOAuthError,
     RevocationError,
@@ -17,12 +19,15 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    ClientRegistration,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
     ProviderConfig,
     ScopeMetadata,
+    ServerMetadata,
     TenancyContext,
+    TokenEndpointAuthMethod,
     TokenSet,
 )
 from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler, StateStore
@@ -36,12 +41,15 @@ from apron_auth.stores import MemoryStateStore
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
+    "ClientRegistration",
     "ConfigurationError",
     "IdentityFetchError",
     "IdentityHandler",
     "IdentityMaterial",
     "IdentityNotSupportedError",
     "IdentityProfile",
+    "McpDiscoveryError",
+    "McpRegistrationError",
     "MemoryStateStore",
     "OAuthClient",
     "OAuthError",
@@ -51,10 +59,12 @@ __all__ = [
     "RevocationError",
     "RevocationHandler",
     "ScopeMetadata",
+    "ServerMetadata",
     "StandardRevocationHandler",
     "StateError",
     "StateStore",
     "TenancyContext",
+    "TokenEndpointAuthMethod",
     "TokenExchangeError",
     "TokenRefreshError",
     "TokenSet",

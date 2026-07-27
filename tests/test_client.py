@@ -396,6 +396,62 @@ class TestExchangeCode:
         request = httpx_mock.get_request()
         assert request.headers.get("authorization", "").startswith("Basic ")
 
+    async def test_exchange_public_client_no_secret(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.access_token == "access-abc"
+        request = httpx_mock.get_request()
+        assert b"client_id=test-client" in request.content
+        assert b"client_secret" not in request.content
+
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "expect_secret_sent"),
+        [
+            (SecretStr("test-secret"), "client_secret_post", True),
+            (None, "none", False),
+        ],
+    )
+    async def test_token_body_includes_secret_only_when_present(
+        self, httpx_mock, secret, auth_method, expect_secret_sent
+    ):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
+        client = OAuthClient(config=config)
+        await client.exchange_code(code="code", redirect_uri="https://app.example.com/callback")
+        request = httpx_mock.get_request()
+        assert (b"client_secret=" in request.content) is expect_secret_sent
+
+    async def test_token_request_uses_transport_factory(self):
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200, json={"access_token": "access-abc", "token_type": "Bearer"})
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(handler)
+
+        config = _make_config()
+        client = OAuthClient(config=config, transport_factory=factory)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.access_token == "access-abc"
+        assert calls == ["https://provider.example.com/token"]
+
 
 class TestRefreshToken:
     async def test_successful_refresh(self, httpx_mock):
@@ -523,6 +579,28 @@ class TestRevokeToken:
         client = OAuthClient(config=config)
         result = await client.revoke_token(token="access-token")
         assert result is True
+
+    async def test_revocation_default_handler_uses_transport_factory(self):
+        """revoke_token's fallback handler routes through the client's transport_factory.
+
+        Closes the SSRF seam gap: the revocation URL is server-supplied, so the
+        default handler must honor the same transport_factory as the token request.
+        """
+        calls: list[str] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200)
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(responder)
+
+        config = _make_config(revocation_url="https://provider.example.com/revoke")
+        client = OAuthClient(config=config, transport_factory=factory)
+        result = await client.revoke_token(token="access-token")
+        assert result is True
+        assert calls == ["https://provider.example.com/revoke"]
 
     async def test_revocation_failure_raises(self, httpx_mock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=503)

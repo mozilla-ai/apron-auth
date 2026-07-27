@@ -68,6 +68,55 @@ class TestStandardRevocationHandler:
         assert request.method == "POST"
         assert b"token=access-token-abc" in request.content
 
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "expect_basic_auth"),
+        [
+            (SecretStr("test-secret"), "client_secret_post", True),
+            (None, "none", False),
+        ],
+    )
+    async def test_revocation_basic_auth_only_when_secret_present(
+        self, httpx_mock: HTTPXMock, secret, auth_method, expect_basic_auth
+    ):
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
+        handler = StandardRevocationHandler()
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        request = httpx_mock.get_request()
+        assert b"token=access-token-abc" in request.content
+        assert ("authorization" in request.headers) is expect_basic_auth
+
+    async def test_public_client_revocation_sends_client_id(self, httpx_mock: HTTPXMock):
+        """RFC 7009 section 5: a public client identifies via client_id in the body."""
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        handler = StandardRevocationHandler()
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        request = httpx_mock.get_request()
+        assert b"client_id=test-client" in request.content
+        assert "authorization" not in request.headers
+
+    async def test_public_client_revocation_suppresses_injected_default_auth(self):
+        """A public client must not leak an injected client's default auth to the revocation URL."""
+        seen: list[bool] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            seen.append("authorization" in request.headers)
+            return httpx.Response(200)
+
+        client = httpx.AsyncClient(
+            auth=("default-user", "default-secret"),  # pragma: allowlist secret
+            transport=httpx.MockTransport(responder),
+        )
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("access-token-abc", config)
+        await client.aclose()
+        assert result is True
+        assert seen == [False]
+
     async def test_failed_revocation(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
         config = _make_config()
@@ -113,3 +162,25 @@ class TestStandardRevocationHandler:
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
         assert not client.is_closed
         await client.aclose()
+
+    async def test_transport_factory_used_for_revocation(self):
+        """The revocation request routes through the caller's transport_factory.
+
+        The revocation URL is server-supplied, so a caller pinning DNS for SSRF
+        defense must see revocation honor the same seam as the token request.
+        """
+        calls: list[str] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200)
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(responder)
+
+        config = _make_config()
+        handler = StandardRevocationHandler(transport_factory=factory)
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        assert calls == ["https://provider.example.com/revoke"]

@@ -19,6 +19,14 @@ class IdentityNotSupportedError(OAuthError):
     """Identity fetching is not supported for this provider configuration."""
 
 
+class McpDiscoveryError(OAuthError):
+    """MCP OAuth metadata discovery failed."""
+
+
+class McpRegistrationError(OAuthError):
+    """MCP OAuth dynamic client registration failed."""
+
+
 class PermanentOAuthError(OAuthError):
     """Irrecoverable OAuth failure.
 

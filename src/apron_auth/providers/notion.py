@@ -146,11 +146,12 @@ class NotionRevocationHandler:
         config: ProviderConfig,
     ) -> bool:
         """Send the revocation request and return success status."""
+        auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
             response = await client.post(
                 revocation_url,
                 json={"token": token},
-                auth=(config.client_id, config.client_secret.get_secret_value()),
+                auth=auth,
             )
         except httpx.RequestError as exc:
             raise RevocationError(str(exc)) from exc

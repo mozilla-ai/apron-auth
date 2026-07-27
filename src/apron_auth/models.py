@@ -4,11 +4,19 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, model_validator
 
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 AccessType = Literal["read", "write", "admin"]
+
+
+class TokenEndpointAuthMethod:
+    """RFC 7591/8414 token_endpoint_auth_method values."""
+
+    CLIENT_SECRET_POST = "client_secret_post"  # pragma: allowlist secret
+    CLIENT_SECRET_BASIC = "client_secret_basic"  # pragma: allowlist secret
+    NONE = "none"
 
 
 class ScopeMetadata(BaseModel, frozen=True):
@@ -105,7 +113,7 @@ class ProviderConfig(BaseModel, frozen=True):
     """
 
     client_id: str
-    client_secret: SecretStr
+    client_secret: SecretStr | None = None
     authorize_url: str
     token_url: str
     revocation_url: str | None = None
@@ -113,13 +121,37 @@ class ProviderConfig(BaseModel, frozen=True):
     scopes: list[str] = []
     scope_separator: str = " "
     use_pkce: bool = True
-    token_endpoint_auth_method: str = "client_secret_post"
+    token_endpoint_auth_method: str = TokenEndpointAuthMethod.CLIENT_SECRET_POST
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
     required_scope_families: list[list[str]] = []
     can_assert_domain_ownership: bool = False
     implicit_scopes: dict[str, frozenset[str]] = {}
+
+    @model_validator(mode="after")
+    def _require_client_secret_for_confidential(self) -> ProviderConfig:
+        """Reject a confidential-client config that omits its client secret.
+
+        A missing secret is valid only for a public client, which declares a
+        ``token_endpoint_auth_method`` of ``"none"``. Any other method implies
+        a confidential client, for which the secret is mandatory.
+        """
+        if self.client_secret is None and self.token_endpoint_auth_method != TokenEndpointAuthMethod.NONE:
+            msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
+            raise ValueError(msg)
+        return self
+
+    def basic_auth(self) -> tuple[str, str] | None:
+        """Return the HTTP Basic credential for token-endpoint requests, or None.
+
+        A confidential client authenticates with its ``client_id`` and
+        ``client_secret``. A public client carries no secret and returns None,
+        so the caller attaches no HTTP Basic credential.
+        """
+        if self.client_secret is None:
+            return None
+        return (self.client_id, self.client_secret.get_secret_value())
 
     def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
         """Return ``granted`` expanded with every scope it transitively implies.
@@ -135,6 +167,33 @@ class ProviderConfig(BaseModel, frozen=True):
             A new set: ``granted`` plus every scope it transitively implies.
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
+
+
+class ServerMetadata(BaseModel, frozen=True):
+    """OAuth endpoints and capabilities of an MCP server's authorization server.
+
+    Mirrors the RFC 8414 authorization-server metadata fields relevant to an
+    authorization-code flow, plus the registration endpoint from RFC 7591.
+    Holds no client identity — only the server-advertised facts.
+    """
+
+    authorize_url: str
+    token_url: str
+    registration_url: str | None = None
+    revocation_url: str | None = None
+    scopes_supported: list[str] = []
+    code_challenge_methods: list[str] = []
+    token_endpoint_auth_methods: list[str] = []
+
+
+class ClientRegistration(BaseModel, frozen=True):
+    """Client credentials issued by RFC 7591 dynamic client registration.
+
+    ``client_secret`` is absent for a public client.
+    """
+
+    client_id: str
+    client_secret: SecretStr | None = None
 
 
 class TokenSet(BaseModel, frozen=True):

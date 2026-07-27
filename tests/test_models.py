@@ -34,6 +34,61 @@ class TestProviderConfig:
         assert config.revocation_url is None
         assert config.redirect_uri is None
 
+    def test_public_client_omits_client_secret(self) -> None:
+        config = ProviderConfig(
+            client_id="public-client",
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="none",
+        )
+        assert config.client_secret is None
+
+    def test_basic_auth_returns_credential_for_confidential_client(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.basic_auth() == ("test-client", "test-secret")
+
+    def test_basic_auth_returns_none_for_public_client(self) -> None:
+        config = ProviderConfig(
+            client_id="public-client",
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="none",
+        )
+        assert config.basic_auth() is None
+
+    @pytest.mark.parametrize(
+        ("secret", "auth_method", "raises"),
+        [
+            (None, "client_secret_post", True),
+            (None, "client_secret_basic", True),
+            (None, "none", False),
+            (SecretStr("s"), "client_secret_post", False),
+            (SecretStr("s"), "none", False),
+        ],
+    )
+    def test_client_secret_required_unless_auth_method_none(
+        self, secret: SecretStr | None, auth_method: str, raises: bool
+    ) -> None:
+        def build() -> ProviderConfig:
+            return ProviderConfig(
+                client_id="c",
+                client_secret=secret,
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                token_endpoint_auth_method=auth_method,
+            )
+
+        if raises:
+            with pytest.raises(ValidationError):
+                build()
+        else:
+            build()
+
     def test_full_config(self) -> None:
         config = ProviderConfig(
             client_id="test-client",
