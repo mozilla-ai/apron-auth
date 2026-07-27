@@ -212,7 +212,7 @@ class OAuthClient:
 
         handler = self._revocation_handler
         if handler is None:
-            handler = StandardRevocationHandler()
+            handler = StandardRevocationHandler(transport_factory=self._transport_factory)
 
         try:
             result = await handler.revoke(token, self._config)

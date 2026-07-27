@@ -79,8 +79,23 @@ class IdentityResolver(Protocol):
 class StandardRevocationHandler:
     """RFC 7009 token revocation via POST with token in form body."""
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        transport_factory: TransportFactory | None = None,
+    ) -> None:
+        """Configure how revocation requests reach the network.
+
+        Args:
+            client: A caller-owned client to send every revocation through;
+                when supplied, ``transport_factory`` is unused.
+            transport_factory: Factory controlling the outbound connection for
+                the revocation URL when no ``client`` is given. The URL is
+                server-supplied, so a caller handling untrusted input can pin
+                DNS to validated addresses here to prevent SSRF via rebinding.
+        """
         self._client = client
+        self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token using standard RFC 7009 POST."""
@@ -90,7 +105,8 @@ class StandardRevocationHandler:
         revocation_url = config.revocation_url
         if self._client is not None:
             return await self._send(self._client, token, revocation_url, config)
-        async with httpx.AsyncClient() as client:
+        transport = self._transport_factory(revocation_url) if self._transport_factory is not None else None
+        async with httpx.AsyncClient(transport=transport) as client:
             return await self._send(client, token, revocation_url, config)
 
     async def _send(

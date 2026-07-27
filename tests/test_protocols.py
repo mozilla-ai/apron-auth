@@ -132,3 +132,25 @@ class TestStandardRevocationHandler:
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
         assert not client.is_closed
         await client.aclose()
+
+    async def test_transport_factory_used_for_revocation(self):
+        """The revocation request routes through the caller's transport_factory.
+
+        The revocation URL is server-supplied, so a caller pinning DNS for SSRF
+        defense must see revocation honor the same seam as the token request.
+        """
+        calls: list[str] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200)
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(responder)
+
+        config = _make_config()
+        handler = StandardRevocationHandler(transport_factory=factory)
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        assert calls == ["https://provider.example.com/revoke"]

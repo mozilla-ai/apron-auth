@@ -516,7 +516,7 @@ Public clients are supported end to end: a server that issues no secret yields `
 
 ### SSRF safety
 
-Discovery, registration, and the token request all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and `OAuthClient` each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
+Discovery, registration, the token request, and token revocation all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and `OAuthClient` each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection; the `OAuthClient` factory governs both the token request and revocation. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
 
 ## Provider presets
 

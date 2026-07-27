@@ -580,6 +580,28 @@ class TestRevokeToken:
         result = await client.revoke_token(token="access-token")
         assert result is True
 
+    async def test_revocation_default_handler_uses_transport_factory(self):
+        """revoke_token's fallback handler routes through the client's transport_factory.
+
+        Closes the SSRF seam gap: the revocation URL is server-supplied, so the
+        default handler must honor the same transport_factory as the token request.
+        """
+        calls: list[str] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            del request
+            return httpx.Response(200)
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(responder)
+
+        config = _make_config(revocation_url="https://provider.example.com/revoke")
+        client = OAuthClient(config=config, transport_factory=factory)
+        result = await client.revoke_token(token="access-token")
+        assert result is True
+        assert calls == ["https://provider.example.com/revoke"]
+
     async def test_revocation_failure_raises(self, httpx_mock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=503)
         config = _make_config(revocation_url="https://provider.example.com/revoke")
