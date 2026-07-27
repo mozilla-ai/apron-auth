@@ -576,6 +576,8 @@ All exceptions inherit from `OAuthError`.
 | `RevocationError`     | The provider rejected the revocation request.                                                                   |
 | `StateError`          | OAuth state was invalid, expired, or already used.                                                              |
 | `ConfigurationError`  | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
+| `McpDiscoveryError`   | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
+| `McpRegistrationError`| MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 
 ## Logging
 
