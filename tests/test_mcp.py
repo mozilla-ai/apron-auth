@@ -410,7 +410,6 @@ class TestRegisterClient:
         assert reg.client_id == "generated-id"
         assert reg.client_secret is not None
         assert reg.client_secret.get_secret_value() == "generated-secret"
-        assert reg.token_endpoint_auth_method == "client_secret_post"
 
     async def test_sends_rfc7591_payload(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=200, json={"client_id": "x"})
@@ -431,7 +430,6 @@ class TestRegisterClient:
         )
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.client_secret is None
-        assert reg.token_endpoint_auth_method == "none"
 
     async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})

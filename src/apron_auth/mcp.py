@@ -224,13 +224,9 @@ async def register_client(
         msg = "client registration response is missing client_id"
         raise McpRegistrationError(msg)
     client_secret = data.get("client_secret")
-    auth_method = data.get("token_endpoint_auth_method")
     return ClientRegistration(
         client_id=client_id,
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
-        token_endpoint_auth_method=auth_method
-        if isinstance(auth_method, str)
-        else TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     )
 
 
