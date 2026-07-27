@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import traceback
 
 import httpx
 import pytest
@@ -435,6 +436,23 @@ class TestRegisterClient:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
         with pytest.raises(McpRegistrationError):
             await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+    async def test_registration_error_never_leaks_client_secret(self, httpx_mock: HTTPXMock) -> None:
+        """A registration failure must not surface the issued secret anywhere.
+
+        A malformed success body can still carry ``client_secret`` while lacking
+        ``client_id``; neither the error's message nor its rendered traceback
+        (which walks the ``__cause__``/``__context__`` chain) may expose it.
+        """
+        leaked = "top-secret-value"  # pragma: allowlist secret
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": leaked})
+        with pytest.raises(McpRegistrationError) as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        rendered = "".join(
+            traceback.format_exception(type(exc_info.value), exc_info.value, exc_info.value.__traceback__)
+        )
+        assert leaked not in str(exc_info.value)
+        assert leaked not in rendered
 
     @pytest.mark.parametrize("status", [400, 401, 403, 500])
     async def test_non_success_status_raises(self, httpx_mock: HTTPXMock, status: int) -> None:
