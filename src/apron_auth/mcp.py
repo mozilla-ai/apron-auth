@@ -162,6 +162,13 @@ def to_provider_config(
     """
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
+    # Default PKCE on when the server advertises no code-challenge methods. RFC
+    # 8414 reads an omitted list as "no PKCE", but the MCP spec requires clients
+    # to use PKCE (OAuth 2.1 section 7.5.2) and servers to implement OAuth 2.1,
+    # so a conformant MCP server supports it even without advertising, and one
+    # that genuinely does not ignores the challenge as an unknown parameter.
+    # When methods are advertised, honor them: disable if S256 is absent, since
+    # OAuthClient issues only S256 challenges.
     use_pkce = "S256" in methods if methods else True
     auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods)
     return ProviderConfig(
