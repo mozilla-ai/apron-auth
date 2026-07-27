@@ -203,10 +203,12 @@ async def register_client(
 
     POSTs a registration request to ``registration_url`` (an authorization
     server's registration endpoint) and returns the issued ``client_id`` plus,
-    for a confidential client, a ``client_secret``. The URL is validated (HTTPS,
-    non-public host, ``url_validator``) and the request goes through
-    ``transport_factory`` when supplied. An error never echoes the response
-    body, which carries the issued secret.
+    for a confidential client, a ``client_secret``. Any
+    ``token_endpoint_auth_method`` the response states is captured too — it is
+    authoritative for this client and may differ from the requested method. The
+    URL is validated (HTTPS, non-public host, ``url_validator``) and the request
+    goes through ``transport_factory`` when supplied. An error never echoes the
+    response body, which carries the issued secret.
 
     Args:
         registration_url: The authorization server's registration endpoint.
@@ -253,9 +255,11 @@ async def register_client(
         msg = "client registration response is missing client_id"
         raise McpRegistrationError(msg)
     client_secret = data.get("client_secret")
+    auth_method = data.get("token_endpoint_auth_method")
     return ClientRegistration(
         client_id=client_id,
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
+        token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else None,
     )
 
 

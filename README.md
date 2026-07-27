@@ -499,12 +499,18 @@ meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transp
 if meta.registration_url:
     reg = await mcp.register_client(meta.registration_url, redirect_uri, transport_factory=my_transport_factory)
     client_id, client_secret = reg.client_id, reg.client_secret
+    registered_auth_method = reg.token_endpoint_auth_method
 else:
     client_id, client_secret = my_client_id, my_client_secret  # pre-registered out of band
+    registered_auth_method = None
 
 # 3. Build a ProviderConfig and drive the normal authorization-code flow.
 config = mcp.to_provider_config(
-    meta, client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri
+    meta,
+    client_id=client_id,
+    client_secret=client_secret,
+    registered_auth_method=registered_auth_method,
+    redirect_uri=redirect_uri,
 )
 client = OAuthClient(config, transport_factory=my_transport_factory)
 url, pending = await client.get_authorization_url()
@@ -513,6 +519,8 @@ tokens = await client.exchange_code(code="code-from-callback", code_verifier=pen
 ```
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+
+Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. Omit it (or pass `None`) to derive the method from the client's secret and the server's advertised set.
 
 ### SSRF safety
 

@@ -582,6 +582,7 @@ class TestRegisterClient:
         assert reg.client_id == "generated-id"
         assert reg.client_secret is not None
         assert reg.client_secret.get_secret_value() == "generated-secret"
+        assert reg.token_endpoint_auth_method == "client_secret_post"
 
     async def test_sends_rfc7591_payload(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=200, json={"client_id": "x"})
@@ -602,6 +603,12 @@ class TestRegisterClient:
         )
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.client_secret is None
+        assert reg.token_endpoint_auth_method == "none"
+
+    async def test_auth_method_absent_when_response_omits_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.token_endpoint_auth_method is None
 
     async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
@@ -703,6 +710,7 @@ class TestEndToEndFlow:
             meta,
             client_id=reg.client_id,
             client_secret=reg.client_secret,
+            registered_auth_method=reg.token_endpoint_auth_method,
             redirect_uri=_REDIRECT_URI,
         )
         assert config.token_url == "https://auth.example.com/token"
@@ -722,3 +730,33 @@ class TestEndToEndFlow:
         # Every outbound connection was made through the injected transport factory.
         assert registration_url in seen
         assert "https://auth.example.com/token" in seen
+
+    async def test_dcr_basic_registration_drives_config(self, httpx_mock: HTTPXMock) -> None:
+        """A client the server registers as basic-only is configured as basic.
+
+        The advertised set would derive client_secret_post; honoring the
+        per-client registration is what keeps token exchange from sending the
+        secret the wrong way.
+        """
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={
+                "client_id": "dcr-client",
+                "client_secret": "dcr-secret",  # pragma: allowlist secret
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+        )
+        meta = ServerMetadata(
+            authorize_url="https://auth.example.com/authorize",
+            token_url="https://auth.example.com/token",
+            token_endpoint_auth_methods=["client_secret_post"],
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        config = to_provider_config(
+            meta,
+            client_id=reg.client_id,
+            client_secret=reg.client_secret,
+            registered_auth_method=reg.token_endpoint_auth_method,
+        )
+        assert config.token_endpoint_auth_method == "client_secret_basic"
