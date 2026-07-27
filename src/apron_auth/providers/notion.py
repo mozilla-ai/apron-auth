@@ -20,7 +20,13 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    ProviderConfig,
+    TenancyContext,
+    TokenEndpointAuthMethod,
+)
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -214,7 +220,7 @@ def preset(
         revocation_url=NOTION_REVOCATION_URL,
         redirect_uri=redirect_uri,
         scopes=scopes,
-        token_endpoint_auth_method="client_secret_basic",
+        token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
         extra_params=defaults,
         disconnect_fully_revokes=False,
     )
