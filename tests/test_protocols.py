@@ -87,6 +87,17 @@ class TestStandardRevocationHandler:
         assert b"token=access-token-abc" in request.content
         assert ("authorization" in request.headers) is expect_basic_auth
 
+    async def test_public_client_revocation_sends_client_id(self, httpx_mock: HTTPXMock):
+        """RFC 7009 section 5: a public client identifies via client_id in the body."""
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        handler = StandardRevocationHandler()
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        request = httpx_mock.get_request()
+        assert b"client_id=test-client" in request.content
+        assert "authorization" not in request.headers
+
     async def test_failed_revocation(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
         config = _make_config()
