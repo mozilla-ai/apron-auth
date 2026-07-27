@@ -293,7 +293,8 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
         secret: The client secret, or None for a public client.
         advertised: The server's advertised token-endpoint auth methods.
         registered: The method the server registered for this client, or None
-            when unknown.
+            when unknown. Any non-None value — including an empty string — is
+            treated as an asserted method and validated, not silently ignored.
 
     Returns:
         A token-endpoint authentication method.
@@ -304,7 +305,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
             cannot satisfy — omitting ``none`` for a public client, or offering
             only methods this library cannot perform for a confidential client.
     """
-    if registered:
+    if registered is not None:
         return _honor_registered_auth_method(registered, secret)
     if secret is None:
         # A public client authenticates with no credentials ("none"). An empty
@@ -331,9 +332,12 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
 
     The registered method (RFC 7591) is authoritative for the client, so this
     honors ``none`` for a public client and the confidential methods in
-    :data:`_CONFIDENTIAL_AUTH_METHODS`. A confidential method with no secret to
-    send, or any method this library cannot perform, raises rather than yielding
-    a config doomed to fail at token exchange.
+    :data:`_CONFIDENTIAL_AUTH_METHODS`. It raises rather than yielding an
+    internally inconsistent config when the method and the secret disagree — a
+    confidential method with no secret to send, or ``none`` paired with a secret
+    (a public client must carry none, and a lingering secret would be attached
+    to requests that should present no client authentication) — and when the
+    method is one this library cannot perform.
 
     Args:
         registered: The method the server registered for this client.
@@ -343,9 +347,13 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
         The registered token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If this library cannot perform the registered method.
+        McpDiscoveryError: If the method disagrees with the secret's presence, or
+            this library cannot perform it.
     """
     if registered == TokenEndpointAuthMethod.NONE:
+        if secret is not None:
+            msg = "MCP server registered a public client (none) but issued a client secret"
+            raise McpDiscoveryError(msg)
         return TokenEndpointAuthMethod.NONE
     if registered in _CONFIDENTIAL_AUTH_METHODS:
         if secret is None:

@@ -135,6 +135,26 @@ class TestToProviderConfig:
                 registered_auth_method="client_secret_basic",
             )
 
+    def test_registered_none_with_secret_raises(self) -> None:
+        # A public-client registration paired with a secret is contradictory;
+        # emitting it would attach the secret to public-client requests.
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                client_secret="s",
+                registered_auth_method="none",
+            )
+
+    def test_registered_empty_string_raises(self) -> None:
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                client_secret="s",
+                registered_auth_method="",
+            )
+
     def test_absent_registered_method_falls_back_to_derivation(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
         config = to_provider_config(meta, client_id="c", client_secret="s")
@@ -233,6 +253,12 @@ class TestSelectAuthMethod:
         method = _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="client_secret_basic")
         assert method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
 
+    def test_empty_registered_string_is_validated_not_ignored(self) -> None:
+        # An empty string is "provided" and rejected, not silently derived from
+        # the advertised set — a malformed registration must not be masked.
+        with pytest.raises(McpDiscoveryError):
+            _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="")
+
 
 class TestHonorRegisteredAuthMethod:
     @pytest.mark.parametrize(
@@ -255,6 +281,11 @@ class TestHonorRegisteredAuthMethod:
             # A confidential method with no secret to send it.
             ("client_secret_post", None),
             ("client_secret_basic", None),
+            # A public client (none) must not carry a secret.
+            ("none", SecretStr("s")),
+            # An empty/invalid method string is validated, not ignored.
+            ("", SecretStr("s")),
+            ("", None),
         ],
     )
     def test_raises_when_unperformable(self, registered: str, secret: SecretStr | None) -> None:
