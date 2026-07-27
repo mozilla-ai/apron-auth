@@ -132,8 +132,10 @@ def to_provider_config(
     """Fold discovered metadata and a client identity into a ProviderConfig.
 
     PKCE is enabled unless the server advertises code-challenge methods that
-    exclude S256. A client with a secret authenticates with
-    ``client_secret_post``; a secretless public client uses ``none``.
+    exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
+    S256 challenges, PKCE is disabled rather than downgraded to ``plain``. A
+    client with a secret authenticates with ``client_secret_post``; a
+    secretless public client uses ``none``.
 
     Args:
         metadata: Metadata from :func:`discover`.
