@@ -260,8 +260,8 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
     a server advertising only methods this library cannot perform is unusable,
     so this raises rather than yielding a config doomed to fail at token
     exchange. When the server advertises nothing, this defaults to
-    ``client_secret_post`` — for consistency with the rest of this library and
-    the common case — though RFC 8414's stated default is ``client_secret_basic``.
+    ``client_secret_basic`` — RFC 8414's stated default, and the one scheme
+    RFC 6749 requires every authorization server to support.
 
     Args:
         secret: The client secret, or None for a public client.
@@ -275,9 +275,15 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
             methods this library cannot perform.
     """
     if secret is None:
+        # A public client authenticates with no credentials, so it uses "none"
+        # whatever the advertised set. We deliberately do NOT require "none" to
+        # appear in token_endpoint_auth_methods_supported first: that field lists
+        # client *authentication* methods, and a public client using PKCE
+        # presents none — many servers accept that without listing it, so
+        # rejecting on its absence would refuse legitimate public+PKCE servers.
         return TokenEndpointAuthMethod.NONE
     if not advertised:
-        return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+        return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
     for method in _CONFIDENTIAL_AUTH_METHODS:
         if method in advertised:
             return method

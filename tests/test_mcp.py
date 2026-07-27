@@ -82,10 +82,10 @@ class TestToProviderConfig:
         config = to_provider_config(meta, client_id="c", client_secret="s")
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
-    def test_confidential_client_defaults_post_when_unadvertised(self) -> None:
+    def test_confidential_client_defaults_basic_when_unadvertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=[])
         config = to_provider_config(meta, client_id="c", client_secret="s")
-        assert config.token_endpoint_auth_method == "client_secret_post"
+        assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
@@ -128,8 +128,8 @@ class TestSelectAuthMethod:
             # A public client (no secret) is "none" regardless of what the server advertises.
             (None, [], TokenEndpointAuthMethod.NONE),
             (None, ["client_secret_basic"], TokenEndpointAuthMethod.NONE),
-            # A confidential client with nothing advertised defaults to post.
-            (SecretStr("s"), [], TokenEndpointAuthMethod.CLIENT_SECRET_POST),
+            # A confidential client with nothing advertised defaults to basic (RFC 8414).
+            (SecretStr("s"), [], TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
             # A confidential client honors the advertised method.
             (SecretStr("s"), ["client_secret_post"], TokenEndpointAuthMethod.CLIENT_SECRET_POST),
             (SecretStr("s"), ["client_secret_basic"], TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
