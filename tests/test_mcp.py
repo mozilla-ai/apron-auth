@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -172,6 +173,15 @@ class TestDiscover:
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
         assert meta.token_url == "https://auth.example.com/token"
+
+    async def test_skipped_candidate_logged_at_debug(self, httpx_mock: HTTPXMock, caplog) -> None:
+        """A skipped discovery candidate is logged at debug with a non-sensitive reason."""
+        httpx_mock.add_response(url=_PRM_PATH, status_code=404)
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
+            await discover("https://mcp.example.com/mcp")
+        assert any("protected resource metadata returned HTTP 404" in message for message in caplog.messages)
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})

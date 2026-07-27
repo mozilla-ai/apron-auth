@@ -17,6 +17,7 @@ module is stateless and stores no credentials.
 from __future__ import annotations
 
 import ipaddress
+import logging
 from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -29,6 +30,8 @@ from apron_auth.models import ClientRegistration, ProviderConfig, ServerMetadata
 from apron_auth.protocols import TransportFactory
 
 UrlValidator = Callable[[str], None]
+
+logger = logging.getLogger(__name__)
 
 _DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
@@ -332,23 +335,28 @@ async def _fetch_first_metadata(
     """Fetch and return the first candidate URL that yields a JSON object.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
-    skipping request errors, non-200 responses, and non-object bodies. Raises
-    McpDiscoveryError describing ``what`` when no candidate succeeds.
+    skipping request errors, non-200 responses, and non-object bodies. Each skip
+    is logged at debug with a non-sensitive reason. Raises McpDiscoveryError
+    describing ``what`` when no candidate succeeds.
     """
     for url in candidate_urls:
         _validate_url(url, url_validator)
         async with _discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
-            except httpx.RequestError:
+            except httpx.RequestError as exc:
+                logger.debug("MCP discovery: %s request failed (%s)", what, type(exc).__name__)
                 continue
             if response.status_code != 200:
+                logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
                 continue
             try:
                 payload = response.json()
             except ValueError:
+                logger.debug("MCP discovery: %s returned a non-JSON body", what)
                 continue
             if isinstance(payload, dict):
                 return payload
+            logger.debug("MCP discovery: %s returned a non-object JSON body", what)
     msg = f"could not fetch {what}"
     raise McpDiscoveryError(msg)
