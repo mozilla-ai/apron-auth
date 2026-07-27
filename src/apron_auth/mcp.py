@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import socket
 from collections.abc import Callable, Sequence
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -284,13 +285,32 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
     raise McpDiscoveryError(msg)
 
 
+def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Return host as an IP address, accepting legacy numeric IPv4 forms, else None.
+
+    ``ipaddress.ip_address`` accepts only canonical dotted-quad and IPv6 text, so
+    decimal (``2130706433``), hex (``0x7f000001``), octal, and short-form
+    (``127.1``) literals slip through it as "hostnames" even though a resolver
+    dials them as addresses. ``socket.inet_aton`` canonicalizes those IPv4 forms
+    so they cannot bypass a host check; genuine hostnames fail it and return None.
+    """
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    try:
+        packed = socket.inet_aton(host)
+    except OSError:
+        return None
+    return ipaddress.ip_address(packed)
+
+
 def _is_blocked_host(host: str) -> bool:
-    """Return whether host is empty, localhost, or a non-public IP literal."""
+    """Return whether host is empty, localhost, or a non-public IP address."""
     if not host or host == "localhost" or host.endswith(".localhost"):
         return True
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
+    address = _parse_ip(host)
+    if address is None:
         return False
     return (
         address.is_private

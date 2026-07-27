@@ -329,8 +329,15 @@ class TestIsBlockedHost:
             ("0.0.0.0", True),
             ("224.0.0.1", True),
             ("fe80::1", True),
+            # Legacy numeric IPv4 forms resolve to loopback/private but
+            # ipaddress.ip_address rejects them; they must still be blocked.
+            ("2130706433", True),
+            ("0x7f000001", True),
+            ("017700000001", True),
+            ("127.1", True),
             ("mcp.example.com", False),
             ("8.8.8.8", False),
+            ("134744072", False),
             ("2606:4700:4700::1111", False),
         ],
     )
@@ -428,6 +435,9 @@ class TestValidateUrl:
             "https://127.0.0.1",
             "https://10.0.0.1/token",
             "https://169.254.169.254",
+            "https://2130706433",
+            "https://0x7f000001",
+            "https://127.1",
         ],
     )
     def test_rejects_unusable_url(self, url: str) -> None:
