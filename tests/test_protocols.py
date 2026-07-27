@@ -98,6 +98,25 @@ class TestStandardRevocationHandler:
         assert b"client_id=test-client" in request.content
         assert "authorization" not in request.headers
 
+    async def test_public_client_revocation_suppresses_injected_default_auth(self):
+        """A public client must not leak an injected client's default auth to the revocation URL."""
+        seen: list[bool] = []
+
+        def responder(request: httpx.Request) -> httpx.Response:
+            seen.append("authorization" in request.headers)
+            return httpx.Response(200)
+
+        client = httpx.AsyncClient(
+            auth=("default-user", "default-secret"),  # pragma: allowlist secret
+            transport=httpx.MockTransport(responder),
+        )
+        config = _make_config(client_secret=None, token_endpoint_auth_method="none")
+        handler = StandardRevocationHandler(client=client)
+        result = await handler.revoke("access-token-abc", config)
+        await client.aclose()
+        assert result is True
+        assert seen == [False]
+
     async def test_failed_revocation(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
         config = _make_config()

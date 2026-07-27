@@ -131,7 +131,11 @@ class StandardRevocationHandler:
             response = await client.post(
                 revocation_url,
                 data=data,
-                auth=auth or httpx.USE_CLIENT_DEFAULT,
+                # Pass None (not USE_CLIENT_DEFAULT) for a public client so an
+                # injected client's default auth is never sent to the
+                # server-supplied revocation URL. httpx accepts None at runtime;
+                # its AuthTypes stub omits it, hence the narrow ignore.
+                auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:
             raise RevocationError(str(exc)) from exc
