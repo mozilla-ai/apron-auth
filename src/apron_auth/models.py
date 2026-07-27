@@ -142,6 +142,17 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         return self
 
+    def basic_auth(self) -> tuple[str, str] | None:
+        """Return the HTTP Basic credential for token-endpoint requests, or None.
+
+        A confidential client authenticates with its ``client_id`` and
+        ``client_secret``. A public client carries no secret and returns None,
+        so the caller attaches no HTTP Basic credential.
+        """
+        if self.client_secret is None:
+            return None
+        return (self.client_id, self.client_secret.get_secret_value())
+
     def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
         """Return ``granted`` expanded with every scope it transitively implies.
 

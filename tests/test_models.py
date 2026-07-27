@@ -43,6 +43,24 @@ class TestProviderConfig:
         )
         assert config.client_secret is None
 
+    def test_basic_auth_returns_credential_for_confidential_client(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.basic_auth() == ("test-client", "test-secret")
+
+    def test_basic_auth_returns_none_for_public_client(self) -> None:
+        config = ProviderConfig(
+            client_id="public-client",
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="none",
+        )
+        assert config.basic_auth() is None
+
     @pytest.mark.parametrize(
         ("secret", "auth_method", "raises"),
         [

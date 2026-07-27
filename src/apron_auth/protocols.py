@@ -105,12 +105,7 @@ class StandardRevocationHandler:
         A public client carries no secret, so no HTTP Basic credential is
         attached in that case.
         """
-        client_secret = config.client_secret
-        auth = (
-            (config.client_id, client_secret.get_secret_value())
-            if client_secret is not None
-            else httpx.USE_CLIENT_DEFAULT
-        )
+        auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
             response = await client.post(
                 revocation_url,
