@@ -335,10 +335,14 @@ def _validate_url(
 ) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
-    Raises ``error_cls`` when the URL is not HTTPS, targets a non-public host,
-    or is rejected by ``url_validator``.
+    Raises ``error_cls`` when the URL is malformed, not HTTPS, or targets a
+    non-public host. An ``OAuthError`` from ``url_validator`` propagates
+    unchanged; any other validator exception is wrapped in ``error_cls``.
     """
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError as exc:
+        raise error_cls("MCP OAuth received a malformed URL") from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg)

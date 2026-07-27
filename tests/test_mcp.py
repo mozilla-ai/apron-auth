@@ -444,6 +444,10 @@ class TestValidateUrl:
         with pytest.raises(McpDiscoveryError):
             _validate_url(url, None)
 
+    def test_rejects_malformed_url(self) -> None:
+        with pytest.raises(McpDiscoveryError):
+            _validate_url("https://[::1", None)
+
     def test_invokes_validator_when_url_is_acceptable(self) -> None:
         seen: list[str] = []
         _validate_url("https://mcp.example.com", seen.append)
