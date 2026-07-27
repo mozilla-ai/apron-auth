@@ -198,8 +198,7 @@ async def register_client(
         "response_types": ["code"],
         "token_endpoint_auth_method": TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     }
-    transport = transport_factory(registration_url) if transport_factory is not None else None
-    async with httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False) as client:
+    async with _discovery_client(registration_url, transport_factory) as client:
         try:
             response = await client.post(registration_url, json=payload)
         except httpx.RequestError as exc:
@@ -312,6 +311,18 @@ def _asm_candidate_urls(auth_server: str) -> list[str]:
     return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
 
 
+def _discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:
+    """Build the httpx client for a discovery or registration fetch.
+
+    Routes the connection through ``transport_factory`` when supplied and
+    disables redirect-following, so a validated URL cannot be bounced to an
+    unvalidated host mid-request. ``url`` selects the transport; the returned
+    client is not otherwise bound to it.
+    """
+    transport = transport_factory(url) if transport_factory is not None else None
+    return httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False)
+
+
 async def _fetch_first_metadata(
     candidate_urls: Sequence[str],
     url_validator: UrlValidator | None,
@@ -326,8 +337,7 @@ async def _fetch_first_metadata(
     """
     for url in candidate_urls:
         _validate_url(url, url_validator)
-        transport = transport_factory(url) if transport_factory is not None else None
-        async with httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False) as client:
+        async with _discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
             except httpx.RequestError:
