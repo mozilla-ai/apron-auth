@@ -134,6 +134,7 @@ def to_provider_config(
     *,
     client_id: str,
     client_secret: SecretStr | str | None = None,
+    registered_auth_method: str | None = None,
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
 ) -> ProviderConfig:
@@ -141,15 +142,20 @@ def to_provider_config(
 
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
-    S256 challenges, PKCE is disabled rather than downgraded to ``plain``. A
-    confidential client's token-endpoint auth method is chosen from the methods
-    the server advertises (preferring ``client_secret_post``); a secretless
-    public client uses ``none``.
+    S256 challenges, PKCE is disabled rather than downgraded to ``plain``. The
+    token-endpoint auth method is taken from ``registered_auth_method`` when
+    given — the value is authoritative for this specific client and may differ
+    from what the server advertises server-wide. Absent it, a confidential
+    client's method is chosen from the methods the server advertises (preferring
+    ``client_secret_post``) and a secretless public client uses ``none``.
 
     Args:
         metadata: Metadata from :func:`discover`.
         client_id: Client identifier, pre-registered or minted via DCR.
         client_secret: Secret for a confidential client; omit for a public one.
+        registered_auth_method: The token-endpoint auth method the server
+            registered for this client (RFC 7591), when known; overrides the
+            derivation from the advertised set. Omit when unknown.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
 
@@ -157,8 +163,9 @@ def to_provider_config(
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
 
     Raises:
-        McpDiscoveryError: If the server advertises only client-authentication
-            methods this library cannot perform for a confidential client.
+        McpDiscoveryError: If the registered method is one this library cannot
+            perform, or the server advertises only such methods for a
+            confidential client.
     """
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
@@ -170,7 +177,7 @@ def to_provider_config(
     # When methods are advertised, honor them: disable if S256 is absent, since
     # OAuthClient issues only S256 challenges.
     use_pkce = "S256" in methods if methods else True
-    auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods)
+    auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods, registered_auth_method)
     return ProviderConfig(
         client_id=client_id,
         client_secret=secret,
@@ -259,32 +266,42 @@ def _str_list(value: Any) -> list[str]:
     return []
 
 
-def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
+def _select_auth_method(secret: SecretStr | None, advertised: list[str], registered: str | None = None) -> str:
     """Choose the token-endpoint authentication method for a discovered server.
 
-    A secretless client is public and uses ``none``, unless the server publishes
-    an explicit method list that omits ``none`` — then it accepts no public
-    client and this raises. A confidential client uses the first method in
-    :data:`_CONFIDENTIAL_AUTH_METHODS` the server advertises; a server
-    advertising only methods this library cannot perform is unusable, so this
-    raises rather than yielding a config doomed to fail at token exchange. When
-    the server advertises nothing, this defaults to
+    A ``registered`` method is authoritative and takes precedence: it is the
+    method the server assigned this specific client (RFC 7591) and may differ
+    from the server-wide advertised set, so when present it is honored (or
+    raises if this library cannot perform it) and the advertised set is not
+    consulted.
+
+    Otherwise the method is derived. A secretless client is public and uses
+    ``none``, unless the server publishes an explicit method list that omits
+    ``none`` — then it accepts no public client and this raises. A confidential
+    client uses the first method in :data:`_CONFIDENTIAL_AUTH_METHODS` the server
+    advertises; a server advertising only methods this library cannot perform is
+    unusable, so this raises rather than yielding a config doomed to fail at
+    token exchange. When the server advertises nothing, this defaults to
     ``client_secret_basic`` — RFC 8414's stated default, and the one scheme
     RFC 6749 requires every authorization server to support.
 
     Args:
         secret: The client secret, or None for a public client.
         advertised: The server's advertised token-endpoint auth methods.
+        registered: The method the server registered for this client, or None
+            when unknown.
 
     Returns:
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the server advertises an explicit method list the
-            client cannot satisfy — omitting ``none`` for a public client, or
-            offering only methods this library cannot perform for a confidential
-            client.
+        McpDiscoveryError: If the registered method is one this library cannot
+            perform, or the server advertises an explicit method list the client
+            cannot satisfy — omitting ``none`` for a public client, or offering
+            only methods this library cannot perform for a confidential client.
     """
+    if registered:
+        return _honor_registered_auth_method(registered, secret)
     if secret is None:
         # A public client authenticates with no credentials ("none"). An empty
         # advertised list means the server published nothing, which we do not
@@ -302,6 +319,36 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
         if method in advertised:
             return method
     msg = "MCP server requires an unsupported client authentication method"
+    raise McpDiscoveryError(msg)
+
+
+def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> str:
+    """Return the method the server registered for this client, if performable.
+
+    The registered method (RFC 7591) is authoritative for the client, so this
+    honors ``none`` for a public client and the confidential methods in
+    :data:`_CONFIDENTIAL_AUTH_METHODS`. A confidential method with no secret to
+    send, or any method this library cannot perform, raises rather than yielding
+    a config doomed to fail at token exchange.
+
+    Args:
+        registered: The method the server registered for this client.
+        secret: The client secret, or None for a public client.
+
+    Returns:
+        The registered token-endpoint authentication method.
+
+    Raises:
+        McpDiscoveryError: If this library cannot perform the registered method.
+    """
+    if registered == TokenEndpointAuthMethod.NONE:
+        return TokenEndpointAuthMethod.NONE
+    if registered in _CONFIDENTIAL_AUTH_METHODS:
+        if secret is None:
+            msg = "MCP server registered a confidential auth method but issued no client secret"
+            raise McpDiscoveryError(msg)
+        return registered
+    msg = "MCP server registered an unsupported client authentication method"
     raise McpDiscoveryError(msg)
 
 
