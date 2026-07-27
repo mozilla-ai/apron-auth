@@ -13,6 +13,7 @@ from apron_auth.client import OAuthClient
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
+    _honor_registered_auth_method,
     _is_blocked_host,
     _prm_candidate_urls,
     _select_auth_method,
@@ -96,6 +97,68 @@ class TestToProviderConfig:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
         with pytest.raises(McpDiscoveryError):
             to_provider_config(meta, client_id="c")
+
+    def test_registered_method_overrides_advertised_derivation(self) -> None:
+        # The server advertises only client_secret_post, but this client was
+        # registered as client_secret_basic; the per-client registration wins.
+        config = to_provider_config(
+            self._meta(token_endpoint_auth_methods=["client_secret_post"]),
+            client_id="c",
+            client_secret="s",
+            registered_auth_method="client_secret_basic",
+        )
+        assert config.token_endpoint_auth_method == "client_secret_basic"
+
+    def test_registered_none_yields_public_client(self) -> None:
+        config = to_provider_config(
+            self._meta(),
+            client_id="c",
+            registered_auth_method="none",
+        )
+        assert config.token_endpoint_auth_method == "none"
+        assert config.client_secret is None
+
+    def test_registered_unsupported_method_raises(self) -> None:
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                client_secret="s",
+                registered_auth_method="private_key_jwt",
+            )
+
+    def test_registered_confidential_method_without_secret_raises(self) -> None:
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                registered_auth_method="client_secret_basic",
+            )
+
+    def test_registered_none_with_secret_raises(self) -> None:
+        # A public-client registration paired with a secret is contradictory;
+        # emitting it would attach the secret to public-client requests.
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                client_secret="s",
+                registered_auth_method="none",
+            )
+
+    def test_registered_empty_string_raises(self) -> None:
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(
+                self._meta(),
+                client_id="c",
+                client_secret="s",
+                registered_auth_method="",
+            )
+
+    def test_absent_registered_method_falls_back_to_derivation(self) -> None:
+        meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
+        config = to_provider_config(meta, client_id="c", client_secret="s")
+        assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_accepts_plain_string_secret(self) -> None:
         config = to_provider_config(self._meta(), client_id="c", client_secret="raw-secret")
@@ -184,6 +247,50 @@ class TestSelectAuthMethod:
     def test_public_client_raises_when_none_not_advertised(self, advertised: list[str]) -> None:
         with pytest.raises(McpDiscoveryError):
             _select_auth_method(None, advertised)
+
+    def test_registered_method_wins_over_advertised(self) -> None:
+        # The advertised set would derive post; the registered method wins.
+        method = _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="client_secret_basic")
+        assert method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+
+    def test_empty_registered_string_is_validated_not_ignored(self) -> None:
+        # An empty string is "provided" and rejected, not silently derived from
+        # the advertised set — a malformed registration must not be masked.
+        with pytest.raises(McpDiscoveryError):
+            _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="")
+
+
+class TestHonorRegisteredAuthMethod:
+    @pytest.mark.parametrize(
+        ("registered", "secret", "expected"),
+        [
+            ("none", None, TokenEndpointAuthMethod.NONE),
+            ("client_secret_post", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_POST),
+            ("client_secret_basic", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
+        ],
+    )
+    def test_returns_performable_method(self, registered: str, secret: SecretStr | None, expected: str) -> None:
+        assert _honor_registered_auth_method(registered, secret) == expected
+
+    @pytest.mark.parametrize(
+        ("registered", "secret"),
+        [
+            # A method this library cannot perform, regardless of secret state.
+            ("private_key_jwt", SecretStr("s")),
+            ("tls_client_auth", None),
+            # A confidential method with no secret to send it.
+            ("client_secret_post", None),
+            ("client_secret_basic", None),
+            # A public client (none) must not carry a secret.
+            ("none", SecretStr("s")),
+            # An empty/invalid method string is validated, not ignored.
+            ("", SecretStr("s")),
+            ("", None),
+        ],
+    )
+    def test_raises_when_unperformable(self, registered: str, secret: SecretStr | None) -> None:
+        with pytest.raises(McpDiscoveryError):
+            _honor_registered_auth_method(registered, secret)
 
 
 class TestDiscover:
@@ -506,6 +613,7 @@ class TestRegisterClient:
         assert reg.client_id == "generated-id"
         assert reg.client_secret is not None
         assert reg.client_secret.get_secret_value() == "generated-secret"
+        assert reg.token_endpoint_auth_method == "client_secret_post"
 
     async def test_sends_rfc7591_payload(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=200, json={"client_id": "x"})
@@ -526,6 +634,12 @@ class TestRegisterClient:
         )
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.client_secret is None
+        assert reg.token_endpoint_auth_method == "none"
+
+    async def test_auth_method_absent_when_response_omits_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.token_endpoint_auth_method is None
 
     async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
@@ -627,6 +741,7 @@ class TestEndToEndFlow:
             meta,
             client_id=reg.client_id,
             client_secret=reg.client_secret,
+            registered_auth_method=reg.token_endpoint_auth_method,
             redirect_uri=_REDIRECT_URI,
         )
         assert config.token_url == "https://auth.example.com/token"
@@ -646,3 +761,33 @@ class TestEndToEndFlow:
         # Every outbound connection was made through the injected transport factory.
         assert registration_url in seen
         assert "https://auth.example.com/token" in seen
+
+    async def test_dcr_basic_registration_drives_config(self, httpx_mock: HTTPXMock) -> None:
+        """A client the server registers as basic-only is configured as basic.
+
+        The advertised set would derive client_secret_post; honoring the
+        per-client registration is what keeps token exchange from sending the
+        secret the wrong way.
+        """
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={
+                "client_id": "dcr-client",
+                "client_secret": "dcr-secret",  # pragma: allowlist secret
+                "token_endpoint_auth_method": "client_secret_basic",
+            },
+        )
+        meta = ServerMetadata(
+            authorize_url="https://auth.example.com/authorize",
+            token_url="https://auth.example.com/token",
+            token_endpoint_auth_methods=["client_secret_post"],
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        config = to_provider_config(
+            meta,
+            client_id=reg.client_id,
+            client_secret=reg.client_secret,
+            registered_auth_method=reg.token_endpoint_auth_method,
+        )
+        assert config.token_endpoint_auth_method == "client_secret_basic"
