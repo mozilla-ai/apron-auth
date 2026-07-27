@@ -255,11 +255,13 @@ def _str_list(value: Any) -> list[str]:
 def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
     """Choose the token-endpoint authentication method for a discovered server.
 
-    A secretless client is public and uses ``none``. A confidential client uses
-    the first method in :data:`_CONFIDENTIAL_AUTH_METHODS` the server advertises;
-    a server advertising only methods this library cannot perform is unusable,
-    so this raises rather than yielding a config doomed to fail at token
-    exchange. When the server advertises nothing, this defaults to
+    A secretless client is public and uses ``none``, unless the server publishes
+    an explicit method list that omits ``none`` — then it accepts no public
+    client and this raises. A confidential client uses the first method in
+    :data:`_CONFIDENTIAL_AUTH_METHODS` the server advertises; a server
+    advertising only methods this library cannot perform is unusable, so this
+    raises rather than yielding a config doomed to fail at token exchange. When
+    the server advertises nothing, this defaults to
     ``client_secret_basic`` — RFC 8414's stated default, and the one scheme
     RFC 6749 requires every authorization server to support.
 
@@ -271,16 +273,21 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If a confidential client's server advertises only
-            methods this library cannot perform.
+        McpDiscoveryError: If the server advertises an explicit method list the
+            client cannot satisfy — omitting ``none`` for a public client, or
+            offering only methods this library cannot perform for a confidential
+            client.
     """
     if secret is None:
-        # A public client authenticates with no credentials, so it uses "none"
-        # whatever the advertised set. We deliberately do NOT require "none" to
-        # appear in token_endpoint_auth_methods_supported first: that field lists
-        # client *authentication* methods, and a public client using PKCE
-        # presents none — many servers accept that without listing it, so
-        # rejecting on its absence would refuse legitimate public+PKCE servers.
+        # A public client authenticates with no credentials ("none"). An empty
+        # advertised list means the server published nothing, which we do not
+        # treat as a rejection. But an explicit list that omits "none" means the
+        # token endpoint requires client authentication, so a public client
+        # cannot use it — fail fast rather than emit a config that would be
+        # rejected at token exchange.
+        if advertised and TokenEndpointAuthMethod.NONE not in advertised:
+            msg = "MCP server does not accept a public client at its token endpoint"
+            raise McpDiscoveryError(msg)
         return TokenEndpointAuthMethod.NONE
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC

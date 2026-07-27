@@ -92,6 +92,11 @@ class TestToProviderConfig:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(meta, client_id="c", client_secret="s")
 
+    def test_public_client_rejected_when_none_not_advertised(self) -> None:
+        meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(meta, client_id="c")
+
     def test_accepts_plain_string_secret(self) -> None:
         config = to_provider_config(self._meta(), client_id="c", client_secret="raw-secret")
         assert config.client_secret is not None
@@ -125,9 +130,10 @@ class TestSelectAuthMethod:
     @pytest.mark.parametrize(
         ("secret", "advertised", "expected"),
         [
-            # A public client (no secret) is "none" regardless of what the server advertises.
+            # A public client (no secret) is "none" when the server advertises
+            # nothing or explicitly lists "none".
             (None, [], TokenEndpointAuthMethod.NONE),
-            (None, ["client_secret_basic"], TokenEndpointAuthMethod.NONE),
+            (None, ["none", "client_secret_post"], TokenEndpointAuthMethod.NONE),
             # A confidential client with nothing advertised defaults to basic (RFC 8414).
             (SecretStr("s"), [], TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
             # A confidential client honors the advertised method.
@@ -166,6 +172,18 @@ class TestSelectAuthMethod:
     def test_raises_when_confidential_methods_unavailable(self, advertised: list[str]) -> None:
         with pytest.raises(McpDiscoveryError):
             _select_auth_method(SecretStr("s"), advertised)
+
+    @pytest.mark.parametrize(
+        "advertised",
+        [
+            ["client_secret_basic"],
+            ["client_secret_post", "client_secret_basic"],
+            ["private_key_jwt"],
+        ],
+    )
+    def test_public_client_raises_when_none_not_advertised(self, advertised: list[str]) -> None:
+        with pytest.raises(McpDiscoveryError):
+            _select_auth_method(None, advertised)
 
 
 class TestDiscover:
