@@ -37,7 +37,14 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError, RevocationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+    TokenEndpointAuthMethod,
+)
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
@@ -258,7 +265,7 @@ def preset(
         revocation_url="https://api.hubapi.com/oauth/v1/refresh-tokens",
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
-        token_endpoint_auth_method="client_secret_post",
+        token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
         extra_params=extra_params or {},
         scope_metadata=BASE_SCOPE_METADATA,
     )
