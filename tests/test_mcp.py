@@ -15,13 +15,14 @@ from apron_auth.mcp import (
     _asm_candidate_urls,
     _is_blocked_host,
     _prm_candidate_urls,
+    _select_auth_method,
     _str_list,
     _validate_url,
     discover,
     register_client,
     to_provider_config,
 )
-from apron_auth.models import ProviderConfig, ServerMetadata
+from apron_auth.models import ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
@@ -76,6 +77,21 @@ class TestToProviderConfig:
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
 
+    def test_confidential_client_uses_basic_when_only_basic_advertised(self) -> None:
+        meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
+        config = to_provider_config(meta, client_id="c", client_secret="s")
+        assert config.token_endpoint_auth_method == "client_secret_basic"
+
+    def test_confidential_client_defaults_post_when_unadvertised(self) -> None:
+        meta = self._meta(token_endpoint_auth_methods=[])
+        config = to_provider_config(meta, client_id="c", client_secret="s")
+        assert config.token_endpoint_auth_method == "client_secret_post"
+
+    def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
+        meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(meta, client_id="c", client_secret="s")
+
     def test_accepts_plain_string_secret(self) -> None:
         config = to_provider_config(self._meta(), client_id="c", client_secret="raw-secret")
         assert config.client_secret is not None
@@ -103,6 +119,53 @@ class TestToProviderConfig:
         )
         assert config.scopes == ["a", "b"]
         assert config.redirect_uri == "https://app.example.com/cb"
+
+
+class TestSelectAuthMethod:
+    @pytest.mark.parametrize(
+        ("secret", "advertised", "expected"),
+        [
+            # A public client (no secret) is "none" regardless of what the server advertises.
+            (None, [], TokenEndpointAuthMethod.NONE),
+            (None, ["client_secret_basic"], TokenEndpointAuthMethod.NONE),
+            # A confidential client with nothing advertised defaults to post.
+            (SecretStr("s"), [], TokenEndpointAuthMethod.CLIENT_SECRET_POST),
+            # A confidential client honors the advertised method.
+            (SecretStr("s"), ["client_secret_post"], TokenEndpointAuthMethod.CLIENT_SECRET_POST),
+            (SecretStr("s"), ["client_secret_basic"], TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
+            # When both are advertised, post wins by preference, regardless of order.
+            (
+                SecretStr("s"),
+                ["client_secret_post", "client_secret_basic"],
+                TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            ),
+            (
+                SecretStr("s"),
+                ["client_secret_basic", "client_secret_post"],
+                TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            ),
+            # Unsupported methods are skipped in favor of a performable one.
+            (
+                SecretStr("s"),
+                ["private_key_jwt", "client_secret_basic"],
+                TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+            ),
+        ],
+    )
+    def test_returns_expected_method(self, secret: SecretStr | None, advertised: list[str], expected: str) -> None:
+        assert _select_auth_method(secret, advertised) == expected
+
+    @pytest.mark.parametrize(
+        "advertised",
+        [
+            ["private_key_jwt"],
+            ["tls_client_auth", "private_key_jwt"],
+            ["none"],  # a confidential client whose server accepts only public clients
+        ],
+    )
+    def test_raises_when_confidential_methods_unavailable(self, advertised: list[str]) -> None:
+        with pytest.raises(McpDiscoveryError):
+            _select_auth_method(SecretStr("s"), advertised)
 
 
 class TestDiscover:

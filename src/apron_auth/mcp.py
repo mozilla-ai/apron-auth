@@ -38,6 +38,13 @@ _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
 _WELL_KNOWN_OIDC = "/.well-known/openid-configuration"
 
+# Token-endpoint auth methods this library can perform for a confidential
+# client, in the order it prefers them. authlib drives all of these.
+_CONFIDENTIAL_AUTH_METHODS = (
+    TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+    TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+)
+
 
 async def discover(
     server_url: str,
@@ -134,8 +141,9 @@ def to_provider_config(
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
     S256 challenges, PKCE is disabled rather than downgraded to ``plain``. A
-    client with a secret authenticates with ``client_secret_post``; a
-    secretless public client uses ``none``.
+    confidential client's token-endpoint auth method is chosen from the methods
+    the server advertises (preferring ``client_secret_post``); a secretless
+    public client uses ``none``.
 
     Args:
         metadata: Metadata from :func:`discover`.
@@ -146,11 +154,15 @@ def to_provider_config(
 
     Returns:
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
+
+    Raises:
+        McpDiscoveryError: If the server advertises only client-authentication
+            methods this library cannot perform for a confidential client.
     """
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
     use_pkce = "S256" in methods if methods else True
-    auth_method = TokenEndpointAuthMethod.CLIENT_SECRET_POST if secret is not None else TokenEndpointAuthMethod.NONE
+    auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods)
     return ProviderConfig(
         client_id=client_id,
         client_secret=secret,
@@ -237,6 +249,39 @@ def _str_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
     return []
+
+
+def _select_auth_method(secret: SecretStr | None, advertised: list[str]) -> str:
+    """Choose the token-endpoint authentication method for a discovered server.
+
+    A secretless client is public and uses ``none``. A confidential client uses
+    the first method in :data:`_CONFIDENTIAL_AUTH_METHODS` the server advertises;
+    a server advertising only methods this library cannot perform is unusable,
+    so this raises rather than yielding a config doomed to fail at token
+    exchange. When the server advertises nothing, this defaults to
+    ``client_secret_post`` — for consistency with the rest of this library and
+    the common case — though RFC 8414's stated default is ``client_secret_basic``.
+
+    Args:
+        secret: The client secret, or None for a public client.
+        advertised: The server's advertised token-endpoint auth methods.
+
+    Returns:
+        A token-endpoint authentication method.
+
+    Raises:
+        McpDiscoveryError: If a confidential client's server advertises only
+            methods this library cannot perform.
+    """
+    if secret is None:
+        return TokenEndpointAuthMethod.NONE
+    if not advertised:
+        return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    for method in _CONFIDENTIAL_AUTH_METHODS:
+        if method in advertised:
+            return method
+    msg = "MCP server requires an unsupported client authentication method"
+    raise McpDiscoveryError(msg)
 
 
 def _is_blocked_host(host: str) -> bool:
