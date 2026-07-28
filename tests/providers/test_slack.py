@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -386,6 +387,26 @@ class TestSlackRevocationHandler:
         request = httpx_mock.get_request()
         assert request.method == "GET"
         assert "token=access-abc" in str(request.url)
+
+    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+            await handler.revoke("access-abc", config)
+        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+
+    async def test_malformed_json_response_raises_revocation_error(self, httpx_mock: HTTPXMock):
+        """A 2xx body that is not valid JSON must surface as ``RevocationError``,
+        not an unwrapped ``json.JSONDecodeError``."""
+        httpx_mock.add_response(status_code=200, content=b"not json")
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        with pytest.raises(RevocationError) as exc_info:
+            await handler.revoke("access-abc", config)
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 class TestSlackWorkspaceBotIdentity:

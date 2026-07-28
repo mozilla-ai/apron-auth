@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -115,15 +115,19 @@ class GoogleRevocationHandler:
 
         Raises:
             ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                config.revocation_url,
-                params={"token": token},
-            )
+            try:
+                response = await client.post(
+                    config.revocation_url,
+                    params={"token": token},
+                )
+            except httpx.RequestError as exc:
+                raise RevocationError(str(exc)) from exc
         return response.is_success
 
 
