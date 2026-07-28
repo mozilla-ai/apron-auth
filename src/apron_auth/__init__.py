@@ -6,6 +6,11 @@ import logging
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
+    INVALID_CLIENT,
+    INVALID_GRANT,
+    SERVER_ERROR,
+    TEMPORARILY_UNAVAILABLE,
+    UNAUTHORIZED_CLIENT,
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
@@ -46,6 +51,8 @@ __all__ = [
     "IdentityFetchError",
     "IdentityHandler",
     "IdentityMaterial",
+    "INVALID_CLIENT",
+    "INVALID_GRANT",
     "IdentityNotSupportedError",
     "IdentityProfile",
     "McpDiscoveryError",
@@ -58,14 +65,17 @@ __all__ = [
     "ProviderConfig",
     "RevocationError",
     "RevocationHandler",
+    "SERVER_ERROR",
     "ScopeMetadata",
     "ServerMetadata",
     "StandardRevocationHandler",
     "StateError",
     "StateStore",
+    "TEMPORARILY_UNAVAILABLE",
     "TenancyContext",
     "TokenEndpointAuthMethod",
     "TokenExchangeError",
     "TokenRefreshError",
     "TokenSet",
+    "UNAUTHORIZED_CLIENT",
 ]

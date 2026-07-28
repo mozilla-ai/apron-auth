@@ -7,6 +7,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import pytest
 from pydantic import SecretStr
+from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
@@ -348,6 +349,20 @@ class TestExchangeCode:
                 redirect_uri="https://app.example.com/callback",
             )
 
+    async def test_exchange_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=400,
+            json={"error": "invalid_grant", "error_description": "Code expired"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(
+                code="bad-code",
+                redirect_uri="https://app.example.com/callback",
+            )
+        assert exc_info.value.error_code == "invalid_grant"
+
     async def test_exchange_extra_fields_in_token_set(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
@@ -554,6 +569,79 @@ class TestRefreshToken:
         client = OAuthClient(config=config, permanent_error_codes={"custom_error"})
         with pytest.raises(PermanentOAuthError, match="invalid_grant"):
             await client.refresh_token(refresh_token="expired-refresh")
+
+    async def test_refresh_invalid_grant_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=400,
+            json={"error": "invalid_grant", "error_description": "Token revoked"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(PermanentOAuthError) as exc_info:
+            await client.refresh_token(refresh_token="revoked-refresh")
+        assert exc_info.value.error_code == "invalid_grant"
+
+    async def test_refresh_invalid_client_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=401,
+            json={"error": "invalid_client"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(PermanentOAuthError) as exc_info:
+            await client.refresh_token(refresh_token="bad-refresh")
+        assert exc_info.value.error_code == "invalid_client"
+
+    async def test_refresh_unauthorized_client_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=400,
+            json={"error": "unauthorized_client"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(PermanentOAuthError) as exc_info:
+            await client.refresh_token(refresh_token="bad-refresh")
+        assert exc_info.value.error_code == "unauthorized_client"
+
+    async def test_refresh_transient_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=500,
+            json={"error": "server_error"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == "server_error"
+
+    async def test_refresh_network_error_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == ""
+
+    async def test_refresh_server_error_without_body_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=503,
+            text="Service Unavailable",
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == ""
+
+    async def test_refresh_non_string_error_value_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=500,
+            json={"error": []},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == ""
 
 
 class TestRevokeToken:
