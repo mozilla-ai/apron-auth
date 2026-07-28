@@ -47,3 +47,30 @@ def test_error_chaining():
     err = TokenExchangeError("exchange failed")
     err.__cause__ = cause
     assert err.__cause__ is cause
+
+
+def test_error_code_defaults_to_empty() -> None:
+    assert OAuthError("boom").error_code == ""
+    assert ConfigurationError("misconfigured").error_code == ""
+
+
+def test_error_code_stored_and_message_preserved() -> None:
+    err = PermanentOAuthError("invalid_grant: token revoked", error_code="invalid_grant")
+    assert err.error_code == "invalid_grant"
+    assert str(err) == "invalid_grant: token revoked"
+
+
+def test_well_known_error_code_constants() -> None:
+    from apron_auth import (
+        INVALID_CLIENT,
+        INVALID_GRANT,
+        SERVER_ERROR,
+        TEMPORARILY_UNAVAILABLE,
+        UNAUTHORIZED_CLIENT,
+    )
+
+    assert INVALID_GRANT == "invalid_grant"
+    assert INVALID_CLIENT == "invalid_client"
+    assert UNAUTHORIZED_CLIENT == "unauthorized_client"
+    assert SERVER_ERROR == "server_error"
+    assert TEMPORARILY_UNAVAILABLE == "temporarily_unavailable"

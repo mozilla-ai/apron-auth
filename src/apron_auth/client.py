@@ -10,6 +10,9 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 import httpx
 
 from apron_auth.errors import (
+    INVALID_CLIENT,
+    INVALID_GRANT,
+    UNAUTHORIZED_CLIENT,
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
@@ -48,7 +51,7 @@ class _TokenEndpointError(Exception):
 class OAuthClient:
     """Stateless OAuth 2.0 client for authorization code flows."""
 
-    DEFAULT_PERMANENT_ERROR_CODES = frozenset({"invalid_grant", "unauthorized_client", "invalid_client"})
+    DEFAULT_PERMANENT_ERROR_CODES = frozenset({INVALID_GRANT, UNAUTHORIZED_CLIENT, INVALID_CLIENT})
 
     def __init__(
         self,
@@ -202,7 +205,7 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            raise TokenExchangeError(str(exc)) from exc
+            raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
         return self._parse_token_response(response, context=context)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
@@ -216,10 +219,10 @@ class OAuthClient:
             The refreshed token set.
 
         Raises:
-            PermanentOAuthError: If the endpoint reports an irrecoverable
-                failure (an error code in the configured permanent set,
-                such as ``invalid_grant``); the stored token should be
-                discarded.
+            PermanentOAuthError: If the endpoint reports an error whose code
+                is in the configured permanent set (such as ``invalid_grant``);
+                retrying the identical request will not succeed. Read
+                ``error_code`` to decide how to handle it.
             TokenRefreshError: If the refresh fails transiently and a
                 retry may succeed.
         """
@@ -231,8 +234,8 @@ class OAuthClient:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
             if exc.error_code in self._permanent_error_codes:
-                raise PermanentOAuthError(str(exc)) from exc
-            raise TokenRefreshError(str(exc)) from exc
+                raise PermanentOAuthError(str(exc), error_code=exc.error_code) from exc
+            raise TokenRefreshError(str(exc), error_code=exc.error_code) from exc
         except Exception as exc:
             raise TokenRefreshError(str(exc)) from exc
         return self._parse_token_response(response)
