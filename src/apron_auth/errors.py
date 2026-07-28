@@ -19,8 +19,8 @@ class OAuthError(Exception):
     ``error_code`` holds the OAuth error code (RFC 6749) for failures that carry one, and is the empty string otherwise.
     """
 
-    def __init__(self, message: str = "", error_code: str = "") -> None:
-        super().__init__(message)
+    def __init__(self, *args: object, error_code: str = "") -> None:
+        super().__init__(*args)
         self.error_code = error_code
 
 
