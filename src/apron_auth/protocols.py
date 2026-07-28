@@ -35,13 +35,22 @@ class StateStore(Protocol):
     """
 
     async def save(self, state: OAuthPendingState) -> None:
-        """Store pending state during authorization URL generation."""
+        """Store pending state during authorization URL generation.
+
+        Args:
+            state: The pending state to store.
+        """
         ...
 
     async def consume(self, state_key: str) -> OAuthPendingState | None:
         """Atomically retrieve and invalidate state.
 
-        Returns None if the state is invalid, expired, or already consumed.
+        Args:
+            state_key: The state token to look up and invalidate.
+
+        Returns:
+            The stored state, or ``None`` if it is invalid, expired, or
+            already consumed.
         """
         ...
 
@@ -53,7 +62,12 @@ class RevocationHandler(Protocol):
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token at the provider.
 
-        Returns True if revocation succeeded.
+        Args:
+            token: The token to revoke.
+            config: The provider configuration to revoke against.
+
+        Returns:
+            ``True`` if revocation succeeded.
         """
         ...
 
@@ -63,7 +77,15 @@ class IdentityHandler(Protocol):
     """Provider-specific identity retrieval."""
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using the provider API."""
+        """Fetch normalized identity fields using the provider API.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The normalized identity profile.
+        """
         ...
 
 
@@ -72,7 +94,15 @@ class IdentityResolver(Protocol):
     """Provider-specific identity-handler resolver."""
 
     def __call__(self, config: ProviderConfig) -> IdentityHandler | None:
-        """Return an identity handler when config matches this provider."""
+        """Return an identity handler when config matches this provider.
+
+        Args:
+            config: The provider configuration to match.
+
+        Returns:
+            An identity handler when ``config`` matches this provider, else
+            ``None``.
+        """
         ...
 
 
@@ -98,7 +128,20 @@ class StandardRevocationHandler:
         self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke a token using standard RFC 7009 POST."""
+        """Revoke a token using standard RFC 7009 POST.
+
+        Args:
+            token: The token to revoke.
+            config: The provider configuration; its ``revocation_url`` and
+                client credentials are used for the request.
+
+        Returns:
+            ``True`` when the endpoint reports success.
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint.
+        """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
@@ -120,6 +163,18 @@ class StandardRevocationHandler:
 
         A public client carries no secret, so no HTTP Basic credential is
         attached in that case.
+
+        Args:
+            client: The HTTP client to send the request through.
+            token: The token to revoke.
+            revocation_url: The endpoint to POST the revocation to.
+            config: The provider configuration supplying client credentials.
+
+        Returns:
+            ``True`` when the endpoint responds with success.
+
+        Raises:
+            RevocationError: If the request fails to reach the endpoint.
         """
         auth = config.basic_auth()
         data = {"token": token}

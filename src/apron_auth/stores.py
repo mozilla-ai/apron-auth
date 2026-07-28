@@ -38,16 +38,33 @@ class MemoryStateStore:
     """
 
     def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
+        """Create the store.
+
+        Args:
+            max_age: Maximum age in seconds before a stored state is
+                treated as expired.
+        """
         self._states: dict[str, OAuthPendingState] = {}
         self._max_age = max_age
 
     async def save(self, state: OAuthPendingState) -> None:
-        """Store pending state and prune any expired entries."""
+        """Store pending state and prune any expired entries.
+
+        Args:
+            state: The pending state to store.
+        """
         self._prune()
         self._states[state.state] = state
 
     async def consume(self, state_key: str) -> OAuthPendingState | None:
-        """Retrieve and remove state, returning None if expired or missing."""
+        """Retrieve and remove state, returning None if expired or missing.
+
+        Args:
+            state_key: The state token to retrieve and remove.
+
+        Returns:
+            The stored state, or ``None`` when it is missing or expired.
+        """
         pending = self._states.pop(state_key, None)
         if pending is None:
             return None
@@ -63,9 +80,18 @@ class MemoryStateStore:
         return pending
 
     def _is_expired(self, state: OAuthPendingState) -> bool:
+        """Report whether ``state`` has reached the configured maximum age.
+
+        Args:
+            state: The pending state to test.
+
+        Returns:
+            ``True`` when the state's age is at least ``max_age``.
+        """
         return time.time() - state.created_at >= self._max_age
 
     def _prune(self) -> None:
+        """Drop every stored state that has expired."""
         expired_keys = [k for k, v in self._states.items() if self._is_expired(v)]
         for key in expired_keys:
             del self._states[key]
