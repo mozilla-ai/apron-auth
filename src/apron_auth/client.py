@@ -34,6 +34,13 @@ class _TokenEndpointError(Exception):
     """Internal exception carrying the OAuth error code from the token endpoint."""
 
     def __init__(self, message: str, error_code: str = "") -> None:
+        """Create the error.
+
+        Args:
+            message: Human-readable description of the failure.
+            error_code: The OAuth error code from the token endpoint when
+                one is available, else an empty string.
+        """
         super().__init__(message)
         self.error_code = error_code
 
@@ -153,6 +160,25 @@ class OAuthClient:
         - Pass state to consume from StateStore and retrieve stored
           redirect_uri and code_verifier.
         - Pass redirect_uri and code_verifier directly.
+
+        Args:
+            code: The authorization code returned to the redirect URI.
+            state: The state token to consume from the configured
+                ``StateStore``; its stored ``redirect_uri`` and
+                ``code_verifier`` then override the arguments below.
+            redirect_uri: The redirect URI to send with the exchange, when
+                not sourced from stored state.
+            code_verifier: The PKCE code verifier to send with the
+                exchange, when not sourced from stored state.
+
+        Returns:
+            The exchanged token set. Any caller context stored with the
+            consumed state is surfaced on :attr:`TokenSet.context`.
+
+        Raises:
+            StateError: If ``state`` is given but is invalid, expired, or
+                already consumed.
+            TokenExchangeError: If the token endpoint rejects the exchange.
         """
         context: dict[str, Any] = {}
         if state is not None and self._state_store is not None:
@@ -182,9 +208,20 @@ class OAuthClient:
     async def refresh_token(self, refresh_token: str) -> TokenSet:
         """Refresh an access token using a refresh token.
 
-        Raises PermanentOAuthError for irrecoverable failures
-        (invalid_grant, unauthorized_client, invalid_client).
-        Raises TokenRefreshError for transient failures.
+        Args:
+            refresh_token: The refresh token to exchange for a new access
+                token.
+
+        Returns:
+            The refreshed token set.
+
+        Raises:
+            PermanentOAuthError: If the endpoint reports an irrecoverable
+                failure (an error code in the configured permanent set,
+                such as ``invalid_grant``); the stored token should be
+                discarded.
+            TokenRefreshError: If the refresh fails transiently and a
+                retry may succeed.
         """
         data = {
             "grant_type": "refresh_token",
@@ -205,6 +242,18 @@ class OAuthClient:
 
         Uses the configured RevocationHandler, or falls back to
         StandardRevocationHandler (RFC 7009 POST).
+
+        Args:
+            token: The token to revoke.
+
+        Returns:
+            ``True`` when the provider confirms revocation.
+
+        Raises:
+            ConfigurationError: If the provider has no revocation endpoint
+                configured.
+            RevocationError: If the revocation request fails or the
+                provider does not confirm it.
         """
         if not self._config.revocation_url:
             msg = "revocation_url is not configured for this provider"
@@ -237,6 +286,20 @@ class OAuthClient:
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
+
+        Args:
+            tokens: The token set from :meth:`exchange_code` or
+                :meth:`refresh_token` to establish identity from.
+
+        Returns:
+            The normalized identity profile.
+
+        Raises:
+            IdentityNotSupportedError: If no identity handler is configured
+                and none can be inferred for the provider.
+            ConfigurationError: If built-in inference matches more than one
+                provider for the configuration.
+            IdentityFetchError: If the handler fails to fetch identity.
         """
         handler = self._identity_handler or infer_identity_handler(self._config)
         if handler is None:
@@ -256,6 +319,19 @@ class OAuthClient:
         Authlib handles token_endpoint_auth_method (client_secret_post vs
         client_secret_basic), request encoding, and response parsing.
         Three error paths are possible — see inline comments.
+
+        Args:
+            data: The grant-specific form fields for the request (e.g.
+                ``grant_type`` and the authorization code or refresh token).
+
+        Returns:
+            The token-endpoint response as a plain dict.
+
+        Raises:
+            _TokenEndpointError: If the endpoint returns an OAuth error,
+                fails with a non-success status, or the request otherwise
+                errors; its ``error_code`` carries the OAuth error code
+                when one is available.
         """
         from authlib.integrations.base_client.errors import OAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -301,7 +377,18 @@ class OAuthClient:
             raise _TokenEndpointError(str(exc), error_code="") from exc
 
     def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> TokenSet:
-        """Parse a token endpoint response into a TokenSet."""
+        """Parse a token endpoint response into a TokenSet.
+
+        Args:
+            data: A token-endpoint response.
+            context: Caller context to carry onto :attr:`TokenSet.context`;
+                treated as empty when ``None``.
+
+        Returns:
+            The parsed token set. Response fields with no named slot are
+            collected into :attr:`TokenSet.metadata`, and ``expires_at`` is
+            derived from ``expires_in`` when the response omits it.
+        """
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
         metadata = {k: v for k, v in data.items() if k not in known_fields}
 
