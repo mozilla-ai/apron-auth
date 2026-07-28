@@ -130,25 +130,35 @@ class ProviderConfig(BaseModel, frozen=True):
     implicit_scopes: dict[str, frozenset[str]] = {}
 
     @model_validator(mode="after")
-    def _require_client_secret_for_confidential(self) -> ProviderConfig:
-        """Reject a confidential-client config that omits its client secret.
+    def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
+        """Reject a config whose secret presence contradicts its auth method.
 
-        A missing secret is valid only for a public client, which declares a
-        ``token_endpoint_auth_method`` of ``"none"``. Any other method implies
-        a confidential client, for which the secret is mandatory.
+        The ``token_endpoint_auth_method`` decides the client type, and the
+        secret must agree. A public client declares ``"none"`` and carries no
+        secret; presenting one would attach client credentials to requests a
+        public client must send unauthenticated. Any other method is a
+        confidential client, for which the secret is mandatory.
         """
-        if self.client_secret is None and self.token_endpoint_auth_method != TokenEndpointAuthMethod.NONE:
+        is_public = self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
+        if is_public and self.client_secret is not None:
+            msg = f"client_secret must be omitted when token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
+            raise ValueError(msg)
+        if not is_public and self.client_secret is None:
             msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
             raise ValueError(msg)
         return self
 
     def basic_auth(self) -> tuple[str, str] | None:
-        """Return the HTTP Basic credential for token-endpoint requests, or None.
+        """Return the client's HTTP Basic credential, or None for a public client.
 
-        A confidential client authenticates with its ``client_id`` and
-        ``client_secret``. A public client carries no secret and returns None,
-        so the caller attaches no HTTP Basic credential.
+        A public client declares a ``token_endpoint_auth_method`` of ``"none"``,
+        presents no client authentication, and returns None. A confidential
+        client authenticates with its ``client_id`` and ``client_secret``. The
+        declared method drives the decision, so a public client presents no
+        credential even if a secret lingers on the config.
         """
+        if self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE:
+            return None
         if self.client_secret is None:
             return None
         return (self.client_id, self.client_secret.get_secret_value())

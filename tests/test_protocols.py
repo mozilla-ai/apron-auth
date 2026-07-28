@@ -98,6 +98,31 @@ class TestStandardRevocationHandler:
         assert b"client_id=test-client" in request.content
         assert "authorization" not in request.headers
 
+    async def test_public_client_with_lingering_secret_sends_no_basic_auth(self, httpx_mock: HTTPXMock) -> None:
+        """A public client must present no client authentication on revocation
+        even if a secret lingers on the config.
+
+        Validation forbids ``none`` + secret, so ``model_construct`` bypasses it
+        to exercise the revocation path directly and prove the secret is not
+        leaked as HTTP Basic credentials.
+        """
+        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
+        config = ProviderConfig.model_construct(
+            client_id="test-client",
+            client_secret=SecretStr("leaked-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            revocation_url="https://provider.example.com/revoke",
+            token_endpoint_auth_method="none",
+        )
+        handler = StandardRevocationHandler()
+        result = await handler.revoke("access-token-abc", config)
+        assert result is True
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert "authorization" not in request.headers
+        assert b"client_id=test-client" in request.content
+
     async def test_public_client_revocation_suppresses_injected_default_auth(self):
         """A public client must not leak an injected client's default auth to the revocation URL."""
         seen: list[bool] = []

@@ -61,17 +61,34 @@ class TestProviderConfig:
         )
         assert config.basic_auth() is None
 
+    def test_basic_auth_keys_off_auth_method_not_secret_presence(self) -> None:
+        """A public client presents no credential even with a lingering secret.
+
+        The validator makes ``none`` + secret unconstructable, so
+        ``model_construct`` bypasses it to prove the send-credentials decision
+        follows the declared method, not the mere presence of a secret.
+        """
+        config = ProviderConfig.model_construct(
+            client_id="public-client",
+            client_secret=SecretStr("leaked-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="none",
+        )
+        assert config.basic_auth() is None
+
     @pytest.mark.parametrize(
         ("secret", "auth_method", "raises"),
         [
+            (None, "none", False),
+            (SecretStr("s"), "none", True),
             (None, "client_secret_post", True),
             (None, "client_secret_basic", True),
-            (None, "none", False),
             (SecretStr("s"), "client_secret_post", False),
-            (SecretStr("s"), "none", False),
+            (SecretStr("s"), "client_secret_basic", False),
         ],
     )
-    def test_client_secret_required_unless_auth_method_none(
+    def test_client_secret_presence_must_match_auth_method(
         self, secret: SecretStr | None, auth_method: str, raises: bool
     ) -> None:
         def build() -> ProviderConfig:
