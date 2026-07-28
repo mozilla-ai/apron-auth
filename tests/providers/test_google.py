@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from apron_auth.errors import RevocationError
 from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -296,3 +298,12 @@ class TestGoogleRevocationHandler:
         request = httpx_mock.get_request()
         assert request.method == "POST"
         assert "token=access-abc" in str(request.url)
+
+    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+        from apron_auth.providers.google import preset
+
+        config, handler = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+            await handler.revoke("access-abc", config)
+        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)

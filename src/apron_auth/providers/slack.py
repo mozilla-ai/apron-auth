@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -427,18 +427,26 @@ class SlackRevocationHandler:
 
         Raises:
             ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint or
+                its response body is not valid JSON.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
         async with httpx.AsyncClient() as client:
-            response = await client.get(
-                config.revocation_url,
-                params={"token": token},
-            )
+            try:
+                response = await client.get(
+                    config.revocation_url,
+                    params={"token": token},
+                )
+            except httpx.RequestError as exc:
+                raise RevocationError(str(exc)) from exc
         if not response.is_success:
             return False
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise RevocationError(f"Failed to parse Slack revocation response: {exc}") from exc
         return data.get("ok", False)
 
 
