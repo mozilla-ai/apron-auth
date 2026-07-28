@@ -87,6 +87,20 @@ IMPLICIT_SCOPES: dict[str, frozenset[str]] = {
 
 
 def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> tuple[str | None, bool | None]:
+    """Pick the best email and its verified flag from GitHub's responses.
+
+    Prefers the primary verified address, then any verified address, from
+    the emails endpoint; falls back to the profile ``email`` (reported
+    unverified) when the emails list yields nothing.
+
+    Args:
+        user_payload: The parsed ``/user`` profile response.
+        emails_payload: The parsed ``/user/emails`` response, if any.
+
+    Returns:
+        The ``(email, email_verified)`` pair, each ``None`` when no email
+        is available.
+    """
     if isinstance(emails_payload, list):
         for item in emails_payload:
             if not isinstance(item, dict):
@@ -110,7 +124,20 @@ class GitHubIdentityHandler:
     """Fetch identity fields from GitHub profile and email APIs."""
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a GitHub access token."""
+        """Fetch normalized identity fields using a GitHub access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile. GitHub OAuth App tokens carry no tenancy,
+            so ``tenancies`` is empty.
+
+        Raises:
+            IdentityFetchError: If a profile or email request fails, or a
+                response cannot be parsed.
+        """
         del config
         headers = {
             "Authorization": f"Bearer {material.access_token}",
@@ -167,10 +194,31 @@ class GitHubRevocationHandler:
     """
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        """Configure the handler.
+
+        Args:
+            client: An optional caller-owned client to send revocation
+                requests through; a fresh client is used per request when
+                omitted.
+        """
         self._client = client
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke the GitHub OAuth grant at the configured revocation endpoint."""
+        """Revoke the GitHub OAuth grant at the configured revocation endpoint.
+
+        Args:
+            token: The access token whose grant is removed.
+            config: The provider configuration supplying the revocation URL
+                and client credentials.
+
+        Returns:
+            ``True`` when the grant is removed (or already absent), ``False``
+            when GitHub reports a soft failure.
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint.
+        """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
@@ -187,7 +235,21 @@ class GitHubRevocationHandler:
         revocation_url: str,
         config: ProviderConfig,
     ) -> bool:
-        """Send the revocation request and return success status."""
+        """Send the revocation request and return success status.
+
+        Args:
+            client: The HTTP client to send the request through.
+            token: The access token whose grant is removed.
+            revocation_url: The grant endpoint to DELETE.
+            config: The provider configuration supplying client credentials.
+
+        Returns:
+            ``True`` on 204/404 (removed or already gone), ``False`` on a
+            422 or other unexpected status.
+
+        Raises:
+            RevocationError: If the request fails to reach the endpoint.
+        """
         auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
             response = await client.request(
@@ -218,7 +280,15 @@ class GitHubRevocationHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the GitHub identity handler when config matches GitHub hosts."""
+    """Return the GitHub identity handler when config matches GitHub hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A GitHub identity handler when the config's OAuth hosts are
+        GitHub's, else ``None``.
+    """
     if oauth_hosts_match(config, _GITHUB_IDENTITY_HOST_SUFFIXES):
         return GitHubIdentityHandler()
     return None
@@ -242,6 +312,17 @@ def preset(
     Scopes from BASE_SCOPES are merged automatically — ``read:user`` and
     ``user:email`` are required for account identification on the
     consent screen.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
     """
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 

@@ -61,9 +61,15 @@ def _decode_jwt_claims(token: str) -> dict[str, Any] | None:
     transport authenticates the issuer — signature verification is then
     unnecessary, but validating the claims remains the caller's job.
 
-    Returns ``None`` when the token is not a parseable JWT or its payload
-    is not a JSON object; the input length is re-padded before decoding
-    because JWT segments are unpadded base64url.
+    JWT segments are unpadded base64url, so the payload is re-padded
+    before decoding.
+
+    Args:
+        token: The JWT whose payload is decoded.
+
+    Returns:
+        The decoded claims, or ``None`` when the token is not a parseable
+        JWT or its payload is not a JSON object.
     """
     parts = token.split(".")
     if len(parts) < 2:
@@ -102,6 +108,13 @@ def _verified_workforce_tenant_id(claims: dict[str, Any]) -> str | None:
     verified domains must not be asserted. The ``idp`` claim records the
     authenticating identity provider: it is absent for members (implicitly
     the home tenant) and present and different from ``iss`` for guests.
+
+    Args:
+        claims: The decoded ID-token claims.
+
+    Returns:
+        The validated workforce tenant GUID, or ``None`` when no workforce
+        tenancy can be asserted.
     """
     tid = claims.get("tid")
     if not isinstance(tid, str) or not _GUID_RE.match(tid):
@@ -143,7 +156,23 @@ class MicrosoftIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields and any verified tenancy."""
+        """Fetch normalized identity fields and any verified tenancy.
+
+        Args:
+            material: The token material — access token and, when present,
+                the ID token whose validated claims establish a tenancy.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile. A workforce sign-in with a validated
+            tenant contributes one domain-owning tenancy per admin-verified
+            domain; every other case yields ``tenancies=()``.
+
+        Raises:
+            IdentityFetchError: If the userinfo request fails or its
+                response cannot be parsed. Directory lookups never raise;
+                they degrade to no tenancy.
+        """
         del config
         payload = await self._fetch_userinfo(material.access_token)
 
@@ -166,7 +195,18 @@ class MicrosoftIdentityHandler:
         )
 
     async def _fetch_userinfo(self, access_token: str) -> dict[str, Any]:
-        """Fetch the OIDC userinfo payload for display fields."""
+        """Fetch the OIDC userinfo payload for display fields.
+
+        Args:
+            access_token: The bearer access token for the userinfo request.
+
+        Returns:
+            The userinfo payload as a JSON object.
+
+        Raises:
+            IdentityFetchError: If the request fails, its response cannot be
+                parsed, or it is not a JSON object.
+        """
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -195,6 +235,13 @@ class MicrosoftIdentityHandler:
         NOTE: this never raises. The organization only enriches an
         already-established identity, so its absence must be reported as
         a value rather than escalated into an error.
+
+        Args:
+            access_token: The bearer access token for the directory request.
+
+        Returns:
+            The signed-in user's organization, or ``None`` when the
+            directory yields no usable organization.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -254,6 +301,15 @@ class MicrosoftIdentityHandler:
         NOTE: this never raises. Withholding the assertion closes
         domain-gated access rather than opening it, so a directory
         failure must not be escalated into a failure to identify.
+
+        Args:
+            access_token: The bearer access token for the directory request.
+            tenant_id: The validated ID-token tenant GUID the directory
+                response must bind back to.
+
+        Returns:
+            One domain-owning tenancy per admin-verified domain, or an empty
+            tuple when no such tenancy can be established.
         """
         organization = await self._fetch_organization(access_token)
         if organization is None:
@@ -306,6 +362,13 @@ def _subject(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> str | N
 
     Falls back to the userinfo ``sub`` so identity is still keyed when no
     ID token is present — identity does not require a verified tenancy.
+
+    Args:
+        claims: The validated ID-token claims, or ``None`` when absent.
+        userinfo: The OIDC userinfo payload used as a fallback.
+
+    Returns:
+        The user subject, preferring the ID-token ``sub``, else ``None``.
     """
     if claims is not None:
         sub = claims.get("sub")
@@ -324,6 +387,13 @@ def _email_verified(claims: dict[str, Any] | None) -> bool | None:
     verification — its trust comes from the back-channel TLS receipt — so
     a non-boolean value is reported as unknown rather than coerced: a
     bare ``bool()`` would read the string ``"false"`` as ``True``.
+
+    Args:
+        claims: The validated ID-token claims, or ``None`` when absent.
+
+    Returns:
+        The ``email_verified`` claim when the ID token carries it as a
+        genuine boolean, else ``None``.
     """
     if claims is None:
         return None
@@ -332,7 +402,15 @@ def _email_verified(claims: dict[str, Any] | None) -> bool | None:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Microsoft identity handler when config matches Microsoft hosts."""
+    """Return the Microsoft identity handler when config matches Microsoft hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Microsoft identity handler when the config's OAuth hosts are
+        Microsoft's, else ``None``.
+    """
     if oauth_hosts_match(config, _MICROSOFT_IDENTITY_HOST_SUFFIXES):
         return MicrosoftIdentityHandler()
     return None
@@ -385,6 +463,19 @@ def preset(
     is set: an Entra ID workforce sign-in can carry a verified
     domain-owning tenancy resolved from the ID token and the tenant's
     admin-verified domains.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters; merged over
+            the ``prompt=consent`` default.
+
+    Returns:
+        The provider configuration paired with ``None``, as Microsoft
+        exposes no revocation endpoint.
     """
     defaults = {"prompt": "consent"}
     if extra_params:

@@ -70,7 +70,22 @@ class SalesforceIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a Salesforce access token."""
+        """Fetch normalized identity fields using a Salesforce access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration; its ``authorize_url`` host
+                determines the userinfo endpoint the token is sent to.
+
+        Returns:
+            The identity profile, with the org surfaced as a single tenancy
+            when the userinfo response names one.
+
+        Raises:
+            IdentityFetchError: If ``authorize_url`` is not a Salesforce
+                host, the userinfo request fails, or its response cannot be
+                parsed.
+        """
         host = urlparse(config.authorize_url).hostname or ""
         if not matches_suffix(host, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
             msg = (
@@ -151,6 +166,13 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     misconfigured ``ProviderConfig`` from inferring this handler and
     then leaking the bearer token to a non-Salesforce host (the
     userinfo URL is derived from ``authorize_url`` at fetch time).
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Salesforce identity handler when both OAuth hosts are
+        Salesforce's, else ``None``.
     """
     if oauth_hosts_match(config, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
         return SalesforceIdentityHandler()
@@ -183,6 +205,21 @@ def preset(
     bare hostname — no scheme, path, query, or whitespace — and is
     rejected with :class:`ValueError` otherwise so misconfiguration
     fails fast rather than producing a malformed OAuth endpoint.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+        host: The Salesforce login host, as described above.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
+
+    Raises:
+        ValueError: If ``host`` is empty or not a bare hostname.
     """
     if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
         msg = f"host must be a bare hostname like 'login.salesforce.com' (no scheme, path, or whitespace); got {host!r}"

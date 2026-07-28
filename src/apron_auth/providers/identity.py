@@ -15,6 +15,22 @@ from apron_auth.providers._identity_registry import IDENTITY_RESOLVER_ATTR, Iden
 
 @lru_cache(maxsize=1)
 def _identity_resolver_registrations() -> tuple[IdentityResolverRegistration, ...]:
+    """Discover and validate every provider's identity-resolver registration.
+
+    Imports each concrete provider module, collects its declared
+    ``IDENTITY_RESOLVER``, validates the declaration, and returns the
+    registrations ordered by provider name. The result is cached.
+
+    Returns:
+        The validated registrations, ordered by provider name.
+
+    Raises:
+        TypeError: If a module's ``IDENTITY_RESOLVER`` is not an
+            ``IdentityResolverRegistration`` or carries a non-callable
+            resolver.
+        ConfigurationError: If a registration's provider name does not match
+            its module, or two modules register the same provider.
+    """
     registrations: list[IdentityResolverRegistration] = []
     module_names = sorted(info.name for info in pkgutil.iter_modules(providers_pkg.__path__))
     for module_name in module_names:
@@ -71,9 +87,18 @@ def _identity_resolver_registrations() -> tuple[IdentityResolverRegistration, ..
 def infer_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Infer a built-in identity handler from provider modules.
 
-    Returns ``None`` when no provider matches. Raises
-    :class:`ConfigurationError` when more than one resolver matches the
-    same ``ProviderConfig``.
+    Args:
+        config: The provider configuration to match against built-in
+            providers.
+
+    Returns:
+        The single matching identity handler, or ``None`` when no built-in
+        provider matches.
+
+    Raises:
+        TypeError: If a matched resolver returns a value that is neither an
+            identity handler nor ``None``.
+        ConfigurationError: If more than one provider matches ``config``.
     """
     matches: list[tuple[str, IdentityHandler]] = []
     for registration in _identity_resolver_registrations():
