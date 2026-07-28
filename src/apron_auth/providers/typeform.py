@@ -39,7 +39,20 @@ class TypeformIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a Typeform access token."""
+        """Fetch normalized identity fields using a Typeform access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile. ``subject`` is always ``None`` and
+            ``tenancies`` is empty, per this provider's response shape.
+
+        Raises:
+            IdentityFetchError: If the userinfo request fails or its
+                response cannot be parsed.
+        """
         del config
         try:
             async with httpx.AsyncClient() as client:
@@ -75,7 +88,15 @@ class TypeformIdentityHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Typeform identity handler when config matches Typeform hosts."""
+    """Return the Typeform identity handler when config matches Typeform hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Typeform identity handler when the config's OAuth hosts are
+        Typeform's, else ``None``.
+    """
     if oauth_hosts_match(config, _TYPEFORM_IDENTITY_HOST_SUFFIXES):
         return TypeformIdentityHandler()
     return None
@@ -98,6 +119,17 @@ def preset(
 
     Typeform does not support PKCE and does not provide a revocation
     endpoint.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: The scopes to request.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with ``None``, as Typeform
+        exposes no revocation endpoint.
     """
     config = ProviderConfig(
         client_id=client_id,

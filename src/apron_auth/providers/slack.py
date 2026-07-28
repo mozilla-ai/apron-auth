@@ -63,6 +63,13 @@ def _has_openid_scope(config: ProviderConfig) -> bool:
     Slack's ``user_scope`` query parameter, which the preset stores in
     ``extra_params["user_scope"]``). Either placement should enable
     identity inference.
+
+    Args:
+        config: The provider configuration to inspect.
+
+    Returns:
+        ``True`` when ``openid`` appears in the bot scopes or the
+        ``user_scope`` extra parameter.
     """
     if "openid" in config.scopes:
         return True
@@ -77,17 +84,24 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     ``https://kraneflannel.slack.com/`` whose host's leading label is
     the workspace's ``team_domain``. ``team.info`` exposes the domain
     directly, so this helper is only used on the ``auth.test``
-    fallback path. Returns ``None`` for any of:
-
-    - missing input;
-    - a host that does not end in ``.slack.com``;
-    - a host that does end in ``.slack.com`` but whose leading label
-      is empty or itself multi-segment — Enterprise Grid org URLs
-      like ``myorg.enterprise.slack.com`` pass the suffix check yet
-      surface no single workspace ``team_domain``.
+    fallback path.
 
     Preferring an absent value over a guess keeps the contract honest
     when the URL shape is ambiguous.
+
+    Args:
+        url: The workspace URL to parse, if any.
+
+    Returns:
+        The workspace ``team_domain`` (the host's leading label), or
+        ``None`` for any of:
+
+        - missing input;
+        - a host that does not end in ``.slack.com``;
+        - a host that does end in ``.slack.com`` but whose leading label
+          is empty or itself multi-segment — Enterprise Grid org URLs
+          like ``myorg.enterprise.slack.com`` pass the suffix check yet
+          surface no single workspace ``team_domain``.
     """
     if not url:
         return None
@@ -142,14 +156,40 @@ class SlackIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields from the appropriate Slack flow."""
+        """Fetch normalized identity fields from the appropriate Slack flow.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration; its scopes select the
+                Sign-in-with-Slack (OIDC) or workspace-bot identity path.
+
+        Returns:
+            The identity profile: full person identity plus a
+            single-workspace tenancy for Sign-in-with-Slack, or workspace
+            tenancy only for a workspace-bot token.
+
+        Raises:
+            IdentityFetchError: If the selected Slack request fails, its
+                response cannot be parsed, or Slack reports an error.
+        """
         access_token = material.access_token
         if _has_openid_scope(config):
             return await self._fetch_via_oidc(access_token)
         return await self._fetch_workspace_only(access_token)
 
     async def _fetch_via_oidc(self, access_token: str) -> IdentityProfile:
-        """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint."""
+        """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
+
+        Args:
+            access_token: The bearer access token for the userInfo request.
+
+        Returns:
+            The person identity profile with a single-workspace tenancy.
+
+        Raises:
+            IdentityFetchError: If the request fails, its response cannot be
+                parsed, or Slack reports ``ok=false``.
+        """
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -234,6 +274,18 @@ class SlackIdentityHandler:
         deliberately deferred until a concrete consumer use case
         lands; the single-tenant assumption documented here must be
         revisited at that point rather than quietly invalidated.
+
+        Args:
+            access_token: The bearer access token for the workspace lookup.
+
+        Returns:
+            A workspace-only identity profile; person-identity fields are
+            ``None``.
+
+        Raises:
+            IdentityFetchError: If ``team.info`` fails for a reason other
+                than a missing scope, the ``auth.test`` fallback fails, or a
+                response cannot be parsed.
         """
         # Reuse one client for the optional fallback to keep the
         # connection pool warm across both calls.
@@ -261,7 +313,21 @@ class SlackIdentityHandler:
         access_token: str,
         endpoint_label: str,
     ) -> dict[str, Any]:
-        """POST to a Slack Web API method and return the JSON object payload."""
+        """POST to a Slack Web API method and return the JSON object payload.
+
+        Args:
+            client: The HTTP client to send the request through.
+            url: The Slack Web API method URL to POST to.
+            access_token: The bearer access token for the request.
+            endpoint_label: A short method label used in error messages.
+
+        Returns:
+            The response payload as a JSON object.
+
+        Raises:
+            IdentityFetchError: If the request fails, its response cannot be
+                parsed, or it is not a JSON object.
+        """
         try:
             response = await client.post(
                 url,
@@ -289,6 +355,13 @@ def _build_workspace_profile_from_auth_test(payload: dict[str, Any]) -> Identity
     ``url`` host's leading label and may be ``None`` when the host is
     not a recognisable Slack workspace URL. Person-identity fields
     stay ``None``; see :class:`SlackIdentityHandler` for why.
+
+    Args:
+        payload: The parsed ``auth.test`` response.
+
+    Returns:
+        A workspace-only identity profile, with a tenancy only when the
+        payload carries a ``team_id``.
     """
     team_id = payload.get("team_id")
     tenancies: tuple[TenancyContext, ...] = ()
@@ -315,6 +388,13 @@ def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> Identity
     to dedicated fields, preserving the single-tenancy contract.
     Person-identity fields stay ``None``; see
     :class:`SlackIdentityHandler` for why.
+
+    Args:
+        payload: The parsed ``team.info`` response.
+
+    Returns:
+        A workspace-only identity profile, with a tenancy only when the
+        nested team carries an ``id``.
     """
     team = payload.get("team")
     team_payload: dict[str, Any] = team if isinstance(team, dict) else {}
@@ -336,7 +416,18 @@ class SlackRevocationHandler:
     """Slack token revocation via GET with token as query parameter."""
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke a token at Slack's revocation endpoint."""
+        """Revoke a token at Slack's revocation endpoint.
+
+        Args:
+            token: The token to revoke.
+            config: The provider configuration supplying the revocation URL.
+
+        Returns:
+            ``True`` when Slack confirms revocation (``ok=true``).
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+        """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
@@ -360,6 +451,13 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     handled — so resolution is purely host-based here. The single
     handler / single registration design is documented on
     :class:`SlackIdentityHandler`.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Slack identity handler when both OAuth hosts are Slack's, else
+        ``None``.
     """
     if not oauth_hosts_match(config, _SLACK_IDENTITY_HOST_SUFFIXES):
         return None
@@ -393,6 +491,18 @@ def preset(
     :attr:`ProviderConfig.required_scope_families` — one family per
     non-empty token family — so a consent picker can enforce the rule
     without Slack-specific knowledge.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: The bot scopes to request.
+        user_scopes: The user scopes to request via Slack's ``user_scope``
+            parameter, if any.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
 
     Raises:
         ValueError: If both ``scopes`` and ``user_scopes`` are empty.

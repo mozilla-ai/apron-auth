@@ -32,7 +32,20 @@ class GoogleIdentityHandler:
     """Fetch identity fields from Google's OIDC userinfo endpoint."""
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a Google access token."""
+        """Fetch normalized identity fields using a Google access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile. A Workspace ``hd`` claim, when present,
+            is surfaced as a domain-owning tenancy.
+
+        Raises:
+            IdentityFetchError: If the userinfo request fails or its
+                response cannot be parsed.
+        """
         del config
         try:
             async with httpx.AsyncClient() as client:
@@ -91,7 +104,18 @@ class GoogleRevocationHandler:
     """Google token revocation via POST with token as query parameter."""
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke a token at Google's revocation endpoint."""
+        """Revoke a token at Google's revocation endpoint.
+
+        Args:
+            token: The token to revoke.
+            config: The provider configuration supplying the revocation URL.
+
+        Returns:
+            ``True`` when the endpoint reports success.
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+        """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
@@ -104,7 +128,15 @@ class GoogleRevocationHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Google identity handler when config matches Google hosts."""
+    """Return the Google identity handler when config matches Google hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Google identity handler when the config's OAuth hosts are
+        Google's, else ``None``.
+    """
     if oauth_hosts_match(config, _GOOGLE_IDENTITY_HOST_SUFFIXES):
         return GoogleIdentityHandler()
     return None
@@ -147,6 +179,18 @@ def preset(
 
     Default extra_params include access_type=offline and prompt=consent
     for offline access. Scopes from BASE_SCOPES are merged automatically.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters; merged over
+            the ``access_type=offline`` and ``prompt=consent`` defaults.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
     """
     defaults = {"access_type": "offline", "prompt": "consent"}
     if extra_params:

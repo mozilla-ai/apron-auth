@@ -38,6 +38,13 @@ def _build_tenancies(resources: Any) -> tuple[TenancyContext, ...]:
     ``url`` are decorative. ``name`` and ``domain`` may independently
     be ``None`` per the :class:`TenancyContext` contract — emit the
     entry anyway so callers retain the anchor identifier.
+
+    Args:
+        resources: The parsed accessible-resources response.
+
+    Returns:
+        One tenancy per resource carrying an ``id``, in response order; an
+        empty tuple when ``resources`` is not a list.
     """
     if not isinstance(resources, list):
         return ()
@@ -92,7 +99,20 @@ class AtlassianIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using an Atlassian access token."""
+        """Fetch normalized identity fields using an Atlassian access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile, with one tenancy per Atlassian Cloud site
+            the token can access.
+
+        Raises:
+            IdentityFetchError: If the userinfo or accessible-resources
+                request fails, or a response cannot be parsed.
+        """
         del config
         headers = {"Authorization": f"Bearer {material.access_token}"}
         async with httpx.AsyncClient() as client:
@@ -137,7 +157,15 @@ class AtlassianIdentityHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Atlassian identity handler when config matches Atlassian hosts."""
+    """Return the Atlassian identity handler when config matches Atlassian hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        An Atlassian identity handler when the config's OAuth hosts are
+        Atlassian's, else ``None``.
+    """
     if oauth_hosts_match(config, _ATLASSIAN_IDENTITY_HOST_SUFFIXES):
         return AtlassianIdentityHandler()
     return None
@@ -179,6 +207,18 @@ def preset(
     """Create an Atlassian OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters; merged over
+            the ``audience`` and ``prompt=consent`` defaults.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
     """
     defaults = {"audience": "api.atlassian.com", "prompt": "consent"}
     if extra_params:

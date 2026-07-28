@@ -24,6 +24,13 @@ def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
     rejects lookalike hosts such as ``evilexample.com`` against
     suffix ``example.com`` while still accepting legitimate
     subdomains like ``api.example.com``.
+
+    Args:
+        host: The hostname to test.
+        suffixes: The trusted suffixes to match against.
+
+    Returns:
+        ``True`` when ``host`` matches any suffix on a label boundary.
     """
     return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
 
@@ -42,6 +49,15 @@ def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool
     in-tree example of such a code path; it also re-validates the
     derived host with :func:`matches_suffix` at fetch time as defense
     in depth.
+
+    Args:
+        config: The provider configuration whose ``authorize_url`` and
+            ``token_url`` hosts are checked.
+        suffixes: The trusted provider host suffixes.
+
+    Returns:
+        ``True`` only when both the authorize and token URL hosts match a
+        suffix.
     """
     authorize_host = urlparse(config.authorize_url).hostname or ""
     token_host = urlparse(config.token_url).hostname or ""

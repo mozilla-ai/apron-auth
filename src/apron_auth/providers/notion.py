@@ -53,7 +53,22 @@ class NotionIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a Notion access token."""
+        """Fetch normalized identity fields using a Notion access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile. External integrations yield owner-level
+            person fields; internal integrations yield a workspace/bot
+            identity. The workspace is surfaced as a single tenancy when
+            present.
+
+        Raises:
+            IdentityFetchError: If the userinfo request fails or its
+                response cannot be parsed.
+        """
         del config
         try:
             async with httpx.AsyncClient() as client:
@@ -142,6 +157,13 @@ class NotionRevocationHandler:
     """
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        """Configure the handler.
+
+        Args:
+            client: An optional caller-owned client to send revocation
+                requests through; a fresh client is used per request when
+                omitted.
+        """
         self._client = client
 
     async def _send(
@@ -151,7 +173,21 @@ class NotionRevocationHandler:
         revocation_url: str,
         config: ProviderConfig,
     ) -> bool:
-        """Send the revocation request and return success status."""
+        """Send the revocation request and return success status.
+
+        Args:
+            client: The HTTP client to send the request through.
+            token: The token to revoke.
+            revocation_url: The endpoint to POST the revocation to.
+            config: The provider configuration supplying client credentials.
+
+        Returns:
+            ``True`` on 200 (revoked) or 400 (already invalid — idempotent),
+            ``False`` on any other status.
+
+        Raises:
+            RevocationError: If the request fails to reach the endpoint.
+        """
         auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
             response = await client.post(
@@ -170,7 +206,21 @@ class NotionRevocationHandler:
         return False
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke a Notion access token."""
+        """Revoke a Notion access token.
+
+        Args:
+            token: The token to revoke.
+            config: The provider configuration supplying the revocation URL
+                and client credentials.
+
+        Returns:
+            ``True`` when the endpoint reports the token revoked or already
+            invalid.
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint.
+        """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
             raise ValueError(msg)
@@ -182,7 +232,15 @@ class NotionRevocationHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Notion identity handler when config matches Notion hosts."""
+    """Return the Notion identity handler when config matches Notion hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Notion identity handler when the config's OAuth hosts are
+        Notion's, else ``None``.
+    """
     if oauth_hosts_match(config, _NOTION_IDENTITY_HOST_SUFFIXES):
         return NotionIdentityHandler()
     return None
@@ -207,6 +265,17 @@ def preset(
     https://api.notion.com/v1/oauth/revoke, set as
     ``config.revocation_url`` so that ``OAuthClient.revoke_token()``
     can dispatch to the returned :class:`NotionRevocationHandler`.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: The scopes to request.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters; merged over
+            the ``owner=user`` default.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
     """
     defaults = {"owner": "user"}
     if extra_params:

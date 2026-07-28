@@ -138,6 +138,13 @@ class ProviderConfig(BaseModel, frozen=True):
         secret; presenting one would attach client credentials to requests a
         public client must send unauthenticated. Any other method is a
         confidential client, for which the secret is mandatory.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If a public client carries a secret, or a
+                confidential client lacks one.
         """
         is_public = self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
         if is_public and self.client_secret is not None:
@@ -156,6 +163,10 @@ class ProviderConfig(BaseModel, frozen=True):
         client authenticates with its ``client_id`` and ``client_secret``. The
         declared method drives the decision, so a public client presents no
         credential even if a secret lingers on the config.
+
+        Returns:
+            The ``(client_id, client_secret)`` pair for a confidential
+            client, or ``None`` for a public client.
         """
         if self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE:
             return None
@@ -185,6 +196,20 @@ class ServerMetadata(BaseModel, frozen=True):
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
     authorization-code flow, plus the registration endpoint from RFC 7591.
     Holds no client identity — only the server-advertised facts.
+
+    Attributes:
+        authorize_url: The authorization endpoint URL.
+        token_url: The token endpoint URL.
+        registration_url: The dynamic client registration endpoint, or
+            ``None`` when the server advertises none.
+        revocation_url: The token revocation endpoint, or ``None`` when the
+            server advertises none.
+        scopes_supported: The scopes the server advertises support for;
+            empty when it advertises none.
+        code_challenge_methods: The PKCE code-challenge methods the server
+            advertises; empty when it advertises none.
+        token_endpoint_auth_methods: The token-endpoint authentication
+            methods the server advertises; empty when it advertises none.
     """
 
     authorize_url: str
@@ -199,10 +224,15 @@ class ServerMetadata(BaseModel, frozen=True):
 class ClientRegistration(BaseModel, frozen=True):
     """Client credentials issued by RFC 7591 dynamic client registration.
 
-    ``client_secret`` is absent for a public client.
-    ``token_endpoint_auth_method`` is the method the server registered for this
-    client; it is authoritative for this client and may differ from the server's
-    advertised set, and is None when the registration response states no method.
+    Attributes:
+        client_id: The client identifier issued by the registration
+            endpoint.
+        client_secret: The issued client secret for a confidential client;
+            ``None`` for a public client.
+        token_endpoint_auth_method: The token-endpoint authentication method
+            the server registered for this client. It is authoritative for
+            this client and may differ from the server's advertised set, and
+            is ``None`` when the registration response states no method.
     """
 
     client_id: str
@@ -279,6 +309,13 @@ class IdentityMaterial(BaseModel, frozen=True):
         providers return it as the ``id_token`` field that lands on
         :attr:`TokenSet.metadata`. The refresh token and caller context
         on the ``TokenSet`` are intentionally not carried over.
+
+        Args:
+            tokens: The token set to narrow.
+
+        Returns:
+            The identity material: the access token and, when the
+            response carried one, the OIDC ID token.
         """
         id_token = tokens.metadata.get("id_token")
         return cls(
@@ -346,6 +383,10 @@ class TenancyContext(BaseModel, frozen=True):
         ``None`` if the tenancy asserts no ownership, and if it asserts
         ownership without naming a domain — neither leaves anything to
         compare against.
+
+        Returns:
+            The normalized (trimmed, lowercased) owned domain, or ``None``
+            when the tenancy owns no domain to compare against.
         """
         if not self.owns_email_domain or self.domain is None:
             return None
@@ -403,6 +444,9 @@ class IdentityProfile(BaseModel, frozen=True):
         the time of verification. It does NOT prove ongoing control or
         current employment. Callers must not use this as proof of
         domain affiliation — see :meth:`owns_domain` for that question.
+
+        Returns:
+            The email when the provider reports it verified, else ``None``.
         """
         if self.email_verified and self.email:
             return self.email
@@ -415,6 +459,10 @@ class IdentityProfile(BaseModel, frozen=True):
         should key their user/identity tables on this tuple rather than
         on ``email`` to avoid cross-provider account hijack via email
         collision.
+
+        Returns:
+            The ``(provider, subject)`` pair, or ``None`` when either
+            field is missing or empty.
         """
         if self.provider and self.subject:
             return (self.provider, self.subject)

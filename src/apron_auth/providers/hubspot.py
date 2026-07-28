@@ -100,7 +100,21 @@ class HubSpotIdentityHandler:
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a HubSpot access token."""
+        """Fetch normalized identity fields using a HubSpot access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile, with the portal surfaced as a single
+            tenancy when the introspection response names one.
+
+        Raises:
+            IdentityFetchError: If the introspection request fails or its
+                response cannot be parsed. Messages never include the
+                request URL, which embeds the token.
+        """
         del config
         introspect_url = f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(material.access_token, safe='')}"
         try:
@@ -179,9 +193,29 @@ class HubSpotRevocationHandler:
     """
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        """Configure the handler.
+
+        Args:
+            client: An optional caller-owned client to send revocation
+                requests through; a fresh client is used per request when
+                omitted.
+        """
         self._client = client
 
     async def _send(self, client: httpx.AsyncClient, url: str) -> bool:
+        """Send the revocation request and return success status.
+
+        Args:
+            client: The HTTP client to send the request through.
+            url: The refresh-token revocation URL to DELETE.
+
+        Returns:
+            ``True`` on 204 (revoked) or 404 (already gone — idempotent),
+            ``False`` on any other status.
+
+        Raises:
+            RevocationError: If the request fails to reach the endpoint.
+        """
         try:
             response = await client.delete(url)
         except httpx.RequestError as exc:
@@ -200,9 +234,18 @@ class HubSpotRevocationHandler:
         The ``token`` argument must be the refresh token issued by
         HubSpot. The final request URL is built by appending the
         URL-encoded refresh token to ``config.revocation_url``.
-        Returns True on 204 (revoked) or 404 (already gone —
-        idempotent). Returns False for any other status code.
-        Raises :class:`RevocationError` on network failure.
+
+        Args:
+            token: The refresh token to revoke.
+            config: The provider configuration supplying the revocation URL.
+
+        Returns:
+            ``True`` on 204 (revoked) or 404 (already gone — idempotent),
+            ``False`` for any other status.
+
+        Raises:
+            ValueError: If ``config`` has no revocation URL.
+            RevocationError: If the request fails to reach the endpoint.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -224,6 +267,13 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     either — prevents a misconfigured ``ProviderConfig`` with one
     HubSpot-shaped URL and one attacker-controlled URL from inferring
     this handler and routing the bearer token to a non-HubSpot host.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A HubSpot identity handler when both OAuth hosts are HubSpot's,
+        else ``None``.
     """
     if oauth_hosts_match(config, _HUBSPOT_IDENTITY_HOST_SUFFIXES):
         return HubSpotIdentityHandler()
@@ -254,6 +304,17 @@ def preset(
 
     Scopes from BASE_SCOPES are merged automatically — HubSpot requires
     the ``oauth`` scope on every app authorization.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: Additional scopes to request; merged with the required
+            base scopes.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
     """
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 

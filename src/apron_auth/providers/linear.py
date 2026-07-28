@@ -44,7 +44,21 @@ class LinearIdentityHandler:
     """Fetch identity fields via Linear's GraphQL ``viewer`` query."""
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-        """Fetch normalized identity fields using a Linear access token."""
+        """Fetch normalized identity fields using a Linear access token.
+
+        Args:
+            material: The token material to establish identity from.
+            config: The provider configuration the tokens were issued under.
+
+        Returns:
+            The identity profile, with the workspace surfaced as a single
+            tenancy when the GraphQL response names one.
+
+        Raises:
+            IdentityFetchError: If the GraphQL request fails, the response
+                cannot be parsed, or it carries GraphQL errors or an
+                unexpected shape.
+        """
         del config
         try:
             async with httpx.AsyncClient() as client:
@@ -116,7 +130,15 @@ class LinearIdentityHandler:
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Linear identity handler when config matches Linear hosts."""
+    """Return the Linear identity handler when config matches Linear hosts.
+
+    Args:
+        config: The provider configuration to match.
+
+    Returns:
+        A Linear identity handler when the config's OAuth hosts are
+        Linear's, else ``None``.
+    """
     if oauth_hosts_match(config, _LINEAR_IDENTITY_HOST_SUFFIXES):
         return LinearIdentityHandler()
     return None
@@ -135,7 +157,18 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
-    """Create a Linear OAuth provider configuration."""
+    """Create a Linear OAuth provider configuration.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: The scopes to request.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
+    """
     config = ProviderConfig(
         client_id=client_id,
         client_secret=SecretStr(client_secret),
