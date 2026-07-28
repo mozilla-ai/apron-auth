@@ -368,7 +368,8 @@ def _subject(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> str | N
         userinfo: The OIDC userinfo payload used as a fallback.
 
     Returns:
-        The user subject, preferring the ID-token ``sub``, else ``None``.
+        The ID-token ``sub`` when present, otherwise the userinfo ``sub``;
+        ``None`` when neither is available.
     """
     if claims is not None:
         sub = claims.get("sub")
