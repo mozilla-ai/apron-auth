@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, SecretStr, model_validator
 
+from apron_auth.errors import IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 AccessType = Literal["read", "write", "admin"]
@@ -110,6 +111,23 @@ class ProviderConfig(BaseModel, frozen=True):
             missing. :meth:`resolve_implicit_scopes` expands a granted set
             against this mapping. Set by the preset; empty when a provider
             has no such relationships.
+        issuer: Expected issuer identifier (RFC 8414) of the authorization
+            server, used to validate the authorization-response ``iss``
+            parameter (RFC 9207) before a code is redeemed. ``None`` when no
+            issuer is known, which disables issuer validation entirely —
+            the default for presets that do not opt in.
+        require_iss: Whether an authorization response that omits ``iss``
+            must be rejected. Set ``True`` when the authorization server
+            advertises support for the ``iss`` parameter, so a stripped
+            ``iss`` cannot silently bypass the mix-up check. Ignored when
+            :attr:`issuer` is ``None``. Defaults to ``False``.
+
+            The default leaves a hand-built config that sets :attr:`issuer`
+            but not this flag catching only a *mismatched* ``iss``, not a
+            *stripped* one — an attacker who removes ``iss`` slips past. A
+            caller that knows its authorization server emits ``iss`` should
+            set this ``True`` to close that gap; :func:`apron_auth.mcp.to_provider_config`
+            does so automatically from the discovered metadata.
     """
 
     client_id: str
@@ -128,6 +146,8 @@ class ProviderConfig(BaseModel, frozen=True):
     required_scope_families: list[list[str]] = []
     can_assert_domain_ownership: bool = False
     implicit_scopes: dict[str, frozenset[str]] = {}
+    issuer: str | None = None
+    require_iss: bool = False
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
@@ -174,6 +194,37 @@ class ProviderConfig(BaseModel, frozen=True):
             return None
         return (self.client_id, self.client_secret.get_secret_value())
 
+    def validate_issuer(self, received_iss: str | None) -> None:
+        """Validate an authorization-response ``iss`` (RFC 9207) against :attr:`issuer`.
+
+        Guards against an authorization-server mix-up: a code minted by one
+        authorization server must not be redeemed at another. Validation applies
+        only when :attr:`issuer` is set; without a known issuer there is nothing
+        to compare against and this is a no-op. A present ``iss`` must match the
+        expected issuer exactly; an absent one is rejected only when
+        :attr:`require_iss` is set, so a stripped parameter cannot bypass the
+        check against a server known to send it.
+
+        Args:
+            received_iss: The ``iss`` parameter from the authorization response,
+                or ``None`` when the response carried none.
+
+        Raises:
+            IssuerValidationError: If ``received_iss`` is present and does not
+                match :attr:`issuer`, or is absent while :attr:`require_iss` is
+                set.
+        """
+        if self.issuer is None:
+            return
+        if received_iss is None:
+            if self.require_iss:
+                msg = "authorization response is missing the required iss parameter"
+                raise IssuerValidationError(msg)
+            return
+        if received_iss != self.issuer:
+            msg = "authorization response iss does not match the expected issuer"
+            raise IssuerValidationError(msg)
+
     def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
         """Return ``granted`` expanded with every scope it transitively implies.
 
@@ -210,6 +261,12 @@ class ServerMetadata(BaseModel, frozen=True):
             advertises; empty when it advertises none.
         token_endpoint_auth_methods: The token-endpoint authentication
             methods the server advertises; empty when it advertises none.
+        issuer: The authorization server's issuer identifier, or ``None``
+            when the metadata omits it. Used to validate the
+            authorization-response ``iss`` parameter (RFC 9207).
+        iss_parameter_supported: Whether the server advertises support for
+            returning the ``iss`` parameter on the authorization response;
+            ``False`` when the metadata omits the flag.
     """
 
     authorize_url: str
@@ -219,6 +276,8 @@ class ServerMetadata(BaseModel, frozen=True):
     scopes_supported: list[str] = []
     code_challenge_methods: list[str] = []
     token_endpoint_auth_methods: list[str] = []
+    issuer: str | None = None
+    iss_parameter_supported: bool = False
 
 
 class ClientRegistration(BaseModel, frozen=True):

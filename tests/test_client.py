@@ -14,6 +14,7 @@ from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
+    IssuerValidationError,
     PermanentOAuthError,
     RevocationError,
     StateError,
@@ -466,6 +467,81 @@ class TestExchangeCode:
         )
         assert tokens.access_token == "access-abc"
         assert calls == ["https://provider.example.com/token"]
+
+    async def test_exchange_matching_iss_succeeds(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(issuer="https://provider.example.com")
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+            iss="https://provider.example.com",
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_mismatched_iss_rejected_before_token_request(self, httpx_mock: HTTPXMock) -> None:
+        config = _make_config(issuer="https://provider.example.com")
+        client = OAuthClient(config=config)
+        with pytest.raises(IssuerValidationError):
+            await client.exchange_code(
+                code="auth-code-123",
+                redirect_uri="https://app.example.com/callback",
+                iss="https://attacker.example.com",
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_missing_iss_rejected_when_required(self, httpx_mock: HTTPXMock) -> None:
+        config = _make_config(issuer="https://provider.example.com", require_iss=True)
+        client = OAuthClient(config=config)
+        with pytest.raises(IssuerValidationError):
+            await client.exchange_code(
+                code="auth-code-123",
+                redirect_uri="https://app.example.com/callback",
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_missing_iss_allowed_when_not_required(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(issuer="https://provider.example.com", require_iss=False)
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_without_configured_issuer_ignores_iss(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+            iss="https://anything.example.com",
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_bad_iss_does_not_consume_state(self) -> None:
+        store = AsyncMock()
+        store.consume = AsyncMock()
+        config = _make_config(issuer="https://provider.example.com")
+        client = OAuthClient(config=config, state_store=store)
+        with pytest.raises(IssuerValidationError):
+            await client.exchange_code(
+                code="auth-code-123",
+                state="stored-state",
+                iss="https://attacker.example.com",
+            )
+        store.consume.assert_not_awaited()
 
 
 class TestRefreshToken:

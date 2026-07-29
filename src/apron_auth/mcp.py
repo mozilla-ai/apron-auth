@@ -118,6 +118,7 @@ async def discover(
         if url is not None:
             _validate_url(url, url_validator)
 
+    issuer = server_meta.get("issuer")
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
@@ -126,6 +127,8 @@ async def discover(
         scopes_supported=_str_list(server_meta.get("scopes_supported")),
         code_challenge_methods=_str_list(server_meta.get("code_challenge_methods_supported")),
         token_endpoint_auth_methods=_str_list(server_meta.get("token_endpoint_auth_methods_supported")),
+        issuer=issuer if isinstance(issuer, str) else None,
+        iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
     )
 
 
@@ -147,7 +150,9 @@ def to_provider_config(
     given — the value is authoritative for this specific client and may differ
     from what the server advertises server-wide. Absent it, a confidential
     client's method is chosen from the methods the server advertises (preferring
-    ``client_secret_post``) and a secretless public client uses ``none``.
+    ``client_secret_post``) and a secretless public client uses ``none``. The
+    discovered issuer and its ``iss``-parameter support carry onto the config so
+    the code exchange can validate the authorization-response ``iss`` (RFC 9207).
 
     Args:
         metadata: Metadata from :func:`discover`.
@@ -188,6 +193,8 @@ def to_provider_config(
         scopes=list(scopes),
         use_pkce=use_pkce,
         token_endpoint_auth_method=auth_method,
+        issuer=metadata.issuer,
+        require_iss=metadata.iss_parameter_supported,
     )
 
 

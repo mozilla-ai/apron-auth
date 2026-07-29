@@ -514,11 +514,19 @@ config = mcp.to_provider_config(
 )
 client = OAuthClient(config, transport_factory=my_transport_factory)
 url, pending = await client.get_authorization_url()
-# Redirect the user to `url`; on the callback:
-tokens = await client.exchange_code(code="code-from-callback", code_verifier=pending.code_verifier)
+# Redirect the user to `url`; on the callback, pass the `iss` query
+# parameter so the issuer can be validated before the code is redeemed:
+tokens = await client.exchange_code(
+    code="code-from-callback",
+    redirect_uri=pending.redirect_uri,
+    code_verifier=pending.code_verifier,
+    iss="iss-from-callback",
+)
 ```
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+
+`discover` records the authorization server's issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 
 Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. Omit it (or pass `None`) to derive the method from the client's secret and the server's advertised set.
 
