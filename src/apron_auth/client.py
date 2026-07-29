@@ -156,6 +156,7 @@ class OAuthClient:
         state: str | None = None,
         redirect_uri: str | None = None,
         code_verifier: str | None = None,
+        iss: str | None = None,
     ) -> TokenSet:
         """Exchange an authorization code for tokens.
 
@@ -163,6 +164,11 @@ class OAuthClient:
         - Pass state to consume from StateStore and retrieve stored
           redirect_uri and code_verifier.
         - Pass redirect_uri and code_verifier directly.
+
+        When the provider carries an expected issuer, the authorization-response
+        ``iss`` (RFC 9207) is validated against it before anything else — before
+        state is consumed and before the token endpoint is called — so a mix-up
+        attempt is refused without burning the pending state.
 
         Args:
             code: The authorization code returned to the redirect URI.
@@ -173,16 +179,22 @@ class OAuthClient:
                 not sourced from stored state.
             code_verifier: The PKCE code verifier to send with the
                 exchange, when not sourced from stored state.
+            iss: The ``iss`` parameter from the authorization response, to
+                validate against the provider's expected issuer. Omit when
+                the provider has no expected issuer configured.
 
         Returns:
             The exchanged token set. Any caller context stored with the
             consumed state is surfaced on :attr:`TokenSet.context`.
 
         Raises:
+            IssuerValidationError: If ``iss`` fails validation against the
+                provider's expected issuer.
             StateError: If ``state`` is given but is invalid, expired, or
                 already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
         """
+        self._config.validate_issuer(iss)
         context: dict[str, Any] = {}
         if state is not None and self._state_store is not None:
             pending = await self._state_store.consume(state)

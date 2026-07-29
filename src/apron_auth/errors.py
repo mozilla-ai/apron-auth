@@ -36,6 +36,16 @@ class IdentityNotSupportedError(OAuthError):
     """Identity fetching is not supported for this provider configuration."""
 
 
+class IssuerValidationError(OAuthError):
+    """Authorization-response issuer (RFC 9207) did not match the expected issuer.
+
+    Raised when a code exchange is refused because the authorization response's
+    ``iss`` parameter is absent where required or names a different authorization
+    server than the one the flow was configured for — the signature of an
+    authorization-server mix-up.
+    """
+
+
 class McpDiscoveryError(OAuthError):
     """MCP OAuth metadata discovery failed."""
 

@@ -5,6 +5,7 @@ import time
 import pytest
 from pydantic import SecretStr, ValidationError
 
+from apron_auth.errors import IssuerValidationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -222,6 +223,51 @@ class TestProviderConfig:
             token_url="https://provider.example.com/token",
         )
         assert config.resolve_implicit_scopes({"x"}) == {"x"}
+
+    def test_issuer_and_require_iss_default_to_absent(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.issuer is None
+        assert config.require_iss is False
+
+
+class TestProviderConfigValidateIssuer:
+    def _config(self, **overrides: object) -> ProviderConfig:
+        defaults: dict[str, object] = {
+            "client_id": "test-client",
+            "client_secret": SecretStr("test-secret"),
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+        }
+        defaults.update(overrides)
+        return ProviderConfig(**defaults)
+
+    def test_no_expected_issuer_ignores_received_iss(self) -> None:
+        # A preset carries no expected issuer, so a received iss cannot be
+        # validated and is not grounds for rejection.
+        self._config().validate_issuer("https://anything.example.com")
+
+    def test_matching_iss_passes(self) -> None:
+        config = self._config(issuer="https://auth.example.com")
+        config.validate_issuer("https://auth.example.com")
+
+    def test_mismatched_iss_raises(self) -> None:
+        config = self._config(issuer="https://auth.example.com")
+        with pytest.raises(IssuerValidationError):
+            config.validate_issuer("https://attacker.example.com")
+
+    def test_missing_iss_raises_when_required(self) -> None:
+        config = self._config(issuer="https://auth.example.com", require_iss=True)
+        with pytest.raises(IssuerValidationError):
+            config.validate_issuer(None)
+
+    def test_missing_iss_allowed_when_not_required(self) -> None:
+        config = self._config(issuer="https://auth.example.com", require_iss=False)
+        config.validate_issuer(None)
 
 
 class TestScopeMetadata:

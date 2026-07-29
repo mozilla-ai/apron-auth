@@ -188,6 +188,17 @@ class TestToProviderConfig:
         assert config.scopes == ["a", "b"]
         assert config.redirect_uri == "https://app.example.com/cb"
 
+    def test_issuer_and_iss_requirement_threaded_from_metadata(self) -> None:
+        meta = self._meta(issuer="https://auth.example.com", iss_parameter_supported=True)
+        config = to_provider_config(meta, client_id="c", client_secret="s")
+        assert config.issuer == "https://auth.example.com"
+        assert config.require_iss is True
+
+    def test_issuer_absent_leaves_config_unbound(self) -> None:
+        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        assert config.issuer is None
+        assert config.require_iss is False
+
 
 class TestSelectAuthMethod:
     @pytest.mark.parametrize(
@@ -371,6 +382,26 @@ class TestDiscover:
         with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
             await discover("https://mcp.example.com/mcp")
         assert any("protected resource metadata returned HTTP 404" in message for message in caplog.messages)
+
+    async def test_issuer_and_iss_support_captured(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(
+            url=_ASM_ROOT,
+            json=_asm_payload(
+                issuer="https://auth.example.com",
+                authorization_response_iss_parameter_supported=True,
+            ),
+        )
+        meta = await discover("https://mcp.example.com")
+        assert meta.issuer == "https://auth.example.com"
+        assert meta.iss_parameter_supported is True
+
+    async def test_issuer_and_iss_support_default_when_absent(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.issuer is None
+        assert meta.iss_parameter_supported is False
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
