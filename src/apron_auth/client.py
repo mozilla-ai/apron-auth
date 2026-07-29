@@ -382,7 +382,8 @@ class OAuthClient:
                 body = exc.response.json()
                 raw_error_code = body.get("error", "")
                 error_code = raw_error_code if isinstance(raw_error_code, str) else ""
-                description = body.get("error_description", "")
+                raw_description = body.get("error_description", "")
+                description = raw_description if isinstance(raw_description, str) else ""
                 msg = f"{error_code}: {description}" if description else error_code or msg
             except Exception:
                 pass

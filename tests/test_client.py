@@ -719,6 +719,18 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
 
+    async def test_refresh_non_string_error_description_omitted_from_message(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=500,
+            json={"error": "server_error", "error_description": {"nested": "obj"}},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == "server_error"
+        assert str(exc_info.value) == "server_error"
+
 
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
