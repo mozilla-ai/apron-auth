@@ -518,6 +518,7 @@ url, pending = await client.get_authorization_url()
 # parameter so the issuer can be validated before the code is redeemed:
 tokens = await client.exchange_code(
     code="code-from-callback",
+    redirect_uri=pending.redirect_uri,
     code_verifier=pending.code_verifier,
     iss="iss-from-callback",
 )
