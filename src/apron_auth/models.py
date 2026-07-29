@@ -218,11 +218,11 @@ class ProviderConfig(BaseModel, frozen=True):
             return
         if received_iss is None:
             if self.require_iss:
-                msg = "authorization response is missing the required issuer parameter"
+                msg = "authorization response is missing the required iss parameter"
                 raise IssuerValidationError(msg)
             return
         if received_iss != self.issuer:
-            msg = "authorization response issuer does not match the expected issuer"
+            msg = "authorization response iss does not match the expected issuer"
             raise IssuerValidationError(msg)
 
     def resolve_implicit_scopes(self, granted: set[str]) -> set[str]:
