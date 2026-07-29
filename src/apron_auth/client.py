@@ -384,7 +384,8 @@ class OAuthClient:
                 error_code = raw_error_code if isinstance(raw_error_code, str) else ""
                 raw_description = body.get("error_description", "")
                 description = raw_description if isinstance(raw_description, str) else ""
-                msg = f"{error_code}: {description}" if description else error_code or msg
+                prefix = error_code or msg
+                msg = f"{prefix}: {description}" if description else prefix
             except Exception:
                 pass
             raise _TokenEndpointError(msg, error_code=error_code) from exc

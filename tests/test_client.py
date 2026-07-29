@@ -731,6 +731,20 @@ class TestRefreshToken:
         assert exc_info.value.error_code == "server_error"
         assert str(exc_info.value) == "server_error"
 
+    async def test_refresh_error_description_without_error_code_keeps_status_prefix(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            status_code=500,
+            json={"error_description": "backend unavailable"},
+        )
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == ""
+        assert str(exc_info.value) == "HTTP 500: backend unavailable"
+
 
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
