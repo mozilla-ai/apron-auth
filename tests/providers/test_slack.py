@@ -380,8 +380,8 @@ class TestSlackPreset:
 class TestSlackRevocationHandler:
     async def test_revokes_via_authorization_header(self, httpx_mock: HTTPXMock) -> None:
         """Slack rejects query-string tokens for apps created after
-        2021-02-24, so the token must POST with ``Authorization: Bearer``
-        and never appear in the URL."""
+        2021-02-24, so the request sends the token in the
+        ``Authorization: Bearer`` header via POST, never in the URL."""
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": True})
         from apron_auth.providers.slack import preset
 

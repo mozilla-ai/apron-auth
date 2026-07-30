@@ -415,10 +415,10 @@ def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> Identity
 class SlackRevocationHandler:
     """Revoke Slack tokens at the ``auth.revoke`` endpoint.
 
-    Slack rejects tokens sent as a URL query parameter for apps created
-    after 2021-02-24, so the token travels in the ``Authorization:
-    Bearer`` header of a POST — the only request shape Slack services
-    for such apps.
+    Slack rejects tokens sent as a URL query parameter for apps
+    created after 2021-02-24, so the token is sent in the
+    ``Authorization: Bearer`` header of a POST rather than as a
+    query-string parameter.
     """
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
