@@ -237,7 +237,10 @@ async def register_client(
         transport_factory: Optional factory controlling the outbound connection.
 
     Returns:
-        The issued client registration.
+        The issued client registration. Its credentials are bound to the
+        authorization server that minted them; see
+        :class:`~apron_auth.models.ClientRegistration` for the caller's
+        persistence obligation.
 
     Raises:
         ValueError: If ``application_type`` is neither ``web`` nor ``native``.
