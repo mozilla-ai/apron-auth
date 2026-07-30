@@ -290,6 +290,16 @@ class ServerMetadata(BaseModel, frozen=True):
 class ClientRegistration(BaseModel, frozen=True):
     """Client credentials issued by RFC 7591 dynamic client registration.
 
+    The issued ``client_id`` and ``client_secret`` are bound to the
+    authorization server that minted them and are not valid at any other
+    authorization server.
+
+    NOTE: a caller that persists these credentials must store them keyed by
+    the minting issuer (the ``issuer`` of the ``ServerMetadata`` whose
+    ``registration_url`` produced them) and must not present them to a
+    different authorization server; this library is stateless and holds no
+    credentials, so it cannot enforce the binding on the caller's behalf.
+
     Attributes:
         client_id: The client identifier issued by the registration
             endpoint.
