@@ -413,7 +413,13 @@ def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> Identity
 
 
 class SlackRevocationHandler:
-    """Slack token revocation via GET with token as query parameter."""
+    """Revoke Slack tokens at the ``auth.revoke`` endpoint.
+
+    Slack rejects tokens sent as a URL query parameter for apps created
+    after 2021-02-24, so the token travels in the ``Authorization:
+    Bearer`` header of a POST — the only request shape Slack services
+    for such apps.
+    """
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token at Slack's revocation endpoint.
@@ -435,9 +441,9 @@ class SlackRevocationHandler:
             raise ValueError(msg)
         async with httpx.AsyncClient() as client:
             try:
-                response = await client.get(
+                response = await client.post(
                     config.revocation_url,
-                    params={"token": token},
+                    headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as exc:
                 raise RevocationError(str(exc)) from exc

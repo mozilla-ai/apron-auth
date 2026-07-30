@@ -10,6 +10,7 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig,
 from apron_auth.protocols import RevocationHandler
 
 SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
+SLACK_REVOKE_URL = "https://slack.com/api/auth.revoke"
 SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
 SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 
@@ -377,16 +378,33 @@ class TestSlackPreset:
 
 
 class TestSlackRevocationHandler:
-    async def test_revokes_via_get(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(json={"ok": True, "revoked": True})
+    async def test_revokes_via_authorization_header(self, httpx_mock: HTTPXMock) -> None:
+        """Slack rejects query-string tokens for apps created after
+        2021-02-24, so the token must POST with ``Authorization: Bearer``
+        and never appear in the URL."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": True})
         from apron_auth.providers.slack import preset
 
         config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
-        result = await handler.revoke("access-abc", config)
+        result = await handler.revoke("xoxb-access-abc", config)
+
         assert result is True
         request = httpx_mock.get_request()
-        assert request.method == "GET"
-        assert "token=access-abc" in str(request.url)
+        assert request is not None
+        assert request.method == "POST"
+        assert request.headers.get("authorization") == "Bearer xoxb-access-abc"
+        assert request.url.params.get("token") is None
+        assert "xoxb-access-abc" not in str(request.url)
+
+    async def test_ok_false_returns_false(self, httpx_mock: HTTPXMock) -> None:
+        """A 2xx body with ``ok=false`` is a failed revocation, returned
+        as ``False`` for the client to surface as ``RevocationError``."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": "invalid_auth"})
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        result = await handler.revoke("xoxb-access-abc", config)
+        assert result is False
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
