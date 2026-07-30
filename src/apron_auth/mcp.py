@@ -240,10 +240,14 @@ async def register_client(
         The issued client registration.
 
     Raises:
+        ValueError: If ``application_type`` is neither ``web`` nor ``native``.
         McpRegistrationError: If the URL is rejected, the endpoint returns a
             non-success status, or the response lacks a usable ``client_id``.
     """
     _validate_url(registration_url, url_validator, McpRegistrationError)
+    if application_type not in (None, ApplicationType.WEB, ApplicationType.NATIVE):
+        msg = "application_type must be 'web' or 'native'"
+        raise ValueError(msg)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {

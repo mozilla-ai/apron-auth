@@ -742,6 +742,9 @@ class TestRegisterClient:
             "http://localhost:8080/callback",
             "http://[::1]:8080/callback",
             "http://127.1:8080/callback",
+            "http://2130706433:8080/callback",
+            "http://0x7f000001:8080/callback",
+            "http://0177.0.0.1:8080/callback",
         ],
     )
     async def test_application_type_inferred_native_from_loopback_redirect(
@@ -775,6 +778,10 @@ class TestRegisterClient:
         request = httpx_mock.get_request()
         assert request is not None
         assert json.loads(request.content)["application_type"] == "web"
+
+    async def test_invalid_application_type_rejected_locally(self) -> None:
+        with pytest.raises(ValueError, match="application_type"):
+            await register_client(_REGISTER_URL, _REDIRECT_URI, application_type="desktop")
 
 
 class TestEndToEndFlow:
