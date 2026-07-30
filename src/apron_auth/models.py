@@ -20,6 +20,13 @@ class TokenEndpointAuthMethod:
     NONE = "none"
 
 
+class ApplicationType:
+    """RFC 7591/OpenID Connect application_type values."""
+
+    WEB = "web"
+    NATIVE = "native"
+
+
 class ScopeMetadata(BaseModel, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
 

@@ -27,7 +27,13 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
-from apron_auth.models import ClientRegistration, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
+from apron_auth.models import (
+    ApplicationType,
+    ClientRegistration,
+    ProviderConfig,
+    ServerMetadata,
+    TokenEndpointAuthMethod,
+)
 from apron_auth.protocols import TransportFactory
 
 UrlValidator = Callable[[str], None]
@@ -203,6 +209,7 @@ async def register_client(
     redirect_uri: str,
     *,
     client_name: str = "apron-auth",
+    application_type: str | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
 ) -> ClientRegistration:
@@ -221,6 +228,11 @@ async def register_client(
         registration_url: The authorization server's registration endpoint.
         redirect_uri: Redirect URI to register for the authorization flow.
         client_name: Human-readable client name sent in the request.
+        application_type: The application_type to register
+            (``ApplicationType.WEB`` or ``ApplicationType.NATIVE``). When
+            omitted, ``native`` is inferred from a loopback ``redirect_uri``
+            and otherwise left unset. Registering ``native`` lets servers that
+            gate ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
         transport_factory: Optional factory controlling the outbound connection.
 
@@ -232,6 +244,8 @@ async def register_client(
             non-success status, or the response lacks a usable ``client_id``.
     """
     _validate_url(registration_url, url_validator, McpRegistrationError)
+    if application_type is None:
+        application_type = _infer_application_type(redirect_uri)
     payload = {
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
@@ -239,6 +253,8 @@ async def register_client(
         "response_types": ["code"],
         "token_endpoint_auth_method": TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     }
+    if application_type is not None:
+        payload["application_type"] = application_type
     async with _discovery_client(registration_url, transport_factory) as client:
         try:
             response = await client.post(registration_url, json=payload)
@@ -406,6 +422,26 @@ def _is_blocked_host(host: str) -> bool:
         or address.is_multicast
         or address.is_unspecified
     )
+
+
+def _infer_application_type(redirect_uri: str) -> str | None:
+    """Return ``native`` for a loopback redirect URI, else ``None``.
+
+    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252
+    signature of a native or CLI client. Any other redirect leaves the value
+    unset so the registration request is byte-identical to one that never
+    considered it.
+    """
+    try:
+        host = urlparse(redirect_uri).hostname or ""
+    except ValueError:
+        return None
+    if host == "localhost" or host.endswith(".localhost"):
+        return ApplicationType.NATIVE
+    address = _parse_ip(host)
+    if address is not None and address.is_loopback:
+        return ApplicationType.NATIVE
+    return None
 
 
 def _validate_url(

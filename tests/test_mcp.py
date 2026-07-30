@@ -23,7 +23,7 @@ from apron_auth.mcp import (
     register_client,
     to_provider_config,
 )
-from apron_auth.models import ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
+from apron_auth.models import ApplicationType, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
@@ -724,6 +724,57 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI, transport_factory=factory)
         assert reg.client_id == "x"
         assert calls == [_REGISTER_URL]
+
+    @pytest.mark.parametrize("application_type", [ApplicationType.WEB, ApplicationType.NATIVE])
+    async def test_explicit_application_type_included_in_payload(
+        self, httpx_mock: HTTPXMock, application_type: str
+    ) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, _REDIRECT_URI, application_type=application_type)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["application_type"] == application_type
+
+    @pytest.mark.parametrize(
+        "redirect_uri",
+        [
+            "http://127.0.0.1:8080/callback",
+            "http://localhost:8080/callback",
+            "http://[::1]:8080/callback",
+            "http://127.1:8080/callback",
+        ],
+    )
+    async def test_application_type_inferred_native_from_loopback_redirect(
+        self, httpx_mock: HTTPXMock, redirect_uri: str
+    ) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, redirect_uri)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["application_type"] == "native"
+
+    @pytest.mark.parametrize(
+        "redirect_uri",
+        [
+            "https://app.example.com/callback",
+            "http://10.0.0.5:8080/callback",
+        ],
+    )
+    async def test_application_type_omitted_for_non_loopback_redirect(
+        self, httpx_mock: HTTPXMock, redirect_uri: str
+    ) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, redirect_uri)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert "application_type" not in json.loads(request.content)
+
+    async def test_explicit_application_type_overrides_loopback_inference(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, "http://127.0.0.1:8080/callback", application_type=ApplicationType.WEB)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["application_type"] == "web"
 
 
 class TestEndToEndFlow:
