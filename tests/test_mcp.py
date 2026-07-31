@@ -403,6 +403,28 @@ class TestDiscover:
         assert meta.issuer is None
         assert meta.iss_parameter_supported is False
 
+    async def test_supports_cimd_captured(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(
+            url=_ASM_ROOT,
+            json=_asm_payload(client_id_metadata_document_supported=True),
+        )
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is True
+
+    async def test_supports_cimd_defaults_false_when_absent(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is False
+
+    async def test_supports_cimd_false_when_not_true(self, httpx_mock: HTTPXMock) -> None:
+        """A non-boolean flag value must not be read as support."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(client_id_metadata_document_supported="yes"))
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is False
+
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json={"authorization_endpoint": "https://auth.example.com/authorize"})

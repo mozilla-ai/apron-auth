@@ -135,6 +135,7 @@ async def discover(
         token_endpoint_auth_methods=_str_list(server_meta.get("token_endpoint_auth_methods_supported")),
         issuer=issuer if isinstance(issuer, str) else None,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
+        supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
     )
 
 
