@@ -200,6 +200,19 @@ class TestToProviderConfig:
         assert config.issuer is None
         assert config.require_iss is False
 
+    def test_cimd_url_client_id_yields_public_config(self) -> None:
+        url = cimd_client_id("https://app.example.com/oauth/client-metadata.json")
+        config = to_provider_config(self._meta(), client_id=url, client_secret=None)
+        assert config.client_id == "https://app.example.com/oauth/client-metadata.json"
+        assert config.client_secret is None
+        assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
+
+    def test_cimd_public_client_without_none_method_fails_fast(self) -> None:
+        """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
+        meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
+
 
 class TestSelectAuthMethod:
     @pytest.mark.parametrize(
