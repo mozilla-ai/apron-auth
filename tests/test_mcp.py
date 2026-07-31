@@ -19,6 +19,7 @@ from apron_auth.mcp import (
     _select_auth_method,
     _str_list,
     _validate_url,
+    cimd_client_id,
     discover,
     register_client,
     to_provider_config,
@@ -804,6 +805,37 @@ class TestRegisterClient:
     async def test_invalid_application_type_rejected_locally(self) -> None:
         with pytest.raises(ValueError, match="application_type"):
             await register_client(_REGISTER_URL, _REDIRECT_URI, application_type="desktop")
+
+
+class TestCimdClientId:
+    def test_valid_url_returned_unchanged(self) -> None:
+        url = "https://app.example.com/oauth/client-metadata.json"
+        assert cimd_client_id(url) == url
+
+    def test_valid_url_with_nested_path(self) -> None:
+        url = "https://app.example.com/a/b/client.json"
+        assert cimd_client_id(url) == url
+
+    def test_http_scheme_rejected(self) -> None:
+        with pytest.raises(ValueError, match="https"):
+            cimd_client_id("http://app.example.com/client.json")
+
+    def test_missing_path_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path"):
+            cimd_client_id("https://app.example.com")
+
+    def test_bare_slash_path_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path"):
+            cimd_client_id("https://app.example.com/")
+
+    def test_no_host_rejected(self) -> None:
+        with pytest.raises(ValueError, match="host"):
+            cimd_client_id("https:///client.json")
+
+    def test_non_public_host_accepted(self) -> None:
+        """The SSRF host block must NOT apply: the caller hosts this URL and the library never fetches it."""
+        url = "https://internal.example/client.json"
+        assert cimd_client_id(url) == url
 
 
 class TestEndToEndFlow:
