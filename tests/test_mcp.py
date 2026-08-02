@@ -845,9 +845,38 @@ class TestCimdClientId:
         with pytest.raises(ValueError, match="host"):
             cimd_client_id("https:///client.json")
 
+    def test_valid_url_with_port_accepted(self) -> None:
+        url = "https://app.example.com:8443/client.json"
+        assert cimd_client_id(url) == url
+
+    def test_invalid_port_rejected(self) -> None:
+        with pytest.raises(ValueError, match="valid URL"):
+            cimd_client_id("https://app.example.com:notaport/client.json")
+
+    def test_userinfo_rejected(self) -> None:
+        with pytest.raises(ValueError, match="username or password"):
+            cimd_client_id("https://user:pass@app.example.com/client.json")  # pragma: allowlist secret
+
+    def test_fragment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="fragment"):
+            cimd_client_id("https://app.example.com/client.json#section")
+
+    def test_dot_path_segment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path segment"):
+            cimd_client_id("https://app.example.com/./client.json")
+
+    def test_dotdot_path_segment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path segment"):
+            cimd_client_id("https://app.example.com/../client.json")
+
     def test_non_public_host_accepted(self) -> None:
-        """The SSRF host block must NOT apply: the caller hosts this URL and the library never fetches it."""
-        url = "https://internal.example/client.json"
+        """The SSRF host block must NOT apply: the caller hosts this URL and the library never fetches it.
+
+        Uses a loopback IP literal, which ``_is_blocked_host`` (applied by discovery
+        and registration) rejects — so accepting it here proves the block is
+        deliberately absent, and guards against a regression that adds it.
+        """
+        url = "https://127.0.0.1/client.json"
         assert cimd_client_id(url) == url
 
 

@@ -299,9 +299,12 @@ def cimd_client_id(url: str) -> str:
 
     A CIMD client is identified by an HTTPS URL to a metadata document the client
     hosts, and that URL is sent verbatim as the ``client_id`` in the authorization
-    and token requests. This checks the two client-side rules this library can
-    enforce locally — an ``https`` scheme and a path component naming the document —
-    and returns the URL for use as a ``client_id``.
+    and token requests. This enforces the client-identifier URL rules this library
+    can check locally and returns the URL for use as a ``client_id``: an ``https``
+    scheme, a valid port, a path component naming the document, and none of the
+    components the specification forbids — userinfo, a fragment, or a ``.`` or
+    ``..`` path segment. A query string is only discouraged, not forbidden, so it
+    is left alone.
 
     Unlike :func:`discover` and :func:`register_client`, this does not block
     non-public hosts. The URL is the client's own metadata document, which this
@@ -315,11 +318,16 @@ def cimd_client_id(url: str) -> str:
         The validated URL, unchanged, for use as a ``client_id``.
 
     Raises:
-        ValueError: If the URL is malformed, is not ``https``, has no host, or
-            names no document path beyond a bare ``/``.
+        ValueError: If the URL is malformed or has an invalid port, is not
+            ``https``, has no host, carries userinfo or a fragment, names no
+            document path beyond a bare ``/``, or contains a ``.`` or ``..``
+            path segment.
     """
     try:
         parsed = urlparse(url)
+        # Accessing .port forces its validation; an out-of-range or non-numeric
+        # port raises ValueError, which urlparse itself defers until this access.
+        _ = parsed.port
     except ValueError as exc:
         msg = "CIMD client_id must be a valid URL"
         raise ValueError(msg) from exc
@@ -329,8 +337,17 @@ def cimd_client_id(url: str) -> str:
     if not parsed.hostname:
         msg = "CIMD client_id must be an https URL with a host"
         raise ValueError(msg)
+    if parsed.username is not None or parsed.password is not None:
+        msg = "CIMD client_id must not contain a username or password"
+        raise ValueError(msg)
+    if parsed.fragment:
+        msg = "CIMD client_id must not contain a fragment"
+        raise ValueError(msg)
     if not parsed.path.strip("/"):
         msg = "CIMD client_id must be an https URL with a path component"
+        raise ValueError(msg)
+    if any(segment in (".", "..") for segment in parsed.path.split("/")):
+        msg = "CIMD client_id must not contain a . or .. path segment"
         raise ValueError(msg)
     return url
 
