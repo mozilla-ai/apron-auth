@@ -34,6 +34,7 @@ class TestProviderConfig:
         assert config.extra_params == {}
         assert config.revocation_url is None
         assert config.redirect_uri is None
+        assert config.resource is None
 
     def test_public_client_omits_client_secret(self) -> None:
         config = ProviderConfig(

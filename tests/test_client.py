@@ -102,6 +102,39 @@ class TestGetAuthorizationUrl:
         assert params["access_type"] == ["offline"]
         assert params["prompt"] == ["consent"]
 
+    async def test_resource_included_when_set(self) -> None:
+        config = _make_config(resource="https://mcp.example.com/")
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        assert params["resource"] == ["https://mcp.example.com/"]
+
+    async def test_resource_absent_when_unset(self) -> None:
+        config = _make_config()
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        assert "resource" not in params
+
+    async def test_resource_not_overridden_by_extra_params(self) -> None:
+        config = _make_config(
+            resource="https://mcp.example.com/",
+            extra_params={"resource": "https://attacker.example.com/"},
+        )
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        assert params["resource"] == ["https://mcp.example.com/"]
+
     async def test_scope_separator_applied(self):
         config = _make_config(scopes=["read", "write"], scope_separator=",")
         client = OAuthClient(config=config)
@@ -236,6 +269,35 @@ class TestExchangeCode:
         )
         request = httpx_mock.get_request()
         assert b"code_verifier=test-verifier" in request.content
+
+    async def test_exchange_includes_resource_when_set(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config(resource="https://mcp.example.com/")
+        client = OAuthClient(config=config)
+        await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        request = httpx_mock.get_request()
+        body = parse_qs(request.content.decode())
+        assert body["resource"] == ["https://mcp.example.com/"]
+
+    async def test_exchange_omits_resource_when_unset(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        await client.exchange_code(
+            code="auth-code-123",
+            redirect_uri="https://app.example.com/callback",
+        )
+        request = httpx_mock.get_request()
+        assert b"resource" not in request.content
 
     async def test_exchange_with_state_store(self, httpx_mock):
         httpx_mock.add_response(
@@ -572,6 +634,29 @@ class TestRefreshToken:
         request = httpx_mock.get_request()
         assert b"grant_type=refresh_token" in request.content
         assert b"refresh_token=old-refresh" in request.content
+
+    async def test_refresh_includes_resource_when_set(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "new-access", "token_type": "Bearer"},
+        )
+        config = _make_config(resource="https://mcp.example.com/")
+        client = OAuthClient(config=config)
+        await client.refresh_token(refresh_token="old-refresh")
+        request = httpx_mock.get_request()
+        body = parse_qs(request.content.decode())
+        assert body["resource"] == ["https://mcp.example.com/"]
+
+    async def test_refresh_omits_resource_when_unset(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "new-access", "token_type": "Bearer"},
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        await client.refresh_token(refresh_token="old-refresh")
+        request = httpx_mock.get_request()
+        assert b"resource" not in request.content
 
     async def test_refresh_permanent_error_invalid_grant(self, httpx_mock):
         httpx_mock.add_response(

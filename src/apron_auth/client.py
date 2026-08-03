@@ -131,6 +131,12 @@ class OAuthClient:
 
         params.update(self._config.extra_params)
 
+        # The resource indicator (RFC 8707) is authoritative for audience
+        # binding, so it is applied after extra_params — the generic escape
+        # hatch must not be able to suppress or redirect it.
+        if self._config.resource:
+            params["resource"] = self._config.resource
+
         parsed = urlparse(self._config.authorize_url)
         existing_params = parse_qs(parsed.query)
         merged = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
@@ -213,6 +219,8 @@ class OAuthClient:
             data["redirect_uri"] = redirect_uri
         if code_verifier:
             data["code_verifier"] = code_verifier
+        if self._config.resource:
+            data["resource"] = self._config.resource
 
         try:
             response = await self._token_request(data)
@@ -242,6 +250,8 @@ class OAuthClient:
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         }
+        if self._config.resource:
+            data["resource"] = self._config.resource
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:

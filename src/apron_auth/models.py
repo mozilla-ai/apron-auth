@@ -135,6 +135,13 @@ class ProviderConfig(BaseModel, frozen=True):
             caller that knows its authorization server emits ``iss`` should
             set this ``True`` to close that gap; :func:`apron_auth.mcp.to_provider_config`
             does so automatically from the discovered metadata.
+        resource: RFC 8707 resource indicator identifying the service the
+            issued token is audience-bound to. When set, it is sent on the
+            authorization request and on the token-exchange and refresh
+            requests, so the authorization server can restrict the token's
+            audience to this resource. ``None`` (the default) emits no
+            ``resource`` parameter anywhere, preserving behavior for
+            providers that do not use resource indicators.
     """
 
     client_id: str
@@ -155,6 +162,7 @@ class ProviderConfig(BaseModel, frozen=True):
     implicit_scopes: dict[str, frozenset[str]] = {}
     issuer: str | None = None
     require_iss: bool = False
+    resource: str | None = None
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
