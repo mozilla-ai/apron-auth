@@ -36,6 +36,30 @@ class TestProviderConfig:
         assert config.redirect_uri is None
         assert config.resource is None
 
+    def test_resource_accepts_absolute_uri(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            resource="https://mcp.example.com/",
+        )
+        assert config.resource == "https://mcp.example.com/"
+
+    @pytest.mark.parametrize(
+        "bad_resource",
+        ["", "mcp.example.com/mcp", "/relative/path", "https://mcp.example.com/#section"],
+    )
+    def test_resource_rejects_non_absolute_or_fragmented_uri(self, bad_resource: str) -> None:
+        with pytest.raises(ValidationError):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                resource=bad_resource,
+            )
+
     def test_public_client_omits_client_secret(self) -> None:
         config = ProviderConfig(
             client_id="public-client",

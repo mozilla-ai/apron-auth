@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, SecretStr, model_validator
 
@@ -136,12 +137,14 @@ class ProviderConfig(BaseModel, frozen=True):
             set this ``True`` to close that gap; :func:`apron_auth.mcp.to_provider_config`
             does so automatically from the discovered metadata.
         resource: RFC 8707 resource indicator identifying the service the
-            issued token is audience-bound to. When set, it is sent on the
-            authorization request and on the token-exchange and refresh
-            requests, so the authorization server can restrict the token's
-            audience to this resource. ``None`` (the default) emits no
-            ``resource`` parameter anywhere, preserving behavior for
-            providers that do not use resource indicators.
+            issued token is audience-bound to. When set, it must be an
+            absolute URI without a fragment (RFC 8707); an invalid value is
+            rejected at construction. It is sent on the authorization request
+            and on the token-exchange and refresh requests, so the
+            authorization server can restrict the token's audience to this
+            resource. ``None`` (the default) emits no ``resource`` parameter
+            anywhere, preserving behavior for providers that do not use
+            resource indicators.
     """
 
     client_id: str
@@ -187,6 +190,35 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         if not is_public and self.client_secret is None:
             msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _resource_is_absolute_uri(self) -> ProviderConfig:
+        """Reject a resource indicator that is not an absolute URI without a fragment.
+
+        RFC 8707 requires a resource indicator to be an absolute URI (RFC 3986
+        section 4.3): it carries a scheme and an authority and no fragment.
+        ``None`` is allowed and disables the indicator. Validating at
+        construction keeps an empty, relative, or fragment-bearing value from
+        reaching the authorization server, where it would silently weaken or
+        break audience binding.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``resource`` is set but is not an absolute URI, or
+                carries a fragment.
+        """
+        if self.resource is None:
+            return self
+        parsed = urlparse(self.resource)
+        if not parsed.scheme or not parsed.netloc:
+            msg = "resource must be an absolute URI when set"
+            raise ValueError(msg)
+        if parsed.fragment:
+            msg = "resource must not contain a fragment"
             raise ValueError(msg)
         return self
 
