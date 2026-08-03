@@ -198,7 +198,7 @@ class ProviderConfig(BaseModel, frozen=True):
         """Reject a resource indicator that is not an absolute URI without a fragment.
 
         RFC 8707 requires a resource indicator to be an absolute URI (RFC 3986
-        section 4.3): it carries a scheme and an authority and no fragment.
+        section 4.3): it carries a scheme and no fragment.
         ``None`` is allowed and disables the indicator. Validating at
         construction keeps an empty, relative, or fragment-bearing value from
         reaching the authorization server, where it would silently weaken or
@@ -213,12 +213,11 @@ class ProviderConfig(BaseModel, frozen=True):
         """
         if self.resource is None:
             return self
-        parsed = urlparse(self.resource)
-        if not parsed.scheme or not parsed.netloc:
-            msg = "resource must be an absolute URI when set"
-            raise ValueError(msg)
-        if parsed.fragment:
+        if "#" in self.resource:
             msg = "resource must not contain a fragment"
+            raise ValueError(msg)
+        if not urlparse(self.resource).scheme:
+            msg = "resource must be an absolute URI when set"
             raise ValueError(msg)
         return self
 
