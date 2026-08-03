@@ -495,14 +495,20 @@ from apron_auth import OAuthClient, mcp
 # 1. Discover the server's OAuth endpoints.
 meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transport_factory)
 
-# 2. Obtain a client identity: register dynamically, or use a pre-registered one.
-if meta.registration_url:
+# 2. Obtain a client identity, in the spec's priority order.
+if my_pre_registered_client_id:  # an existing relationship with this server
+    client_id, client_secret = my_pre_registered_client_id, my_pre_registered_secret
+    registered_auth_method = None
+elif meta.supports_cimd:  # CIMD — the forward path; you host the metadata document
+    client_id = mcp.cimd_client_id("https://app.example.com/oauth/client-metadata.json")
+    client_secret = None
+    registered_auth_method = None
+elif meta.registration_url:  # DCR — deprecated, kept for backward compatibility
     reg = await mcp.register_client(meta.registration_url, redirect_uri, transport_factory=my_transport_factory)
     client_id, client_secret = reg.client_id, reg.client_secret
     registered_auth_method = reg.token_endpoint_auth_method
 else:
-    client_id, client_secret = my_client_id, my_client_secret  # pre-registered out of band
-    registered_auth_method = None
+    raise RuntimeError("server offers no supported client-registration mechanism")
 
 # 3. Build a ProviderConfig and drive the normal authorization-code flow.
 config = mcp.to_provider_config(
@@ -525,6 +531,10 @@ tokens = await client.exchange_code(
 ```
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+
+When using CIMD, you host the `client-metadata.json` yourself at the `client_id` URL — apron-auth is stateless and does not host it. The document must include `client_id`, `client_name`, and `redirect_uris`. Its `client_id` must equal that URL, and its `redirect_uris` must include the redirect you use in the flow; the authorization server fetches and validates the document. `mcp.cimd_client_id(url)` checks the URL is a well-formed CIMD identifier (`https` scheme, a document path, no userinfo or fragment); it does not fetch the URL.
+
+Unlike DCR or pre-registered credentials — which are bound to the authorization server that issued them and must be re-registered when that server changes — a CIMD `client_id` is a self-hosted URL, portable across authorization servers with no re-registration.
 
 `discover` records the authorization server's issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 

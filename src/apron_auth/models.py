@@ -274,6 +274,10 @@ class ServerMetadata(BaseModel, frozen=True):
         iss_parameter_supported: Whether the server advertises support for
             returning the ``iss`` parameter on the authorization response;
             ``False`` when the metadata omits the flag.
+        supports_cimd: Whether the authorization server advertises support
+            for Client ID Metadata Documents (CIMD) via
+            ``client_id_metadata_document_supported``; ``False`` when the
+            metadata omits the flag.
     """
 
     authorize_url: str
@@ -285,6 +289,7 @@ class ServerMetadata(BaseModel, frozen=True):
     token_endpoint_auth_methods: list[str] = []
     issuer: str | None = None
     iss_parameter_supported: bool = False
+    supports_cimd: bool = False
 
 
 class ClientRegistration(BaseModel, frozen=True):

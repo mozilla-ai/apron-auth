@@ -135,6 +135,7 @@ async def discover(
         token_endpoint_auth_methods=_str_list(server_meta.get("token_endpoint_auth_methods_supported")),
         issuer=issuer if isinstance(issuer, str) else None,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
+        supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
     )
 
 
@@ -291,6 +292,64 @@ async def register_client(
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
         token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else None,
     )
+
+
+def cimd_client_id(url: str) -> str:
+    """Validate an HTTPS URL as a Client ID Metadata Document (CIMD) client identifier.
+
+    A CIMD client is identified by an HTTPS URL to a metadata document the client
+    hosts, and that URL is sent verbatim as the ``client_id`` in the authorization
+    and token requests. This enforces the client-identifier URL rules this library
+    can check locally and returns the URL for use as a ``client_id``: an ``https``
+    scheme, a valid port, a path component naming the document, and none of the
+    components the specification forbids — userinfo, a fragment, or a ``.`` or
+    ``..`` path segment. A query string is only discouraged, not forbidden, so it
+    is left alone.
+
+    Unlike :func:`discover` and :func:`register_client`, this does not block
+    non-public hosts. The URL is the client's own metadata document, which this
+    library never fetches — the authorization server resolves it — so blocking
+    non-public hosts would reject a legitimate caller-hosted URL.
+
+    Args:
+        url: The HTTPS URL of the client's hosted metadata document.
+
+    Returns:
+        The validated URL, unchanged, for use as a ``client_id``.
+
+    Raises:
+        ValueError: If the URL is malformed or has an invalid port, is not
+            ``https``, has no host, carries userinfo or a fragment, names no
+            document path beyond a bare ``/``, or contains a ``.`` or ``..``
+            path segment.
+    """
+    try:
+        parsed = urlparse(url)
+        # Accessing .port forces its validation; an out-of-range or non-numeric
+        # port raises ValueError, which urlparse itself defers until this access.
+        _ = parsed.port
+    except ValueError as exc:
+        msg = "CIMD client_id must be a valid URL"
+        raise ValueError(msg) from exc
+    if parsed.scheme != "https":
+        msg = "CIMD client_id must be an https URL"
+        raise ValueError(msg)
+    if not parsed.hostname:
+        msg = "CIMD client_id must be an https URL with a host"
+        raise ValueError(msg)
+    if parsed.username is not None or parsed.password is not None:
+        msg = "CIMD client_id must not contain a username or password"
+        raise ValueError(msg)
+    if parsed.fragment:
+        msg = "CIMD client_id must not contain a fragment"
+        raise ValueError(msg)
+    if not parsed.path.strip("/"):
+        msg = "CIMD client_id must be an https URL with a path component"
+        raise ValueError(msg)
+    if any(segment in (".", "..") for segment in parsed.path.split("/")):
+        msg = "CIMD client_id must not contain a . or .. path segment"
+        raise ValueError(msg)
+    return url
 
 
 def _str_list(value: Any) -> list[str]:

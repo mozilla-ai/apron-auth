@@ -19,6 +19,7 @@ from apron_auth.mcp import (
     _select_auth_method,
     _str_list,
     _validate_url,
+    cimd_client_id,
     discover,
     register_client,
     to_provider_config,
@@ -198,6 +199,19 @@ class TestToProviderConfig:
         config = to_provider_config(self._meta(), client_id="c", client_secret="s")
         assert config.issuer is None
         assert config.require_iss is False
+
+    def test_cimd_url_client_id_yields_public_config(self) -> None:
+        url = cimd_client_id("https://app.example.com/oauth/client-metadata.json")
+        config = to_provider_config(self._meta(), client_id=url, client_secret=None)
+        assert config.client_id == "https://app.example.com/oauth/client-metadata.json"
+        assert config.client_secret is None
+        assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
+
+    def test_cimd_public_client_without_none_method_fails_fast(self) -> None:
+        """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
+        meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
+        with pytest.raises(McpDiscoveryError):
+            to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
 
 
 class TestSelectAuthMethod:
@@ -402,6 +416,28 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com")
         assert meta.issuer is None
         assert meta.iss_parameter_supported is False
+
+    async def test_supports_cimd_captured(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(
+            url=_ASM_ROOT,
+            json=_asm_payload(client_id_metadata_document_supported=True),
+        )
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is True
+
+    async def test_supports_cimd_defaults_false_when_absent(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is False
+
+    async def test_supports_cimd_false_when_not_true(self, httpx_mock: HTTPXMock) -> None:
+        """A non-boolean flag value must not be read as support."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(client_id_metadata_document_supported="yes"))
+        meta = await discover("https://mcp.example.com")
+        assert meta.supports_cimd is False
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -782,6 +818,66 @@ class TestRegisterClient:
     async def test_invalid_application_type_rejected_locally(self) -> None:
         with pytest.raises(ValueError, match="application_type"):
             await register_client(_REGISTER_URL, _REDIRECT_URI, application_type="desktop")
+
+
+class TestCimdClientId:
+    def test_valid_url_returned_unchanged(self) -> None:
+        url = "https://app.example.com/oauth/client-metadata.json"
+        assert cimd_client_id(url) == url
+
+    def test_valid_url_with_nested_path(self) -> None:
+        url = "https://app.example.com/a/b/client.json"
+        assert cimd_client_id(url) == url
+
+    def test_http_scheme_rejected(self) -> None:
+        with pytest.raises(ValueError, match="https"):
+            cimd_client_id("http://app.example.com/client.json")
+
+    def test_missing_path_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path"):
+            cimd_client_id("https://app.example.com")
+
+    def test_bare_slash_path_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path"):
+            cimd_client_id("https://app.example.com/")
+
+    def test_no_host_rejected(self) -> None:
+        with pytest.raises(ValueError, match="host"):
+            cimd_client_id("https:///client.json")
+
+    def test_valid_url_with_port_accepted(self) -> None:
+        url = "https://app.example.com:8443/client.json"
+        assert cimd_client_id(url) == url
+
+    def test_invalid_port_rejected(self) -> None:
+        with pytest.raises(ValueError, match="valid URL"):
+            cimd_client_id("https://app.example.com:notaport/client.json")
+
+    def test_userinfo_rejected(self) -> None:
+        with pytest.raises(ValueError, match="username or password"):
+            cimd_client_id("https://user:pass@app.example.com/client.json")  # pragma: allowlist secret
+
+    def test_fragment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="fragment"):
+            cimd_client_id("https://app.example.com/client.json#section")
+
+    def test_dot_path_segment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path segment"):
+            cimd_client_id("https://app.example.com/./client.json")
+
+    def test_dotdot_path_segment_rejected(self) -> None:
+        with pytest.raises(ValueError, match="path segment"):
+            cimd_client_id("https://app.example.com/../client.json")
+
+    def test_non_public_host_accepted(self) -> None:
+        """The SSRF host block must NOT apply: the caller hosts this URL and the library never fetches it.
+
+        Uses a loopback IP literal, which ``_is_blocked_host`` (applied by discovery
+        and registration) rejects — so accepting it here proves the block is
+        deliberately absent, and guards against a regression that adds it.
+        """
+        url = "https://127.0.0.1/client.json"
+        assert cimd_client_id(url) == url
 
 
 class TestEndToEndFlow:
