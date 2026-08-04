@@ -200,6 +200,25 @@ class TestToProviderConfig:
         assert config.issuer is None
         assert config.require_iss is False
 
+    def test_resource_threaded_from_metadata(self) -> None:
+        meta = self._meta(resource="https://mcp.example.com/mcp")
+        config = to_provider_config(meta, client_id="c", client_secret="s")
+        assert config.resource == "https://mcp.example.com/mcp"
+
+    def test_resource_absent_leaves_config_unbound(self) -> None:
+        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        assert config.resource is None
+
+    def test_explicit_resource_overrides_metadata(self) -> None:
+        meta = self._meta(resource="https://mcp.example.com")
+        config = to_provider_config(
+            meta,
+            client_id="c",
+            client_secret="s",
+            resource="https://mcp.example.com/server/mcp",
+        )
+        assert config.resource == "https://mcp.example.com/server/mcp"
+
     def test_cimd_url_client_id_yields_public_config(self) -> None:
         url = cimd_client_id("https://app.example.com/oauth/client-metadata.json")
         config = to_provider_config(self._meta(), client_id=url, client_secret=None)
@@ -438,6 +457,33 @@ class TestDiscover:
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(client_id_metadata_document_supported="yes"))
         meta = await discover("https://mcp.example.com")
         assert meta.supports_cimd is False
+
+    async def test_resource_identifier_captured(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_PRM_ROOT,
+            json={
+                "resource": "https://mcp.example.com",
+                "authorization_servers": ["https://auth.example.com"],
+            },
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.resource == "https://mcp.example.com"
+
+    async def test_resource_none_when_prm_omits_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.resource is None
+
+    async def test_resource_ignored_when_not_a_string(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_PRM_ROOT,
+            json={"resource": 123, "authorization_servers": ["https://auth.example.com"]},
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.resource is None
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
