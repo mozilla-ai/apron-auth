@@ -63,12 +63,12 @@ async def discover(
     """Discover a remote MCP server's OAuth metadata.
 
     Fetches the RFC 9728 protected-resource metadata (trying the
-    ``resource_metadata_url`` hint, then well-known locations), reads its first
-    authorization server, and fetches that server's RFC 8414 metadata (with an
-    OIDC fallback). The HTTPS requirement and non-public-IP-literal block are
-    defense-in-depth; they do not stop a hostname that resolves to an internal
-    address, so untrusted ``server_url`` values need a ``transport_factory``
-    that pins DNS to validated addresses.
+    ``resource_metadata_url`` hint, then well-known locations), reads its
+    resource identifier and first authorization server, and fetches that
+    server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
+    and non-public-IP-literal block are defense-in-depth; they do not stop a
+    hostname that resolves to an internal address, so untrusted ``server_url``
+    values need a ``transport_factory`` that pins DNS to validated addresses.
 
     Args:
         server_url: Base URL of the MCP server.
@@ -125,6 +125,7 @@ async def discover(
             _validate_url(url, url_validator)
 
     issuer = server_meta.get("issuer")
+    resource = resource_meta.get("resource")
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
@@ -136,6 +137,7 @@ async def discover(
         issuer=issuer if isinstance(issuer, str) else None,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
+        resource=resource if isinstance(resource, str) else None,
     )
 
 
@@ -147,6 +149,7 @@ def to_provider_config(
     registered_auth_method: str | None = None,
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
+    resource: str | None = None,
 ) -> ProviderConfig:
     """Fold discovered metadata and a client identity into a ProviderConfig.
 
@@ -160,6 +163,8 @@ def to_provider_config(
     ``client_secret_post``) and a secretless public client uses ``none``. The
     discovered issuer and its ``iss``-parameter support carry onto the config so
     the code exchange can validate the authorization-response ``iss`` (RFC 9207).
+    The RFC 8707 resource indicator defaults to the discovered protected-resource
+    identifier and can be overridden by ``resource``.
 
     Args:
         metadata: Metadata from :func:`discover`.
@@ -170,6 +175,12 @@ def to_provider_config(
             derivation from the advertised set. Omit when unknown.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
+        resource: RFC 8707 resource indicator to audience-bind issued tokens to,
+            overriding the discovered :attr:`ServerMetadata.resource`. ``None``
+            (the default) selects the discovered identifier rather than clearing
+            it — a discovered resource cannot be suppressed here. The resulting
+            config carries no resource indicator only when ``resource`` is
+            ``None`` and none was discovered.
 
     Returns:
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
@@ -178,6 +189,8 @@ def to_provider_config(
         McpDiscoveryError: If the registered method is one this library cannot
             perform, or the server advertises only such methods for a
             confidential client.
+        ValidationError: If the effective ``resource`` — supplied or discovered —
+            is not a valid absolute URI without a fragment.
     """
     secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
     methods = metadata.code_challenge_methods
@@ -202,6 +215,7 @@ def to_provider_config(
         token_endpoint_auth_method=auth_method,
         issuer=metadata.issuer,
         require_iss=metadata.iss_parameter_supported,
+        resource=resource if resource is not None else metadata.resource,
     )
 
 

@@ -288,11 +288,12 @@ class ProviderConfig(BaseModel, frozen=True):
 
 
 class ServerMetadata(BaseModel, frozen=True):
-    """OAuth endpoints and capabilities of an MCP server's authorization server.
+    """OAuth metadata discovered for an MCP server and its authorization server.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
-    authorization-code flow, plus the registration endpoint from RFC 7591.
-    Holds no client identity — only the server-advertised facts.
+    authorization-code flow, plus the registration endpoint from RFC 7591 and
+    the RFC 9728 protected-resource identifier. Holds no client identity — only
+    the server-advertised facts.
 
     Attributes:
         authorize_url: The authorization endpoint URL.
@@ -317,6 +318,10 @@ class ServerMetadata(BaseModel, frozen=True):
             for Client ID Metadata Documents (CIMD) via
             ``client_id_metadata_document_supported``; ``False`` when the
             metadata omits the flag.
+        resource: The protected resource's RFC 8707 resource identifier, taken
+            from the RFC 9728 protected-resource metadata ``resource`` field;
+            ``None`` when the metadata omits it or its value is not a string.
+            This is the canonical URI to which a token's audience is bound.
     """
 
     authorize_url: str
@@ -329,6 +334,7 @@ class ServerMetadata(BaseModel, frozen=True):
     issuer: str | None = None
     iss_parameter_supported: bool = False
     supports_cimd: bool = False
+    resource: str | None = None
 
 
 class ClientRegistration(BaseModel, frozen=True):
