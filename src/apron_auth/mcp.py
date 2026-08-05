@@ -175,10 +175,12 @@ def to_provider_config(
             derivation from the advertised set. Omit when unknown.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
-        resource: RFC 8707 resource indicator to audience-bind issued tokens to.
-            Overrides :attr:`ServerMetadata.resource` when given; when omitted,
-            the discovered identifier is used. ``None`` in both leaves the config
-            with no resource indicator.
+        resource: RFC 8707 resource indicator to audience-bind issued tokens to,
+            overriding the discovered :attr:`ServerMetadata.resource`. ``None``
+            (the default) selects the discovered identifier rather than clearing
+            it — a discovered resource cannot be suppressed here. The resulting
+            config carries no resource indicator only when ``resource`` is
+            ``None`` and none was discovered.
 
     Returns:
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
