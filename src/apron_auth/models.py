@@ -288,12 +288,20 @@ class ProviderConfig(BaseModel, frozen=True):
 
 
 class ServerMetadata(BaseModel, frozen=True):
-    """OAuth metadata discovered for an MCP server and its authorization server.
+    """OAuth metadata discovered for an authorization server.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
     authorization-code flow, plus the registration endpoint from RFC 7591 and
     the RFC 9728 protected-resource identifier. Holds no client identity — only
     the server-advertised facts.
+
+    Two discovery paths produce this: :func:`apron_auth.mcp.discover`, which
+    reaches an authorization server through an MCP server's protected-resource
+    metadata, and :func:`apron_auth.providers.oidc.discover`, which reads an
+    OpenID provider's configuration document directly. The fields each path
+    leaves unset differ accordingly: an MCP discovery sets no
+    :attr:`userinfo_url` or :attr:`jwks_url`, and an OIDC discovery sets no
+    :attr:`resource`.
 
     Attributes:
         authorize_url: The authorization endpoint URL.
@@ -322,6 +330,15 @@ class ServerMetadata(BaseModel, frozen=True):
             from the RFC 9728 protected-resource metadata ``resource`` field;
             ``None`` when the metadata omits it or its value is not a string.
             This is the canonical URI to which a token's audience is bound.
+        userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when
+            the metadata omits it. An OpenID provider is not obliged to
+            advertise one, and a caller that finds it absent must establish
+            identity from the ID token alone.
+        jwks_url: The JSON Web Key Set endpoint, or ``None`` when the metadata
+            omits it. Present so a caller that verifies ID-token signatures
+            knows where the keys are; this library does not fetch it, because
+            an ID token received over the back-channel is authenticated by the
+            token endpoint's TLS (OpenID Connect Core 1.0, section 3.1.3.7).
     """
 
     authorize_url: str
@@ -335,6 +352,8 @@ class ServerMetadata(BaseModel, frozen=True):
     iss_parameter_supported: bool = False
     supports_cimd: bool = False
     resource: str | None = None
+    userinfo_url: str | None = None
+    jwks_url: str | None = None
 
 
 class ClientRegistration(BaseModel, frozen=True):
