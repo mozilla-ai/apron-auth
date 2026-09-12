@@ -56,9 +56,90 @@ config, revocation_handler = google.preset(
 )
 ```
 
+### Any OpenID Connect provider
+
+A provider that implements OpenID Connect publishes its own endpoints, so there is
+nothing to hardcode: discover them from the issuer and hand the result to the preset.
+This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, and Ping without
+a module per product.
+
+```python
+from apron_auth import OAuthClient
+from apron_auth.providers import oidc
+
+metadata = await oidc.discover("https://sso.example.com/realms/acme")
+
+config, revocation_handler = oidc.preset(
+    client_id="your-client-id",
+    client_secret="your-client-secret",  # pragma: allowlist secret
+    scopes=["email", "profile"],
+    metadata=metadata,
+    redirect_uri="https://yourapp.com/callback",
+)
+
+client = OAuthClient(
+    config,
+    identity_handler=oidc.identity_handler(metadata, client_id="your-client-id"),
+)
+```
+
+The issuer is a trust anchor, not just an address: `discover` refuses a configuration
+document that names a different one (OpenID Connect Discovery 1.0, section 4.3), and the
+discovered issuer carries onto the config so the authorization-response `iss` is validated
+before a code is redeemed (RFC 9207).
+
+Unlike every other provider here, the identity handler is passed explicitly. Handler
+inference matches a config's OAuth hosts against each provider's known hosts, and a
+generic connection's hosts are whatever the operator configured — so `oidc` registers no
+resolver rather than making inference ambiguous for the providers that can answer.
+
+ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
+OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check, and the
+claim validation is delegated to `authlib.oidc.core.CodeIDToken` — authlib's own §3.1.3.7
+validator, which checks `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (verified
+against the access token, per §3.1.3.7 step 8). The handler then refuses
+a userinfo response whose `sub` disagrees with the ID token's. `ServerMetadata.jwks_url` is carried through for a caller
+that wants to verify signatures itself; this library does not fetch it.
+
+`IdentityProfile.provider` is `oidc:<issuer>`, not a bare `oidc`. A `sub` is unique only
+within an issuer, so two generic connections would otherwise collide on the
+`(provider, subject)` pair that `identity_key()` recommends as a user-table primary key.
+
+PKCE is mandatory here, not negotiated: a provider whose `code_challenge_methods_supported`
+omits `S256` is refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only
+thing binding an authorization code to the session that requested it, so a config without it
+would have no code-injection defense at all.
+
+`discover` applies no scheme or host policy of its own, so a self-hosted IdP on a private
+network needs no opt-in. Whether a given issuer may be reached is a deployment question,
+and a check on the URL string cannot answer it anyway — a hostname resolving to an internal
+address passes any such test. Both `discover` and `identity_handler` accept a
+`transport_factory`, which is where that policy belongs: it controls the actual outbound
+connection, so a caller can pin DNS to validated addresses or route through its own egress.
+
+The endpoint URLs a configuration document names are used exactly as named, including the
+scheme. HTTPS is deliberately not enforced: a document that advertises an `http://` token
+endpoint is used at that URL, and `preset` will happily build a config that POSTs client
+credentials there. Keeping the credential-bearing endpoints on HTTPS is the operator's
+responsibility — this module only refuses to pretend the decision was made for you.
+
+#### What this preset does not do
+
+Each is a deliberate limitation rather than an oversight:
+
+| Limitation | Why |
+| --- | --- |
+| Confidential clients only | `preset` requires a client secret; a public (native/SPA) client cannot be configured, though `ProviderConfig` models one |
+| No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, and PKCE covers code injection — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
+| No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata`, though authlib implements the URL builder |
+| No `response_mode` | The query default is always used |
+| A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |
+| A signed (`application/jwt`) userinfo response is refused | Signatures are not verified here, so it is refused rather than read unverified |
+
 ### Manual configuration
 
-If your provider doesn't have a preset, configure it directly.
+If your provider doesn't have a preset and doesn't implement OpenID Connect, configure it
+directly.
 
 ```python
 from pydantic import SecretStr
@@ -558,6 +639,7 @@ Discovery, registration, the token request, and token revocation all fetch URLs 
 | Salesforce | `salesforce.preset(...)` | RFC 7009 POST          | `False`                    |
 | Typeform   | `typeform.preset(...)`   | —                      | `False`                    |
 | HubSpot    | `hubspot.preset(...)`    | DELETE refresh-token   | `False`                    |
+| Any OpenID | `oidc.preset(...)`       | RFC 7009 POST, if advertised | `False`              |
 
 ## Scope reduction tiers
 
@@ -604,6 +686,7 @@ All exceptions inherit from `OAuthError`.
 | `ConfigurationError`  | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
 | `McpDiscoveryError`   | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`| MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
+| `OidcDiscoveryError`  | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 
 ## Logging
 

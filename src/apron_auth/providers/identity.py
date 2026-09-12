@@ -84,6 +84,25 @@ def _identity_resolver_registrations() -> tuple[IdentityResolverRegistration, ..
     return ordered
 
 
+def identity_providers() -> tuple[str, ...]:
+    """The built-in providers that can establish an identity, sorted by name.
+
+    For a consumer that lets an operator *choose* a provider rather than
+    hardcoding one: the set is discovered from the modules in this package, so
+    a provider added here becomes selectable without the consumer restating the
+    list and going stale against it.
+
+    ``providers.oidc`` is absent, and not by oversight. Every name here resolves
+    its handler by matching a config's OAuth hosts, which a generic OpenID
+    connection has no fixed value for; that module registers no resolver and
+    exposes :func:`apron_auth.providers.oidc.identity_handler` instead.
+
+    Returns:
+        The provider names, ordered.
+    """
+    return tuple(registration.provider for registration in _identity_resolver_registrations())
+
+
 def infer_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     """Infer a built-in identity handler from provider modules.
 

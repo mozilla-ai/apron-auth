@@ -34,6 +34,7 @@ source = { editable = "." }
 dependencies = [
     { name = "authlib" },
     { name = "httpx" },
+    { name = "joserfc" },
     { name = "pydantic" },
 ]
 
@@ -65,6 +66,7 @@ tests = [
 requires-dist = [
     { name = "authlib", specifier = ">=1.6.12" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "joserfc", specifier = ">=1.6" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
