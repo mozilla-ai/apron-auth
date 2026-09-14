@@ -69,7 +69,16 @@ class TestAtlassianPreset:
         )
         metadata_scopes = {meta.scope for meta in config.scope_metadata}
         assert metadata_scopes == set(BASE_SCOPES)
-        assert all(meta.required for meta in config.scope_metadata)
+
+    def test_read_me_scope_is_optional(self):
+        """Identity is derivable from accessible-resources alone, so a
+        consent picker may let the user decline ``read:me``; only the
+        refresh-token scope is load-bearing for the flow itself."""
+        from apron_auth.providers.atlassian import preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        required = {meta.scope: meta.required for meta in config.scope_metadata}
+        assert required == {"offline_access": True, "read:me": False}
 
 
 class TestAtlassianIdentityHandler:

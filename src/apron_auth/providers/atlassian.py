@@ -255,9 +255,12 @@ BASE_SCOPE_METADATA = [
     ScopeMetadata(
         scope="read:me",
         label="User Profile",
-        description="View your Atlassian account profile for account identification",
+        description=(
+            "View your Atlassian account profile so the connection can be identified "
+            "by your name and email rather than by site alone"
+        ),
         access_type="read",
-        required=True,
+        required=False,
     ),
 ]
 
@@ -278,8 +281,7 @@ def preset(
     Args:
         client_id: The OAuth client identifier.
         client_secret: The OAuth client secret.
-        scopes: Additional scopes to request; merged with the required
-            base scopes.
+        scopes: Additional scopes to request; merged with the base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``audience`` and ``prompt=consent`` defaults.
