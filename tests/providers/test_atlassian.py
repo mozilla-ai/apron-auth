@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -123,10 +126,12 @@ class TestAtlassianIdentityHandler:
             raw=payload,
         )
         requests = httpx_mock.get_requests()
-        assert {str(r.url) for r in requests} == {
-            ATLASSIAN_ME_URL,
+        # accessible-resources is the load-bearing call, so it goes first;
+        # a failure there must not be preceded by a wasted ``/me`` round trip.
+        assert [str(r.url) for r in requests] == [
             ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
-        }
+            ATLASSIAN_ME_URL,
+        ]
         for request in requests:
             assert request.headers.get("authorization") == "Bearer access-abc"
 
@@ -229,7 +234,15 @@ class TestAtlassianIdentityHandler:
 
         assert identity.tenancies == ()
 
-    async def test_401_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
+    async def test_me_failure_degrades_to_tenancy_only_profile(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
+        """``/me`` needs ``read:me`` and the User Identity API toggle;
+        accessible-resources needs neither. When ``/me`` is refused the
+        site tenancies still establish identity and the person-level
+        fields stay ``None``, with a warning so the gap is observable."""
+        resources = [{"id": "cloud-1", "name": "Acme Corp", "url": "https://acme.atlassian.net"}]
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         httpx_mock.add_response(
             url=ATLASSIAN_ME_URL,
             status_code=401,
@@ -237,14 +250,83 @@ class TestAtlassianIdentityHandler:
         )
         from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
 
-        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian identity"):
-            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity == IdentityProfile(
+            provider="atlassian",
+            tenancies=(
+                TenancyContext(
+                    id="cloud-1",
+                    name="Acme Corp",
+                    domain="https://acme.atlassian.net",
+                    raw={},
+                ),
+            ),
+        )
+        assert "status 401" in caplog.text
+
+    async def test_me_transport_error_degrades_to_tenancy_only_profile(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
+        resources = [{"id": "cloud-1"}]
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        httpx_mock.add_exception(httpx.ConnectError("connection refused"), url=ATLASSIAN_ME_URL)
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        handler = AtlassianIdentityHandler()
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject is None
+        assert identity.raw == {}
+        assert identity.tenancies[0].id == "cloud-1"
+        assert "ConnectError" in caplog.text
+
+    async def test_me_non_json_2xx_degrades_to_tenancy_only_profile(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
+        resources = [{"id": "cloud-1"}]
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, status_code=200, content=b"not-json")
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        handler = AtlassianIdentityHandler()
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject is None
+        assert identity.raw == {}
+        assert identity.tenancies[0].id == "cloud-1"
+        assert "could not parse" in caplog.text
+
+    async def test_me_non_object_payload_degrades_to_tenancy_only_profile(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ):
+        resources = [{"id": "cloud-1"}]
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=["not", "an", "object"])
+        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
+
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        handler = AtlassianIdentityHandler()
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject is None
+        assert identity.raw == {}
+        assert identity.tenancies[0].id == "cloud-1"
+        assert "not a JSON object" in caplog.text
 
     async def test_accessible_resources_failure_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
         httpx_mock.add_response(
             url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
             status_code=500,
@@ -259,9 +341,11 @@ class TestAtlassianIdentityHandler:
         # which endpoint failed without reproducing the call.
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        # ``/me`` is never reached: the pytest-httpx teardown check would
+        # fail if an unused ``/me`` response had been registered here.
+        assert [str(r.url) for r in httpx_mock.get_requests()] == [ATLASSIAN_ACCESSIBLE_RESOURCES_URL]
 
     async def test_accessible_resources_non_json_raises_distinct_parse_error(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json={"account_id": "x"})
         httpx_mock.add_response(
             url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
             status_code=200,
@@ -276,20 +360,6 @@ class TestAtlassianIdentityHandler:
             IdentityFetchError,
             match="Failed to parse Atlassian accessible resources response",
         ):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
-
-    async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(
-            url=ATLASSIAN_ME_URL,
-            status_code=200,
-            content=b"not-json",
-        )
-        from apron_auth.providers.atlassian import AtlassianIdentityHandler, preset
-
-        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
-        handler = AtlassianIdentityHandler()
-
-        with pytest.raises(IdentityFetchError, match="Failed to parse Atlassian identity response"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
 

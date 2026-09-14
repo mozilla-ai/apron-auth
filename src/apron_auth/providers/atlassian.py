@@ -9,6 +9,7 @@ surface a deep link to that page for manual removal.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -23,6 +24,8 @@ from apron_auth.providers._identity_registry import IdentityResolverRegistration
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
+
+logger = logging.getLogger(__name__)
 
 _ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
 _ATLASSIAN_IDENTITY_HOST_SUFFIXES = ("auth.atlassian.com",)
@@ -79,19 +82,26 @@ def _optional_str(value: Any) -> str | None:
 
 
 class AtlassianIdentityHandler:
-    """Fetch identity fields from Atlassian's User Identity API.
-
-    Requires the ``read:me`` OAuth scope and that the "User Identity
-    API" is enabled on the OAuth app in the Atlassian developer
-    console — without that toggle, ``GET /me`` returns 401 even with a
-    valid access token.
+    """Fetch identity fields from Atlassian's accessible-resources and User Identity APIs.
 
     Atlassian OAuth 2.0 (3LO) tokens can grant access to several Cloud
     sites (Jira, Jira Service Management, Confluence) under the same
-    grant. This handler issues a second call to
-    ``/oauth/token/accessible-resources`` and emits one
-    :class:`TenancyContext` per returned resource — making Atlassian
-    the canonical multi-tenant case for the ``tenancies`` tuple shape.
+    grant. ``/oauth/token/accessible-resources`` lists those sites and
+    needs no scope beyond what any 3LO grant already carries, so it is
+    the load-bearing call: one :class:`TenancyContext` is emitted per
+    returned resource — making Atlassian the canonical multi-tenant case
+    for the ``tenancies`` tuple shape — and a failure there fails the
+    whole fetch.
+
+    ``GET /me`` enriches the profile with the person-level fields
+    (``subject``, ``email``, ``name``, ``username``, ``avatar_url``). It
+    requires the ``read:me`` scope and that the "User Identity API" is
+    enabled on the OAuth app in the Atlassian developer console — without
+    that toggle, ``/me`` returns 401 even with a valid access token. Since
+    every field it populates is optional, a refused or unparseable ``/me``
+    response degrades to a tenancy-only profile with a warning rather
+    than failing the fetch.
+
     The bearer token travels in the ``Authorization`` header on both
     calls (not the URL), so default httpx exception messages — which
     embed the request URL — do not embed the token; the standard
@@ -107,41 +117,19 @@ class AtlassianIdentityHandler:
 
         Returns:
             The identity profile, with one tenancy per Atlassian Cloud site
-            the token can access.
+            the token can access. Person-level fields are ``None`` and
+            ``raw`` is empty when the User Identity API is unavailable.
 
         Raises:
-            IdentityFetchError: If the userinfo or accessible-resources
-                request fails, or a response cannot be parsed.
+            IdentityFetchError: If the accessible-resources request fails
+                or its response cannot be parsed. The User Identity API
+                request never raises; it degrades to a tenancy-only profile.
         """
         del config
         headers = {"Authorization": f"Bearer {material.access_token}"}
         async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(_ATLASSIAN_USERINFO_URL, headers=headers)
-                response.raise_for_status()
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-                raise IdentityFetchError(f"Failed to fetch Atlassian identity: {exc}") from exc
-
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise IdentityFetchError(f"Failed to parse Atlassian identity response: {exc}") from exc
-
-            try:
-                resources_response = await client.get(
-                    _ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
-                    headers=headers,
-                )
-                resources_response.raise_for_status()
-            except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-                raise IdentityFetchError(f"Failed to fetch Atlassian accessible resources: {exc}") from exc
-
-            try:
-                resources = resources_response.json()
-            except ValueError as exc:
-                raise IdentityFetchError(f"Failed to parse Atlassian accessible resources response: {exc}") from exc
-
-        tenancies = _build_tenancies(resources)
+            tenancies = await self._fetch_tenancies(client, headers)
+            payload = await self._fetch_profile(client, headers)
 
         return IdentityProfile(
             provider="atlassian",
@@ -154,6 +142,85 @@ class AtlassianIdentityHandler:
             tenancies=tenancies,
             raw=payload,
         )
+
+    async def _fetch_tenancies(self, client: httpx.AsyncClient, headers: dict[str, str]) -> tuple[TenancyContext, ...]:
+        """Resolve the sites the token can access into tenancies.
+
+        Args:
+            client: The HTTP client to issue the request with.
+            headers: Request headers carrying the bearer token.
+
+        Returns:
+            One tenancy per accessible site, in response order.
+
+        Raises:
+            IdentityFetchError: If the request fails or its response cannot
+                be parsed.
+        """
+        try:
+            response = await client.get(_ATLASSIAN_ACCESSIBLE_RESOURCES_URL, headers=headers)
+            response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise IdentityFetchError(f"Failed to fetch Atlassian accessible resources: {exc}") from exc
+
+        try:
+            resources = response.json()
+        except ValueError as exc:
+            raise IdentityFetchError(f"Failed to parse Atlassian accessible resources response: {exc}") from exc
+
+        return _build_tenancies(resources)
+
+    async def _fetch_profile(self, client: httpx.AsyncClient, headers: dict[str, str]) -> dict[str, Any]:
+        """Fetch the person-level profile from the User Identity API.
+
+        Every failure — a refused request, a transport error, or a body
+        that is not a JSON object — is logged and yields an empty payload
+        so the caller can still build a tenancy-only profile.
+
+        Args:
+            client: The HTTP client to issue the request with.
+            headers: Request headers carrying the bearer token.
+
+        Returns:
+            The parsed ``/me`` payload, or an empty dict when it is
+            unavailable.
+        """
+        try:
+            response = await client.get(_ATLASSIAN_USERINFO_URL, headers=headers)
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # The status is the whole diagnostic: 401 separates a missing
+            # scope or disabled User Identity API from a transient failure.
+            logger.warning(
+                "atlassian user identity lookup was refused (status %s); "
+                "emitting a tenancy-only profile without person-level fields",
+                exc.response.status_code,
+            )
+            return {}
+        except httpx.RequestError as exc:
+            logger.warning(
+                "atlassian user identity lookup failed (%s); "
+                "emitting a tenancy-only profile without person-level fields",
+                type(exc).__name__,
+            )
+            return {}
+
+        try:
+            payload = response.json()
+        except ValueError:
+            logger.warning(
+                "atlassian user identity lookup could not parse the response; "
+                "emitting a tenancy-only profile without person-level fields"
+            )
+            return {}
+
+        if not isinstance(payload, dict):
+            logger.warning(
+                "atlassian user identity lookup returned a body that is not a JSON object; "
+                "emitting a tenancy-only profile without person-level fields"
+            )
+            return {}
+        return payload
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
