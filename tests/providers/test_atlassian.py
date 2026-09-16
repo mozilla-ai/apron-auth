@@ -291,6 +291,26 @@ class TestAtlassianIdentityHandler:
         assert identity.tenancies[0].id == "cloud-1"
         assert "could not parse" in caplog.text
 
+    async def test_me_non_string_person_fields_are_dropped(self, httpx_mock: HTTPXMock) -> None:
+        """A well-formed object whose person fields carry the wrong type
+        must not fail the fetch: the tenancies are already established,
+        and every person-level field is optional. ``raw`` keeps the
+        original response so an advanced caller can still inspect it."""
+        payload = {"account_id": [], "email": 123, "name": {"given": "Test"}, "nickname": "tuser"}
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=[{"id": "cloud-1"}])
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
+        handler = AtlassianIdentityHandler()
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject is None
+        assert identity.email is None
+        assert identity.name is None
+        assert identity.username == "tuser"
+        assert identity.tenancies[0].id == "cloud-1"
+        assert identity.raw == payload
+
     async def test_me_non_object_payload_degrades_to_tenancy_only_profile(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:

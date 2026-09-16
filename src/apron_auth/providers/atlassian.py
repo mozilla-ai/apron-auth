@@ -100,7 +100,8 @@ class AtlassianIdentityHandler:
     that toggle, ``/me`` returns 401 even with a valid access token. Since
     every field it populates is optional, a refused or unparseable ``/me``
     response degrades to a tenancy-only profile with a warning rather
-    than failing the fetch.
+    than failing the fetch, and an individual field the response does not
+    carry as a non-empty string is dropped rather than propagated.
 
     The bearer token travels in the ``Authorization`` header on both
     calls (not the URL), so default httpx exception messages — which
@@ -117,8 +118,9 @@ class AtlassianIdentityHandler:
 
         Returns:
             The identity profile, with one tenancy per Atlassian Cloud site
-            the token can access. Person-level fields are ``None`` and
-            ``raw`` is empty when the User Identity API is unavailable.
+            the token can access. A person-level field is ``None`` whenever
+            the User Identity API did not supply it as a non-empty string,
+            and ``raw`` is empty when that API is unavailable altogether.
 
         Raises:
             IdentityFetchError: If the accessible-resources request fails
@@ -133,12 +135,12 @@ class AtlassianIdentityHandler:
 
         return IdentityProfile(
             provider="atlassian",
-            subject=payload.get("account_id"),
-            email=payload.get("email"),
+            subject=_optional_str(payload.get("account_id")),
+            email=_optional_str(payload.get("email")),
             email_verified=None,
-            name=payload.get("name"),
-            username=payload.get("nickname"),
-            avatar_url=payload.get("picture"),
+            name=_optional_str(payload.get("name")),
+            username=_optional_str(payload.get("nickname")),
+            avatar_url=_optional_str(payload.get("picture")),
             tenancies=tenancies,
             raw=payload,
         )
