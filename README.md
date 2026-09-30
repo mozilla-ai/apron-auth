@@ -629,6 +629,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 |----------------------------------|-------------------------------------------------------------|
 | `apron_auth.stores`              | Expired OAuth state discarded on lookup.                     |
 | `apron_auth.providers.microsoft` | Withheld tenancy assertions; ID-token claim parsing.         |
+| `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
 | `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
