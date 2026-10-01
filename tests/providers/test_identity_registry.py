@@ -11,7 +11,11 @@ from apron_auth import providers as providers_pkg
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, ProviderConfig
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
-from apron_auth.providers.identity import _identity_resolver_registrations, infer_identity_handler
+from apron_auth.providers.identity import (
+    _identity_resolver_registrations,
+    identity_providers,
+    infer_identity_handler,
+)
 
 
 def _make_config() -> ProviderConfig:
@@ -247,3 +251,37 @@ class TestIdentityResolverRegistrations:
         )
 
         assert _identity_resolver_registrations() == ()
+
+
+class TestIdentityProviders:
+    """The public enumeration, for a consumer that lets an operator choose one."""
+
+    def test_names_every_registered_provider_in_order(self):
+        _identity_resolver_registrations.cache_clear()
+
+        names = identity_providers()
+
+        assert names == tuple(sorted(names))
+        assert set(names) == {registration.provider for registration in _identity_resolver_registrations()}
+
+    def test_omits_the_generic_openid_module(self):
+        """``providers.oidc`` resolves no handler by host, so it is not here.
+
+        A generic connection's hosts are whatever an operator configured, so it
+        registers no resolver and a consumer reaches its handler through
+        ``providers.oidc.identity_handler`` instead. Pinned because the module
+        does expose ``preset(...)`` and so looks like every other provider to
+        the discovery walk.
+        """
+        assert "oidc" not in identity_providers()
+
+    def test_every_name_is_importable_as_a_provider_module(self):
+        """What makes the enumeration usable as a strategy list.
+
+        A consumer maps a name onto ``apron_auth.providers.<name>.preset``, so a
+        registration whose module could not be imported that way would be a name
+        offered and then refused.
+        """
+        for name in identity_providers():
+            module = importlib.import_module(f"apron_auth.providers.{name}")
+            assert callable(module.preset)
