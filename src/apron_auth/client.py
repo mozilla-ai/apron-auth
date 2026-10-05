@@ -304,10 +304,10 @@ class OAuthClient:
 
         Pass the :class:`TokenSet` returned by :meth:`exchange_code` (or
         :meth:`refresh_token`). It is narrowed to an
-        :class:`IdentityMaterial` — exposing only the access token and,
-        for OIDC providers, the ID token — before being handed to the
-        identity handler, so handlers never receive the refresh token or
-        caller context.
+        :class:`IdentityMaterial` — exposing only the access token, the
+        granted scopes, and, for OIDC providers, the ID token — before
+        being handed to the identity handler, so handlers never receive
+        the refresh token or caller context.
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
