@@ -439,7 +439,21 @@ class TestIdentityMaterial:
         material = IdentityMaterial.from_token_set(tokens)
         assert not hasattr(material, "refresh_token")
         assert not hasattr(material, "context")
-        assert set(material.model_dump()) == {"access_token", "id_token"}
+        assert set(material.model_dump()) == {"access_token", "id_token", "scope"}
+
+    def test_minimal_defaults_scope_to_none(self) -> None:
+        material = IdentityMaterial(access_token="access-abc")
+        assert material.scope is None
+
+    def test_from_token_set_carries_granted_scope(self) -> None:
+        tokens = TokenSet(access_token="access-abc", scope="accounts:read forms:read")
+        material = IdentityMaterial.from_token_set(tokens)
+        assert material.scope == "accounts:read forms:read"
+
+    def test_from_token_set_absent_scope_is_none(self) -> None:
+        tokens = TokenSet(access_token="access-abc")
+        material = IdentityMaterial.from_token_set(tokens)
+        assert material.scope is None
 
 
 class TestTenancyContext:

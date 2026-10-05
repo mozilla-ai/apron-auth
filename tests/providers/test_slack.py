@@ -5,7 +5,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -177,6 +177,33 @@ class TestSlackIdentityHandler:
 
         with pytest.raises(IdentityFetchError, match="invalid_auth"):
             await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+    async def test_ok_false_missing_scope_raises_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler, preset
+
+        httpx_mock.add_response(
+            url=SLACK_USERINFO_URL,
+            status_code=200,
+            json={"ok": False, "error": "missing_scope"},
+        )
+        config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
+
+        with pytest.raises(IdentityScopeNotGrantedError, match="missing_scope"):
+            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+    async def test_ok_false_other_error_is_not_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.slack import SlackIdentityHandler, preset
+
+        httpx_mock.add_response(
+            url=SLACK_USERINFO_URL,
+            status_code=200,
+            json={"ok": False, "error": "invalid_auth"},
+        )
+        config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
+
+        with pytest.raises(IdentityFetchError) as exc_info:
+            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        assert not isinstance(exc_info.value, IdentityScopeNotGrantedError)
 
 
 class TestSlackMaybeIdentityHandler:

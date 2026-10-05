@@ -14,6 +14,7 @@ from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
+    IdentityScopeNotGrantedError,
     IssuerValidationError,
     PermanentOAuthError,
     RevocationError,
@@ -1249,6 +1250,18 @@ class TestFetchIdentity:
             avatar_url=None,
             raw=payload,
         )
+
+    async def test_typeform_scope_not_granted_propagates_from_token_set(self) -> None:
+        config = _make_config(
+            authorize_url="https://api.typeform.com/oauth/authorize",
+            token_url="https://api.typeform.com/oauth/token",
+            scopes=["accounts:read", "forms:read"],
+            use_pkce=False,
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityScopeNotGrantedError):
+            await client.fetch_identity(TokenSet(access_token="access-abc", scope="forms:read"))
 
     async def test_fetch_identity_lookalike_typeform_host_not_inferred(self):
         config = _make_config(

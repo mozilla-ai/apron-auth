@@ -74,3 +74,11 @@ def test_well_known_error_code_constants() -> None:
     assert UNAUTHORIZED_CLIENT == "unauthorized_client"
     assert SERVER_ERROR == "server_error"
     assert TEMPORARILY_UNAVAILABLE == "temporarily_unavailable"
+
+
+def test_identity_scope_not_granted_is_an_identity_fetch_error() -> None:
+    from apron_auth import IdentityFetchError, IdentityScopeNotGrantedError
+
+    err = IdentityScopeNotGrantedError("scope missing")
+    assert isinstance(err, IdentityFetchError)
+    assert IdentityScopeNotGrantedError is not IdentityFetchError

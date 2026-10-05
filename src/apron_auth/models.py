@@ -375,7 +375,8 @@ class TokenSet(BaseModel, frozen=True):
         refresh_token: Optional refresh token for obtaining new access tokens.
         expires_in: Token lifetime in seconds as reported by the provider.
         expires_at: Absolute expiry time as a Unix timestamp.
-        scope: Space-separated scopes granted by the provider.
+        scope: Scopes granted by the provider, delimited by the
+            provider's scope separator.
         metadata: Additional fields from the provider's token endpoint
             response that are not captured by the named attributes above
             (e.g. Slack's ``team_id``).  Populated automatically.
@@ -402,12 +403,12 @@ class IdentityMaterial(BaseModel, frozen=True):
     to a provider's identity handler, this type is the single boundary
     that decides what token material crosses into handler code. It
     deliberately exposes only the fields identity resolution needs — the
-    bearer access token and, for OpenID Connect (OIDC) providers, the ID
-    token — and omits the refresh token and caller-supplied context
-    carried on :class:`TokenSet`. Identity handlers can be consumer- or
-    third-party-supplied, so withholding the refresh token and opaque
-    caller context from them is defense in depth: the omitted fields are
-    structurally absent, not merely blanked.
+    bearer access token, the granted scopes, and, for OpenID Connect
+    (OIDC) providers, the ID token — and omits the refresh token and
+    caller-supplied context carried on :class:`TokenSet`. Identity
+    handlers can be consumer- or third-party-supplied, so withholding the
+    refresh token and opaque caller context from them is defense in
+    depth: the omitted fields are structurally absent, not merely blanked.
 
     NOTE: a provider-specific token-endpoint extra that a future handler
     needs (e.g. an instance URL) should be added here as a named field
@@ -422,10 +423,15 @@ class IdentityMaterial(BaseModel, frozen=True):
             identity and tenancy claims a handler can validate as a
             trust boundary. ``None`` for non-OIDC providers or when the
             ``openid`` scope was not granted.
+        scope: The granted scopes, delimited by the provider's scope
+            separator. ``None`` when no scope information is available.
+            A handler must treat ``None`` or a blank value as an unknown
+            grant and must not infer one.
     """
 
     access_token: str
     id_token: str | None = None
+    scope: str | None = None
 
     @classmethod
     def from_token_set(cls, tokens: TokenSet) -> IdentityMaterial:
@@ -440,13 +446,14 @@ class IdentityMaterial(BaseModel, frozen=True):
             tokens: The token set to narrow.
 
         Returns:
-            The identity material: the access token and, when the
-            response carried one, the OIDC ID token.
+            The identity material: the access token, the granted scopes,
+            and, when the response carried one, the OIDC ID token.
         """
         id_token = tokens.metadata.get("id_token")
         return cls(
             access_token=tokens.access_token,
             id_token=id_token if isinstance(id_token, str) else None,
+            scope=tokens.scope,
         )
 
 

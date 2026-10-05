@@ -594,16 +594,18 @@ When Trello ships OAuth 2.0, a preset will be added here.
 
 All exceptions inherit from `OAuthError`.
 
-| Exception             | When it's raised                                                                                                |
-|-----------------------|-----------------------------------------------------------------------------------------------------------------|
-| `TokenExchangeError`  | Code exchange failed at the token endpoint.                                                                     |
-| `TokenRefreshError`   | Refresh failed, but it might work if you try again (transient).                                                 |
-| `PermanentOAuthError` | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
-| `RevocationError`     | The provider rejected the revocation request.                                                                   |
-| `StateError`          | OAuth state was invalid, expired, or already used.                                                              |
-| `ConfigurationError`  | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
-| `McpDiscoveryError`   | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
-| `McpRegistrationError`| MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
+| Exception                      | When it's raised                                                                                                |
+|--------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| `TokenExchangeError`           | Code exchange failed at the token endpoint.                                                                     |
+| `TokenRefreshError`            | Refresh failed, but it might work if you try again (transient).                                                 |
+| `PermanentOAuthError`          | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
+| `RevocationError`              | The provider rejected the revocation request.                                                                   |
+| `StateError`                   | OAuth state was invalid, expired, or already used.                                                              |
+| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
+| `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
+| `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
+| `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient.                                              |
+| `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
 
 ## Logging
 

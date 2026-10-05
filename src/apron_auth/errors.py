@@ -29,11 +29,22 @@ class ConfigurationError(OAuthError):
 
 
 class IdentityFetchError(OAuthError):
-    """Fetching user identity from the provider failed."""
+    """Fetching user identity from the provider failed.
+
+    The failure may be transient, so retrying may succeed.
+    """
 
 
 class IdentityNotSupportedError(OAuthError):
     """Identity fetching is not supported for this provider configuration."""
+
+
+class IdentityScopeNotGrantedError(IdentityFetchError):
+    """The token is known to lack a scope the provider's identity endpoint requires.
+
+    Retrying with the same token cannot succeed.
+    The caller must obtain a token that carries the required scope.
+    """
 
 
 class IssuerValidationError(OAuthError):

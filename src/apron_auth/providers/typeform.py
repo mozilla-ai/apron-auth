@@ -12,16 +12,18 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
 _TYPEFORM_USERINFO_URL = "https://api.typeform.com/me"
+_TYPEFORM_USERINFO_SCOPE = "accounts:read"
 _TYPEFORM_IDENTITY_HOST_SUFFIXES = ("api.typeform.com",)
 
 
@@ -50,10 +52,19 @@ class TypeformIdentityHandler:
             ``tenancies`` is empty, per this provider's response shape.
 
         Raises:
+            IdentityScopeNotGrantedError: If the token's granted scopes are
+                known and do not include ``accounts:read``.
             IdentityFetchError: If the userinfo request fails or its
-                response cannot be parsed.
+                response cannot be parsed. When the granted scopes are
+                unknown, a missing ``accounts:read`` also surfaces here.
         """
-        del config
+        # NOTE: Typeform answers a missing scope and a bad token with the same 403, so only a known grant is checked.
+        granted_scopes = parse_scope(material.scope or "", config.scope_separator)
+        if granted_scopes:
+            granted = config.resolve_implicit_scopes(set(granted_scopes))
+            if _TYPEFORM_USERINFO_SCOPE not in granted:
+                raise IdentityScopeNotGrantedError(f"Typeform identity requires the {_TYPEFORM_USERINFO_SCOPE} scope")
+
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
@@ -68,6 +79,9 @@ class TypeformIdentityHandler:
             payload = response.json()
         except ValueError as exc:
             raise IdentityFetchError(f"Failed to parse Typeform identity response: {exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise IdentityFetchError("Typeform identity response was not a JSON object")
 
         # Typeform "workspaces" are intra-account containers, not
         # OAuth-scoping contexts. A token authenticates the user and
