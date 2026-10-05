@@ -604,6 +604,8 @@ All exceptions inherit from `OAuthError`.
 | `ConfigurationError`  | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
 | `McpDiscoveryError`   | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`| MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
+| `IdentityFetchError`  | Fetching the user's identity failed. The failure may be transient.                                              |
+| `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`. |
 
 ## Logging
 
