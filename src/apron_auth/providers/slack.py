@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 _SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
 _SLACK_HOST_SUFFIX = ".slack.com"
 _SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
+_SLACK_MISSING_SCOPE_ERROR = "missing_scope"
 _SLACK_TEAM_DOMAIN_CLAIM = "https://slack.com/team_domain"
 _SLACK_TEAM_ID_CLAIM = "https://slack.com/team_id"
 _SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
@@ -169,6 +170,8 @@ class SlackIdentityHandler:
             tenancy only for a workspace-bot token.
 
         Raises:
+            IdentityScopeNotGrantedError: If the Sign-in-with-Slack token
+                lacks a scope the userInfo endpoint requires.
             IdentityFetchError: If the selected Slack request fails, its
                 response cannot be parsed, or Slack reports an error.
         """
@@ -187,8 +190,9 @@ class SlackIdentityHandler:
             The person identity profile with a single-workspace tenancy.
 
         Raises:
+            IdentityScopeNotGrantedError: If Slack reports ``missing_scope``.
             IdentityFetchError: If the request fails, its response cannot be
-                parsed, or Slack reports ``ok=false``.
+                parsed, or Slack reports another ``ok=false`` error.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -211,6 +215,8 @@ class SlackIdentityHandler:
         # Slack returns 2xx with ``ok=false`` for auth/scope failures.
         if payload.get("ok") is False:
             error = payload.get("error") or "unknown_error"
+            if error == _SLACK_MISSING_SCOPE_ERROR:
+                raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
             raise IdentityFetchError(f"Slack identity request failed: {error}")
 
         email_verified = None
@@ -295,7 +301,8 @@ class SlackIdentityHandler:
                 return _build_workspace_profile_from_team_info(team_info_payload)
 
             error = team_info_payload.get("error") or "unknown_error"
-            if error != "missing_scope":
+            # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
+            if error != _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityFetchError(f"Slack team.info request failed: {error}")
 
             auth_test_payload = await self._slack_post(client, _SLACK_AUTH_TEST_URL, access_token, "auth.test")
