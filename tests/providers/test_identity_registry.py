@@ -257,6 +257,7 @@ class TestIdentityProviders:
     """The public enumeration, for a consumer that lets an operator choose one."""
 
     def test_names_every_registered_provider_in_order(self):
+        """Every registered provider appears, sorted, with nothing extra."""
         _identity_resolver_registrations.cache_clear()
 
         names = identity_providers()
