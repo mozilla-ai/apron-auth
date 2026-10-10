@@ -98,7 +98,7 @@ OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature che
 claim validation is delegated to `authlib.oidc.core.CodeIDToken` — authlib's own §3.1.3.7
 validator, which checks `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (verified
 against the access token, per §3.1.3.7 step 8). The handler then refuses
-a userinfo response whose `sub` disagrees with the ID token's. `ServerMetadata.jwks_url` is carried through for a caller
+a userinfo response whose `sub` is missing or disagrees with the ID token's. `ServerMetadata.jwks_url` is carried through for a caller
 that wants to verify signatures itself; this library does not fetch it.
 
 `IdentityProfile.provider` is `oidc:<issuer>`, not a bare `oidc`. A `sub` is unique only
