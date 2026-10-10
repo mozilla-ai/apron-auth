@@ -29,6 +29,7 @@ TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 USERINFO_URL = f"{ISSUER}/protocol/openid-connect/userinfo"
 JWKS_URL = f"{ISSUER}/protocol/openid-connect/certs"
 CLIENT_ID = "otari"
+CLIENT_SECRET = "s3cret"  # pragma: allowlist secret
 
 
 def document(**overrides: Any) -> dict[str, Any]:
@@ -277,7 +278,7 @@ class TestPreset:
     def test_builds_a_config_from_discovered_metadata(self):
         config, revocation = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=["email", "profile"],
             metadata=metadata(),
         )
@@ -291,7 +292,7 @@ class TestPreset:
         """Without it the provider runs a plain OAuth flow and returns no ID token."""
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=["email"],
             metadata=metadata(),
         )
@@ -301,7 +302,7 @@ class TestPreset:
     def test_pairs_a_revocation_handler_when_the_provider_advertises_one(self):
         _, revocation = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(revocation_url=f"{ISSUER}/protocol/openid-connect/revoke"),
         )
@@ -311,7 +312,7 @@ class TestPreset:
     def test_carries_iss_support_onto_the_config(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(iss_parameter_supported=True),
         )
@@ -321,7 +322,7 @@ class TestPreset:
     def test_enables_pkce_when_the_provider_advertises_s256(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(code_challenge_methods=["S256"]),
         )
@@ -332,7 +333,7 @@ class TestPreset:
         """A provider that does not implement PKCE ignores the extra parameters."""
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(code_challenge_methods=[]),
         )
@@ -353,7 +354,7 @@ class TestPreset:
         with pytest.raises(ConfigurationError, match="no S256 code-challenge method"):
             preset(
                 client_id=CLIENT_ID,
-                client_secret="s3cret",
+                client_secret=CLIENT_SECRET,
                 scopes=[],
                 metadata=metadata(code_challenge_methods=methods),
             )
@@ -361,7 +362,7 @@ class TestPreset:
     def test_keeps_pkce_when_s256_appears_alongside_others(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(code_challenge_methods=["plain", "S256"]),
         )
@@ -371,7 +372,7 @@ class TestPreset:
     def test_prefers_client_secret_post_among_advertised_methods(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(token_endpoint_auth_methods=["client_secret_basic", "client_secret_post"]),
         )
@@ -381,7 +382,7 @@ class TestPreset:
     def test_falls_back_to_basic_when_that_is_all_that_is_advertised(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(token_endpoint_auth_methods=["client_secret_basic"]),
         )
@@ -392,7 +393,7 @@ class TestPreset:
         with pytest.raises(ConfigurationError, match="no token-endpoint auth method"):
             preset(
                 client_id=CLIENT_ID,
-                client_secret="s3cret",
+                client_secret=CLIENT_SECRET,
                 scopes=[],
                 metadata=metadata(token_endpoint_auth_methods=["private_key_jwt"]),
             )
@@ -407,7 +408,7 @@ class TestPreset:
         with pytest.raises(ConfigurationError, match="names no issuer"):
             preset(
                 client_id=CLIENT_ID,
-                client_secret="s3cret",
+                client_secret=CLIENT_SECRET,
                 scopes=[],
                 metadata=metadata(issuer=None),
             )
@@ -416,7 +417,7 @@ class TestPreset:
         """OpenID Connect standardizes no domain-ownership claim."""
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(),
         )
@@ -426,7 +427,7 @@ class TestPreset:
     def test_adds_no_extra_params_of_its_own(self):
         config, _ = preset(
             client_id=CLIENT_ID,
-            client_secret="s3cret",
+            client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(),
         )
@@ -443,8 +444,10 @@ class TestIdentityHandlerFactory:
 
         An issuer-less handler would construct fine and then silently skip it,
         so the refusal happens here rather than becoming a per-token no-op.
+        Raised as ``ConfigurationError``, as :func:`preset` does, since the
+        document was read and discovery did not fail.
         """
-        with pytest.raises(OidcDiscoveryError, match="names no issuer"):
+        with pytest.raises(ConfigurationError, match="names no issuer"):
             identity_handler(metadata(issuer=None), client_id=CLIENT_ID)
 
     def test_builds_a_handler_without_a_userinfo_endpoint(self):
@@ -459,7 +462,7 @@ class TestOidcIdentity:
 
     @pytest.fixture
     def config(self) -> ProviderConfig:
-        built, _ = preset(client_id=CLIENT_ID, client_secret="s3cret", scopes=[], metadata=metadata())
+        built, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
         return built
 
     async def test_reads_identity_from_userinfo_and_the_id_token(
@@ -643,6 +646,22 @@ class TestOidcIdentity:
                 config,
             )
 
+    async def test_refuses_a_userinfo_response_naming_no_subject_beside_an_id_token(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """Section 5.3.2 requires an exact match, and an absent ``sub`` is not one.
+
+        Otherwise the ID token's subject would pick up a verified email from a
+        document never bound to it.
+        """
+        httpx_mock.add_response(url=USERINFO_URL, json={"email": "person@acme.com", "email_verified": True})
+
+        with pytest.raises(IdentityFetchError, match="names no subject"):
+            await handler.fetch_identity(
+                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")),
+                config,
+            )
+
     async def test_falls_back_to_userinfo_when_the_id_token_is_unparseable(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
@@ -668,6 +687,13 @@ class TestOidcIdentity:
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
         httpx_mock.add_response(url=USERINFO_URL, status_code=401)
+
+        with pytest.raises(IdentityFetchError, match="Failed to fetch"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
+        """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
+        handler = identity_handler(metadata(userinfo_url="https://[::1"), client_id=CLIENT_ID)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
