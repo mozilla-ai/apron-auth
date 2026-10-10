@@ -95,6 +95,7 @@ async def _userinfo_app(scope: Any, receive: Any, send: Any) -> None:
 
 
 def metadata(**overrides: Any) -> ServerMetadata:
+    """Build discovered metadata for the test issuer, with ``overrides`` applied."""
     base: dict[str, Any] = {
         "authorize_url": AUTHORIZE_URL,
         "token_url": TOKEN_URL,
@@ -108,6 +109,7 @@ def metadata(**overrides: Any) -> ServerMetadata:
 
 class TestDiscoveryUrl:
     def test_appends_the_well_known_suffix_to_the_issuer_path(self):
+        """The document lives under the issuer's own path (Discovery 1.0 section 4)."""
         assert discovery_url(ISSUER) == DOCUMENT_URL
 
     def test_preserves_a_realm_path_rather_than_resolving_against_the_root(self):
@@ -115,9 +117,11 @@ class TestDiscoveryUrl:
         assert discovery_url("https://sso.example.com/realms/acme").startswith("https://sso.example.com/realms/acme/")
 
     def test_tolerates_a_trailing_slash_on_the_issuer(self):
+        """A trailing slash does not produce a double slash before the suffix."""
         assert discovery_url(f"{ISSUER}/") == DOCUMENT_URL
 
     def test_handles_an_issuer_at_the_host_root(self):
+        """An issuer with no path still gets the well-known suffix."""
         assert discovery_url("https://sso.example.com") == "https://sso.example.com/.well-known/openid-configuration"
 
     def test_refuses_an_issuer_that_is_not_an_absolute_url(self):
@@ -135,6 +139,7 @@ class TestDiscoveryUrl:
 
 class TestDiscover:
     async def test_reads_every_endpoint_from_the_document(self, httpx_mock: HTTPXMock):
+        """Each endpoint the flow needs is read from its documented field."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document())
 
         discovered = await discover(ISSUER)
@@ -165,6 +170,7 @@ class TestDiscover:
             await discover(ISSUER)
 
     async def test_refuses_a_document_declaring_no_issuer(self, httpx_mock: HTTPXMock):
+        """With no issuer there is nothing to match against, so the document is refused."""
         payload = document()
         del payload["issuer"]
         httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
@@ -173,6 +179,7 @@ class TestDiscover:
             await discover(ISSUER)
 
     async def test_refuses_a_document_missing_an_endpoint(self, httpx_mock: HTTPXMock):
+        """A document without the token endpoint cannot drive the code flow."""
         payload = document()
         del payload["token_endpoint"]
         httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
@@ -181,6 +188,7 @@ class TestDiscover:
             await discover(ISSUER)
 
     async def test_reports_a_non_200_document(self, httpx_mock: HTTPXMock):
+        """A non-200 response is a discovery failure, reported with its status."""
         httpx_mock.add_response(url=DOCUMENT_URL, status_code=404)
 
         with pytest.raises(OidcDiscoveryError, match="HTTP 404"):
@@ -211,12 +219,14 @@ class TestDiscover:
         assert "openid-configuration" in caplog.text
 
     async def test_reports_a_non_json_document(self, httpx_mock: HTTPXMock):
+        """A body that does not parse as JSON is a discovery failure."""
         httpx_mock.add_response(url=DOCUMENT_URL, text="not json")
 
         with pytest.raises(OidcDiscoveryError, match="not JSON"):
             await discover(ISSUER)
 
     async def test_honors_a_document_url_override(self, httpx_mock: HTTPXMock):
+        """An explicit document URL is fetched in place of the well-known one."""
         override = "https://sso.example.com/nonstandard-config"
         httpx_mock.add_response(url=override, json=document())
 
@@ -225,6 +235,7 @@ class TestDiscover:
         assert discovered.issuer == ISSUER
 
     async def test_an_override_does_not_loosen_the_issuer_check(self, httpx_mock: HTTPXMock):
+        """An overridden document must still name the configured issuer."""
         override = "https://sso.example.com/nonstandard-config"
         httpx_mock.add_response(url=override, json=document(issuer="https://attacker.example"))
 
@@ -251,6 +262,7 @@ class TestDiscover:
             await discover(ISSUER, document_url="https://[::1")
 
     async def test_reports_an_unreachable_document(self, httpx_mock: HTTPXMock):
+        """A transport error surfaces as ``OidcDiscoveryError``, not a raw httpx error."""
         httpx_mock.add_exception(httpx.ConnectError("no route"), url=DOCUMENT_URL)
 
         with pytest.raises(OidcDiscoveryError, match="could not fetch"):
@@ -276,6 +288,7 @@ class TestDiscover:
 
 class TestPreset:
     def test_builds_a_config_from_discovered_metadata(self):
+        """The config takes its endpoints and issuer from the metadata."""
         config, revocation = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -300,6 +313,7 @@ class TestPreset:
         assert "openid" in config.scopes
 
     def test_pairs_a_revocation_handler_when_the_provider_advertises_one(self):
+        """A revocation endpoint in the metadata yields a standard RFC 7009 handler."""
         _, revocation = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -310,6 +324,7 @@ class TestPreset:
         assert isinstance(revocation, StandardRevocationHandler)
 
     def test_carries_iss_support_onto_the_config(self):
+        """Advertised RFC 9207 ``iss`` support makes the callback ``iss`` required."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -320,6 +335,7 @@ class TestPreset:
         assert config.require_iss is True
 
     def test_enables_pkce_when_the_provider_advertises_s256(self):
+        """PKCE is on when ``S256`` is advertised."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -360,6 +376,7 @@ class TestPreset:
             )
 
     def test_keeps_pkce_when_s256_appears_alongside_others(self):
+        """Other advertised methods do not matter while ``S256`` is among them."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -370,6 +387,7 @@ class TestPreset:
         assert config.use_pkce is True
 
     def test_prefers_client_secret_post_among_advertised_methods(self):
+        """``client_secret_post`` wins when both secret methods are advertised."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -380,6 +398,7 @@ class TestPreset:
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
     def test_falls_back_to_basic_when_that_is_all_that_is_advertised(self):
+        """``client_secret_basic`` is used when it is the only method on offer."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -390,6 +409,7 @@ class TestPreset:
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
 
     def test_refuses_a_provider_offering_only_unperformable_methods(self):
+        """Only unsupported auth methods is a configuration error, not a silent fallback."""
         with pytest.raises(ConfigurationError, match="no token-endpoint auth method"):
             preset(
                 client_id=CLIENT_ID,
@@ -425,6 +445,7 @@ class TestPreset:
         assert config.can_assert_domain_ownership is False
 
     def test_adds_no_extra_params_of_its_own(self):
+        """No product-specific authorization parameters are added to a generic provider."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -437,6 +458,7 @@ class TestPreset:
 
 class TestIdentityHandlerFactory:
     def test_builds_a_handler_from_metadata(self):
+        """Metadata naming an issuer yields an ``OidcIdentityHandler``."""
         assert isinstance(identity_handler(metadata(), client_id=CLIENT_ID), OidcIdentityHandler)
 
     def test_refuses_metadata_naming_no_issuer(self):
@@ -458,16 +480,19 @@ class TestIdentityHandlerFactory:
 class TestOidcIdentity:
     @pytest.fixture
     def handler(self) -> OidcIdentityHandler:
+        """An identity handler for the test issuer and client."""
         return identity_handler(metadata(), client_id=CLIENT_ID)
 
     @pytest.fixture
     def config(self) -> ProviderConfig:
+        """The provider config the handler's tokens were issued under."""
         built, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
         return built
 
     async def test_reads_identity_from_userinfo_and_the_id_token(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """Fields come from both documents, and ``raw`` keeps them apart."""
         httpx_mock.add_response(
             url=USERINFO_URL,
             json={
@@ -517,6 +542,7 @@ class TestOidcIdentity:
     async def test_works_without_an_id_token(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """Userinfo alone identifies the user, but cannot vouch for email verification."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com"})
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
@@ -571,6 +597,7 @@ class TestOidcIdentity:
         assert identity.email_verified is None
 
     async def test_refuses_an_id_token_from_another_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
+        """An ``iss`` other than the configured issuer is refused."""
         with pytest.raises(IdentityFetchError, match=r"Invalid claim: 'iss'"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
@@ -580,6 +607,7 @@ class TestOidcIdentity:
     async def test_refuses_an_id_token_minted_for_another_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
+        """An ``aud`` that does not name this client is refused."""
         with pytest.raises(IdentityFetchError, match=r"Invalid claim: 'aud'"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(aud="someone-else")),
@@ -589,6 +617,7 @@ class TestOidcIdentity:
     async def test_accepts_an_audience_array_naming_this_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """A multi-audience token is accepted when it names this client and ``azp`` matches."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
@@ -601,6 +630,7 @@ class TestOidcIdentity:
         assert identity.subject == "u-1"
 
     async def test_refuses_an_expired_id_token(self, handler: OidcIdentityHandler, config: ProviderConfig):
+        """A token expired well beyond the leeway is refused."""
         with pytest.raises(IdentityFetchError, match=r"token is expired"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
@@ -610,6 +640,7 @@ class TestOidcIdentity:
     async def test_tolerates_clock_skew_within_the_leeway(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """A token expired by less than the leeway is still accepted."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
@@ -678,6 +709,7 @@ class TestOidcIdentity:
     async def test_refuses_when_neither_document_yields_a_subject(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """With no ``sub`` anywhere there is no one to identify."""
         httpx_mock.add_response(url=USERINFO_URL, json={"email": "person@acme.com"})
 
         with pytest.raises(IdentityFetchError, match="no subject"):
@@ -686,6 +718,7 @@ class TestOidcIdentity:
     async def test_reports_a_failed_userinfo_request(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """An HTTP error from userinfo surfaces as ``IdentityFetchError``."""
         httpx_mock.add_response(url=USERINFO_URL, status_code=401)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
@@ -701,6 +734,7 @@ class TestOidcIdentity:
     async def test_reports_a_non_object_userinfo_response(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """Userinfo JSON that is not an object is refused."""
         httpx_mock.add_response(url=USERINFO_URL, json=["not", "an", "object"])
 
         with pytest.raises(IdentityFetchError, match="not a JSON object"):
@@ -733,6 +767,7 @@ class TestOidcIdentity:
     async def test_accepts_a_single_audience_token_carrying_a_matching_azp(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """An ``azp`` naming this client is accepted on a single-audience token."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
@@ -793,6 +828,7 @@ class TestOidcIdentity:
     async def test_drops_a_verification_flag_with_no_address_beside_it(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
+        """``email_verified`` without an ``email`` in the same document is discarded."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email_verified": True})
 
         identity = await handler.fetch_identity(
@@ -845,6 +881,7 @@ class TestOidcIdentity:
         seen: list[str] = []
 
         def factory(url: str) -> httpx.AsyncBaseTransport:
+            """Record the requested URL and serve it from the in-process userinfo app."""
             seen.append(url)
             return httpx.ASGITransport(app=_userinfo_app)
 
