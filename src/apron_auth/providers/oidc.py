@@ -387,12 +387,14 @@ def identity_handler(
         The identity handler for this provider.
 
     Raises:
-        OidcDiscoveryError: If the metadata names no issuer, which leaves an ID
-            token's ``iss`` with nothing to be checked against.
+        ConfigurationError: If the metadata names no issuer, which leaves an ID
+            token's ``iss`` with nothing to be checked against. Raised as
+            ``ConfigurationError`` rather than :class:`OidcDiscoveryError` for
+            the same reason :func:`preset` gives.
     """
     if metadata.issuer is None:
         msg = "OpenID provider metadata names no issuer; an ID token's iss could not be validated"
-        raise OidcDiscoveryError(msg)
+        raise ConfigurationError(msg)
     return OidcIdentityHandler(
         userinfo_url=metadata.userinfo_url,
         issuer=metadata.issuer,
@@ -414,8 +416,8 @@ class OidcIdentityHandler:
     somebody and userinfo will say who, with a weaker claim to have vouched
     for it.
 
-    A userinfo response whose ``sub`` names a different subject than the ID
-    token is refused outright rather than reconciled (OpenID Connect Core 1.0,
+    A userinfo response whose ``sub`` is missing or names a different subject
+    than the ID token is refused outright rather than reconciled (OpenID Connect Core 1.0,
     section 5.3.2): the two documents disagreeing about who signed in is not a
     field to prefer between.
     """
@@ -463,7 +465,8 @@ class OidcIdentityHandler:
         Raises:
             IdentityFetchError: If the ID token's claims do not validate, the
                 userinfo request fails or cannot be parsed, the two documents
-                name different subjects, or neither yields a subject.
+                name different subjects, userinfo names no subject beside a
+                validated ID token, or neither yields a subject.
         """
         del config
         claims = self._validated_claims(material.id_token, material.access_token) if material.id_token else None
@@ -474,10 +477,18 @@ class OidcIdentityHandler:
         if subject is None:
             msg = "OpenID sign-in returned no subject"
             raise IdentityFetchError(msg)
-        userinfo_subject = _claim_str(userinfo, "sub")
-        if claims is not None and userinfo_subject is not None and userinfo_subject != claims_subject:
-            msg = "OpenID userinfo response names a different subject than the ID token"
-            raise IdentityFetchError(msg)
+        if claims is not None and self._userinfo_url:
+            # Section 5.3.2: the userinfo ``sub`` MUST match the ID token's
+            # exactly, and an absent one does not. Without this, a userinfo
+            # response naming nobody could still lend its email to the ID
+            # token's subject.
+            userinfo_subject = _claim_str(userinfo, "sub")
+            if userinfo_subject is None:
+                msg = "OpenID userinfo response names no subject to match the ID token's"
+                raise IdentityFetchError(msg)
+            if userinfo_subject != claims_subject:
+                msg = "OpenID userinfo response names a different subject than the ID token"
+                raise IdentityFetchError(msg)
 
         email, email_verified = _email_fields(claims, userinfo)
         return IdentityProfile(
@@ -599,7 +610,10 @@ class OidcIdentityHandler:
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+        except (httpx.InvalidURL, httpx.RequestError, httpx.HTTPStatusError) as exc:
+            # ``InvalidURL`` is not a ``RequestError``; the userinfo URL comes
+            # from the discovery document unvalidated, so a malformed one must
+            # still surface as the ``IdentityFetchError`` callers expect.
             raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
 
         try:
