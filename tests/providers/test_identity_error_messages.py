@@ -2,12 +2,15 @@
 
 Callers log and show these messages, so they report a failure in domain terms.
 They never repeat the HTTP client's own text, which carries the request URL.
+
+HubSpot is not in this matrix because its introspection URL carries the access token.
+Its errors must have no cause or context, which test_hubspot.py checks.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import NamedTuple
 
 import httpx
 import pytest
@@ -15,6 +18,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, ProviderConfig
+from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -27,29 +31,36 @@ from apron_auth.providers import (
     typeform,
 )
 
-HANDLERS: dict[str, tuple[Callable[..., tuple[ProviderConfig, object]], list[str], Callable[[], Any]]] = {
-    "atlassian": (atlassian.preset, ["read:jira-work"], atlassian.AtlassianIdentityHandler),
-    "github": (github.preset, ["read:user"], github.GitHubIdentityHandler),
-    "google": (google.preset, ["openid"], google.GoogleIdentityHandler),
-    "linear": (linear.preset, ["read"], linear.LinearIdentityHandler),
-    "microsoft": (microsoft.preset, ["openid"], microsoft.MicrosoftIdentityHandler),
-    "notion": (notion.preset, ["read"], notion.NotionIdentityHandler),
-    "salesforce": (salesforce.preset, ["openid"], salesforce.SalesforceIdentityHandler),
-    "slack-oidc": (slack.preset, ["openid"], slack.SlackIdentityHandler),
-    "slack-workspace": (slack.preset, ["channels:read"], slack.SlackIdentityHandler),
-    "typeform": (typeform.preset, ["accounts:read"], typeform.TypeformIdentityHandler),
+
+class _HandlerCase(NamedTuple):
+    preset: Callable[..., tuple[ProviderConfig, object]]
+    scopes: list[str]
+    handler: type[IdentityHandler]
+
+
+HANDLERS: dict[str, _HandlerCase] = {
+    "atlassian": _HandlerCase(atlassian.preset, ["read:jira-work"], atlassian.AtlassianIdentityHandler),
+    "github": _HandlerCase(github.preset, ["read:user"], github.GitHubIdentityHandler),
+    "google": _HandlerCase(google.preset, ["openid"], google.GoogleIdentityHandler),
+    "linear": _HandlerCase(linear.preset, ["read"], linear.LinearIdentityHandler),
+    "microsoft": _HandlerCase(microsoft.preset, ["openid"], microsoft.MicrosoftIdentityHandler),
+    "notion": _HandlerCase(notion.preset, ["read"], notion.NotionIdentityHandler),
+    "salesforce": _HandlerCase(salesforce.preset, ["openid"], salesforce.SalesforceIdentityHandler),
+    "slack-oidc": _HandlerCase(slack.preset, ["openid"], slack.SlackIdentityHandler),
+    "slack-workspace": _HandlerCase(slack.preset, ["channels:read"], slack.SlackIdentityHandler),
+    "typeform": _HandlerCase(typeform.preset, ["accounts:read"], typeform.TypeformIdentityHandler),
 }
 
 
 async def _fetch_identity_error(name: str) -> IdentityFetchError:
-    factory, scopes, handler_class = HANDLERS[name]
-    config, _ = factory(
+    case = HANDLERS[name]
+    config, _ = case.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
-        scopes=scopes,
+        scopes=case.scopes,
     )
     with pytest.raises(IdentityFetchError) as exc_info:
-        await handler_class().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        await case.handler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
     return exc_info.value
 
 
