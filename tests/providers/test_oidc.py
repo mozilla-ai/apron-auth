@@ -113,6 +113,8 @@ def metadata(**overrides: Any) -> ServerMetadata:
 
 
 class TestDiscoveryUrl:
+    """Deriving the configuration document's URL from an issuer."""
+
     def test_appends_the_well_known_suffix_to_the_issuer_path(self):
         """The document lives under the issuer's own path (Discovery 1.0 section 4)."""
         assert discovery_url(ISSUER) == DOCUMENT_URL
@@ -143,6 +145,8 @@ class TestDiscoveryUrl:
 
 
 class TestDiscover:
+    """Fetching and validating an OpenID provider's configuration document."""
+
     async def test_reads_every_endpoint_from_the_document(self, httpx_mock: HTTPXMock):
         """Each endpoint the flow needs is read from its documented field."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document())
@@ -284,11 +288,14 @@ class TestDiscover:
 
 
 class TestDiscoveryTransportFactory:
+    """The transport factory that lets a caller apply host policy to discovery."""
+
     @staticmethod
     def _factory(seen: list[str]):
         """A transport factory recording each URL and serving the document from memory."""
 
         def factory(url: str) -> httpx.AsyncBaseTransport:
+            """Record the URL and serve the document from memory."""
             seen.append(url)
             return httpx.MockTransport(lambda request: httpx.Response(200, json=document()))
 
@@ -314,16 +321,20 @@ class TestDiscoveryTransportFactory:
 
 
 class TestHttpsRequirement:
+    """Plain ``http`` is refused unless the caller opts in."""
+
     async def test_refuses_an_http_issuer(self):
         """The issuer anchors trust, so it must be authenticated by TLS."""
         with pytest.raises(OidcDiscoveryError, match="issuer must use https"):
             await discover("http://sso.example.com/realms/acme")
 
     def test_discovery_url_refuses_an_http_issuer(self):
+        """``discovery_url`` applies the same https rule as ``discover``."""
         with pytest.raises(OidcDiscoveryError, match="issuer must use https"):
             discovery_url("http://sso.example.com/realms/acme")
 
     async def test_refuses_an_http_document_url_override(self):
+        """An explicit document URL is held to the https rule too."""
         with pytest.raises(OidcDiscoveryError, match="document URL must use https"):
             await discover(ISSUER, document_url="http://sso.example.com/config")
 
@@ -365,6 +376,7 @@ class TestHttpsRequirement:
         assert "issuer is plain http" in caplog.text
 
     async def test_https_does_not_warn(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
+        """An https issuer logs nothing, even with the opt-in set."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document())
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
@@ -374,6 +386,8 @@ class TestHttpsRequirement:
 
 
 class TestUrlValidation:
+    """Issuer and endpoint URLs are validated as absolute, well-formed URLs."""
+
     @pytest.mark.parametrize("field", ["authorization_endpoint", "token_endpoint"])
     @pytest.mark.parametrize(
         "bad",
@@ -429,6 +443,8 @@ class TestUrlValidation:
 
 
 class TestSecurityRelevantLists:
+    """Lists that gate a security refusal must be well-formed when present."""
+
     @pytest.mark.parametrize("field", ["code_challenge_methods_supported", "token_endpoint_auth_methods_supported"])
     @pytest.mark.parametrize("bad", ["plain", 5, {"S256": True}, ["S256", 1]])
     async def test_refuses_a_malformed_list(self, httpx_mock: HTTPXMock, field: str, bad: object):
@@ -448,6 +464,8 @@ class TestSecurityRelevantLists:
 
 
 class TestPreset:
+    """Building a provider config from discovered metadata."""
+
     def test_builds_a_config_from_discovered_metadata(self):
         """The config takes its endpoints and issuer from the metadata."""
         config, revocation = preset(
@@ -647,6 +665,8 @@ class TestPreset:
 
 
 class TestIdentityHandlerFactory:
+    """Building the identity handler from discovered metadata."""
+
     def test_builds_a_handler_from_metadata(self):
         """Metadata naming an issuer yields an ``OidcIdentityHandler``."""
         assert isinstance(identity_handler(metadata()), OidcIdentityHandler)
@@ -701,6 +721,8 @@ class TestHandlerInference:
 
 
 class TestOidcIdentity:
+    """Establishing identity from an ID token and the userinfo endpoint."""
+
     @pytest.fixture
     def handler(self) -> OidcIdentityHandler:
         """An identity handler for the test issuer and client."""
