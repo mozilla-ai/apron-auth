@@ -100,8 +100,8 @@ OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature che
 claim validation is delegated to `authlib.oidc.core.CodeIDToken` — authlib's own §3.1.3.7
 validator, which checks `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (verified
 against the access token, per §3.1.3.7 step 8). The handler then refuses
-a userinfo response whose `sub` is missing or disagrees with the ID token's. `ServerMetadata.jwks_url` is carried through for a caller
-that wants to verify signatures itself; this library does not fetch it.
+a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens
+from a token-endpoint response, never a stored or front-channel token: it does not verify signatures.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and

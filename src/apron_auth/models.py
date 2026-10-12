@@ -300,7 +300,7 @@ class ServerMetadata(BaseModel, frozen=True):
     metadata, and :func:`apron_auth.providers.oidc.discover`, which reads an
     OpenID provider's configuration document directly. The fields each path
     leaves unset differ accordingly: an MCP discovery sets no
-    :attr:`userinfo_url` or :attr:`jwks_url`, and an OIDC discovery sets no
+    :attr:`userinfo_url`, and an OIDC discovery sets no
     :attr:`resource`.
 
     Attributes:
@@ -334,11 +334,6 @@ class ServerMetadata(BaseModel, frozen=True):
             the metadata omits it. An OpenID provider is not obliged to
             advertise one, and a caller that finds it absent must establish
             identity from the ID token alone.
-        jwks_url: The JSON Web Key Set endpoint, or ``None`` when the metadata
-            omits it. Present so a caller that verifies ID-token signatures
-            knows where the keys are; this library does not fetch it, because
-            an ID token received over the back-channel is authenticated by the
-            token endpoint's TLS (OpenID Connect Core 1.0, section 3.1.3.7).
     """
 
     authorize_url: str
@@ -353,7 +348,6 @@ class ServerMetadata(BaseModel, frozen=True):
     supports_cimd: bool = False
     resource: str | None = None
     userinfo_url: str | None = None
-    jwks_url: str | None = None
 
 
 class ClientRegistration(BaseModel, frozen=True):

@@ -35,7 +35,6 @@ DOCUMENT_URL = f"{ISSUER}/.well-known/openid-configuration"
 AUTHORIZE_URL = f"{ISSUER}/protocol/openid-connect/auth"
 TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 USERINFO_URL = f"{ISSUER}/protocol/openid-connect/userinfo"
-JWKS_URL = f"{ISSUER}/protocol/openid-connect/certs"
 CLIENT_ID = "otari"
 CLIENT_SECRET = "s3cret"  # pragma: allowlist secret
 
@@ -47,7 +46,6 @@ def document(**overrides: Any) -> dict[str, Any]:
         "authorization_endpoint": AUTHORIZE_URL,
         "token_endpoint": TOKEN_URL,
         "userinfo_endpoint": USERINFO_URL,
-        "jwks_uri": JWKS_URL,
         "scopes_supported": ["openid", "email", "profile"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
@@ -108,7 +106,6 @@ def metadata(**overrides: Any) -> ServerMetadata:
         "authorize_url": AUTHORIZE_URL,
         "token_url": TOKEN_URL,
         "userinfo_url": USERINFO_URL,
-        "jwks_url": JWKS_URL,
         "issuer": ISSUER,
     }
     base.update(overrides)
@@ -155,7 +152,6 @@ class TestDiscover:
         assert discovered.authorize_url == AUTHORIZE_URL
         assert discovered.token_url == TOKEN_URL
         assert discovered.userinfo_url == USERINFO_URL
-        assert discovered.jwks_url == JWKS_URL
         assert discovered.issuer == ISSUER
         assert discovered.code_challenge_methods == ["S256"]
 
@@ -591,6 +587,11 @@ class TestPreset:
                 scopes=[],
                 metadata=metadata(issuer=None),
             )
+
+    def test_takes_keyword_arguments_only(self):
+        """Locking the signature now keeps a later optional ``client_secret`` non-breaking."""
+        with pytest.raises(TypeError):
+            preset(CLIENT_ID, CLIENT_SECRET, [], metadata())  # type: ignore[misc]
 
     def test_asserts_no_domain_ownership(self):
         """OpenID Connect standardizes no domain-ownership claim."""

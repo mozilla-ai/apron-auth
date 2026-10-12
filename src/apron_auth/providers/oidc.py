@@ -29,9 +29,7 @@ client uses — which checks ``iss``, ``sub``, ``aud``, ``exp``, ``iat``,
 ``azp`` and ``at_hash`` (the last against the access token it was minted
 over, per section 3.1.3.7 step 8). :class:`OidcIdentityHandler` then refuses
 a userinfo response whose ``sub`` disagrees with the ID token's (section
-5.3.2). :attr:`ServerMetadata.jwks_url`
-is carried through discovery so a caller that wants front-channel verification
-has somewhere to fetch keys from; this library does not fetch it.
+5.3.2).
 
 Deliberate limitations
 ----------------------
@@ -220,8 +218,8 @@ async def discover(
             logs a WARNING for each URL it lets through.
 
     Returns:
-        The discovered metadata, carrying the userinfo and JWKS endpoints
-        alongside the authorization-code flow's own.
+        The discovered metadata, carrying the userinfo endpoint alongside the
+        authorization-code flow's own.
 
     Raises:
         OidcDiscoveryError: If the issuer is malformed, the issuer, document
@@ -259,7 +257,6 @@ async def discover(
     userinfo_url = _optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
     revocation_url = _optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
     registration_url = _optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
-    jwks_url = _optional_str(document.get("jwks_uri"))
 
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -272,11 +269,11 @@ async def discover(
         issuer=declared_issuer,
         iss_parameter_supported=document.get("authorization_response_iss_parameter_supported") is True,
         userinfo_url=userinfo_url,
-        jwks_url=jwks_url,
     )
 
 
 def preset(
+    *,
     client_id: str,
     client_secret: str,
     scopes: list[str],
@@ -286,11 +283,11 @@ def preset(
 ) -> tuple[ProviderConfig, RevocationHandler | None]:
     """Create a provider configuration from a discovered OpenID provider.
 
-    Takes ``metadata`` where every other preset hardcodes endpoints, so the
-    argument order departs from theirs: a generic connection cannot be
-    configured without the discovery step, and making it a parameter rather
-    than an implicit fetch keeps this function synchronous and keeps the
-    network call somewhere a caller can cache, validate, or stub.
+    Takes ``metadata`` where every other preset hardcodes endpoints. Making it a
+    parameter rather than an implicit fetch keeps this function synchronous and
+    keeps the network call somewhere a caller can cache, validate, or stub.
+    Every parameter is keyword-only, so making ``client_secret`` optional later
+    (for public clients) is not a breaking change.
 
     The returned config must always be paired with :func:`identity_handler`.
     Without an explicit handler, host-based inference can resolve a config on a
@@ -439,6 +436,10 @@ class OidcIdentityHandler:
     The userinfo call is enrichment when an ID token validated: if it fails,
     a WARNING is logged and identity rests on the ID token. With no usable ID
     token it is the only source, so its failure raises.
+
+    NOTE: Callers must pass only tokens taken from a token-endpoint response
+    over TLS, never a stored or front-channel token. The ID token is validated
+    without a signature check, which is safe only on that channel.
 
     A userinfo response whose ``sub`` is missing or names a different subject
     than the ID token is refused outright rather than reconciled (OpenID Connect Core 1.0,
