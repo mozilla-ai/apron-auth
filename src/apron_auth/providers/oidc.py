@@ -678,18 +678,6 @@ def _claim_str(source: dict[str, Any] | None, name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _optional_str(value: Any) -> str | None:
-    """Return ``value`` when it is a non-empty string, else ``None``.
-
-    Args:
-        value: The raw JSON value from the configuration document.
-
-    Returns:
-        The string, or ``None`` when absent, empty, or the wrong type.
-    """
-    return value if isinstance(value, str) and value else None
-
-
 def _str_list(value: Any) -> list[str]:
     """Return the string entries of a JSON array, or an empty list.
 
