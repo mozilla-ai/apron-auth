@@ -602,12 +602,11 @@ class OidcIdentityHandler:
             signature = jws.extract_compact(id_token.encode())
             claims = json.loads(signature.payload)
         except (JoseError, ValueError, UnicodeDecodeError) as exc:
-            # The exception class is logged, never its value, so no
-            # token-derived bytes are emitted.
-            logger.debug("OpenID id token claim extraction failed: %s", type(exc).__name__)
+            # The exception class only, so no token-derived bytes are emitted.
+            logger.warning("OpenID ID token dropped, identity falls back to userinfo: %s", type(exc).__name__)
             return None
         if not isinstance(claims, dict):
-            logger.debug("OpenID id token payload was not a JSON object")
+            logger.warning("OpenID ID token dropped, identity falls back to userinfo: payload was not a JSON object")
             return None
         token = CodeIDToken(
             claims,
@@ -966,18 +965,13 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
             raise OidcDiscoveryError(msg) from exc
         if response.status_code != 200:
             if 300 <= response.status_code < 400:
-                location = response.headers.get("location")
-                target = f" to {location!r}" if location else ""
-                # Redirects are deliberately not followed, so this surfaces the
-                # reason a live provider fronted by a CDN or load balancer
-                # failed. The target is the actionable part: pass it as
-                # ``document_url`` when it is the canonical document URL.
-                logger.warning(
-                    "OpenID provider configuration returned HTTP %s%s; redirects are not followed, "
-                    "so the fetch failed — pass the redirect target as document_url if it is canonical",
-                    response.status_code,
-                    target,
+                # The target is provider-controlled text, so it is not logged.
+                logger.debug("OpenID provider configuration returned HTTP %s", response.status_code)
+                msg = (
+                    f"OpenID provider configuration returned HTTP {response.status_code}; redirects are not "
+                    "followed, so pass the canonical document URL as document_url"
                 )
+                raise OidcDiscoveryError(msg)
             msg = f"OpenID provider configuration returned HTTP {response.status_code}"
             raise OidcDiscoveryError(msg)
         try:

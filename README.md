@@ -739,6 +739,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
 | `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
+| `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; ID token dropped or userinfo failure degraded; a refused discovery redirect (DEBUG). |
 
 Two levels are used. `WARNING` marks a capability that degraded without
 raising — a revocation the provider would not confirm, or a

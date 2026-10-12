@@ -202,29 +202,27 @@ class TestDiscover:
         with pytest.raises(OidcDiscoveryError, match="HTTP 404"):
             await discover(ISSUER)
 
-    async def test_logs_a_warning_when_the_document_redirects(
+    async def test_a_redirect_raises_with_a_hint_and_logs_only_at_debug(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ):
         """Redirects are not followed, so a CDN-fronted provider fails.
 
-        The failure is still an error, but the warning names the redirect
-        target so an operator knows the provider is alive and where it moved —
-        the actionable half of an otherwise opaque HTTP 301.
+        The exception carries the actionable hint, not the provider-controlled
+        redirect target, and a path that raises does not log a WARNING.
         """
-        httpx_mock.add_response(
-            url=DOCUMENT_URL,
-            status_code=301,
-            headers={"location": "https://sso.example.com/realms/acme/.well-known/openid-configuration"},
-        )
+        target = "https://elsewhere.example/realms/acme/.well-known/openid-configuration"
+        httpx_mock.add_response(url=DOCUMENT_URL, status_code=301, headers={"location": target})
 
         with (
-            caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"),
-            pytest.raises(OidcDiscoveryError, match="HTTP 301"),
+            caplog.at_level(logging.DEBUG, logger="apron_auth.providers.oidc"),
+            pytest.raises(OidcDiscoveryError, match="pass the canonical document URL as document_url") as excinfo,
         ):
             await discover(ISSUER)
 
-        assert "HTTP 301" in caplog.text
-        assert "openid-configuration" in caplog.text
+        assert "HTTP 301" in str(excinfo.value)
+        assert "elsewhere.example" not in str(excinfo.value)
+        assert "elsewhere.example" not in caplog.text
+        assert all(record.levelno == logging.DEBUG for record in caplog.records)
 
     async def test_reports_a_non_json_document(self, httpx_mock: HTTPXMock):
         """A body that does not parse as JSON is a discovery failure."""
@@ -956,6 +954,32 @@ class TestOidcIdentity:
         )
 
         assert identity.subject == "u-1"
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            "not-a-jwt",
+            f"{_b64(b'{}')}.{_b64(json.dumps({'sub': 'u-1'}).encode())}.sig",
+            f"{_b64(json.dumps({'alg': 'RS256'}).encode())}.{_b64(b'[1]')}.sig",
+        ],
+    )
+    async def test_warns_when_the_id_token_is_dropped(
+        self,
+        handler: OidcIdentityHandler,
+        config: ProviderConfig,
+        httpx_mock: HTTPXMock,
+        caplog: pytest.LogCaptureFixture,
+        token: str,
+    ):
+        """Identity silently resting on userinfo alone is a degraded capability, so it is a WARNING."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+
+        assert identity.subject == "u-1"
+        assert "ID token dropped" in caplog.text
+        assert token not in caplog.text
 
     async def test_refuses_when_neither_document_yields_a_subject(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
