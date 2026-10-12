@@ -105,6 +105,16 @@ that wants to verify signatures itself; this library does not fetch it.
 within an issuer, so two generic connections would otherwise collide on the
 `(provider, subject)` pair that `identity_key()` recommends as a user-table primary key.
 
+`IdentityProfile.email_verified` is `None` by default. On a self-run IdP the claim is
+whatever its admin set (Keycloak, Authentik and Zitadel all let an admin mark any address
+verified), so honoring it would change what `verified_email()` means for every other
+provider. Pass `trust_email_verified=True` to `oidc.identity_handler` to report it, which
+says "I trust this issuer's admin to verify addresses". A multi-tenant application where each
+customer brings its own IdP must not enable it for a tenant-supplied issuer: one tenant could
+mint `ceo@other-tenant.com` with `email_verified=true`. Key users on `identity_key()`, which
+stays safe either way. (A per-connection `verified_domains` option is the fuller design,
+tracked in #136.)
+
 PKCE is mandatory here, not negotiated: a provider whose `code_challenge_methods_supported`
 omits `S256` is refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only
 thing binding an authorization code to the session that requested it, so a config without it

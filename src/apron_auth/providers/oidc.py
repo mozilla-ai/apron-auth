@@ -367,6 +367,7 @@ def identity_handler(
     *,
     client_id: str,
     transport_factory: TransportFactory | None = None,
+    trust_email_verified: bool = False,
 ) -> OidcIdentityHandler:
     """Build the identity handler for a discovered provider.
 
@@ -381,6 +382,14 @@ def identity_handler(
             every ID token the provider issues.
         transport_factory: Optional factory controlling the outbound connection
             for the userinfo request, matching the one :func:`discover` accepts.
+        trust_email_verified: Report the issuer's ``email_verified`` claim on
+            the profile. Off by default, so ``email_verified`` is ``None`` and
+            :meth:`~apron_auth.models.IdentityProfile.verified_email` returns
+            nothing. On a self-run IdP the claim is whatever its admin set, so
+            enabling this means "I trust this issuer's admin to verify
+            addresses". A multi-tenant application must not enable it for a
+            tenant-supplied issuer: one tenant could assert an address in
+            another tenant's domain. Key users on ``identity_key()`` instead.
 
     Returns:
         The identity handler for this provider.
@@ -399,6 +408,7 @@ def identity_handler(
         issuer=metadata.issuer,
         client_id=client_id,
         transport_factory=transport_factory,
+        trust_email_verified=trust_email_verified,
     )
 
 
@@ -428,6 +438,7 @@ class OidcIdentityHandler:
         issuer: str,
         client_id: str,
         transport_factory: TransportFactory | None = None,
+        trust_email_verified: bool = False,
     ) -> None:
         """Configure which provider this establishes identities against.
 
@@ -441,7 +452,11 @@ class OidcIdentityHandler:
             client_id: The client identifier an ID token's ``aud`` must name.
             transport_factory: Optional factory controlling the outbound
                 connection for the userinfo request.
+            trust_email_verified: Report the issuer's ``email_verified`` claim;
+                see :func:`identity_handler`. When ``False``, it is reported as
+                ``None``.
         """
+        self._trust_email_verified = trust_email_verified
         self._userinfo_url = userinfo_url
         self._issuer = issuer
         self._client_id = client_id
@@ -490,6 +505,8 @@ class OidcIdentityHandler:
                 raise IdentityFetchError(msg)
 
         email, email_verified = _email_fields(claims, userinfo)
+        if not self._trust_email_verified:
+            email_verified = None
         return IdentityProfile(
             provider=_provider_name(self._issuer),
             subject=subject,

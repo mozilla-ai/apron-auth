@@ -594,13 +594,18 @@ class TestOidcIdentity:
         return identity_handler(metadata(), client_id=CLIENT_ID)
 
     @pytest.fixture
+    def trusting_handler(self) -> OidcIdentityHandler:
+        """A handler whose operator trusts the issuer's ``email_verified`` claim."""
+        return identity_handler(metadata(), client_id=CLIENT_ID, trust_email_verified=True)
+
+    @pytest.fixture
     def config(self) -> ProviderConfig:
         """The provider config the handler's tokens were issued under."""
         built, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
         return built
 
     async def test_reads_identity_from_userinfo_and_the_id_token(
-        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+        self, trusting_handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
         """Fields come from both documents, and ``raw`` keeps them apart."""
         httpx_mock.add_response(
@@ -614,7 +619,7 @@ class TestOidcIdentity:
             },
         )
 
-        identity = await handler.fetch_identity(
+        identity = await trusting_handler.fetch_identity(
             IdentityMaterial(
                 access_token="access",
                 id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True, groups=["staff"]),
@@ -649,6 +654,58 @@ class TestOidcIdentity:
             },
         }
 
+    async def test_reports_email_verified_as_unasserted_by_default(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """A self-run issuer's ``email_verified`` is not honored unless the operator opts in."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+
+        identity = await handler.fetch_identity(
+            IdentityMaterial(
+                access_token="access",
+                id_token=id_token(sub="u-1", email="ceo@other-tenant.com", email_verified=True),
+            ),
+            config,
+        )
+
+        assert identity.email == "ceo@other-tenant.com"
+        assert identity.email_verified is None
+        assert identity.verified_email() is None
+
+    async def test_reports_email_verified_when_the_operator_trusts_the_issuer(
+        self, trusting_handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """``trust_email_verified`` restores the issuer's claim on the profile."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+
+        identity = await trusting_handler.fetch_identity(
+            IdentityMaterial(
+                access_token="access",
+                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True),
+            ),
+            config,
+        )
+
+        assert identity.email_verified is True
+        assert identity.verified_email() == "person@acme.com"
+
+    async def test_default_still_keeps_identity_key_and_raw_claims(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """Dropping the flag from the profile does not hide it from ``raw``."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+
+        identity = await handler.fetch_identity(
+            IdentityMaterial(
+                access_token="access",
+                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True),
+            ),
+            config,
+        )
+
+        assert identity.identity_key() == (f"oidc:{ISSUER}", "u-1")
+        assert identity.raw["id_token"]["email_verified"] is True
+
     async def test_works_without_an_id_token(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
@@ -676,14 +733,14 @@ class TestOidcIdentity:
         assert identity.email == "person@acme.com"
 
     async def test_prefers_the_id_token_email_verified_claim(
-        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+        self, trusting_handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
         """The trust-bearing document wins on the claim an access decision rests on."""
         httpx_mock.add_response(
             url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com", "email_verified": True}
         )
 
-        identity = await handler.fetch_identity(
+        identity = await trusting_handler.fetch_identity(
             IdentityMaterial(
                 access_token="access",
                 id_token=id_token(sub="u-1", email="person@acme.com", email_verified=False),
