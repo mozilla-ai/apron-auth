@@ -11,7 +11,12 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError, OidcDiscoveryError
+from apron_auth.errors import (
+    ConfigurationError,
+    IdentityFetchError,
+    IdentityScopeNotGrantedError,
+    OidcDiscoveryError,
+)
 from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.oidc import (
@@ -890,6 +895,76 @@ class TestOidcIdentity:
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    @pytest.mark.parametrize("status", [401, 403, 500, 503])
+    async def test_userinfo_failure_degrades_to_the_id_token(
+        self,
+        handler: OidcIdentityHandler,
+        config: ProviderConfig,
+        httpx_mock: HTTPXMock,
+        caplog: pytest.LogCaptureFixture,
+        status: int,
+    ):
+        """Entra and Keycloak refuse userinfo for a resource-API audience; the ID token still vouches."""
+        httpx_mock.add_response(url=USERINFO_URL, status_code=status)
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            identity = await handler.fetch_identity(
+                IdentityMaterial(
+                    access_token="access",
+                    id_token=id_token(sub="u-1", email="person@acme.com", name="A Person"),
+                ),
+                config,
+            )
+
+        assert identity.subject == "u-1"
+        assert identity.email == "person@acme.com"
+        assert identity.name == "A Person"
+        assert identity.raw["userinfo"] == {}
+        assert "userinfo request failed" in caplog.text
+        assert "IdentityFetchError" in caplog.text
+
+    async def test_userinfo_failure_without_an_id_token_still_raises(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """With no ID token, userinfo is the only source of a subject."""
+        httpx_mock.add_response(url=USERINFO_URL, status_code=403)
+
+        with pytest.raises(IdentityFetchError, match="Failed to fetch"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    async def test_maps_insufficient_scope_to_a_scope_error_without_an_id_token(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """RFC 6750 ``insufficient_scope`` means retrying the same token cannot succeed."""
+        httpx_mock.add_response(
+            url=USERINFO_URL,
+            status_code=403,
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_scope", scope="openid profile"'},
+        )
+
+        with pytest.raises(IdentityScopeNotGrantedError):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    async def test_a_bare_403_is_not_a_scope_error(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """Only the RFC 6750 error code selects the scope error."""
+        httpx_mock.add_response(url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": 'Bearer realm="x"'})
+
+        with pytest.raises(IdentityFetchError) as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+        assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
+
+    async def test_a_disagreeing_subject_still_raises_when_userinfo_succeeds(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """Degrading on failure does not weaken the section 5.3.2 check on success."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "someone-else"})
+
+        with pytest.raises(IdentityFetchError, match="different subject"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config)
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""

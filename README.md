@@ -101,6 +101,11 @@ against the access token, per §3.1.3.7 step 8). The handler then refuses
 a userinfo response whose `sub` is missing or disagrees with the ID token's. `ServerMetadata.jwks_url` is carried through for a caller
 that wants to verify signatures itself; this library does not fetch it.
 
+Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
+answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
+identity rests on the ID token. With no usable ID token it is the only source, so the failure
+raises, as `IdentityScopeNotGrantedError` for a 403 `insufficient_scope` (RFC 6750).
+
 `IdentityProfile.provider` is `oidc:<issuer>`, not a bare `oidc`. A `sub` is unique only
 within an issuer, so two generic connections would otherwise collide on the
 `(provider, subject)` pair that `identity_key()` recommends as a user-table primary key.

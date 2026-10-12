@@ -77,6 +77,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -87,7 +88,12 @@ from joserfc import jws
 from joserfc.errors import JoseError
 from pydantic import SecretStr
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError, OidcDiscoveryError
+from apron_auth.errors import (
+    ConfigurationError,
+    IdentityFetchError,
+    IdentityScopeNotGrantedError,
+    OidcDiscoveryError,
+)
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -121,6 +127,9 @@ _CONFIDENTIAL_AUTH_METHODS = (
 # behind rather than a token that has genuinely aged.
 _EXPIRY_LEEWAY_SECONDS = 60
 
+
+# RFC 6750 section 3: ``error="insufficient_scope"`` in ``WWW-Authenticate``.
+_INSUFFICIENT_SCOPE = re.compile(r'error\s*=\s*"?insufficient_scope"?', re.IGNORECASE)
 
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
@@ -425,6 +434,10 @@ class OidcIdentityHandler:
     somebody and userinfo will say who, with a weaker claim to have vouched
     for it.
 
+    The userinfo call is enrichment when an ID token validated: if it fails,
+    a WARNING is logged and identity rests on the ID token. With no usable ID
+    token it is the only source, so its failure raises.
+
     A userinfo response whose ``sub`` is missing or names a different subject
     than the ID token is refused outright rather than reconciled (OpenID Connect Core 1.0,
     section 5.3.2): the two documents disagreeing about who signed in is not a
@@ -477,21 +490,37 @@ class OidcIdentityHandler:
             :func:`_provider_name`) and ``tenancies`` is always empty.
 
         Raises:
+            IdentityScopeNotGrantedError: If there is no usable ID token and the
+                userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             IdentityFetchError: If the ID token's claims do not validate, the
-                userinfo request fails or cannot be parsed, the two documents
-                name different subjects, userinfo names no subject beside a
+                userinfo request fails or cannot be parsed while there is no
+                validated ID token to fall back on, the two documents name
+                different subjects, userinfo names no subject beside a
                 validated ID token, or neither yields a subject.
         """
         del config
         claims = self._validated_claims(material.id_token, material.access_token) if material.id_token else None
-        userinfo = await self._fetch_userinfo(material.access_token) if self._userinfo_url else {}
+        userinfo: dict[str, Any] = {}
+        userinfo_fetched = False
+        if self._userinfo_url:
+            try:
+                userinfo = await self._fetch_userinfo(material.access_token)
+                userinfo_fetched = True
+            except IdentityFetchError as exc:
+                if claims is None:
+                    raise
+                # Userinfo only enriches a subject the validated ID token already
+                # gave; the exception class is logged, not its value.
+                logger.warning(
+                    "OpenID userinfo request failed (%s); identity rests on the ID token alone", type(exc).__name__
+                )
 
         claims_subject = _claim_str(claims, "sub")
         subject = claims_subject or _claim_str(userinfo, "sub")
         if subject is None:
             msg = "OpenID sign-in returned no subject"
             raise IdentityFetchError(msg)
-        if claims is not None and self._userinfo_url:
+        if claims is not None and userinfo_fetched:
             # Section 5.3.2: the userinfo ``sub`` MUST match the ID token's
             # exactly, and an absent one does not. Without this, a userinfo
             # response naming nobody could still lend its email to the ID
@@ -614,6 +643,8 @@ class OidcIdentityHandler:
             The userinfo payload as a JSON object.
 
         Raises:
+            IdentityScopeNotGrantedError: If the endpoint answers 403
+                ``insufficient_scope``.
             IdentityFetchError: If the request fails, its response cannot be
                 parsed, or it is not a JSON object.
         """
@@ -626,7 +657,13 @@ class OidcIdentityHandler:
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 response.raise_for_status()
-        except (httpx.InvalidURL, httpx.RequestError, httpx.HTTPStatusError) as exc:
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 403 and _INSUFFICIENT_SCOPE.search(
+                exc.response.headers.get("www-authenticate", "")
+            ):
+                raise IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope") from exc
+            raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
+        except (httpx.InvalidURL, httpx.RequestError) as exc:
             # ``InvalidURL`` is not a ``RequestError``; the userinfo URL comes
             # from the discovery document unvalidated, so a malformed one must
             # still surface as the ``IdentityFetchError`` callers expect.
