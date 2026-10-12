@@ -488,8 +488,8 @@ class OidcIdentityHandler:
                 ID token's ``iss`` with nothing to be checked against.
             IdentityScopeNotGrantedError: If there is no usable ID token and the
                 userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
-            IdentityFetchError: If the ID token's claims do not validate, the
-                userinfo request fails or cannot be parsed while there is no
+            IdentityFetchError: If the ID token's claims do not validate or its
+                ``sub`` is not a non-empty string, the userinfo request fails or cannot be parsed while there is no
                 validated ID token to fall back on, the two documents name
                 different subjects, userinfo names no subject beside a
                 validated ID token, or neither yields a subject.
@@ -507,7 +507,7 @@ class OidcIdentityHandler:
         userinfo_fetched = False
         if self._userinfo_url:
             try:
-                userinfo = await self._fetch_userinfo(material.access_token)
+                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token)
                 userinfo_fetched = True
             except IdentityFetchError as exc:
                 if claims is None:
@@ -519,6 +519,11 @@ class OidcIdentityHandler:
                 )
 
         claims_subject = _claim_str(claims, "sub")
+        if claims is not None and claims_subject is None:
+            # Authlib only requires the claim to be present, so a non-string or
+            # empty ``sub`` would otherwise surface as a userinfo mismatch.
+            msg = "OpenID ID token has an invalid sub claim"
+            raise IdentityFetchError(msg)
         subject = claims_subject or _claim_str(userinfo, "sub")
         if subject is None:
             msg = "OpenID sign-in returned no subject"
@@ -639,10 +644,11 @@ class OidcIdentityHandler:
             raise IdentityFetchError(msg) from exc
         return claims
 
-    async def _fetch_userinfo(self, access_token: str) -> dict[str, Any]:
+    async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 
         Args:
+            userinfo_url: The userinfo endpoint.
             access_token: The bearer access token for the userinfo request.
 
         Returns:
@@ -654,12 +660,11 @@ class OidcIdentityHandler:
             IdentityFetchError: If the request fails, its response cannot be
                 parsed, or it is not a JSON object.
         """
-        assert self._userinfo_url is not None, "caller checks for a userinfo endpoint before calling"
-        transport = self._transport_factory(self._userinfo_url) if self._transport_factory is not None else None
+        transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
         try:
             async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
                 response = await client.get(
-                    self._userinfo_url,
+                    userinfo_url,
                     headers={"Authorization": f"Bearer {access_token}"},
                 )
                 response.raise_for_status()

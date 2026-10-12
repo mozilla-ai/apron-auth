@@ -1321,6 +1321,18 @@ class TestOidcIdentity:
 
         assert str(excinfo.value) == "OpenID ID token has an invalid iss claim"
 
+    @pytest.mark.parametrize("subject", [123, "", ["u-1"]])
+    async def test_reports_a_malformed_id_token_subject_as_such(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, subject: object
+    ):
+        """A non-string ``sub`` is a malformed ID token, not a userinfo disagreement."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+
+        with pytest.raises(IdentityFetchError, match="ID token has an invalid sub claim"):
+            await handler.fetch_identity(
+                IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
+            )
+
     async def test_refuses_a_non_string_azp(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A present-but-untyped ``azp`` is a claim that cannot be checked, so it fails closed."""
         with pytest.raises(IdentityFetchError, match=r"invalid azp claim"):
