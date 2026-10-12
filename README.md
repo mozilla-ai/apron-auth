@@ -110,18 +110,18 @@ omits `S256` is refused at `preset` time. Since this preset sends no `nonce`, PK
 thing binding an authorization code to the session that requested it, so a config without it
 would have no code-injection defense at all.
 
-`discover` applies no scheme or host policy of its own, so a self-hosted IdP on a private
+`discover` requires `https` for the issuer, the document URL, and every endpoint the
+document names, because ID tokens are read without a signature check and rely on TLS to
+authenticate the issuer: over `http`, an on-path attacker chooses every claim and reads the
+client secret. For local development, pass `allow_insecure_http=True`; each URL it lets
+through logs a WARNING.
+
+Beyond the scheme, `discover` applies no host policy, so a self-hosted IdP on a private
 network needs no opt-in. Whether a given issuer may be reached is a deployment question,
 and a check on the URL string cannot answer it anyway — a hostname resolving to an internal
 address passes any such test. Both `discover` and `identity_handler` accept a
 `transport_factory`, which is where that policy belongs: it controls the actual outbound
 connection, so a caller can pin DNS to validated addresses or route through its own egress.
-
-The endpoint URLs a configuration document names are used exactly as named, including the
-scheme. HTTPS is deliberately not enforced: a document that advertises an `http://` token
-endpoint is used at that URL, and `preset` will happily build a config that POSTs client
-credentials there. Keeping the credential-bearing endpoints on HTTPS is the operator's
-responsibility — this module only refuses to pretend the decision was made for you.
 
 #### What this preset does not do
 

@@ -63,12 +63,11 @@ first if a deployment needs it.
   with a weaker claim to have vouched for it.
 * **A signed (``application/jwt``) userinfo response is refused**, not read
   unverified — see :meth:`OidcIdentityHandler._fetch_userinfo`.
-* **HTTPS is not enforced.** The endpoint URLs a configuration document names
-  are carried through exactly as named, so a document that advertises an
-  ``http://`` token endpoint is used at that URL. Sending client credentials
-  in clear is the operator's choice; this library's contribution is
-  documenting it (see :func:`discover`) rather than silently upgrading or
-  refusing a clear-text endpoint.
+* **HTTPS is required.** The issuer, the document URL and every endpoint a
+  configuration document names must be ``https``, because the unsigned-token
+  design above rests on TLS authenticating the issuer. :func:`discover` takes
+  an explicit ``allow_insecure_http`` opt-in for local development, which logs
+  a WARNING. Host policy is separate and stays with ``transport_factory``.
 * **RP-Initiated Logout is not wired up**, though
   ``authlib.integrations.base_client`` implements it in ``create_logout_url``
   should this module ever grow it.
@@ -136,7 +135,7 @@ BASE_SCOPE_METADATA = [
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
-def discovery_url(issuer: str) -> str:
+def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
     """The configuration document's URL for ``issuer``.
 
     Delegates to :func:`authlib.oidc.discovery.get_well_known_url`, which
@@ -154,18 +153,19 @@ def discovery_url(issuer: str) -> str:
     malformed *URL* and lose which input was actually at fault. The guard
     checks that the issuer is an absolute URL — a scheme and a host, not a
     bare hostname — because appending a well-known suffix to a relative
-    string produces a relative URL that no client can fetch. The scheme is
-    not restricted to ``https``: keeping an issuer (and its document)
-    served in clear is the operator's choice, documented in :func:`discover`.
+    string produces a relative URL that no client can fetch. The scheme must
+    be ``https`` unless ``allow_insecure_http`` is set; see :func:`discover`.
 
     Args:
         issuer: The issuer identifier to derive the document URL from.
+        allow_insecure_http: Accept an ``http`` issuer, for local development.
 
     Returns:
         The configuration document's URL.
 
     Raises:
-        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL.
+        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL, or
+            is not ``https`` and ``allow_insecure_http`` is unset.
     """
     try:
         parsed = urlparse(issuer)
@@ -175,6 +175,7 @@ def discovery_url(issuer: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         msg = "OpenID discovery received an issuer that is not an absolute URL"
         raise OidcDiscoveryError(msg)
+    _require_https(issuer, field="issuer", allow_insecure_http=allow_insecure_http)
     return get_well_known_url(issuer, external=True)
 
 
@@ -183,6 +184,7 @@ async def discover(
     *,
     document_url: str | None = None,
     transport_factory: TransportFactory | None = None,
+    allow_insecure_http: bool = False,
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
 
@@ -202,31 +204,33 @@ async def discover(
             loosening what it may claim.
         transport_factory: Optional factory returning an httpx transport for
             the document URL, letting the caller control the outbound
-            connection. This is where network policy belongs: no scheme or
-            host check is applied here, because whether a given issuer may be
-            reached is the deployment's question, not this library's, and a
-            check that inspects only the URL string cannot answer it anyway —
-            a hostname resolving to an internal address passes any such test.
-
-        The endpoint URLs the document names are carried through exactly as
-        named, including their scheme. HTTPS is *not* enforced: a document
-        that advertises an ``http://`` token endpoint is used at that URL,
-        and a caller that POSTs client credentials there has chosen to send
-        them in clear. Whether a deployment may serve an issuer over HTTP is
-        the operator's responsibility; this module's only contribution is
-        documenting that the credential-bearing endpoints are used
-        verbatim, so the decision is an informed one.
+            connection. This is where network policy belongs: no host check is
+            applied here, because whether a given issuer may be reached is the
+            deployment's question, not this library's, and a check that inspects
+            only the URL string cannot answer it anyway — a hostname resolving
+            to an internal address passes any such test.
+        allow_insecure_http: Accept ``http`` for the issuer, the document URL
+            and the endpoints the document names. Off by default, because ID
+            tokens are not signature-checked and rely on TLS to authenticate the
+            issuer; over ``http`` an on-path attacker chooses every claim and
+            reads the client secret. Intended for local development only, and
+            logs a WARNING for each URL it lets through.
 
     Returns:
         The discovered metadata, carrying the userinfo and JWKS endpoints
         alongside the authorization-code flow's own.
 
     Raises:
-        OidcDiscoveryError: If the issuer is malformed, the document cannot be
-            fetched or parsed, it omits an endpoint the flow requires, or it
-            names an issuer other than ``issuer``.
+        OidcDiscoveryError: If the issuer is malformed, the issuer, document
+            URL or an endpoint is not ``https`` (and ``allow_insecure_http`` is
+            unset), the document cannot be fetched or parsed, it omits an
+            endpoint the flow requires, or it names an issuer other than
+            ``issuer``.
     """
-    url = document_url or discovery_url(issuer)
+    url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
+    if document_url is not None:
+        _require_https(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
+        url = document_url
     document = await _fetch_document(url, transport_factory)
 
     declared_issuer = document.get("issuer")
@@ -251,6 +255,17 @@ async def discover(
     jwks_url = _optional_str(document.get("jwks_uri"))
     revocation_url = _optional_str(document.get("revocation_endpoint"))
     registration_url = _optional_str(document.get("registration_endpoint"))
+
+    endpoints = {
+        "authorization endpoint": authorize_url,
+        "token endpoint": token_url,
+        "userinfo endpoint": userinfo_url,
+        "revocation endpoint": revocation_url,
+        "registration endpoint": registration_url,
+    }
+    for field, endpoint in endpoints.items():
+        if endpoint is not None:
+            _require_https(endpoint, field=field, allow_insecure_http=allow_insecure_http)
 
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -756,6 +771,32 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
             return method
     msg = "OpenID provider advertises no token-endpoint auth method this library can perform"
     raise ConfigurationError(msg)
+
+
+def _require_https(url: str, *, field: str, allow_insecure_http: bool) -> None:
+    """Refuse a non-``https`` URL unless the caller opted in.
+
+    Args:
+        url: The URL to check.
+        field: What the URL is, for the error and the warning.
+        allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
+
+    Raises:
+        OidcDiscoveryError: If ``url`` is unparseable, or is not ``https`` and
+            ``allow_insecure_http`` is unset.
+    """
+    try:
+        scheme = urlparse(url).scheme.lower()
+    except ValueError as exc:
+        msg = f"OpenID discovery received a malformed {field}"
+        raise OidcDiscoveryError(msg) from exc
+    if scheme == "https":
+        return
+    if scheme == "http" and allow_insecure_http:
+        logger.warning("OpenID %s is plain http; allowed by allow_insecure_http, use for local development only", field)
+        return
+    msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
+    raise OidcDiscoveryError(msg)
 
 
 async def _fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:

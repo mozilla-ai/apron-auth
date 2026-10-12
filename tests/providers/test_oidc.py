@@ -252,13 +252,8 @@ class TestDiscover:
             await discover("https://[::1")
 
     async def test_reports_a_malformed_document_url_override(self):
-        """The override skips ``discovery_url``, so httpx is what rejects it.
-
-        ``httpx.InvalidURL`` is not a ``RequestError``, so without being caught
-        alongside them it would escape as an httpx exception rather than the
-        ``OidcDiscoveryError`` this module documents for every bad input.
-        """
-        with pytest.raises(OidcDiscoveryError, match="could not fetch"):
+        """An unparseable override surfaces as the ``OidcDiscoveryError`` this module documents."""
+        with pytest.raises(OidcDiscoveryError, match="malformed document URL"):
             await discover(ISSUER, document_url="https://[::1")
 
     async def test_reports_an_unreachable_document(self, httpx_mock: HTTPXMock):
@@ -284,6 +279,66 @@ class TestDiscover:
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(scopes_supported="openid"))
 
         assert (await discover(ISSUER)).scopes_supported == []
+
+
+class TestHttpsRequirement:
+    async def test_refuses_an_http_issuer(self):
+        """The issuer anchors trust, so it must be authenticated by TLS."""
+        with pytest.raises(OidcDiscoveryError, match="issuer must use https"):
+            await discover("http://sso.example.com/realms/acme")
+
+    def test_discovery_url_refuses_an_http_issuer(self):
+        with pytest.raises(OidcDiscoveryError, match="issuer must use https"):
+            discovery_url("http://sso.example.com/realms/acme")
+
+    async def test_refuses_an_http_document_url_override(self):
+        with pytest.raises(OidcDiscoveryError, match="document URL must use https"):
+            await discover(ISSUER, document_url="http://sso.example.com/config")
+
+    @pytest.mark.parametrize(
+        ("field", "label"),
+        [
+            ("authorization_endpoint", "authorization endpoint"),
+            ("token_endpoint", "token endpoint"),
+            ("userinfo_endpoint", "userinfo endpoint"),
+            ("revocation_endpoint", "revocation endpoint"),
+            ("registration_endpoint", "registration endpoint"),
+        ],
+    )
+    async def test_refuses_an_http_endpoint(self, httpx_mock: HTTPXMock, field: str, label: str):
+        """A document advertising a clear-text endpoint is refused by default."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: "http://idp.example/endpoint"}))
+
+        with pytest.raises(OidcDiscoveryError, match=f"{label} must use https"):
+            await discover(ISSUER)
+
+    async def test_accepts_http_with_the_explicit_opt_in(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
+        """Local development can opt in, and the opt-in is audible in the logs."""
+        issuer = "http://localhost:8080/realms/dev"
+        httpx_mock.add_response(
+            url=f"{issuer}/.well-known/openid-configuration",
+            json=document(
+                issuer=issuer,
+                authorization_endpoint=f"{issuer}/auth",
+                token_endpoint=f"{issuer}/token",
+                userinfo_endpoint=f"{issuer}/userinfo",
+            ),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            discovered = await discover(issuer, allow_insecure_http=True)
+
+        assert discovered.token_url == f"{issuer}/token"
+        assert "token endpoint is plain http" in caplog.text
+        assert "issuer is plain http" in caplog.text
+
+    async def test_https_does_not_warn(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document())
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            await discover(ISSUER, allow_insecure_http=True)
+
+        assert caplog.text == ""
 
 
 class TestPreset:
