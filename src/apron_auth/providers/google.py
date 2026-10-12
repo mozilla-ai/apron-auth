@@ -18,6 +18,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -55,12 +56,12 @@ class GoogleIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Google identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Google identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Google identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Google identity response") from exc
         # Honor email_verified only as a genuine boolean; a bare bool()
         # would coerce a non-boolean (e.g. the string "false") to True.
         email_verified = payload.get("email_verified")

@@ -18,6 +18,7 @@ from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -104,12 +105,12 @@ class SalesforceIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Salesforce identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Salesforce identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Salesforce identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Salesforce identity response") from exc
 
         # Honor email_verified only as a genuine boolean; a bare bool()
         # would coerce a non-boolean (e.g. the string "false") to True.

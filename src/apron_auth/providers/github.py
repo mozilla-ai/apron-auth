@@ -19,6 +19,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -150,13 +151,13 @@ class GitHubIdentityHandler:
                 emails_response = await client.get(_GITHUB_EMAILS_URL, headers=headers)
                 emails_response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch GitHub identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch GitHub identity: {describe_http_error(exc)}") from exc
 
         try:
             user_payload = user_response.json()
             emails_payload = emails_response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse GitHub identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse GitHub identity response") from exc
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")
