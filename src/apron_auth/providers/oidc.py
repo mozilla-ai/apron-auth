@@ -152,7 +152,7 @@ def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
     validating, so a malformed issuer would otherwise surface later as a
     malformed *URL* and lose which input was actually at fault. The guard
     checks that the issuer is an absolute URL — a scheme and a host, not a
-    bare hostname — because appending a well-known suffix to a relative
+    bare hostname, with no query, fragment or userinfo — because appending a well-known suffix to a relative
     string produces a relative URL that no client can fetch. The scheme must
     be ``https`` unless ``allow_insecure_http`` is set; see :func:`discover`.
 
@@ -164,18 +164,11 @@ def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
         The configuration document's URL.
 
     Raises:
-        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL, or
-            is not ``https`` and ``allow_insecure_http`` is unset.
+        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL, has
+            a query, fragment or userinfo, or is not ``https`` and
+            ``allow_insecure_http`` is unset.
     """
-    try:
-        parsed = urlparse(issuer)
-    except ValueError as exc:
-        msg = "OpenID discovery received a malformed issuer"
-        raise OidcDiscoveryError(msg) from exc
-    if not parsed.scheme or not parsed.netloc:
-        msg = "OpenID discovery received an issuer that is not an absolute URL"
-        raise OidcDiscoveryError(msg)
-    _require_https(issuer, field="issuer", allow_insecure_http=allow_insecure_http)
+    _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
     return get_well_known_url(issuer, external=True)
 
 
@@ -229,7 +222,7 @@ async def discover(
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
-        _require_https(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
+        _require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
         url = document_url
     document = await _fetch_document(url, transport_factory)
 
@@ -247,25 +240,16 @@ async def discover(
 
     authorize_url = document.get("authorization_endpoint")
     token_url = document.get("token_endpoint")
-    if not isinstance(authorize_url, str) or not isinstance(token_url, str):
+    if authorize_url is None or token_url is None:
         msg = "OpenID provider configuration is missing an endpoint"
         raise OidcDiscoveryError(msg)
+    authorize_url = _require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
+    token_url = _require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
 
-    userinfo_url = _optional_str(document.get("userinfo_endpoint"))
+    userinfo_url = _optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
+    revocation_url = _optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
+    registration_url = _optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
     jwks_url = _optional_str(document.get("jwks_uri"))
-    revocation_url = _optional_str(document.get("revocation_endpoint"))
-    registration_url = _optional_str(document.get("registration_endpoint"))
-
-    endpoints = {
-        "authorization endpoint": authorize_url,
-        "token endpoint": token_url,
-        "userinfo endpoint": userinfo_url,
-        "revocation endpoint": revocation_url,
-        "registration endpoint": registration_url,
-    }
-    for field, endpoint in endpoints.items():
-        if endpoint is not None:
-            _require_https(endpoint, field=field, allow_insecure_http=allow_insecure_http)
 
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -773,30 +757,75 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
     raise ConfigurationError(msg)
 
 
-def _require_https(url: str, *, field: str, allow_insecure_http: bool) -> None:
-    """Refuse a non-``https`` URL unless the caller opted in.
+def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False) -> str:
+    """Require ``value`` to be an absolute URL this module may talk to.
+
+    The one URL rule for the issuer, the document URL and every endpoint: a
+    string with a scheme and a host, no fragment, and ``https`` unless
+    ``allow_insecure_http`` is set. An issuer additionally has no query and no
+    userinfo (OpenID Connect Discovery 1.0, section 4.1).
 
     Args:
-        url: The URL to check.
-        field: What the URL is, for the error and the warning.
+        value: The raw value to check.
+        field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
+        is_issuer: Apply the stricter issuer rules.
+
+    Returns:
+        ``value``, once it passes.
 
     Raises:
-        OidcDiscoveryError: If ``url`` is unparseable, or is not ``https`` and
-            ``allow_insecure_http`` is unset.
+        OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
+    if not isinstance(value, str) or not value:
+        msg = f"OpenID {field} is not an absolute URL"
+        raise OidcDiscoveryError(msg)
     try:
-        scheme = urlparse(url).scheme.lower()
+        parsed = urlparse(value)
+        hostname = parsed.hostname
     except ValueError as exc:
         msg = f"OpenID discovery received a malformed {field}"
         raise OidcDiscoveryError(msg) from exc
-    if scheme == "https":
-        return
+    if not parsed.scheme or not hostname:
+        msg = f"OpenID {field} is not an absolute URL"
+        raise OidcDiscoveryError(msg)
+    scheme = parsed.scheme.lower()
     if scheme == "http" and allow_insecure_http:
         logger.warning("OpenID %s is plain http; allowed by allow_insecure_http, use for local development only", field)
-        return
-    msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
-    raise OidcDiscoveryError(msg)
+    elif scheme != "https":
+        msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
+        raise OidcDiscoveryError(msg)
+    if parsed.fragment:
+        msg = f"OpenID {field} must not carry a fragment"
+        raise OidcDiscoveryError(msg)
+    if is_issuer and (parsed.query or "?" in value):
+        msg = f"OpenID {field} must not carry a query"
+        raise OidcDiscoveryError(msg)
+    if is_issuer and (parsed.username is not None or parsed.password is not None or "@" in parsed.netloc):
+        msg = f"OpenID {field} must not carry userinfo"
+        raise OidcDiscoveryError(msg)
+    return value
+
+
+def _optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
+    """Validate an optional endpoint when the document names one.
+
+    Args:
+        document: The configuration document.
+        key: The document member to read.
+        field: What the endpoint is, for errors.
+        allow_insecure_http: Passed through to :func:`_require_url`.
+
+    Returns:
+        The endpoint, or ``None`` when the document omits it.
+
+    Raises:
+        OidcDiscoveryError: If the member is present but not an acceptable URL.
+    """
+    value = document.get(key)
+    if value is None:
+        return None
+    return _require_url(value, field=field, allow_insecure_http=allow_insecure_http)
 
 
 async def _fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:

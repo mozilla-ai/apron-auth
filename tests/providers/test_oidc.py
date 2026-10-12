@@ -341,6 +341,61 @@ class TestHttpsRequirement:
         assert caplog.text == ""
 
 
+class TestUrlValidation:
+    @pytest.mark.parametrize("field", ["authorization_endpoint", "token_endpoint"])
+    @pytest.mark.parametrize(
+        "bad",
+        ["", "/relative/path", "javascript:alert(1)", "idp.example/token", f"{ISSUER}/token#frag", 5],
+    )
+    async def test_refuses_a_bad_required_endpoint(self, httpx_mock: HTTPXMock, field: str, bad: object):
+        """An empty, relative, scripting or fragment-bearing endpoint never becomes a config."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: bad}))
+
+        with pytest.raises(OidcDiscoveryError, match="endpoint"):
+            await discover(ISSUER)
+
+    @pytest.mark.parametrize("field", ["userinfo_endpoint", "revocation_endpoint", "registration_endpoint"])
+    @pytest.mark.parametrize("bad", ["", "/relative", "javascript:alert(1)", f"{ISSUER}/x#frag"])
+    async def test_refuses_a_bad_optional_endpoint_when_present(self, httpx_mock: HTTPXMock, field: str, bad: str):
+        """An optional endpoint is validated whenever the document names one."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: bad}))
+
+        with pytest.raises(OidcDiscoveryError, match="endpoint"):
+            await discover(ISSUER)
+
+    async def test_names_the_offending_field(self, httpx_mock: HTTPXMock):
+        """The error says which member was wrong, so an operator can find it."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(token_endpoint="javascript:alert(1)"))
+
+        with pytest.raises(OidcDiscoveryError, match="token endpoint"):
+            await discover(ISSUER)
+
+    @pytest.mark.parametrize(
+        ("issuer", "match"),
+        [
+            ("https://sso.example.com/realms/acme?x=1", "query"),
+            ("https://sso.example.com/realms/acme?", "query"),
+            ("https://sso.example.com/realms/acme#frag", "fragment"),
+            ("https://user@sso.example.com/realms/acme", "userinfo"),
+            ("https://user:pw@sso.example.com/realms/acme", "userinfo"),  # pragma: allowlist secret
+        ],
+    )
+    async def test_refuses_an_issuer_with_a_query_fragment_or_userinfo(self, issuer: str, match: str):
+        """Discovery 1.0 section 4.1 forbids each, and the issuer ends up in ``provider``."""
+        with pytest.raises(OidcDiscoveryError, match=match):
+            await discover(issuer)
+
+    async def test_accepts_a_port_and_path_in_the_issuer(self, httpx_mock: HTTPXMock):
+        """A port is not userinfo, so ordinary self-hosted issuers still work."""
+        issuer = "https://sso.example.com:8443/realms/acme"
+        httpx_mock.add_response(
+            url=f"{issuer}/.well-known/openid-configuration",
+            json=document(issuer=issuer),
+        )
+
+        assert (await discover(issuer)).issuer == issuer
+
+
 class TestPreset:
     def test_builds_a_config_from_discovered_metadata(self):
         """The config takes its endpoints and issuer from the metadata."""

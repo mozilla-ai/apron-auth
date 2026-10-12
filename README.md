@@ -110,8 +110,9 @@ omits `S256` is refused at `preset` time. Since this preset sends no `nonce`, PK
 thing binding an authorization code to the session that requested it, so a config without it
 would have no code-injection defense at all.
 
-`discover` requires `https` for the issuer, the document URL, and every endpoint the
-document names, because ID tokens are read without a signature check and rely on TLS to
+`discover` requires an absolute `https` URL for the issuer, the document URL, and every
+endpoint the document names (no fragment; the issuer also has no query or userinfo, per
+Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because ID tokens are read without a signature check and rely on TLS to
 authenticate the issuer: over `http`, an on-path attacker chooses every claim and reads the
 client secret. For local development, pass `allow_insecure_http=True`; each URL it lets
 through logs a WARNING.
