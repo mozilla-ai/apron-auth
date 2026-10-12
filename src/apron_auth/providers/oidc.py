@@ -388,21 +388,20 @@ def preset(
 def identity_handler(
     metadata: ServerMetadata,
     *,
-    client_id: str,
     transport_factory: TransportFactory | None = None,
     trust_email_verified: bool = False,
 ) -> OidcIdentityHandler:
     """Build the identity handler for a discovered provider.
 
     The counterpart to the inference every other provider gets for free from
-    ``providers.identity``, which this module cannot participate in; see the
-    module docstring.
+    ``providers.identity``; always pass it to
+    :class:`~apron_auth.client.OAuthClient`, as the module docstring explains.
+    The issuer and client identifier an ID token is validated against are read
+    from the :class:`~apron_auth.models.ProviderConfig` that :func:`preset`
+    built, so they cannot disagree with it.
 
     Args:
         metadata: The provider's discovered metadata, from :func:`discover`.
-        client_id: The client identifier an ID token's ``aud`` must name. This
-            must be the same value passed to :func:`preset`; a mismatch rejects
-            every ID token the provider issues.
         transport_factory: Optional factory controlling the outbound connection
             for the userinfo request, matching the one :func:`discover` accepts.
         trust_email_verified: Report the issuer's ``email_verified`` claim on
@@ -416,20 +415,9 @@ def identity_handler(
 
     Returns:
         The identity handler for this provider.
-
-    Raises:
-        ConfigurationError: If the metadata names no issuer, which leaves an ID
-            token's ``iss`` with nothing to be checked against. Raised as
-            ``ConfigurationError`` rather than :class:`OidcDiscoveryError` for
-            the same reason :func:`preset` gives.
     """
-    if metadata.issuer is None:
-        msg = "OpenID provider metadata names no issuer; an ID token's iss could not be validated"
-        raise ConfigurationError(msg)
     return OidcIdentityHandler(
         userinfo_url=metadata.userinfo_url,
-        issuer=metadata.issuer,
-        client_id=client_id,
         transport_factory=transport_factory,
         trust_email_verified=trust_email_verified,
     )
@@ -462,21 +450,14 @@ class OidcIdentityHandler:
         self,
         *,
         userinfo_url: str | None,
-        issuer: str,
-        client_id: str,
         transport_factory: TransportFactory | None = None,
         trust_email_verified: bool = False,
     ) -> None:
-        """Configure which provider this establishes identities against.
+        """Configure where this handler reads userinfo from.
 
         Args:
             userinfo_url: The provider's userinfo endpoint, or ``None`` when it
                 advertises none and identity rests on the ID token alone.
-            issuer: The issuer an ID token's ``iss`` must name. Required rather
-                than optional: OpenID Connect Core 1.0 section 3.1.3.7 step 2
-                makes the comparison a MUST, and an issuer-less handler would
-                silently skip it.
-            client_id: The client identifier an ID token's ``aud`` must name.
             transport_factory: Optional factory controlling the outbound
                 connection for the userinfo request.
             trust_email_verified: Report the issuer's ``email_verified`` claim;
@@ -485,8 +466,6 @@ class OidcIdentityHandler:
         """
         self._trust_email_verified = trust_email_verified
         self._userinfo_url = userinfo_url
-        self._issuer = issuer
-        self._client_id = client_id
         self._transport_factory = transport_factory
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -495,15 +474,17 @@ class OidcIdentityHandler:
         Args:
             material: The token material — the access token, and the ID token
                 whose validated claims are preferred where they overlap.
-            config: The provider configuration the tokens were issued under.
-                Unused: everything this needs was fixed at construction, from
-                the metadata the config was itself derived from.
+            config: The provider configuration the tokens were issued under; its
+                ``issuer`` and ``client_id`` are what the ID token is validated
+                against.
 
         Returns:
             The identity profile. ``provider`` is namespaced by issuer (see
             :func:`_provider_name`) and ``tenancies`` is always empty.
 
         Raises:
+            ConfigurationError: If ``config`` names no issuer, which leaves an
+                ID token's ``iss`` with nothing to be checked against.
             IdentityScopeNotGrantedError: If there is no usable ID token and the
                 userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             IdentityFetchError: If the ID token's claims do not validate, the
@@ -512,8 +493,15 @@ class OidcIdentityHandler:
                 different subjects, userinfo names no subject beside a
                 validated ID token, or neither yields a subject.
         """
-        del config
-        claims = self._validated_claims(material.id_token, material.access_token) if material.id_token else None
+        if config.issuer is None:
+            msg = "OpenID provider config names no issuer; an ID token's iss could not be validated"
+            raise ConfigurationError(msg)
+        issuer = config.issuer
+        claims = (
+            self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
+            if material.id_token
+            else None
+        )
         userinfo: dict[str, Any] = {}
         userinfo_fetched = False
         if self._userinfo_url:
@@ -551,7 +539,7 @@ class OidcIdentityHandler:
         if not self._trust_email_verified:
             email_verified = None
         return IdentityProfile(
-            provider=_provider_name(self._issuer),
+            provider=_provider_name(issuer),
             subject=subject,
             email=email,
             email_verified=email_verified,
@@ -568,7 +556,7 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    def _validated_claims(self, id_token: str, access_token: str) -> dict[str, Any] | None:
+    def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any] | None:
         """Return the ID token's claims once they check out.
 
         Validation is :class:`authlib.oidc.core.CodeIDToken`, authlib's
@@ -601,6 +589,8 @@ class OidcIdentityHandler:
             id_token: The ID token from the token-endpoint response.
             access_token: The access token from the same response, which
                 ``at_hash`` — when present — is verified against.
+            issuer: The issuer the token's ``iss`` must name.
+            client_id: The client identifier the token's ``aud`` must name.
 
         Returns:
             The validated claims, or ``None`` when the token is unparseable.
@@ -633,10 +623,10 @@ class OidcIdentityHandler:
             # ``aud=<someone-else>, azp=<us>`` is accepted without this option
             # — an audience check that silently is not one.
             {
-                "iss": {"values": [self._issuer], "essential": True},
-                "aud": {"values": [self._client_id], "essential": True},
+                "iss": {"values": [issuer], "essential": True},
+                "aud": {"values": [client_id], "essential": True},
             },
-            {"client_id": self._client_id, "access_token": access_token},
+            {"client_id": client_id, "access_token": access_token},
         )
         try:
             token.validate(leeway=_EXPIRY_LEEWAY_SECONDS)

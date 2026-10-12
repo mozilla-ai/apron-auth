@@ -79,7 +79,7 @@ config, revocation_handler = oidc.preset(
 
 client = OAuthClient(
     config,
-    identity_handler=oidc.identity_handler(metadata, client_id="your-client-id"),
+    identity_handler=oidc.identity_handler(metadata),
 )
 ```
 

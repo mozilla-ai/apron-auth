@@ -620,22 +620,11 @@ class TestPreset:
 class TestIdentityHandlerFactory:
     def test_builds_a_handler_from_metadata(self):
         """Metadata naming an issuer yields an ``OidcIdentityHandler``."""
-        assert isinstance(identity_handler(metadata(), client_id=CLIENT_ID), OidcIdentityHandler)
-
-    def test_refuses_metadata_naming_no_issuer(self):
-        """Section 3.1.3.7 step 2 makes the ``iss`` comparison a MUST.
-
-        An issuer-less handler would construct fine and then silently skip it,
-        so the refusal happens here rather than becoming a per-token no-op.
-        Raised as ``ConfigurationError``, as :func:`preset` does, since the
-        document was read and discovery did not fail.
-        """
-        with pytest.raises(ConfigurationError, match="names no issuer"):
-            identity_handler(metadata(issuer=None), client_id=CLIENT_ID)
+        assert isinstance(identity_handler(metadata()), OidcIdentityHandler)
 
     def test_builds_a_handler_without_a_userinfo_endpoint(self):
-        """Identity can rest on the ID token alone; the issuer is what cannot be missing."""
-        assert isinstance(identity_handler(metadata(userinfo_url=None), client_id=CLIENT_ID), OidcIdentityHandler)
+        """Identity can rest on the ID token alone."""
+        assert isinstance(identity_handler(metadata(userinfo_url=None)), OidcIdentityHandler)
 
 
 class TestHandlerInference:
@@ -686,12 +675,12 @@ class TestOidcIdentity:
     @pytest.fixture
     def handler(self) -> OidcIdentityHandler:
         """An identity handler for the test issuer and client."""
-        return identity_handler(metadata(), client_id=CLIENT_ID)
+        return identity_handler(metadata())
 
     @pytest.fixture
     def trusting_handler(self) -> OidcIdentityHandler:
         """A handler whose operator trusts the issuer's ``email_verified`` claim."""
-        return identity_handler(metadata(), client_id=CLIENT_ID, trust_email_verified=True)
+        return identity_handler(metadata(), trust_email_verified=True)
 
     @pytest.fixture
     def config(self) -> ProviderConfig:
@@ -814,7 +803,7 @@ class TestOidcIdentity:
 
     async def test_works_without_a_userinfo_endpoint(self, config: ProviderConfig):
         """A provider advertising none still identifies someone via the ID token."""
-        handler = identity_handler(metadata(userinfo_url=None), client_id=CLIENT_ID)
+        handler = identity_handler(metadata(userinfo_url=None))
 
         identity = await handler.fetch_identity(
             IdentityMaterial(
@@ -1058,7 +1047,7 @@ class TestOidcIdentity:
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = identity_handler(metadata(userinfo_url="https://[::1"), client_id=CLIENT_ID)
+        handler = identity_handler(metadata(userinfo_url="https://[::1"))
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
@@ -1192,18 +1181,21 @@ class TestOidcIdentity:
         ``"oidc"`` would let any ``sub`` one issuer mints collide with the
         other's user records.
         """
-        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
-        other = OidcIdentityHandler(userinfo_url=None, issuer="https://sso.other.example", client_id=CLIENT_ID)
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"}, is_reusable=True)
+        other_issuer = "https://sso.other.example"
+        other_config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(issuer=other_issuer, userinfo_url=None),
+        )
 
         mine = await handler.fetch_identity(
             IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
         )
-        theirs = await other.fetch_identity(
-            IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", iss="https://sso.other.example"),
-            ),
-            config,
+        theirs = await handler.fetch_identity(
+            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", iss=other_issuer)),
+            other_config,
         )
 
         assert mine.identity_key() != theirs.identity_key()
@@ -1217,7 +1209,7 @@ class TestOidcIdentity:
             seen.append(url)
             return httpx.ASGITransport(app=_userinfo_app)
 
-        handler = identity_handler(metadata(), client_id=CLIENT_ID, transport_factory=factory)
+        handler = identity_handler(metadata(), transport_factory=factory)
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
 
@@ -1312,7 +1304,21 @@ class TestOidcIdentity:
                 config,
             )
 
-    async def test_the_issuer_check_cannot_be_disabled(self, config: ProviderConfig):
-        """``issuer`` is a required constructor argument, so there is no un-checked mode."""
-        with pytest.raises(TypeError):
-            OidcIdentityHandler(userinfo_url=USERINFO_URL, client_id=CLIENT_ID)  # type: ignore[call-arg]
+    async def test_refuses_a_config_naming_no_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
+        """Section 3.1.3.7 step 2 makes ``iss`` a MUST; an issuer-less config has nothing to check against."""
+        issuerless = config.model_copy(update={"issuer": None})
+
+        with pytest.raises(ConfigurationError, match="names no issuer"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), issuerless)
+
+    async def test_validates_against_the_config_not_the_handler(self, handler: OidcIdentityHandler):
+        """Issuer and client id come from the config, so the pair cannot disagree."""
+        other, _ = preset(
+            client_id="another-client",
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(userinfo_url=None),
+        )
+
+        with pytest.raises(IdentityFetchError, match="invalid aud claim"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), other)
