@@ -70,7 +70,7 @@ def _at_hash(access_token: str) -> str:
     return _b64(digest[:16])
 
 
-def id_token(**claims: Any) -> str:
+def id_token(*, alg: str = "RS256", **claims: Any) -> str:
     """An unsigned JWT carrying ``claims``, shaped like a real one.
 
     The signature is never checked (see the module docstring), so a placeholder
@@ -86,7 +86,7 @@ def id_token(**claims: Any) -> str:
     now = int(time.time())
     payload = {"iss": ISSUER, "sub": "u-1", "aud": CLIENT_ID, "exp": now + 300, "iat": now, **claims}
     payload = {key: value for key, value in payload.items() if value is not _OMIT}
-    return f"{_b64(json.dumps({'alg': 'RS256'}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
+    return f"{_b64(json.dumps({'alg': alg}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
 
 
 _OMIT = object()
@@ -281,6 +281,36 @@ class TestDiscover:
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(scopes_supported="openid"))
 
         assert (await discover(ISSUER)).scopes_supported == []
+
+
+class TestDiscoveryTransportFactory:
+    @staticmethod
+    def _factory(seen: list[str]):
+        """A transport factory recording each URL and serving the document from memory."""
+
+        def factory(url: str) -> httpx.AsyncBaseTransport:
+            seen.append(url)
+            return httpx.MockTransport(lambda request: httpx.Response(200, json=document()))
+
+        return factory
+
+    async def test_routes_the_document_fetch_through_the_factory(self):
+        """``transport_factory`` is the documented host-policy hook for discovery."""
+        seen: list[str] = []
+
+        discovered = await discover(ISSUER, transport_factory=self._factory(seen))
+
+        assert seen == [DOCUMENT_URL]
+        assert discovered.issuer == ISSUER
+
+    async def test_the_factory_sees_a_document_url_override(self):
+        """An override relocates the fetch, and the factory is asked about the new URL."""
+        seen: list[str] = []
+        override = "https://sso.example.com/nonstandard-config"
+
+        await discover(ISSUER, document_url=override, transport_factory=self._factory(seen))
+
+        assert seen == [override]
 
 
 class TestHttpsRequirement:
@@ -1331,6 +1361,39 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="ID token has an invalid sub claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
+            )
+
+    async def test_refuses_when_there_is_no_userinfo_endpoint_and_no_id_token(self, config: ProviderConfig):
+        """With neither document, nothing names a subject."""
+        handler = identity_handler(metadata(userinfo_url=None))
+
+        with pytest.raises(IdentityFetchError, match="no subject"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    async def test_accepts_an_eddsa_token_with_a_sha512_at_hash(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """EdDSA names no hash of its own; the ``at_hash`` uses SHA-512 (Core section 3.1.3.6)."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+        at_hash = _b64(hashlib.sha512(b"access").digest()[:32])
+
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token="access", id_token=id_token(alg="EdDSA", sub="u-1", at_hash=at_hash)),
+            config,
+        )
+
+        assert identity.subject == "u-1"
+
+    async def test_refuses_an_eddsa_token_with_the_wrong_at_hash(
+        self, handler: OidcIdentityHandler, config: ProviderConfig
+    ):
+        """The EdDSA path still verifies the binding rather than skipping it."""
+        with pytest.raises(IdentityFetchError, match="invalid at_hash claim"):
+            await handler.fetch_identity(
+                IdentityMaterial(
+                    access_token="access", id_token=id_token(alg="EdDSA", sub="u-1", at_hash=_at_hash("access"))
+                ),
+                config,
             )
 
     async def test_refuses_a_non_string_azp(self, handler: OidcIdentityHandler, config: ProviderConfig):
