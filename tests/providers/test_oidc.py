@@ -19,6 +19,9 @@ from apron_auth.errors import (
 )
 from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.providers.google import GoogleIdentityHandler
+from apron_auth.providers.identity import infer_identity_handler
+from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
     discover,
@@ -590,6 +593,50 @@ class TestIdentityHandlerFactory:
     def test_builds_a_handler_without_a_userinfo_endpoint(self):
         """Identity can rest on the ID token alone; the issuer is what cannot be missing."""
         assert isinstance(identity_handler(metadata(userinfo_url=None), client_id=CLIENT_ID), OidcIdentityHandler)
+
+
+class TestHandlerInference:
+    """Pins that host-based inference can still replace the generic handler (#137)."""
+
+    def test_a_microsoft_hosted_generic_config_infers_the_microsoft_handler(self):
+        """Why ``identity_handler`` must always be passed explicitly.
+
+        Flip this when inference learns to skip generic configs (#137).
+        """
+        entra = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
+        config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(
+                issuer=entra,
+                authorize_url=f"{entra}/authorize",
+                token_url=f"{entra}/token",
+            ),
+        )
+
+        assert isinstance(infer_identity_handler(config), MicrosoftIdentityHandler)
+
+    def test_a_google_hosted_generic_config_infers_the_google_handler(self):
+        """The same hazard for an issuer on Google's hosts."""
+        config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(
+                issuer="https://accounts.google.com",
+                authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+                token_url="https://oauth2.googleapis.com/token",
+            ),
+        )
+
+        assert isinstance(infer_identity_handler(config), GoogleIdentityHandler)
+
+    def test_an_arbitrary_generic_config_infers_nothing(self):
+        """Only the explicit handler establishes identity for an unclaimed host."""
+        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
+
+        assert infer_identity_handler(config) is None
 
 
 class TestOidcIdentity:

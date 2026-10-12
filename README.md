@@ -88,10 +88,12 @@ document that names a different one (OpenID Connect Discovery 1.0, section 4.3),
 discovered issuer carries onto the config so the authorization-response `iss` is validated
 before a code is redeemed (RFC 9207).
 
-Unlike every other provider here, the identity handler is passed explicitly. Handler
-inference matches a config's OAuth hosts against each provider's known hosts, and a
-generic connection's hosts are whatever the operator configured — so `oidc` registers no
-resolver rather than making inference ambiguous for the providers that can answer.
+Always pass the identity handler explicitly, as above. `oidc` registers no inference
+resolver, but inference still runs on the config `preset` returns: a generic config whose
+endpoints sit on a host another provider claims (an Entra or Google issuer, for example)
+resolves to that provider's handler. `provider` is then `microsoft` or `google` instead of
+`oidc:<issuer>`, and adding the explicit handler later changes every user's `identity_key()`.
+Making inference skip generic configs is a tracked follow-up (#137).
 
 ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
 OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check, and the

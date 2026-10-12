@@ -7,15 +7,15 @@ document, so :func:`discover` reads the endpoints from the issuer and
 Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, Ping, and anything else that
 implements OpenID Connect Discovery 1.0, without a module here per product.
 
-**No identity resolver is registered, deliberately.** Every other provider
-infers its handler by matching the config's OAuth hosts against a fixed suffix
-list (``providers.identity.infer_identity_handler``). A generic connection's
-hosts are whatever the operator configured, so a resolver here would either
-match nothing or match everything and make inference ambiguous for the presets
-that can answer honestly. A caller using this module passes
-:class:`OidcIdentityHandler` to :class:`~apron_auth.client.OAuthClient`
-explicitly, which is what :func:`identity_handler` builds from the same metadata
-the config came from.
+**Always pass the identity handler explicitly.** This module registers no
+identity resolver, but host-based inference still runs on the config
+:func:`preset` returns: a generic config whose endpoints sit on a host another
+provider claims (an Entra or Google issuer, say) is resolved to that provider's
+handler by ``providers.identity.infer_identity_handler``. ``provider`` is then
+``microsoft`` or ``google`` rather than ``oidc:<issuer>``, and adding the
+explicit handler later changes every user's ``identity_key()``. Pass
+:func:`identity_handler` to :class:`~apron_auth.client.OAuthClient` from the
+start; skipping generic configs in inference is tracked as a follow-up (#137).
 
 **ID-token signatures are not verified here, and that is compliant rather than
 a shortcut.** The tokens this module sees arrive on the token-endpoint response
@@ -290,6 +290,12 @@ def preset(
     configured without the discovery step, and making it a parameter rather
     than an implicit fetch keeps this function synchronous and keeps the
     network call somewhere a caller can cache, validate, or stub.
+
+    The returned config must always be paired with :func:`identity_handler`.
+    Without an explicit handler, host-based inference can resolve a config on a
+    host another provider claims (an Entra or Google issuer) to that
+    provider's handler, which changes ``provider`` and every user's
+    ``identity_key()``; see the module docstring.
 
     ``openid`` is merged into ``scopes``: without it the provider runs a plain
     OAuth flow, returns no ID token, and nothing below can establish an
