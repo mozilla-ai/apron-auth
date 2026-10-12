@@ -85,8 +85,13 @@ client = OAuthClient(
 
 The issuer is a trust anchor, not just an address: `discover` refuses a configuration
 document that names a different one (OpenID Connect Discovery 1.0, section 4.3), and the
-discovered issuer carries onto the config so the authorization-response `iss` is validated
-before a code is redeemed (RFC 9207).
+discovered issuer carries onto the config. The authorization-response `iss` (RFC 9207) is
+validated before a code is redeemed only when the provider sends `iss` or advertises
+`authorization_response_iss_parameter_supported`.
+
+Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/<tid>/v2.0`.
+The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
+match by design.
 
 Always pass the identity handler explicitly, as above. `oidc` registers no inference
 resolver, but inference still runs on the config `preset` returns: a generic config whose
@@ -96,12 +101,11 @@ resolves to that provider's handler. `provider` is then `microsoft` or `google` 
 Making inference skip generic configs is a tracked follow-up (#137).
 
 ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
-OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check, and the
-claim validation is delegated to `authlib.oidc.core.CodeIDToken` — authlib's own §3.1.3.7
-validator, which checks `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (verified
-against the access token, per §3.1.3.7 step 8). The handler then refuses
-a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens
-from a token-endpoint response, never a stored or front-channel token: it does not verify signatures.
+OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check. The
+claims are always validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against
+the access token). The handler then refuses a userinfo response whose `sub` is missing or
+disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response,
+never a stored or front-channel token, because it does not verify signatures.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -152,7 +156,7 @@ Each is a deliberate limitation rather than an oversight:
 | --- | --- |
 | Confidential clients only | `preset` requires a client secret; a public (native/SPA) client cannot be configured, though `ProviderConfig` models one |
 | No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, so PKCE is the only code-injection defense (and only where the provider enforces it) — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
-| No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata`, though authlib implements the URL builder |
+| No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata` |
 | No `response_mode` | The query default is always used |
 | A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |
 | A signed (`application/jwt`) userinfo response is refused | Signatures are not verified here, so it is refused rather than read unverified |

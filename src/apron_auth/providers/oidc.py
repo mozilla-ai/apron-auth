@@ -1,75 +1,34 @@
 """Generic OpenID Connect provider preset, discovery, and identity handler.
 
-The preset every other module in this package is not: it names no endpoints,
-because it has none to name. An OpenID provider publishes its own configuration
-document, so :func:`discover` reads the endpoints from the issuer and
-:func:`preset` folds them together with a client identity. That covers Keycloak,
-Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, Ping, and anything else that
-implements OpenID Connect Discovery 1.0, without a module here per product.
+An OpenID provider publishes its own configuration document, so :func:`discover`
+reads the endpoints from the issuer and :func:`preset` combines them with a
+client identity. That covers Keycloak, Okta, Auth0, Entra ID, Authentik,
+Zitadel, Dex, Ping, and any other provider implementing OpenID Connect
+Discovery 1.0.
 
-**Always pass the identity handler explicitly.** This module registers no
-identity resolver, but host-based inference still runs on the config
-:func:`preset` returns: a generic config whose endpoints sit on a host another
-provider claims (an Entra or Google issuer, say) is resolved to that provider's
-handler by ``providers.identity.infer_identity_handler``. ``provider`` is then
-``microsoft`` or ``google`` rather than ``oidc:<issuer>``, and adding the
-explicit handler later changes every user's ``identity_key()``. Pass
-:func:`identity_handler` to :class:`~apron_auth.client.OAuthClient` from the
-start; skipping generic configs in inference is tracked as a follow-up (#137).
+Always pass :func:`identity_handler` to :class:`~apron_auth.client.OAuthClient`.
+Host-based inference still runs on the config :func:`preset` returns, so an
+Entra or Google issuer would otherwise resolve to that provider's handler,
+changing ``provider`` and every user's ``identity_key()`` (follow-up: #137).
 
-**ID-token signatures are not verified here, and that is compliant rather than
-a shortcut.** The tokens this module sees arrive on the token-endpoint response
-over the back-channel, where TLS already authenticates the issuer; OpenID
-Connect Core 1.0 section 3.1.3.7 permits TLS server validation in place of a
-signature check for exactly that case, and ``providers.microsoft`` already
-relies on it. What is *not* optional is validating the claims, and that is
-delegated to :class:`authlib.oidc.core.CodeIDToken` — authlib's own
-implementation of the section 3.1.3.7 rules, the same validator its OpenID
-client uses — which checks ``iss``, ``sub``, ``aud``, ``exp``, ``iat``,
-``azp`` and ``at_hash`` (the last against the access token it was minted
-over, per section 3.1.3.7 step 8). :class:`OidcIdentityHandler` then refuses
-a userinfo response whose ``sub`` disagrees with the ID token's (section
-5.3.2).
+ID-token signatures are not verified: tokens arrive on the token-endpoint
+response, where TLS authenticates the issuer (OpenID Connect Core 1.0 section
+3.1.3.7). Claims are always validated per that section, and that is why every
+URL here must be ``https``. Pass the handler only tokens from a token-endpoint
+response.
 
-Deliberate limitations
-----------------------
+Limitations
+-----------
 
-Each of these is a decision, not an oversight, and each is the thing to change
-first if a deployment needs it.
-
-* **Confidential clients only.** :func:`preset` requires a client secret, and
-  :func:`_select_auth_method` never returns ``none``. A public client — the
-  ordinary shape for native and single-page apps — cannot be configured, even
-  though :class:`~apron_auth.models.ProviderConfig` models one. Supporting it
-  is a change to this module's signature, not to the flow.
-* **No ``nonce``, and no per-request authorization parameters** (``prompt``,
-  ``login_hint``, ``max_age``, ``acr_values``, ``ui_locales``, ``display``,
-  ``id_token_hint``). ``nonce`` is OPTIONAL for the authorization-code flow
-  (section 3.1.2.1), so omitting it is compliant, but it means PKCE is the only
-  code-injection defense and holds only where the provider enforces PKCE.
-  What blocks all of them alike is that ``extra_params`` is fixed on
-  a frozen config: a ``nonce`` threaded through it would be the same constant on
-  every request, which defeats the replay defense rather than providing it.
-  These need per-request support in
-  :meth:`~apron_auth.client.OAuthClient.get_authorization_url` and
-  :class:`~apron_auth.models.OAuthPendingState`, not a knob here.
-* **No RP-Initiated Logout.** ``end_session_endpoint`` is neither read from the
-  configuration document nor carried on :class:`ServerMetadata`.
-* **No ``response_mode``.** The query default is always used.
-* **A token response without an ``id_token`` is accepted**, degrading to
-  userinfo alone. Section 3.1.3.3 requires one on a flow that requested
-  ``openid``, so such a provider is out of spec; identity is still established,
-  with a weaker claim to have vouched for it.
-* **A signed (``application/jwt``) userinfo response is refused**, not read
-  unverified — see :meth:`OidcIdentityHandler._fetch_userinfo`.
-* **HTTPS is required.** The issuer, the document URL and every endpoint a
-  configuration document names must be ``https``, because the unsigned-token
-  design above rests on TLS authenticating the issuer. :func:`discover` takes
-  an explicit ``allow_insecure_http`` opt-in for local development, which logs
-  a WARNING. Host policy is separate and stays with ``transport_factory``.
-* **RP-Initiated Logout is not wired up**, though
-  ``authlib.integrations.base_client`` implements it in ``create_logout_url``
-  should this module ever grow it.
+* Confidential clients only; :func:`preset` requires a client secret.
+* No ``nonce`` and no per-request authorization parameters, so PKCE is the only
+  code-injection defense and holds only where the provider enforces it.
+* No RP-Initiated Logout and no ``response_mode`` (the query default is used).
+* A token response without an ``id_token`` is accepted and identity falls back
+  to userinfo alone, with a weaker claim to have vouched for it.
+* A signed (``application/jwt``) userinfo response is refused.
+* ``https`` is required for the issuer, the document URL and every endpoint;
+  :func:`discover` takes ``allow_insecure_http`` for local development.
 """
 
 from __future__ import annotations
@@ -114,17 +73,14 @@ logger = logging.getLogger(__name__)
 _DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
-# Token-endpoint auth methods this library can perform for a confidential
-# client, in the order it prefers them. authlib drives both.
+# Token-endpoint auth methods this library can perform, in preference order.
 _CONFIDENTIAL_AUTH_METHODS = (
     TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
 )
 
-# Clock skew allowed when checking an ID token's ``exp``. The token is read
-# seconds after the issuer minted it, so this covers a provider whose clock runs
-# behind rather than a token that has genuinely aged.
-_EXPIRY_LEEWAY_SECONDS = 60
+# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
+_CLOCK_SKEW_SECONDS = 60
 
 
 # RFC 6750 section 3: ``error="insufficient_scope"`` in ``WWW-Authenticate``.
@@ -144,25 +100,13 @@ BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
-    """The configuration document's URL for ``issuer``.
+    """The document URL for ``issuer``, per OpenID Connect Discovery 1.0 section 4.
 
-    Delegates to :func:`authlib.oidc.discovery.get_well_known_url`, which
-    appends the well-known suffix to the issuer *including its path* as OpenID
-    Connect Discovery 1.0 section 4 requires — so a Keycloak realm at
-    ``https://sso.example.com/realms/acme`` publishes at
-    ``https://sso.example.com/realms/acme/.well-known/openid-configuration``
-    rather than at the host root, and a trailing slash on the issuer does not
-    produce a doubled one. Kept as a thin named wrapper because it is part of
-    this module's public surface and because ``external=True`` (absolute URL
-    rather than path-only) is the non-obvious half of the call.
-
-    The parse guard stays ours: ``get_well_known_url`` concatenates without
-    validating, so a malformed issuer would otherwise surface later as a
-    malformed *URL* and lose which input was actually at fault. The guard
-    checks that the issuer is an absolute URL — a scheme and a host, not a
-    bare hostname, with no query, fragment or userinfo — because appending a well-known suffix to a relative
-    string produces a relative URL that no client can fetch. The scheme must
-    be ``https`` unless ``allow_insecure_http`` is set; see :func:`discover`.
+    The well-known suffix is appended to the issuer including its path, so a
+    realm at ``https://sso.example.com/realms/acme`` publishes under that path
+    rather than at the host root, and a trailing slash does not double up. The
+    issuer must be an absolute URL with no query, fragment or userinfo, and
+    ``https`` unless ``allow_insecure_http`` is set; see :func:`discover`.
 
     Args:
         issuer: The issuer identifier to derive the document URL from.
@@ -238,10 +182,7 @@ async def discover(
     if not isinstance(declared_issuer, str) or not declared_issuer:
         msg = "OpenID provider configuration declares no issuer"
         raise OidcDiscoveryError(msg)
-    # Compared exactly rather than normalized. RFC 8414 section 2 makes the
-    # issuer a URL with no trailing slash, and two values that differ only by
-    # one are two different strings to every ``iss`` comparison downstream; a
-    # normalization here would hide the discrepancy rather than resolve it.
+    # Compared exactly: RFC 8414 section 2 allows no trailing slash, and normalizing would hide a mismatch.
     if declared_issuer != issuer:
         msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
         raise OidcDiscoveryError(msg)
@@ -369,16 +310,10 @@ def preset(
         scope_metadata=BASE_SCOPE_METADATA,
         issuer=metadata.issuer,
         require_iss=metadata.iss_parameter_supported,
-        # A generic connection asserts no tenancy: OpenID Connect standardizes
-        # no claim for "this user's organization owns this email domain", and
-        # the products that do carry one (Google's ``hd``, Entra's verified
-        # domains) each spell it their own way in their own module.
+        # OpenID Connect standardizes no claim for an organization owning an email domain.
         can_assert_domain_ownership=False,
     )
-    # Nothing here can revoke the portal-level grant: whether revocation ends
-    # the user's consent is a per-product fact, and a generic connection has no
-    # product to look it up for. Left False so a caller falls back to telling
-    # the user to remove the application at the provider, which is always true.
+    # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
     return config, StandardRevocationHandler() if metadata.revocation_url else None
 
 
@@ -512,16 +447,14 @@ class OidcIdentityHandler:
             except IdentityFetchError as exc:
                 if claims is None:
                     raise
-                # Userinfo only enriches a subject the validated ID token already
-                # gave; the exception class is logged, not its value.
+                # Userinfo only enriches a subject the ID token already gave.
                 logger.warning(
                     "OpenID userinfo request failed (%s); identity rests on the ID token alone", type(exc).__name__
                 )
 
         claims_subject = _claim_str(claims, "sub")
         if claims is not None and claims_subject is None:
-            # Authlib only requires the claim to be present, so a non-string or
-            # empty ``sub`` would otherwise surface as a userinfo mismatch.
+            # Authlib only requires ``sub`` to be present, so a non-string would read as a userinfo mismatch.
             msg = "OpenID ID token has an invalid sub claim"
             raise IdentityFetchError(msg)
         subject = claims_subject or _claim_str(userinfo, "sub")
@@ -529,10 +462,7 @@ class OidcIdentityHandler:
             msg = "OpenID sign-in returned no subject"
             raise IdentityFetchError(msg)
         if claims is not None and userinfo_fetched:
-            # Section 5.3.2: the userinfo ``sub`` MUST match the ID token's
-            # exactly, and an absent one does not. Without this, a userinfo
-            # response naming nobody could still lend its email to the ID
-            # token's subject.
+            # Section 5.3.2: userinfo ``sub`` must match the ID token's, and an absent one does not.
             userinfo_subject = _claim_str(userinfo, "sub")
             if userinfo_subject is None:
                 msg = "OpenID userinfo response names no subject to match the ID token's"
@@ -553,36 +483,18 @@ class OidcIdentityHandler:
             username=_claim_str(claims, "preferred_username") or _claim_str(userinfo, "preferred_username"),
             avatar_url=_claim_str(claims, "picture") or _claim_str(userinfo, "picture"),
             tenancies=(),
-            # Keyed rather than merged, following ``providers.github``. The two
-            # documents carry different weight — one is issuer-asserted, one is
-            # whatever the userinfo endpoint chose to return — and a flat merge
-            # would leave a caller unable to tell which said what. Claims that
-            # exist only on the ID token (``groups``, ``roles``, ``acr``,
-            # ``amr``) reach a caller here and nowhere else.
+            # Keyed rather than merged, so a caller can tell issuer-asserted claims from userinfo's.
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
     def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any] | None:
         """Return the ID token's claims once they check out.
 
-        Validation is :class:`authlib.oidc.core.CodeIDToken`, authlib's
-        implementation of the OpenID Connect Core 1.0 section 3.1.3.7 rules for
-        an ID token received through the authorization-code flow. It is used
-        rather than a hand-rolled equivalent because the rules are more
-        conditional than they look: ``azp`` is required only when the effective
-        audience differs from this client, ``aud`` may be a string or an array,
-        ``at_hash`` is checked against the access token when the token carries
-        one, and ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are each
-        essential. Authlib carries the same validator its own OpenID client
-        uses.
-
-        The signature is not checked: these tokens arrive on the
-        token-endpoint response over the back-channel, where TLS authenticates
-        the issuer (section 3.1.3.7 step 6). What is checked is every claim,
-        which is the half that stays the client's job. ``at_hash`` is not part
-        of the signature check but is still verified against the access token
-        it was minted over, which is the binding OpenID Connect Core 1.0
-        section 3.1.3.7 step 8 asks a client to confirm.
+        Claims are validated per OpenID Connect Core 1.0 section 3.1.3.7:
+        ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are essential, ``azp``
+        is required when the audience is not solely this client, and ``at_hash``
+        is checked against the access token. The signature is not checked; see
+        the module docstring.
 
         ``None`` when the token is not a parseable JWT, which degrades to
         userinfo rather than failing: a provider that returns something
@@ -616,17 +528,9 @@ class OidcIdentityHandler:
             return None
         token = CodeIDToken(
             claims,
-            # The token's real header, not ``{}``. ``validate_at_hash`` reads
-            # ``header["alg"]`` when the token carries an ``at_hash`` — the
-            # access token threaded through below is what makes that path live
-            # — so an empty stand-in would raise ``KeyError`` the moment it is
-            # exercised, and it is already parsed here anyway.
+            # The real header: ``at_hash`` validation reads ``alg`` from it.
             signature.headers(),
-            # ``aud`` must be declared explicitly. ``CodeIDToken`` derives the
-            # ``azp`` rules from ``client_id`` but does *not* compare ``aud``
-            # against it on its own, so a token carrying
-            # ``aud=<someone-else>, azp=<us>`` is accepted without this option
-            # — an audience check that silently is not one.
+            # ``CodeIDToken`` does not compare ``aud`` to ``client_id`` itself, so it is declared here.
             {
                 "iss": {"values": [issuer], "essential": True},
                 "aud": {"values": [client_id], "essential": True},
@@ -634,12 +538,11 @@ class OidcIdentityHandler:
             {"client_id": client_id, "access_token": access_token},
         )
         try:
-            token.validate(leeway=_EXPIRY_LEEWAY_SECONDS)
+            token.validate(leeway=_CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
             raise IdentityFetchError(_claim_error_message(exc)) from exc
         except (JoseError, TypeError, ValueError) as exc:
-            # A malformed header or claim shape can escape the validator as a
-            # bare ``TypeError``; the contract is ``IdentityFetchError``.
+            # A malformed header or claim shape can escape as ``TypeError``; the contract is ``IdentityFetchError``.
             msg = "OpenID ID token claims did not validate"
             raise IdentityFetchError(msg) from exc
         return claims
@@ -675,9 +578,7 @@ class OidcIdentityHandler:
                 raise IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope") from exc
             raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
         except (httpx.InvalidURL, httpx.RequestError) as exc:
-            # ``InvalidURL`` is not a ``RequestError``; the userinfo URL comes
-            # from the discovery document unvalidated, so a malformed one must
-            # still surface as the ``IdentityFetchError`` callers expect.
+            # ``InvalidURL`` is not a ``RequestError``, but must still surface as ``IdentityFetchError``.
             raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
 
         try:
@@ -685,10 +586,7 @@ class OidcIdentityHandler:
         except ValueError as exc:
             raise IdentityFetchError(f"Failed to parse OpenID identity response: {exc}") from exc
         if not isinstance(payload, dict):
-            # A provider registered for a signed userinfo response returns
-            # ``application/jwt`` here (section 5.3.2). This library does not
-            # verify signatures, so it refuses rather than reading such a
-            # response unverified; register the client for JSON instead.
+            # A signed (``application/jwt``) userinfo response is refused rather than read unverified.
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
         return payload
@@ -965,8 +863,7 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
         try:
             response = await client.get(url)
         except (httpx.InvalidURL, httpx.RequestError) as exc:
-            # The exception class, not its value: the URL is in the caller's
-            # config and the value adds only the request line.
+            # The exception class only; the value adds just the request line.
             msg = f"could not fetch the OpenID provider configuration ({type(exc).__name__})"
             raise OidcDiscoveryError(msg) from exc
         if response.status_code != 200:
