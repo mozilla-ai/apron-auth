@@ -46,6 +46,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -132,9 +133,8 @@ class HubSpotIdentityHandler:
         except httpx.RequestError as exc:
             # Drop the cause chain: httpx transport errors commonly include the
             # request URL — and therefore the access token — in their str().
-            error_name = type(exc).__name__
             raise IdentityFetchError(
-                f"Failed to fetch HubSpot identity: {error_name}",
+                f"Failed to fetch HubSpot identity: {describe_http_error(exc)}",
             ) from None
 
         try:
