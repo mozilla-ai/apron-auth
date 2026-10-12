@@ -860,7 +860,7 @@ class TestOidcIdentity:
 
     async def test_refuses_an_id_token_from_another_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """An ``iss`` other than the configured issuer is refused."""
-        with pytest.raises(IdentityFetchError, match=r"Invalid claim: 'iss'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid iss claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
                 config,
@@ -870,7 +870,7 @@ class TestOidcIdentity:
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
         """An ``aud`` that does not name this client is refused."""
-        with pytest.raises(IdentityFetchError, match=r"Invalid claim: 'aud'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid aud claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(aud="someone-else")),
                 config,
@@ -893,7 +893,7 @@ class TestOidcIdentity:
 
     async def test_refuses_an_expired_id_token(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A token expired well beyond the leeway is refused."""
-        with pytest.raises(IdentityFetchError, match=r"token is expired"):
+        with pytest.raises(IdentityFetchError, match=r"has expired"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
                 config,
@@ -921,7 +921,7 @@ class TestOidcIdentity:
         ``iat`` is the one our hand-rolled validation never checked; it comes
         for free with authlib's essential-claims set.
         """
-        with pytest.raises(IdentityFetchError, match=rf"Missing claim: '{claim}'"):
+        with pytest.raises(IdentityFetchError, match=rf"missing the {claim} claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(**{claim: _OMIT})),
                 config,
@@ -1076,7 +1076,7 @@ class TestOidcIdentity:
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
         """Section 3.1.3.7 step 4 — ``aud`` arrays are accepted, so the condition is reachable."""
-        with pytest.raises(IdentityFetchError, match=r"Missing claim: 'azp'"):
+        with pytest.raises(IdentityFetchError, match=r"missing the azp claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", aud=["other", CLIENT_ID])),
                 config,
@@ -1090,7 +1090,7 @@ class TestOidcIdentity:
         ``aud`` names this client, so the audience check alone passes; ``azp``
         is what says the token was actually minted for somebody else.
         """
-        with pytest.raises(IdentityFetchError, match=r"claim: 'azp'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid azp claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", azp="someone-else")),
                 config,
@@ -1131,7 +1131,7 @@ class TestOidcIdentity:
         a different one — a token minted for a different request, which the
         bearer must not be able to use.
         """
-        with pytest.raises(IdentityFetchError, match=r"claim: 'at_hash'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid at_hash claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", at_hash=_at_hash("other"))),
                 config,
@@ -1177,7 +1177,7 @@ class TestOidcIdentity:
         Reported as such rather than as the subject disagreement the userinfo
         cross-check below would otherwise raise.
         """
-        with pytest.raises(IdentityFetchError, match=r"Missing claim: 'sub'"):
+        with pytest.raises(IdentityFetchError, match=r"missing the sub claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub=_OMIT)),
                 config,
@@ -1278,15 +1278,35 @@ class TestOidcIdentity:
         must fail closed rather than being treated as "no audience to disagree
         with".
         """
-        with pytest.raises(IdentityFetchError, match=r"claim: 'a(ud|zp)'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid a(ud|zp) claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", aud=audience)),
                 config,
             )
 
+    async def test_reports_a_malformed_header_as_an_identity_error(
+        self, handler: OidcIdentityHandler, config: ProviderConfig
+    ):
+        """A non-string ``alg`` makes the ``at_hash`` check raise ``TypeError``; callers get our error instead."""
+        now = int(time.time())
+        payload = {"iss": ISSUER, "sub": "u-1", "aud": CLIENT_ID, "exp": now + 300, "iat": now, "at_hash": "x"}
+        token = f"{_b64(json.dumps({'alg': 5}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
+
+        with pytest.raises(IdentityFetchError, match="claims did not validate"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+
+    async def test_error_text_is_ours_not_the_validators(self, handler: OidcIdentityHandler, config: ProviderConfig):
+        """A joserfc rewording must not change the user-facing contract."""
+        with pytest.raises(IdentityFetchError) as excinfo:
+            await handler.fetch_identity(
+                IdentityMaterial(access_token="access", id_token=id_token(iss="https://evil.example")), config
+            )
+
+        assert str(excinfo.value) == "OpenID ID token has an invalid iss claim"
+
     async def test_refuses_a_non_string_azp(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A present-but-untyped ``azp`` is a claim that cannot be checked, so it fails closed."""
-        with pytest.raises(IdentityFetchError, match=r"claim: 'azp'"):
+        with pytest.raises(IdentityFetchError, match=r"invalid azp claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", azp=42)),
                 config,

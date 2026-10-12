@@ -86,7 +86,7 @@ import httpx
 from authlib.oidc.core import CodeIDToken
 from authlib.oidc.discovery import get_well_known_url
 from joserfc import jws
-from joserfc.errors import JoseError
+from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
 from apron_auth.errors import (
@@ -640,11 +640,13 @@ class OidcIdentityHandler:
         )
         try:
             token.validate(leeway=_EXPIRY_LEEWAY_SECONDS)
-        except JoseError as exc:
-            # The joserfc message names the offending claim (e.g. "Missing
-            # claim: 'azp'"), which is the whole diagnostic; the token's own
-            # values are never interpolated.
-            raise IdentityFetchError(f"OpenID ID token claims did not validate: {exc}") from exc
+        except ClaimError as exc:
+            raise IdentityFetchError(_claim_error_message(exc)) from exc
+        except (JoseError, TypeError, ValueError) as exc:
+            # A malformed header or claim shape can escape the validator as a
+            # bare ``TypeError``; the contract is ``IdentityFetchError``.
+            msg = "OpenID ID token claims did not validate"
+            raise IdentityFetchError(msg) from exc
         return claims
 
     async def _fetch_userinfo(self, access_token: str) -> dict[str, Any]:
@@ -695,6 +697,23 @@ class OidcIdentityHandler:
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
         return payload
+
+
+def _claim_error_message(exc: ClaimError) -> str:
+    """Our own wording for a failed claim, naming the claim and never its value.
+
+    Args:
+        exc: The validator's claim error, which carries the claim name and kind.
+
+    Returns:
+        The message to raise.
+    """
+    kind = getattr(exc, "error", "invalid_claim")
+    if kind == "missing_claim":
+        return f"OpenID ID token is missing the {exc.claim} claim"
+    if kind == "expired_token":
+        return "OpenID ID token has expired"
+    return f"OpenID ID token has an invalid {exc.claim} claim"
 
 
 def _provider_name(issuer: str) -> str:
