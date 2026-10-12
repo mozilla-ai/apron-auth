@@ -272,7 +272,8 @@ class TestAtlassianIdentityHandler:
         assert identity.subject is None
         assert identity.raw == {}
         assert identity.tenancies[0].id == "cloud-1"
-        assert "ConnectError" in caplog.text
+        assert "network error" in caplog.text
+        assert "ConnectError" not in caplog.text
 
     async def test_me_non_json_2xx_degrades_to_tenancy_only_profile(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture

@@ -265,7 +265,7 @@ class MicrosoftIdentityHandler:
             logger.warning(
                 "microsoft directory lookup could not resolve the tenant's verified domains "
                 "(%s); not asserting domain ownership",
-                type(exc).__name__,
+                describe_http_error(exc),
             )
             return None
 

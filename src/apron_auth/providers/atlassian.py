@@ -104,10 +104,8 @@ class AtlassianIdentityHandler:
     than failing the fetch, and an individual field the response does not
     carry as a non-empty string is dropped rather than propagated.
 
-    The bearer token travels in the ``Authorization`` header on both
-    calls (not the URL), so default httpx exception messages — which
-    embed the request URL — do not embed the token; the standard
-    ``raise ... from exc`` chain is therefore safe here.
+    The bearer token travels in the ``Authorization`` header on both calls, not in the URL.
+    A chained HTTP client error therefore cannot carry the token.
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -205,7 +203,7 @@ class AtlassianIdentityHandler:
             logger.warning(
                 "atlassian user identity lookup failed (%s); "
                 "emitting a tenancy-only profile without person-level fields",
-                type(exc).__name__,
+                describe_http_error(exc),
             )
             return {}
 

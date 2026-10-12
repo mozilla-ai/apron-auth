@@ -538,6 +538,8 @@ class TestMicrosoftOrganizationDegradation:
         assert identity.subject == "ms-sub-1"
         assert identity.tenancies == ()
         assert "could not resolve the tenant's verified domains" in caplog.text
+        assert "network error" in caplog.text
+        assert "ConnectError" not in caplog.text
 
     async def test_non_json_degrades_to_no_tenancy(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
