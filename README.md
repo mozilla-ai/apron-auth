@@ -122,10 +122,13 @@ mint `ceo@other-tenant.com` with `email_verified=true`. Key users on `identity_k
 stays safe either way. (A per-connection `verified_domains` option is the fuller design,
 tracked in #136.)
 
-PKCE is mandatory here, not negotiated: a provider whose `code_challenge_methods_supported`
-omits `S256` is refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only
-thing binding an authorization code to the session that requested it, so a config without it
-would have no code-injection defense at all.
+PKCE is always on, and a provider whose `code_challenge_methods_supported` omits `S256` is
+refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only thing binding
+an authorization code to the session that requested it, but only where the provider enforces
+it: when the field is absent (Entra omits it) `preset` still uses PKCE and logs a WARNING,
+because a provider that ignores the challenge leaves the code unbound. A malformed
+`code_challenge_methods_supported` or `token_endpoint_auth_methods_supported` is a discovery
+error rather than "not advertised". `nonce` support is tracked in #135.
 
 `discover` requires an absolute `https` URL for the issuer, the document URL, and every
 endpoint the document names (no fragment; the issuer also has no query or userinfo, per
@@ -148,7 +151,7 @@ Each is a deliberate limitation rather than an oversight:
 | Limitation | Why |
 | --- | --- |
 | Confidential clients only | `preset` requires a client secret; a public (native/SPA) client cannot be configured, though `ProviderConfig` models one |
-| No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, and PKCE covers code injection — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
+| No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, so PKCE is the only code-injection defense (and only where the provider enforces it) — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
 | No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata`, though authlib implements the URL builder |
 | No `response_mode` | The query default is always used |
 | A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |

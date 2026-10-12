@@ -47,8 +47,9 @@ first if a deployment needs it.
 * **No ``nonce``, and no per-request authorization parameters** (``prompt``,
   ``login_hint``, ``max_age``, ``acr_values``, ``ui_locales``, ``display``,
   ``id_token_hint``). ``nonce`` is OPTIONAL for the authorization-code flow
-  (section 3.1.2.1) and PKCE already covers code injection, so omitting it is
-  compliant. What blocks all of them alike is that ``extra_params`` is fixed on
+  (section 3.1.2.1), so omitting it is compliant, but it means PKCE is the only
+  code-injection defense and holds only where the provider enforces PKCE.
+  What blocks all of them alike is that ``extra_params`` is fixed on
   a frozen config: a ``nonce`` threaded through it would be the same constant on
   every request, which defeats the replay defense rather than providing it.
   These need per-request support in
@@ -266,8 +267,8 @@ async def discover(
         registration_url=registration_url,
         revocation_url=revocation_url,
         scopes_supported=_str_list(document.get("scopes_supported")),
-        code_challenge_methods=_str_list(document.get("code_challenge_methods_supported")),
-        token_endpoint_auth_methods=_str_list(document.get("token_endpoint_auth_methods_supported")),
+        code_challenge_methods=_strict_str_list(document, "code_challenge_methods_supported"),
+        token_endpoint_auth_methods=_strict_str_list(document, "token_endpoint_auth_methods_supported"),
         issuer=declared_issuer,
         iss_parameter_supported=document.get("authorization_response_iss_parameter_supported") is True,
         userinfo_url=userinfo_url,
@@ -310,8 +311,9 @@ def preset(
     requested it. Silently clearing it would hand back a config with no
     code-injection defense at all, which RFC 9700 requires a client to prevent
     by one mechanism or the other. A provider advertising no methods still gets
-    PKCE, because one that does not implement it ignores the extra parameters
-    as unknown.
+    PKCE, with a WARNING: some real providers (Entra) omit the field, but one
+    that does not implement PKCE ignores the challenge, leaving the code
+    unbound to the session.
 
     Args:
         client_id: The OAuth client identifier registered at the provider.
@@ -349,6 +351,12 @@ def preset(
     if methods and "S256" not in methods:
         msg = "OpenID provider advertises no S256 code-challenge method; PKCE cannot be negotiated"
         raise ConfigurationError(msg)
+    if not methods:
+        logger.warning(
+            "OpenID provider %s does not advertise PKCE support; PKCE is still used, "
+            "but it binds the authorization code only if the provider enforces it",
+            metadata.issuer,
+        )
 
     config = ProviderConfig(
         client_id=client_id,
@@ -786,6 +794,32 @@ def _str_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [entry for entry in value if isinstance(entry, str)]
+
+
+def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
+    """Return a security-relevant list member, refusing a malformed one.
+
+    Unlike :func:`_str_list`, a present-but-malformed value is an error: these
+    lists gate a refusal (PKCE methods, token-endpoint auth methods), and
+    treating ``"plain"`` as "not advertised" would take the permissive branch.
+
+    Args:
+        document: The configuration document.
+        key: The member to read.
+
+    Returns:
+        The strings, or ``[]`` when the member is absent.
+
+    Raises:
+        OidcDiscoveryError: If the member is present but not a list of strings.
+    """
+    value = document.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+        msg = f"OpenID provider configuration has a malformed {key}"
+        raise OidcDiscoveryError(msg)
+    return value
 
 
 def _select_auth_method(advertised: Sequence[str]) -> str:

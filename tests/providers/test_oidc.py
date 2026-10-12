@@ -404,6 +404,25 @@ class TestUrlValidation:
         assert (await discover(issuer)).issuer == issuer
 
 
+class TestSecurityRelevantLists:
+    @pytest.mark.parametrize("field", ["code_challenge_methods_supported", "token_endpoint_auth_methods_supported"])
+    @pytest.mark.parametrize("bad", ["plain", 5, {"S256": True}, ["S256", 1]])
+    async def test_refuses_a_malformed_list(self, httpx_mock: HTTPXMock, field: str, bad: object):
+        """A string would otherwise read as "not advertised" and take the permissive branch."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: bad}))
+
+        with pytest.raises(OidcDiscoveryError, match=field):
+            await discover(ISSUER)
+
+    async def test_an_absent_list_is_not_an_error(self, httpx_mock: HTTPXMock):
+        """Entra omits the PKCE field, and that stays legal."""
+        body = document()
+        del body["code_challenge_methods_supported"]
+        httpx_mock.add_response(url=DOCUMENT_URL, json=body)
+
+        assert (await discover(ISSUER)).code_challenge_methods == []
+
+
 class TestPreset:
     def test_builds_a_config_from_discovered_metadata(self):
         """The config takes its endpoints and issuer from the metadata."""
@@ -462,6 +481,30 @@ class TestPreset:
         )
 
         assert config.use_pkce is True
+
+    def test_warns_when_the_provider_advertises_no_pkce_support(self, caplog: pytest.LogCaptureFixture):
+        """PKCE binds the code only if the provider enforces it, so silence would overclaim."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            preset(
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                scopes=[],
+                metadata=metadata(code_challenge_methods=[]),
+            )
+
+        assert "does not advertise PKCE" in caplog.text
+
+    def test_does_not_warn_when_s256_is_advertised(self, caplog: pytest.LogCaptureFixture):
+        """An explicit S256 advertisement is the quiet path."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            preset(
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                scopes=[],
+                metadata=metadata(code_challenge_methods=["S256"]),
+            )
+
+        assert caplog.text == ""
 
     def test_enables_pkce_when_the_provider_advertises_nothing(self):
         """A provider that does not implement PKCE ignores the extra parameters."""
