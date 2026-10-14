@@ -38,6 +38,8 @@ TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 USERINFO_URL = f"{ISSUER}/protocol/openid-connect/userinfo"
 CLIENT_ID = "otari"
 CLIENT_SECRET = "s3cret"  # pragma: allowlist secret
+# Codes that differ from ``insufficient_scope`` by a prefix, a suffix, padding or letter case.
+NEAR_MISS_SCOPE_CODES = ("x_insufficient_scope", "insufficient_scope_v2", " insufficient_scope", "Insufficient_Scope")
 
 
 def document(**overrides: Any) -> dict[str, Any]:
@@ -1288,12 +1290,13 @@ class TestOidcIdentity:
         with pytest.raises(IdentityScopeNotGrantedError):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
 
+    @pytest.mark.parametrize("code", NEAR_MISS_SCOPE_CODES)
     async def test_a_near_miss_error_code_is_not_a_scope_error(
-        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, code: str
     ) -> None:
         """A near miss maps to the retryable fetch error, not to the scope error."""
         httpx_mock.add_response(
-            url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": 'Bearer error="insufficient_scope_v2"'}
+            url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": f'Bearer error="{code}"'}
         )
 
         with pytest.raises(IdentityFetchError) as excinfo:
@@ -1717,7 +1720,6 @@ class TestBearerError:
             ('Bearer ,, error="insufficient_scope",', "insufficient_scope"),
             (', Bearer error="insufficient_scope"', "insufficient_scope"),
             ('Bearer error="insufficient\\_scope"', "insufficient_scope"),
-            ('Bearer error="invalid_token", error_description="not error=insufficient_scope"', "invalid_token"),
             ('Bearer error="insufficient_scope", error_description="needs \u2192 scope"', "insufficient_scope"),
             ('Bearer realm="x"', None),
             ("Bearer", None),
@@ -1725,20 +1727,24 @@ class TestBearerError:
         ],
     )
     def test_reads_the_code_from_a_well_formed_header(self, header: str, expected: str | None) -> None:
-        """Scheme and parameter names are case-insensitive, and empty list elements are allowed."""
+        """A well-formed header gives its ``Bearer`` error code, or ``None`` when it has none."""
         assert _bearer_error(header) == expected
+
+    @pytest.mark.parametrize("code", NEAR_MISS_SCOPE_CODES)
+    def test_a_near_miss_code_is_returned_unchanged(self, code: str) -> None:
+        """A near-miss code is returned exactly as sent."""
+        assert _bearer_error(f'Bearer error="{code}"') == code
 
     @pytest.mark.parametrize(
         ("header", "expected"),
         [
-            ('Bearer error="insufficient_scope_v2"', "insufficient_scope_v2"),
             ('Bearer suberror="insufficient_scope"', None),
-            ('Bearer error="Insufficient_Scope"', "Insufficient_Scope"),
+            ('Bearer error="invalid_token", error_description="not error=insufficient_scope"', "invalid_token"),
             ('Basic error="insufficient_scope"', None),
         ],
     )
-    def test_a_near_miss_is_not_the_scope_code(self, header: str, expected: str | None) -> None:
-        """Only the exact code in a ``Bearer`` challenge counts, and the code is returned as sent."""
+    def test_only_the_bearer_error_parameter_supplies_the_code(self, header: str, expected: str | None) -> None:
+        """Another parameter, another parameter's value, or another scheme's challenge never supplies the code."""
         assert _bearer_error(header) == expected
 
     @pytest.mark.parametrize(
