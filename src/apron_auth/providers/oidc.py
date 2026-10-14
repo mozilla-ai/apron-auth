@@ -6,9 +6,8 @@ This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, Ping,
 and any other provider that implements OpenID Connect Discovery 1.0.
 
 Always pass :func:`identity_handler` to :class:`~apron_auth.client.OAuthClient`.
-On a host that a built-in provider also serves,
-an inferred handler would change ``provider`` and every user's ``identity_key()``.
-A config from :func:`preset` therefore disallows handler inference.
+A config from :func:`preset` disallows handler inference,
+because a built-in provider's handler for the same endpoint hosts would change every user's ``identity_key()``.
 Without a handler, ``OAuthClient.fetch_identity`` raises :class:`~apron_auth.errors.IdentityNotSupportedError`.
 
 ID token signatures are not verified.
@@ -279,7 +278,6 @@ def preset(
         require_iss=metadata.iss_parameter_supported,
         # OpenID Connect standardizes no claim for an organization owning an email domain.
         can_assert_domain_ownership=False,
-        # A built-in provider's handler would change ``provider`` and so every user's ``identity_key()``.
         allow_identity_inference=False,
     )
     # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
