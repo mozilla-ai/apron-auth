@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import pytest
+from joserfc import jwk, jws
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
@@ -75,23 +76,23 @@ def _at_hash(access_token: str) -> str:
     return _b64(digest[:16])
 
 
-def id_token(*, alg: str = "RS256", **claims: Any) -> str:
-    """An unsigned JWT carrying ``claims``, shaped like a real one.
+RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
+OKP_KEY = jwk.OKPKey.generate_key("Ed25519", parameters={"kid": "okp-1"})
+PUBLISHED_KEYS = {"keys": [RSA_KEY.as_dict(private=False), OKP_KEY.as_dict(private=False)]}
+_KEY_FOR_ALG = {"EdDSA": OKP_KEY, "RS256": RSA_KEY}
 
-    The signature is never checked (see the module docstring), so a placeholder
-    third segment is what a provider's token would be indistinguishable from
-    here. The *header* is real, though: extraction parses it, so a placeholder
-    there would make every token in this file unparseable rather than
-    unsigned.
 
-    Every claim section 2 makes REQUIRED — ``iss``, ``sub``, ``aud``, ``exp``,
-    ``iat`` — is set by default, so a token is valid unless a test deliberately
-    breaks one. Pass ``_OMIT`` for a claim to drop it.
+def id_token(*, alg: str = "RS256", key: Any = None, **claims: Any) -> str:
+    """Return an ID token signed with the issuer's published key for ``alg``, carrying ``claims``.
+
+    Every claim section 2 makes REQUIRED is set by default, so a token is valid unless a test breaks one.
+    Pass ``_OMIT`` for a claim to drop it, and ``key`` to sign with a key the issuer does not publish.
     """
     now = int(time.time())
     payload = {"iss": ISSUER, "sub": "u-1", "aud": CLIENT_ID, "exp": now + 300, "iat": now, **claims}
-    payload = {key: value for key, value in payload.items() if value is not _OMIT}
-    return f"{_b64(json.dumps({'alg': alg}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
+    payload = {name: value for name, value in payload.items() if value is not _OMIT}
+    header = {"alg": alg, "kid": _KEY_FOR_ALG[alg].kid}
+    return jws.serialize_compact(header, json.dumps(payload).encode(), key or _KEY_FOR_ALG[alg], algorithms=[alg])
 
 
 _OMIT = object()
@@ -912,6 +913,11 @@ class TestHandlerInference:
 class TestOidcIdentity:
     """Establishing identity from an ID token and the userinfo endpoint."""
 
+    @pytest.fixture(autouse=True)
+    def _published_keys(self, httpx_mock: HTTPXMock) -> None:
+        """Serve the issuer's key set to any test that sends an ID token."""
+        httpx_mock.add_response(url=JWKS_URL, json=PUBLISHED_KEYS, is_optional=True, is_reusable=True)
+
     @pytest.fixture
     def handler(self) -> OidcIdentityHandler:
         """An identity handler for the test issuer and client."""
@@ -1192,45 +1198,64 @@ class TestOidcIdentity:
                 config,
             )
 
-    async def test_falls_back_to_userinfo_when_the_id_token_is_unparseable(
-        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
-    ):
-        """A provider returning junk has still authenticated somebody."""
-        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com"})
-
-        identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token="not-a-jwt"),
-            config,
-        )
-
-        assert identity.subject == "u-1"
-
     @pytest.mark.parametrize(
-        "token",
+        ("token", "message"),
         [
-            "not-a-jwt",
-            f"{_b64(b'{}')}.{_b64(json.dumps({'sub': 'u-1'}).encode())}.sig",
-            f"{_b64(json.dumps({'alg': 'RS256'}).encode())}.{_b64(b'[1]')}.sig",
+            ("not-a-jwt", "not a signed token"),
+            (
+                f"{_b64(b'{}')}.{_b64(json.dumps({'sub': 'u-1'}).encode())}.sig",
+                "not a signed token",
+            ),
+            (f"{_b64(json.dumps({'alg': 'RS256'}).encode())}.{_b64(b'[1]')}.sig", "signature did not verify"),
         ],
     )
-    async def test_warns_when_the_id_token_is_dropped(
-        self,
-        handler: OidcIdentityHandler,
-        config: ProviderConfig,
-        httpx_mock: HTTPXMock,
-        caplog: pytest.LogCaptureFixture,
-        token: str,
-    ):
-        """Identity silently resting on userinfo alone is a degraded capability, so it is a WARNING."""
-        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+    async def test_refuses_an_id_token_that_does_not_verify_before_userinfo(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, token: str, message: str
+    ) -> None:
+        """A token that does not verify stops the sign-in, so identity never rests on userinfo alone."""
+        with pytest.raises(IdentityFetchError, match=message) as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
 
-        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+        assert token not in str(excinfo.value)
+        assert USERINFO_URL not in [str(request.url) for request in httpx_mock.get_requests()]
 
-        assert identity.subject == "u-1"
-        assert "ID token dropped" in caplog.text
-        assert token not in caplog.text
-        assert "Error" not in caplog.text
+    async def test_refuses_an_id_token_signed_by_another_key(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A forged token with valid claims is refused, even when userinfo would succeed."""
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"}, is_optional=True)
+        forged = id_token(key=jwk.RSAKey.generate_key(2048))
+
+        with pytest.raises(IdentityFetchError, match="signature did not verify"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=forged), config)
+
+    async def test_verifies_before_any_userinfo_request(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A forged token stops the sign-in before the access token is sent anywhere."""
+        forged = id_token(key=jwk.RSAKey.generate_key(2048))
+
+        with pytest.raises(IdentityFetchError):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=forged), config)
+
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
+
+    async def test_fetches_the_key_set_through_the_transport_factory(self, config: ProviderConfig) -> None:
+        """Host policy covers the key set fetch, not only userinfo."""
+        requested: list[str] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=PUBLISHED_KEYS if str(request.url) == JWKS_URL else {"sub": "u-1"})
+
+        def factory(url: str) -> httpx.AsyncBaseTransport:
+            requested.append(url)
+            return httpx.MockTransport(respond)
+
+        handler = identity_handler(metadata(), transport_factory=factory)
+
+        await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), config)
+
+        assert JWKS_URL in requested
 
     async def test_refuses_when_neither_document_yields_a_subject(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1528,10 +1553,12 @@ class TestOidcIdentity:
     ) -> None:
         """A host-policy refusal from the caller's factory is a failed userinfo call like any other."""
 
-        def refuse(url: str) -> httpx.AsyncBaseTransport:
-            raise PermissionError("blocked host secret-detail")
+        def refuse_userinfo(url: str) -> httpx.AsyncBaseTransport:
+            if url == USERINFO_URL:
+                raise PermissionError("blocked host secret-detail")
+            return httpx.MockTransport(lambda request: httpx.Response(200, json=PUBLISHED_KEYS))
 
-        handler = identity_handler(metadata(), transport_factory=refuse)
+        handler = identity_handler(metadata(), transport_factory=refuse_userinfo)
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
             identity = await handler.fetch_identity(
@@ -1578,40 +1605,15 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="Failed to parse"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
 
-    @pytest.mark.parametrize(
-        ("payload", "reason"),
-        [
-            ("", "an empty payload segment"),
-            ("!!!not-base64!!!", "a payload segment that will not decode"),
-            (_b64(b"{not json"), "a payload that is not JSON"),
-            (_b64(b'["a","list"]'), "a payload that is not an object"),
-        ],
-    )
-    async def test_degrades_to_userinfo_for_a_junk_payload_segment(
-        self,
-        handler: OidcIdentityHandler,
-        config: ProviderConfig,
-        httpx_mock: HTTPXMock,
-        payload: str,
-        reason: str,
-    ):
-        """Three shapes of junk, all reached past the JWT-shape check.
+    @pytest.mark.parametrize("payload", [b"", b"{not json", b'["a","list"]'])
+    async def test_refuses_a_signed_token_whose_payload_is_not_a_claims_object(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, payload: bytes
+    ) -> None:
+        """A correctly signed token must still carry a claims object."""
+        token = jws.serialize_compact({"alg": "RS256", "kid": "rsa-1"}, payload, RSA_KEY)
 
-        The existing "not-a-jwt" case is refused on segment count before any
-        decoding happens, so it never exercises these. A provider returning
-        junk has still authenticated somebody: userinfo says who.
-        """
-        del reason
-        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com"})
-        header = _b64(json.dumps({"alg": "RS256"}).encode())
-
-        identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=f"{header}.{payload}.sig"),
-            config,
-        )
-
-        assert identity.subject == "u-1"
-        assert identity.raw["id_token"] == {}
+        with pytest.raises(IdentityFetchError, match="claims are not a JSON object"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
 
     @pytest.mark.parametrize("audience", [42, {"aud": "otari"}, ["other"], []])
     async def test_refuses_an_id_token_whose_audience_is_not_a_string_or_array(
@@ -1632,12 +1634,12 @@ class TestOidcIdentity:
     async def test_reports_a_malformed_header_as_an_identity_error(
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
-        """A non-string ``alg`` makes the ``at_hash`` check raise ``TypeError``; callers get our error instead."""
+        """A non-string ``alg`` is refused before any key is fetched."""
         now = int(time.time())
         payload = {"iss": ISSUER, "sub": "u-1", "aud": CLIENT_ID, "exp": now + 300, "iat": now, "at_hash": "x"}
         token = f"{_b64(json.dumps({'alg': 5}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
 
-        with pytest.raises(IdentityFetchError, match="claims did not validate"):
+        with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
 
     async def test_error_text_is_ours_not_the_validators(self, handler: OidcIdentityHandler, config: ProviderConfig):
@@ -1668,6 +1670,7 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="no subject"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
 
+    @pytest.mark.filterwarnings("ignore:EdDSA is deprecated:joserfc.errors.SecurityWarning")
     async def test_accepts_an_eddsa_token_with_a_sha512_at_hash(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
@@ -1682,6 +1685,7 @@ class TestOidcIdentity:
 
         assert identity.subject == "u-1"
 
+    @pytest.mark.filterwarnings("ignore:EdDSA is deprecated:joserfc.errors.SecurityWarning")
     async def test_refuses_an_eddsa_token_with_the_wrong_at_hash(
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):

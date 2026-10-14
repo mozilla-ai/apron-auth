@@ -36,7 +36,6 @@ Limitations
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from enum import Enum, auto
@@ -46,7 +45,6 @@ from urllib.parse import urlparse
 import httpx
 from authlib.oidc.core import CodeIDToken
 from authlib.oidc.discovery import get_well_known_url
-from joserfc import jws
 from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
@@ -349,9 +347,11 @@ class OidcIdentityHandler:
     """Establish identity from an ID token's claims and the userinfo endpoint.
 
     The handler is bound to one issuer, and it refuses a config that names another.
+    It caches the issuer's signing keys, so one handler per issuer serves every sign-in.
 
     The ID token is the trust-bearing source.
-    Its ``iss``, ``aud``, ``azp``, ``exp`` and ``sub`` are validated before any claim is read.
+    Its signature is checked against the issuer's published keys before any claim is read.
+    Its ``iss``, ``aud``, ``azp``, ``exp`` and ``sub`` are then validated.
     ``sub`` is taken from it in preference to userinfo, because the caller makes access decisions on it.
     Userinfo supplies display fields, and it stands in entirely when the provider returns no ID token.
     OpenID Connect Core 1.0 section 3.1.3.3 requires an ID token when ``openid`` was requested.
@@ -359,14 +359,17 @@ class OidcIdentityHandler:
 
     When an ID token validated, the userinfo call only adds detail.
     If it fails, a WARNING is logged and identity rests on the ID token.
-    With no usable ID token, userinfo is the only source, so its failure raises.
-
-    NOTE: Callers must pass only tokens taken from a token-endpoint response over TLS,
-    never a stored or front-channel token.
-    The ID token is validated without a signature check, which is safe only on that channel.
+    With no ID token, userinfo is the only source, so its failure raises.
+    An ID token that does not verify raises, and identity never falls back to userinfo for it.
 
     A userinfo response whose ``sub`` is missing or differs from the ID token's is refused, not reconciled.
     OpenID Connect Core 1.0 section 5.3.2 requires the two to match.
+
+    NOTE: Callers must pass only tokens taken from a token-endpoint response, never a stored or front-channel token.
+    No ``nonce`` binds an ID token to this client's request, so a validly signed token replayed from elsewhere passes.
+
+    NOTE: Callers must not use one handler from event loops in several threads at once,
+    because its key cache is unguarded.
     """
 
     def __init__(
@@ -426,7 +429,8 @@ class OidcIdentityHandler:
                 Either way, no request is sent.
             IdentityScopeNotGrantedError: If there is no usable ID token,
                 and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
-            IdentityFetchError: If the ID token's claims do not validate or its ``sub`` is not a non-empty string.
+            IdentityFetchError: If the ID token's signature or claims do not validate,
+                its ``sub`` is not a non-empty string, or the issuer's signing keys cannot be fetched or read.
                 It is also raised when userinfo fails and there is no validated ID token,
                 when userinfo names no subject or a different one than the ID token, or when neither yields a subject.
         """
@@ -438,7 +442,7 @@ class OidcIdentityHandler:
             raise ConfigurationError(msg)
         issuer = config.issuer
         claims = (
-            self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
+            await self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
             if material.id_token
             else None
         )
@@ -489,18 +493,14 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any] | None:
-        """Return the ID token's claims once they check out.
+    async def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any]:
+        """Return the ID token's claims once its signature and claims check out.
 
-        Claims are validated per OpenID Connect Core 1.0 section 3.1.3.7.
+        The signature is checked against the issuer's published keys before any claim is read.
+        Claims are then validated per OpenID Connect Core 1.0 section 3.1.3.7.
         ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are essential.
         ``azp`` is required when the audience is not solely this client.
         ``at_hash`` is checked against the access token.
-        The signature is not checked, as the module docstring explains.
-
-        A token that is not a parseable JWT gives ``None``, and identity falls back to userinfo.
-        The provider has still authenticated somebody, and userinfo says who.
-        A token that parses but has wrong claims raises, because it was minted for someone else or by someone else.
 
         Args:
             id_token: The ID token from the token-endpoint response.
@@ -510,24 +510,17 @@ class OidcIdentityHandler:
             client_id: The client identifier the token's ``aud`` must name.
 
         Returns:
-            The validated claims, or ``None`` when the token is unparseable.
+            The validated claims.
 
         Raises:
-            IdentityFetchError: If any claim does not validate.
+            IdentityFetchError: If the signature or any claim does not validate,
+                or the issuer's signing keys cannot be fetched or read.
         """
-        try:
-            signature = jws.extract_compact(id_token.encode())
-            claims = json.loads(signature.payload)
-        except (JoseError, ValueError):
-            logger.warning("OpenID ID token dropped, identity falls back to userinfo: token is not a parseable JWT")
-            return None
-        if not isinstance(claims, dict):
-            logger.warning("OpenID ID token dropped, identity falls back to userinfo: payload was not a JSON object")
-            return None
+        header, claims = await self._signing_keys.verify(id_token)
         token = CodeIDToken(
             claims,
             # The real header: ``at_hash`` validation reads ``alg`` from it.
-            signature.headers(),
+            header,
             # ``CodeIDToken`` does not compare ``aud`` to ``client_id`` itself, so it is declared here.
             {
                 "iss": {"values": [issuer], "essential": True},
