@@ -93,12 +93,7 @@ Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/
 The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
 match by design.
 
-Always pass the identity handler explicitly, as above. `oidc` registers no inference
-resolver, but inference still runs on the config `preset` returns: a generic config whose
-endpoints sit on a host another provider claims (an Entra or Google issuer, for example)
-resolves to that provider's handler. `provider` is then `microsoft` or `google` instead of
-`oidc:<issuer>`, and adding the explicit handler later changes every user's `identity_key()`.
-Making inference skip generic configs is a tracked follow-up (#137).
+Always pass the identity handler explicitly, as above. The config that `preset` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. Inference would otherwise give a config on an Entra or Google host that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
 
 Build the handler and the config from the same `metadata`. The handler is bound to that
 metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,

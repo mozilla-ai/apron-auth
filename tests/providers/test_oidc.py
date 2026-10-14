@@ -11,17 +11,17 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
+    IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
 )
-from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
+from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers.google import GoogleIdentityHandler
 from apron_auth.providers.identity import infer_identity_handler
-from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
     _bearer_error,
@@ -805,29 +805,26 @@ class TestIdentityHandlerFactory:
 
 
 class TestHandlerInference:
-    """Pins that host-based inference can still replace the generic handler (#137)."""
+    """Test that a generic config never resolves to another provider's identity handler."""
 
-    def test_a_microsoft_hosted_generic_config_infers_the_microsoft_handler(self):
-        """Why ``identity_handler`` must always be passed explicitly.
-
-        Flip this when inference learns to skip generic configs (#137).
-        """
+    @pytest.fixture
+    def entra_config(self) -> ProviderConfig:
+        """Return a generic config whose endpoints sit on Microsoft's sign-in host."""
         entra = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
-            metadata=metadata(
-                issuer=entra,
-                authorize_url=f"{entra}/authorize",
-                token_url=f"{entra}/token",
-            ),
+            metadata=metadata(issuer=entra, authorize_url=f"{entra}/authorize", token_url=f"{entra}/token"),
         )
+        return config
 
-        assert isinstance(infer_identity_handler(config), MicrosoftIdentityHandler)
+    def test_a_microsoft_hosted_generic_config_infers_nothing(self, entra_config: ProviderConfig) -> None:
+        """The Microsoft handler would change ``provider`` and so every user's ``identity_key()``."""
+        assert infer_identity_handler(entra_config) is None
 
-    def test_a_google_hosted_generic_config_infers_the_google_handler(self):
-        """The same hazard for an issuer on Google's hosts."""
+    def test_a_google_hosted_generic_config_infers_nothing(self) -> None:
+        """The same holds for an issuer on Google's hosts."""
         config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
@@ -839,13 +836,24 @@ class TestHandlerInference:
             ),
         )
 
-        assert isinstance(infer_identity_handler(config), GoogleIdentityHandler)
+        assert infer_identity_handler(config) is None
 
-    def test_an_arbitrary_generic_config_infers_nothing(self):
+    def test_an_arbitrary_generic_config_infers_nothing(self) -> None:
         """Only the explicit handler establishes identity for an unclaimed host."""
         config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
 
         assert infer_identity_handler(config) is None
+
+    async def test_a_client_without_a_handler_refuses_before_any_request(
+        self, entra_config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """The client raises the unsupported-identity error and sends nothing to the provider."""
+        client = OAuthClient(entra_config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity(TokenSet(access_token="access"))
+
+        assert httpx_mock.get_requests() == []
 
 
 class TestOidcIdentity:
