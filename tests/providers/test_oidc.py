@@ -807,34 +807,34 @@ class TestIdentityHandlerFactory:
 class TestHandlerInference:
     """Test that a generic config never resolves to another provider's identity handler."""
 
-    @pytest.fixture
-    def entra_config(self) -> ProviderConfig:
-        """Return a generic config whose endpoints sit on Microsoft's sign-in host."""
-        entra = "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0"
-        config, _ = preset(
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            scopes=[],
-            metadata=metadata(issuer=entra, authorize_url=f"{entra}/authorize", token_url=f"{entra}/token"),
-        )
-        return config
-
-    def test_a_microsoft_hosted_generic_config_infers_nothing(self, entra_config: ProviderConfig) -> None:
-        """The Microsoft handler would change ``provider`` and so every user's ``identity_key()``."""
-        assert infer_identity_handler(entra_config) is None
-
-    def test_a_google_hosted_generic_config_infers_nothing(self) -> None:
-        """The same holds for an issuer on Google's hosts."""
-        config, _ = preset(
-            client_id=CLIENT_ID,
-            client_secret=CLIENT_SECRET,
-            scopes=[],
-            metadata=metadata(
-                issuer="https://accounts.google.com",
-                authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-                token_url="https://oauth2.googleapis.com/token",
+    @pytest.fixture(
+        params=[
+            pytest.param(
+                (
+                    "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/v2.0",
+                    "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/oauth2/v2.0/authorize",
+                    "https://login.microsoftonline.com/11111111-2222-3333-4444-555555555555/oauth2/v2.0/token",
+                ),
+                id="microsoft",
             ),
-        )
+            pytest.param(
+                (
+                    "https://accounts.google.com",
+                    "https://accounts.google.com/o/oauth2/v2/auth",
+                    "https://oauth2.googleapis.com/token",
+                ),
+                id="google",
+            ),
+        ]
+    )
+    def claimed_metadata(self, request: pytest.FixtureRequest) -> ServerMetadata:
+        """Return metadata for an issuer on a host that a built-in provider also serves."""
+        issuer, authorize_url, token_url = request.param
+        return metadata(issuer=issuer, authorize_url=authorize_url, token_url=token_url)
+
+    def test_a_generic_config_on_a_claimed_host_infers_nothing(self, claimed_metadata: ServerMetadata) -> None:
+        """The built-in handler would change ``provider`` and so every user's ``identity_key()``."""
+        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
 
         assert infer_identity_handler(config) is None
 
@@ -845,25 +845,28 @@ class TestHandlerInference:
         assert infer_identity_handler(config) is None
 
     async def test_a_client_without_a_handler_refuses_before_any_request(
-        self, entra_config: ProviderConfig, httpx_mock: HTTPXMock
+        self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
         """The client raises the unsupported-identity error and sends nothing to the provider."""
-        client = OAuthClient(entra_config)
+        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
+        client = OAuthClient(config)
 
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity(TokenSet(access_token="access"))
 
         assert httpx_mock.get_requests() == []
 
-    async def test_a_client_with_the_generic_handler_establishes_identity(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_client_with_the_generic_handler_establishes_identity(
+        self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
+    ) -> None:
         """The explicit handler is the one source of identity for a config that allows no inference."""
-        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
+        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
-        client = OAuthClient(config, identity_handler=identity_handler(metadata()))
+        client = OAuthClient(config, identity_handler=identity_handler(claimed_metadata))
 
         identity = await client.fetch_identity(TokenSet(access_token="access"))
 
-        assert identity.identity_key() == (f"oidc:{ISSUER}", "u-1")
+        assert identity.identity_key() == (f"oidc:{claimed_metadata.issuer}", "u-1")
 
 
 class TestOidcIdentity:
