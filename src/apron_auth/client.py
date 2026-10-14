@@ -311,7 +311,7 @@ class OAuthClient:
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
-        The config can disallow that inference, and identity is then unsupported without a handler.
+        A config may disallow that inference, which leaves the configured handler as the only source of identity.
 
         NOTE: Callers must pass a token set straight from :meth:`exchange_code` or :meth:`refresh_token`.
         They must never pass one reloaded from storage or built from untrusted input.
@@ -328,6 +328,7 @@ class OAuthClient:
         Raises:
             IdentityNotSupportedError: If no identity handler is configured
                 and none can be inferred for the provider.
+                That includes a config that disallows inference.
             ConfigurationError: If built-in inference matches more than one
                 provider for the configuration.
             IdentityFetchError: If the handler fails to fetch identity.
