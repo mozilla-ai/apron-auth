@@ -1251,10 +1251,26 @@ class TestOidcIdentity:
 
         assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
 
+    async def test_reads_a_scope_refusal_from_separate_header_lines(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A server may send each challenge on its own ``WWW-Authenticate`` line."""
+        httpx_mock.add_response(
+            url=USERINFO_URL,
+            status_code=403,
+            headers=[
+                ("WWW-Authenticate", 'Basic realm="x"'),
+                ("WWW-Authenticate", 'Bearer error="insufficient_scope"'),
+            ],
+        )
+
+        with pytest.raises(IdentityScopeNotGrantedError):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
     async def test_a_near_miss_error_code_is_not_a_scope_error(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ) -> None:
-        """A near miss is an ordinary fetch failure, so a caller does not discard a token that retrying could use."""
+        """A near miss maps to the retryable fetch error, not to the scope error."""
         httpx_mock.add_response(
             url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": 'Bearer error="insufficient_scope_v2"'}
         )
@@ -1667,7 +1683,7 @@ class TestOidcIdentity:
 
 
 class TestBearerError:
-    """Reading the ``error`` code of a ``WWW-Authenticate`` header's ``Bearer`` challenge."""
+    """Test how the parser reads the ``error`` code of a ``WWW-Authenticate`` header's ``Bearer`` challenge."""
 
     @pytest.mark.parametrize(
         ("header", "expected"),
