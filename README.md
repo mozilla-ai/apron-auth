@@ -181,18 +181,18 @@ url, pending_state = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
 )
 # Redirect the user to `url`.
-# Hold onto `pending_state` — you'll need it for the callback.
+# Keep `pending_state` server-side for the callback, where the user cannot change it.
 ```
 
 ### Code exchange
 
-When the user comes back with an authorization code, exchange it for tokens.
+When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt, and refuse one older than your own time limit. With a `StateStore`, pass only `state` (see below).
 
 ```python
 tokens = await client.exchange_code(
     code="authorization-code-from-callback",
-    redirect_uri="https://yourapp.com/callback",
-    code_verifier=pending_state.code_verifier,
+    state="state-from-callback",
+    pending_state=pending_state,
 )
 print(tokens.access_token)
 print(tokens.refresh_token)
@@ -206,8 +206,8 @@ fetch them after token exchange:
 ```python
 tokens = await client.exchange_code(
     code="authorization-code-from-callback",
-    redirect_uri="https://yourapp.com/callback",
-    code_verifier=pending_state.code_verifier,
+    state="state-from-callback",
+    pending_state=pending_state,
 )
 identity = await client.fetch_identity(tokens)
 print(identity.provider)        # "google", "github", etc.
@@ -559,7 +559,7 @@ tokens = await client.exchange_code(code="...", state="state-from-callback")
 
 #### Carrying context through the flow
 
-If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `metadata` when building the authorization URL. apron-auth carries it opaquely through the `StateStore` and surfaces it on `TokenSet.context` after auto-consume.
+If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `metadata` when building the authorization URL. apron-auth carries it opaquely on the pending state, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
 
 ```python
 url, pending_state = await client.get_authorization_url(
@@ -615,8 +615,8 @@ url, pending = await client.get_authorization_url()
 # parameter so the issuer can be validated before the code is redeemed:
 tokens = await client.exchange_code(
     code="code-from-callback",
-    redirect_uri=pending.redirect_uri,
-    code_verifier=pending.code_verifier,
+    state="state-from-callback",
+    pending_state=pending,
     iss="iss-from-callback",
 )
 ```
@@ -692,7 +692,7 @@ All exceptions inherit from `OAuthError`.
 | `TokenRefreshError`            | Refresh failed, but it might work if you try again (transient).                                                 |
 | `PermanentOAuthError`          | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
 | `RevocationError`              | The provider rejected the revocation request.                                                                   |
-| `StateError`                   | OAuth state was invalid, expired, or already used.                                                              |
+| `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |

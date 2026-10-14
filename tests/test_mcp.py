@@ -967,8 +967,8 @@ class TestEndToEndFlow:
 
         tokens = await client.exchange_code(
             code="auth-code",
-            redirect_uri=_REDIRECT_URI,
-            code_verifier=pending.code_verifier,
+            state=pending.state,
+            pending_state=pending,
         )
         assert tokens.access_token == "final-token"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import secrets
 import time
 from functools import cached_property
@@ -47,6 +48,21 @@ class _TokenEndpointError(Exception):
         """
         super().__init__(message)
         self.error_code = error_code
+
+
+def _same_secret(given: str, expected: str) -> bool:
+    """Return whether two secret strings are equal, in time that does not depend on where they differ.
+
+    Any two strings compare without raising, including ones that are not valid UTF-8 text.
+
+    Args:
+        given: The value received from outside.
+        expected: The value this client issued.
+
+    Returns:
+        ``True`` when the strings are equal.
+    """
+    return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
 
 
 class OAuthClient:
@@ -102,8 +118,6 @@ class OAuthClient:
         Args:
             redirect_uri: Override the redirect URI from ``ProviderConfig``.
             metadata: Opaque caller context attached to the pending state.
-                Carried through ``StateStore`` save/consume and surfaced
-                on ``TokenSet.context`` when ``exchange_code`` auto-consumes.
 
         Returns:
             A tuple of the authorization URL and the pending state.
@@ -164,66 +178,54 @@ class OAuthClient:
     async def exchange_code(
         self,
         code: str,
-        state: str | None = None,
-        redirect_uri: str | None = None,
-        code_verifier: str | None = None,
+        state: str,
+        *,
+        pending_state: OAuthPendingState | None = None,
         iss: str | None = None,
     ) -> TokenSet:
         """Exchange an authorization code for tokens.
 
-        Two modes:
-        - Pass state to consume from StateStore and retrieve stored
-          redirect_uri and code_verifier.
-        - Pass redirect_uri and code_verifier directly.
+        A client with a ``StateStore`` consumes the pending state for ``state`` from it.
+        A client without one takes ``pending_state``.
+        Either way, a ``state`` that does not match the pending state is refused before the code is redeemed.
 
-        When the provider carries an expected issuer, the authorization-response
-        ``iss`` (RFC 9207) is validated against it before anything else — before
-        state is consumed and before the token endpoint is called — so a mix-up
-        attempt is refused without burning the pending state.
+        When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is validated first.
+        A mix-up attempt is then refused before any state is consumed and before the token endpoint is called.
+
+        NOTE: Callers must keep their own pending state where the user cannot change it,
+        because every check here trusts it.
+        Callers must also discard it after one exchange attempt, even a failed one,
+        because only a ``StateStore`` refuses a pending state that is reused or too old.
 
         Args:
             code: The authorization code returned to the redirect URI.
-            state: The state token to consume from the configured
-                ``StateStore``; its stored ``redirect_uri`` and
-                ``code_verifier`` then override the arguments below.
-            redirect_uri: The redirect URI to send with the exchange, when
-                not sourced from stored state.
-            code_verifier: The PKCE code verifier to send with the
-                exchange, when not sourced from stored state.
+            state: The ``state`` parameter from the callback.
+            pending_state: The pending state that :meth:`get_authorization_url` returned, when the client has no store.
             iss: The ``iss`` parameter from the authorization response, to
                 validate against the provider's expected issuer. Omit when
                 the provider has no expected issuer configured.
 
         Returns:
-            The exchanged token set. Any caller context stored with the
-            consumed state is surfaced on :attr:`TokenSet.context`.
+            The exchanged token set.
+            Any caller context stored with the pending state is surfaced on :attr:`TokenSet.context`.
 
         Raises:
+            ConfigurationError: If ``pending_state`` is given to a client with a ``StateStore``,
+                or is not given to a client without one.
             IssuerValidationError: If ``iss`` fails validation against the
                 provider's expected issuer.
-            StateError: If ``state`` is given but is invalid, expired, or
-                already consumed.
+            StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
+                or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
         """
         self._config.validate_issuer(iss)
-        context: dict[str, Any] = {}
-        if state is not None and self._state_store is not None:
-            pending = await self._state_store.consume(state)
-            if pending is None:
-                msg = "OAuth state is invalid, expired, or already consumed"
-                raise StateError(msg)
-            redirect_uri = pending.redirect_uri
-            code_verifier = pending.code_verifier
-            context = pending.metadata
+        pending = await self._resolve_pending_state(state, pending_state)
 
-        data: dict[str, str] = {
-            "grant_type": "authorization_code",
-            "code": code,
-        }
-        if redirect_uri:
-            data["redirect_uri"] = redirect_uri
-        if code_verifier:
-            data["code_verifier"] = code_verifier
+        data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
+        if pending.redirect_uri:
+            data["redirect_uri"] = pending.redirect_uri
+        if pending.code_verifier:
+            data["code_verifier"] = pending.code_verifier
         if self._config.resource is not None:
             data["resource"] = self._config.resource
 
@@ -231,7 +233,7 @@ class OAuthClient:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
-        return self._parse_token_response(response, context=context)
+        return self._parse_token_response(response, context=pending.metadata)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
         """Refresh an access token using a refresh token.
@@ -360,6 +362,42 @@ class OAuthClient:
             The inferred handler, or ``None`` when no built-in provider matches the config.
         """
         return infer_identity_handler(self._config)
+
+    async def _resolve_pending_state(self, state: str, pending_state: OAuthPendingState | None) -> OAuthPendingState:
+        """Return the pending state that matches the callback's state.
+
+        Args:
+            state: The ``state`` parameter from the callback.
+            pending_state: The pending state the caller kept, or ``None`` when the ``StateStore`` keeps it.
+
+        Returns:
+            The pending state consumed from the store for ``state``, or the given one when the client has no store.
+
+        Raises:
+            ConfigurationError: If ``pending_state`` is given to a client with a ``StateStore``,
+                or is not given to a client without one.
+            StateError: If the callback carried no state, the store holds no pending state for it,
+                or ``state`` does not match ``pending_state``.
+        """
+        if not isinstance(state, str) or not state:
+            msg = "OAuth callback carried no usable state"
+            raise StateError(msg)
+        if self._state_store is not None:
+            if pending_state is not None:
+                msg = "This client looks up the pending state in its state store, so pass only the state"
+                raise ConfigurationError(msg)
+            pending = await self._state_store.consume(state)
+            if pending is None or not _same_secret(state, pending.state):
+                msg = "OAuth state is invalid, expired, or already consumed"
+                raise StateError(msg)
+            return pending
+        if pending_state is None:
+            msg = "Pass the pending state, or configure a state store to look it up"
+            raise ConfigurationError(msg)
+        if not _same_secret(state, pending_state.state):
+            msg = "OAuth state does not match the pending authorization request"
+            raise StateError(msg)
+        return pending_state
 
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.

@@ -392,10 +392,8 @@ class TokenSet(BaseModel, frozen=True):
         metadata: Additional fields from the provider's token endpoint
             response that are not captured by the named attributes above
             (e.g. Slack's ``team_id``).  Populated automatically.
-        context: Caller-supplied context carried opaquely from
-            ``OAuthPendingState.metadata`` through the authorization flow.
-            Populated when ``exchange_code`` auto-consumes from a
-            ``StateStore``; empty otherwise.
+        context: Caller-supplied context carried opaquely from ``OAuthPendingState.metadata``.
+            It is empty for a token set that does not come from a code exchange.
     """
 
     access_token: str
@@ -668,11 +666,8 @@ class OAuthPendingState(BaseModel, frozen=True):
         redirect_uri: Redirect URI for this flow.
         code_verifier: PKCE code verifier, if PKCE is enabled.
         created_at: Unix timestamp when this state was created.
-        metadata: Opaque caller-supplied context that apron-auth carries
-            but never interprets.  Attach application-specific data
-            (e.g. ``user_id``, ``tenant_id``) here; it will be preserved
-            through ``StateStore`` save/consume and surfaced on
-            ``TokenSet.context`` when ``exchange_code`` auto-consumes.
+        metadata: Opaque caller-supplied context that apron-auth carries but never interprets.
+            Attach application-specific data such as ``user_id`` or ``tenant_id`` here.
     """
 
     state: str

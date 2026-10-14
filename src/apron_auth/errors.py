@@ -90,7 +90,7 @@ class RevocationError(OAuthError):
 
 
 class StateError(OAuthError):
-    """OAuth state invalid, expired, or already consumed."""
+    """The OAuth state from a callback is missing, invalid, expired, already consumed, or not the pending state's."""
 
 
 class TokenExchangeError(OAuthError):
