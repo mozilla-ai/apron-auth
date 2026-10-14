@@ -7,9 +7,8 @@ Zitadel, Dex, Ping, and any other provider implementing OpenID Connect
 Discovery 1.0.
 
 Always pass :func:`identity_handler` to :class:`~apron_auth.client.OAuthClient`.
-Host-based inference still runs on the config :func:`preset` returns, so an
-Entra or Google issuer would otherwise resolve to that provider's handler,
-changing ``provider`` and every user's ``identity_key()`` (follow-up: #137).
+Without it, a config on an Entra or Google host gets that provider's handler,
+which changes ``provider`` and every user's ``identity_key()``.
 
 ID-token signatures are not verified: tokens arrive on the token-endpoint
 response, where TLS authenticates the issuer (OpenID Connect Core 1.0 section
@@ -134,11 +133,8 @@ async def discover(
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
 
-    The document's own ``issuer`` is compared against ``issuer`` and a mismatch
-    is refused (OpenID Connect Discovery 1.0, section 4.3). That check is what
-    makes the issuer a trust anchor rather than a hostname: without it, a
-    document served from anywhere could name any issuer, and every later
-    ``iss`` validation would be measuring against the attacker's own answer.
+    A document that names an issuer other than ``issuer`` is refused (OpenID Connect Discovery 1.0, section 4.3).
+    Every later ``iss`` check therefore compares against an issuer the caller chose.
 
     Args:
         issuer: The issuer identifier, which the document must also name. This
@@ -148,13 +144,8 @@ async def discover(
             standard suffix :func:`discovery_url` derives. The issuer check
             still applies, so an override relocates the document without
             loosening what it may claim.
-        transport_factory: Optional factory returning an httpx transport for
-            the document URL, letting the caller control the outbound
-            connection. This is where network policy belongs: no host check is
-            applied here, because whether a given issuer may be reached is the
-            deployment's question, not this library's, and a check that inspects
-            only the URL string cannot answer it anyway — a hostname resolving
-            to an internal address passes any such test.
+        transport_factory: Optional factory returning an httpx transport for the document URL.
+            Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL
             and the endpoints the document names. Off by default, because ID
             tokens are not signature-checked and rely on TLS to authenticate the
@@ -226,34 +217,19 @@ def preset(
 ) -> tuple[ProviderConfig, RevocationHandler | None]:
     """Create a provider configuration from a discovered OpenID provider.
 
-    Takes ``metadata`` where every other preset hardcodes endpoints. Making it a
-    parameter rather than an implicit fetch keeps this function synchronous and
-    keeps the network call somewhere a caller can cache, validate, or stub.
-    Every parameter is keyword-only, so making ``client_secret`` optional later
-    (for public clients) is not a breaking change.
+    It takes ``metadata`` as a parameter, so it stays synchronous and the caller can cache, validate or stub the fetch.
+    Every parameter is keyword-only, so ``client_secret`` can later become optional without breaking callers.
 
-    The returned config must always be paired with :func:`identity_handler`.
-    Without an explicit handler, host-based inference can resolve a config on a
-    host another provider claims (an Entra or Google issuer) to that
-    provider's handler, which changes ``provider`` and every user's
-    ``identity_key()``; see the module docstring.
+    NOTE: Callers must always pair the returned config with :func:`identity_handler`.
+    The module docstring explains why.
 
-    ``openid`` is merged into ``scopes``: without it the provider runs a plain
-    OAuth flow, returns no ID token, and nothing below can establish an
-    identity.
+    ``openid`` is merged into ``scopes``, because without it the provider returns no ID token.
 
-    PKCE is always on. :class:`~apron_auth.client.OAuthClient` issues only
-    ``S256`` challenges, so a provider advertising code-challenge methods that
-    exclude ``S256`` is refused rather than configured without PKCE. The
-    refusal is the point: this module sends no ``nonce`` (OpenID Connect Core
-    1.0 section 3.1.2.1 makes it OPTIONAL for the authorization-code flow), so
-    PKCE is the *only* thing binding an authorization code to the session that
-    requested it. Silently clearing it would hand back a config with no
-    code-injection defense at all, which RFC 9700 requires a client to prevent
-    by one mechanism or the other. A provider advertising no methods still gets
-    PKCE, with a WARNING: some real providers (Entra) omit the field, but one
-    that does not implement PKCE ignores the challenge, leaving the code
-    unbound to the session.
+    PKCE is always on, with ``S256`` challenges.
+    No ``nonce`` is sent, so PKCE is the only code-injection defense (RFC 9700).
+    A provider whose advertised methods exclude ``S256`` is therefore refused, not configured without PKCE.
+    A provider that advertises no methods still gets PKCE, with a WARNING.
+    PKCE binds the code only if the provider enforces it.
 
     Args:
         client_id: The OAuth client identifier registered at the provider.
@@ -274,15 +250,10 @@ def preset(
         when it does not.
 
     Raises:
-        ConfigurationError: If the metadata names no issuer, holds a URL that
-            :func:`discover` would refuse, or if the provider
-            advertises only token-endpoint auth methods this library cannot
-            perform or advertises code-challenge methods that exclude
-            ``S256``. None of these are failures of discovery — the document
-            was read and is valid — so they raise ``ConfigurationError``
-            rather than :class:`OidcDiscoveryError`, letting a caller that
-            catches the latter to mean "provider unreachable" keep the
-            distinction.
+        ConfigurationError: If the metadata names no issuer or holds a URL that :func:`discover` would refuse.
+            It is also raised if the provider advertises only token-endpoint auth methods this library cannot perform,
+            or code-challenge methods that exclude ``S256``.
+            These are configuration faults, not discovery failures, so they do not raise :class:`OidcDiscoveryError`.
     """
     if metadata.issuer is None:
         msg = "OpenID provider metadata names no issuer; an ID token's iss could not be validated"
@@ -334,12 +305,8 @@ def identity_handler(
 ) -> OidcIdentityHandler:
     """Build the identity handler for a discovered provider.
 
-    The counterpart to the inference every other provider gets for free from
-    ``providers.identity``; always pass it to
-    :class:`~apron_auth.client.OAuthClient`, as the module docstring explains.
-    The issuer and client identifier an ID token is validated against are read
-    from the :class:`~apron_auth.models.ProviderConfig` that :func:`preset`
-    built, so they cannot disagree with it.
+    NOTE: Callers must always pass it to :class:`~apron_auth.client.OAuthClient`.
+    The module docstring explains why.
 
     Args:
         metadata: The provider's discovered metadata, from :func:`discover`.
@@ -441,11 +408,9 @@ class OidcIdentityHandler:
                 ID token's ``iss`` with nothing to be checked against.
             IdentityScopeNotGrantedError: If there is no usable ID token and the
                 userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
-            IdentityFetchError: If the ID token's claims do not validate or its
-                ``sub`` is not a non-empty string, the userinfo request fails or cannot be parsed while there is no
-                validated ID token to fall back on, the two documents name
-                different subjects, userinfo names no subject beside a
-                validated ID token, or neither yields a subject.
+            IdentityFetchError: If the ID token's claims do not validate or its ``sub`` is not a non-empty string.
+                It is also raised when userinfo fails and there is no validated ID token,
+                when userinfo names no subject or a different one than the ID token, or when neither yields a subject.
         """
         if config.issuer is None:
             msg = "OpenID provider config names no issuer; an ID token's iss could not be validated"
@@ -628,15 +593,10 @@ def _claim_error_message(exc: ClaimError) -> str:
 def _provider_name(issuer: str) -> str:
     """The ``IdentityProfile.provider`` string for a generic OpenID connection.
 
-    Namespaced by issuer, because a bare ``"oidc"`` would be wrong in a way
-    that matters. :meth:`~apron_auth.models.IdentityProfile.identity_key`
-    returns ``(provider, subject)`` as the recommended primary key for a user
-    table, and a ``sub`` is only unique *within* an issuer (OpenID Connect Core
-    1.0, section 2). Two generic connections — say an Okta tenant and a
-    Keycloak realm — would otherwise collide on ``("oidc", sub)``, and any
-    ``sub`` one issuer can be made to mint becomes a key collision against the
-    other. Every other provider in this package is safe with a bare name only
-    because its name is one-to-one with an issuer; this one is not.
+    The string carries the issuer.
+    A ``sub`` is unique only within one issuer (OpenID Connect Core 1.0, section 2).
+    With a bare ``"oidc"``, two issuers could collide on the ``(provider, subject)`` pair.
+    That pair is what :meth:`~apron_auth.models.IdentityProfile.identity_key` returns.
 
     Args:
         issuer: The validated issuer identifier.
@@ -650,14 +610,8 @@ def _provider_name(issuer: str) -> str:
 def _email_fields(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> tuple[str | None, bool | None]:
     """The ``email`` and ``email_verified`` pair, taken from a single document.
 
-    Both fields come from the *same* source — the ID token when it carries an
-    ``email``, else userinfo — because they are one assertion, not two.
-    Sourcing them independently lets an ID token's address pair with userinfo's
-    verification flag, and
-    :meth:`~apron_auth.models.IdentityProfile.verified_email` would then return
-    an address nothing had vouched for. Every other handler in this package
-    reads both from one payload by construction; this one has two payloads and
-    has to choose deliberately.
+    Both fields come from one source: the ID token when it carries an ``email``, and userinfo otherwise.
+    They are one assertion, so an address from one document never pairs with a verification flag from the other.
 
     ``email_verified`` is honored only as a genuine JSON boolean, and reported
     as ``None`` when the chosen document omits it: a bare ``bool()`` would read
@@ -859,11 +813,7 @@ def _optional_url(document: dict[str, Any], key: str, field: str, allow_insecure
 async def _fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
     """Fetch the configuration document at ``url``.
 
-    Redirects are not followed, so the request goes to the URL derived from the
-    issuer and nowhere else. ``httpx.InvalidURL`` is caught alongside transport
-    failures: it is not a ``RequestError``, so a malformed ``document_url``
-    would otherwise escape as an httpx exception rather than the
-    ``OidcDiscoveryError`` this module documents.
+    Redirects are not followed, so the request goes to ``url`` and nowhere else.
 
     Args:
         url: The document URL, already validated.
