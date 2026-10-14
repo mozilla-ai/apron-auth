@@ -1,33 +1,36 @@
 """Generic OpenID Connect provider preset, discovery, and identity handler.
 
-An OpenID provider publishes its own configuration document, so :func:`discover`
-reads the endpoints from the issuer and :func:`preset` combines them with a
-client identity. That covers Keycloak, Okta, Auth0, Entra ID, Authentik,
-Zitadel, Dex, Ping, and any other provider implementing OpenID Connect
-Discovery 1.0.
+An OpenID provider publishes its own configuration document.
+:func:`discover` reads the endpoints from the issuer, and :func:`preset` combines them with a client identity.
+This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, Ping,
+and any other provider that implements OpenID Connect Discovery 1.0.
 
 Always pass :func:`identity_handler` to :class:`~apron_auth.client.OAuthClient`.
 Without it, a config on an Entra or Google host gets that provider's handler,
 which changes ``provider`` and every user's ``identity_key()``.
 
-ID-token signatures are not verified: tokens arrive on the token-endpoint
-response, where TLS authenticates the issuer (OpenID Connect Core 1.0 section
-3.1.3.7). Claims are always validated per that section, and that is why every
-URL here must be ``https``. Pass the handler only tokens from a token-endpoint
-response.
+ID token signatures are not verified.
+Tokens arrive on the token-endpoint response, where TLS authenticates the issuer.
+OpenID Connect Core 1.0 section 3.1.3.7 allows this.
+Claims are always validated per that section.
+Every URL here must be ``https``, because the design relies on TLS.
+Pass the handler only tokens from a token-endpoint response.
 
 Limitations
 -----------
 
-* Confidential clients only; :func:`preset` requires a client secret.
-* No ``nonce`` and no per-request authorization parameters, so PKCE is the only
-  code-injection defense and holds only where the provider enforces it.
-* No RP-Initiated Logout and no ``response_mode`` (the query default is used).
-* A token response without an ``id_token`` is accepted and identity falls back
-  to userinfo alone, with a weaker claim to have vouched for it.
+* Confidential clients only.
+  :func:`preset` requires a client secret.
+* No ``nonce`` and no per-request authorization parameters.
+  PKCE is the only code-injection defense, and it holds only where the provider enforces it.
+* No RP-Initiated Logout and no ``response_mode``.
+  The query default is used.
+* A token response without an ``id_token`` is accepted.
+  Identity then falls back to userinfo alone, which has a weaker claim to have vouched for it.
 * A signed (``application/jwt``) userinfo response is refused.
 * ``https`` is required for the issuer, the document URL and every endpoint.
-  :func:`discover`, :func:`preset` and :func:`identity_handler` take ``allow_insecure_http`` for local development.
+  :func:`discover`, :func:`preset` and :func:`identity_handler` take ``allow_insecure_http``
+  for local development.
 """
 
 from __future__ import annotations
@@ -96,11 +99,10 @@ BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
     """The document URL for ``issuer``, per OpenID Connect Discovery 1.0 section 4.
 
-    The well-known suffix is appended to the issuer including its path, so a
-    realm at ``https://sso.example.com/realms/acme`` publishes under that path
-    rather than at the host root, and a trailing slash does not double up. The
-    issuer must be an absolute URL with no query, fragment or userinfo, and
-    ``https`` unless ``allow_insecure_http`` is set; see :func:`discover`.
+    The well-known suffix is appended to the issuer including its path, and a trailing slash does not double up.
+    A realm at ``https://sso.example.com/realms/acme`` therefore publishes under that path, not at the host root.
+    The issuer must be an absolute URL with no query, fragment or userinfo.
+    It must use ``https`` unless ``allow_insecure_http`` is set.
 
     Args:
         issuer: The issuer identifier to derive the document URL from.
@@ -110,9 +112,8 @@ def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
         The configuration document's URL.
 
     Raises:
-        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL, has
-            a query, fragment or userinfo, or is not ``https`` and
-            ``allow_insecure_http`` is unset.
+        OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL or has a query, fragment or userinfo.
+            It is also raised if ``issuer`` is not ``https`` and ``allow_insecure_http`` is unset.
     """
     _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
     return get_well_known_url(issuer, external=True)
@@ -131,32 +132,24 @@ async def discover(
     Every later ``iss`` check therefore compares against an issuer the caller chose.
 
     Args:
-        issuer: The issuer identifier, which the document must also name. This
-            is the value an operator configures, and the one an authorization
-            response's ``iss`` is later checked against.
-        document_url: Where to fetch the document, when it is not at the
-            standard suffix :func:`discovery_url` derives. The issuer check
-            still applies, so an override relocates the document without
-            loosening what it may claim.
+        issuer: The issuer identifier, which the document must also name.
+            It is the value an operator configures, and an authorization response's ``iss`` is checked against it.
+        document_url: Where to fetch the document, when it is not at the standard suffix.
+            The issuer check still applies, so an override moves the document without loosening what it may claim.
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
-        allow_insecure_http: Accept ``http`` for the issuer, the document URL
-            and the endpoints the document names. Off by default, because ID
-            tokens are not signature-checked and rely on TLS to authenticate the
-            issuer; over ``http`` an on-path attacker chooses every claim and
-            reads the client secret. Intended for local development only, and
-            logs a WARNING for each URL it lets through.
+        allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
+            It is off by default, because ID tokens are not signature-checked and rely on TLS for the issuer.
+            Over ``http``, an on-path attacker chooses every claim and reads the client secret.
+            It is for local development only, and it logs a WARNING for each URL it lets through.
 
     Returns:
-        The discovered metadata, carrying the userinfo endpoint alongside the
-        authorization-code flow's own.
+        The discovered metadata, including the userinfo endpoint.
 
     Raises:
-        OidcDiscoveryError: If the issuer is malformed, the issuer, document
-            URL or an endpoint is not ``https`` (and ``allow_insecure_http`` is
-            unset), the document cannot be fetched or parsed, it omits an
-            endpoint the flow requires, or it names an issuer other than
-            ``issuer``.
+        OidcDiscoveryError: If the issuer is malformed, or a URL is not ``https`` and ``allow_insecure_http`` is unset.
+            It is also raised if the document cannot be fetched or parsed, omits a required endpoint,
+            or names an issuer other than ``issuer``.
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
@@ -229,20 +222,16 @@ def preset(
     Args:
         client_id: The OAuth client identifier registered at the provider.
         client_secret: The OAuth client secret paired with it.
-        scopes: Scopes to request; merged with the required ``openid`` scope.
+        scopes: Scopes to request, merged with the required ``openid`` scope.
         metadata: The provider's discovered metadata, from :func:`discover`.
         redirect_uri: The redirect URI for the authorization flow.
-        extra_params: Extra authorization-request parameters. No defaults are
-            merged under these: a generic connection has no product-specific
-            consent behavior to compensate for, and an unexpected parameter on
-            an arbitrary provider's authorization request is more likely to be
-            refused than ignored.
+        extra_params: Extra authorization-request parameters.
+            No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
     Returns:
-        The provider configuration, paired with a standard RFC 7009 revocation
-        handler when the provider advertises a revocation endpoint and ``None``
-        when it does not.
+        The provider configuration, paired with a standard RFC 7009 revocation handler.
+        The handler is ``None`` when the provider advertises no revocation endpoint.
 
     Raises:
         ConfigurationError: If ``client_secret`` is empty,
@@ -309,16 +298,15 @@ def identity_handler(
 
     Args:
         metadata: The provider's discovered metadata, from :func:`discover`.
-        transport_factory: Optional factory controlling the outbound connection
-            for the userinfo request, matching the one :func:`discover` accepts.
-        trust_email_verified: Report the issuer's ``email_verified`` claim on
-            the profile. Off by default, so ``email_verified`` is ``None`` and
-            :meth:`~apron_auth.models.IdentityProfile.verified_email` returns
-            nothing. On a self-run IdP the claim is whatever its admin set, so
-            enabling this means "I trust this issuer's admin to verify
-            addresses". A multi-tenant application must not enable it for a
-            tenant-supplied issuer: one tenant could assert an address in
-            another tenant's domain. Key users on ``identity_key()`` instead.
+        transport_factory: Optional factory controlling the outbound connection for the userinfo request.
+        trust_email_verified: Report the issuer's ``email_verified`` claim on the profile.
+            It is off by default, so ``email_verified`` is ``None``
+            and :meth:`~apron_auth.models.IdentityProfile.verified_email` returns nothing.
+            On a self-run IdP the claim is whatever its admin set.
+            Enabling this means "I trust this issuer's admin to verify addresses".
+            A multi-tenant application must not enable it for a tenant-supplied issuer,
+            because one tenant could assert an address in another tenant's domain.
+            Key users on ``identity_key()`` instead.
         allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
             Each one logs a WARNING.
 
@@ -344,28 +332,25 @@ def identity_handler(
 class OidcIdentityHandler:
     """Establish identity from an ID token's claims and the userinfo endpoint.
 
-    The ID token is the trust-bearing half: its ``iss``, ``aud``, ``azp``,
-    ``exp`` and ``sub`` are validated before any claim is read, and ``sub`` is
-    taken from it in preference to userinfo, because that is what the caller
-    makes an access decision on. Userinfo supplies display fields and stands in
-    entirely when the provider returns no ID token — OpenID Connect Core 1.0
-    section 3.1.3.3 requires one on a flow that requested ``openid``, so a
-    provider that omits it is out of spec, but it has still authenticated
-    somebody and userinfo will say who, with a weaker claim to have vouched
-    for it.
+    The handler is bound to one issuer, and it refuses a config that names another.
 
-    The userinfo call is enrichment when an ID token validated: if it fails,
-    a WARNING is logged and identity rests on the ID token. With no usable ID
-    token it is the only source, so its failure raises.
+    The ID token is the trust-bearing source.
+    Its ``iss``, ``aud``, ``azp``, ``exp`` and ``sub`` are validated before any claim is read.
+    ``sub`` is taken from it in preference to userinfo, because the caller makes access decisions on it.
+    Userinfo supplies display fields, and it stands in entirely when the provider returns no ID token.
+    OpenID Connect Core 1.0 section 3.1.3.3 requires an ID token when ``openid`` was requested.
+    A provider that omits it is out of spec, but userinfo still says who signed in, with a weaker guarantee.
 
-    NOTE: Callers must pass only tokens taken from a token-endpoint response
-    over TLS, never a stored or front-channel token. The ID token is validated
-    without a signature check, which is safe only on that channel.
+    When an ID token validated, the userinfo call only adds detail.
+    If it fails, a WARNING is logged and identity rests on the ID token.
+    With no usable ID token, userinfo is the only source, so its failure raises.
 
-    A userinfo response whose ``sub`` is missing or names a different subject
-    than the ID token is refused outright rather than reconciled (OpenID Connect Core 1.0,
-    section 5.3.2): the two documents disagreeing about who signed in is not a
-    field to prefer between.
+    NOTE: Callers must pass only tokens taken from a token-endpoint response over TLS,
+    never a stored or front-channel token.
+    The ID token is validated without a signature check, which is safe only on that channel.
+
+    A userinfo response whose ``sub`` is missing or differs from the ID token's is refused, not reconciled.
+    OpenID Connect Core 1.0 section 5.3.2 requires the two to match.
     """
 
     def __init__(
@@ -381,13 +366,11 @@ class OidcIdentityHandler:
 
         Args:
             issuer: The issuer this handler serves. It refuses a config that names any other issuer.
-            userinfo_url: The provider's userinfo endpoint, or ``None`` when it
-                advertises none and identity rests on the ID token alone.
-            transport_factory: Optional factory controlling the outbound
-                connection for the userinfo request.
-            trust_email_verified: Report the issuer's ``email_verified`` claim;
-                see :func:`identity_handler`. When ``False``, it is reported as
-                ``None``.
+            userinfo_url: The provider's userinfo endpoint.
+                It is ``None`` when the provider advertises none, and identity then rests on the ID token alone.
+            transport_factory: Optional factory controlling the outbound connection for the userinfo request.
+            trust_email_verified: Report the issuer's ``email_verified`` claim, as :func:`identity_handler` describes.
+                When ``False``, the claim is reported as ``None``.
             allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
                 Each one logs a WARNING.
 
@@ -409,21 +392,19 @@ class OidcIdentityHandler:
         """Fetch normalized identity fields for a generic OpenID sign-in.
 
         Args:
-            material: The token material — the access token, and the ID token
-                whose validated claims are preferred where they overlap.
-            config: The provider configuration the tokens were issued under; its
-                ``issuer`` and ``client_id`` are what the ID token is validated
-                against.
+            material: The access token, and the ID token whose validated claims are preferred where they overlap.
+            config: The provider configuration the tokens were issued under.
+                The ID token is validated against its ``issuer`` and ``client_id``.
 
         Returns:
-            The identity profile. ``provider`` is namespaced by issuer (see
-            :func:`_provider_name`) and ``tenancies`` is always empty.
+            The identity profile.
+            ``provider`` is namespaced by issuer, and ``tenancies`` is always empty.
 
         Raises:
             ConfigurationError: If ``config`` names no issuer, or names one other than this handler's.
                 Either way, no request is sent.
-            IdentityScopeNotGrantedError: If there is no usable ID token and the
-                userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
+            IdentityScopeNotGrantedError: If there is no usable ID token,
+                and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             IdentityFetchError: If the ID token's claims do not validate or its ``sub`` is not a non-empty string.
                 It is also raised when userinfo fails and there is no validated ID token,
                 when userinfo names no subject or a different one than the ID token, or when neither yields a subject.
@@ -490,23 +471,20 @@ class OidcIdentityHandler:
     def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any] | None:
         """Return the ID token's claims once they check out.
 
-        Claims are validated per OpenID Connect Core 1.0 section 3.1.3.7:
-        ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are essential, ``azp``
-        is required when the audience is not solely this client, and ``at_hash``
-        is checked against the access token. The signature is not checked; see
-        the module docstring.
+        Claims are validated per OpenID Connect Core 1.0 section 3.1.3.7.
+        ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are essential.
+        ``azp`` is required when the audience is not solely this client.
+        ``at_hash`` is checked against the access token.
+        The signature is not checked, as the module docstring explains.
 
-        ``None`` when the token is not a parseable JWT, which degrades to
-        userinfo rather than failing: a provider that returns something
-        unparseable in ``id_token`` has still authenticated somebody, and
-        userinfo will say who. A token that parses but whose claims are *wrong*
-        is a different matter and raises, because that is a token minted for
-        someone else or by someone else.
+        A token that is not a parseable JWT gives ``None``, and identity falls back to userinfo.
+        The provider has still authenticated somebody, and userinfo says who.
+        A token that parses but has wrong claims raises, because it was minted for someone else or by someone else.
 
         Args:
             id_token: The ID token from the token-endpoint response.
-            access_token: The access token from the same response, which
-                ``at_hash`` — when present — is verified against.
+            access_token: The access token from the same response.
+                A present ``at_hash`` is verified against it.
             issuer: The issuer the token's ``iss`` must name.
             client_id: The client identifier the token's ``aud`` must name.
 
@@ -541,7 +519,7 @@ class OidcIdentityHandler:
         except ClaimError as exc:
             raise IdentityFetchError(_claim_error_message(exc)) from exc
         except (JoseError, TypeError, ValueError) as exc:
-            # A malformed header or claim shape can escape as ``TypeError``; the contract is ``IdentityFetchError``.
+            # A malformed header or claim shape can raise ``TypeError``, which must surface as ``IdentityFetchError``.
             msg = "OpenID ID token claims did not validate"
             raise IdentityFetchError(msg) from exc
         # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
@@ -561,8 +539,7 @@ class OidcIdentityHandler:
             The userinfo payload as a JSON object.
 
         Raises:
-            IdentityScopeNotGrantedError: If the endpoint answers 403
-                ``insufficient_scope``.
+            IdentityScopeNotGrantedError: If the endpoint answers 403 ``insufficient_scope``.
             IdentityFetchError: If the transport factory refuses the connection, the request fails,
                 or the response is signed, cannot be parsed, or is not a JSON object.
         """
@@ -644,21 +621,17 @@ def _email_fields(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> tu
     Both fields come from one source: the ID token when it carries an ``email``, and userinfo otherwise.
     They are one assertion, so an address from one document never pairs with a verification flag from the other.
 
-    ``email_verified`` is honored only as a genuine JSON boolean, and reported
-    as ``None`` when the chosen document omits it: a bare ``bool()`` would read
-    the string ``"false"`` as ``True``, and an unasserted value is not the same
-    fact as an asserted ``false``. Callers that must decide on a boolean
-    collapse the unasserted case themselves, and toward unverified. An
-    ``email_verified`` with no ``email`` beside it asserts nothing and is
-    dropped.
+    ``email_verified`` is honored only as a JSON boolean, because a bare ``bool()`` reads ``"false"`` as ``True``.
+    It is ``None`` when the chosen document omits it, because an unasserted value differs from an asserted ``false``.
+    An ``email_verified`` with no ``email`` beside it asserts nothing and is dropped.
 
     Args:
         claims: The validated ID-token claims, or ``None`` when absent.
         userinfo: The userinfo payload, empty when none was fetched.
 
     Returns:
-        The address and its verification flag, both from one document, or
-        ``(None, None)`` when neither carries an address.
+        The address and its verification flag, both from one document.
+        It is ``(None, None)`` when neither document carries an address.
     """
     for source in (claims, userinfo):
         if source is None:
@@ -719,10 +692,8 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
         The method to authenticate the token request with.
 
     Raises:
-        ConfigurationError: If the provider advertises only methods this
-            library cannot perform. This is a capability mismatch in an
-            otherwise-valid configuration document, so it is a configuration
-            error rather than a discovery failure.
+        ConfigurationError: If the provider advertises only methods this library cannot perform.
+            The document is valid, so this is a configuration error, not a discovery failure.
     """
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
@@ -736,10 +707,10 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
 def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False) -> str:
     """Require ``value`` to be an absolute URL this module may talk to.
 
-    The one URL rule for the issuer, the document URL and every endpoint: a
-    string with a scheme and a host, no fragment, and ``https`` unless
-    ``allow_insecure_http`` is set. An issuer additionally has no query and no
-    userinfo (OpenID Connect Discovery 1.0, section 4.1).
+    This is the one URL rule for the issuer, the document URL and every endpoint.
+    The value must be a string with a scheme, a host and no fragment.
+    It must use ``https`` unless ``allow_insecure_http`` is set.
+    An issuer also has no query and no userinfo (OpenID Connect Discovery 1.0 section 4.1).
 
     Args:
         value: The raw value to check.

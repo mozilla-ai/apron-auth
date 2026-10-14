@@ -68,11 +68,10 @@ class McpRegistrationError(OAuthError):
 class OidcDiscoveryError(OAuthError):
     """Reading an OpenID provider's configuration document failed.
 
-    Raised when the document cannot be fetched or parsed, omits an endpoint the
-    authorization-code flow requires, or names an issuer other than the one it
-    was fetched for. The last is not a transport failure but a refusal: OpenID
-    Connect Discovery 1.0 section 4.3 requires the two to match, and a mismatch
-    is how a document served from one origin claims to speak for another.
+    It is raised when a URL is refused, or the document cannot be fetched or parsed.
+    It is also raised when the document omits a required endpoint or names another issuer.
+    An issuer mismatch is a refusal, not a transport failure.
+    OpenID Connect Discovery 1.0 section 4.3 requires the document to name the issuer it was fetched for.
     """
 
 
