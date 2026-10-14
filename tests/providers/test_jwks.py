@@ -248,6 +248,14 @@ class TestVerify:
         with pytest.raises(ConfigurationError, match="signing algorithms"):
             IssuerSigningKeys(JWKS_URL, algorithms=algorithms)
 
+    async def test_reports_the_key_that_verified_the_token(self, httpx_mock: HTTPXMock) -> None:
+        """The caller can apply its own rules to the published key, such as the issuer it names."""
+        httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
+
+        verified = await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
+
+        assert verified.key.kid == "rsa-1"
+
     async def test_refuses_an_algorithm_the_issuer_does_not_use(self, httpx_mock: HTTPXMock) -> None:
         """An issuer limited to some algorithms refuses a token signed by its own key with another one."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY), is_optional=True)

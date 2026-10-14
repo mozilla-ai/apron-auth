@@ -515,7 +515,8 @@ class OidcIdentityHandler:
             IdentityFetchError: If the signature or any claim does not validate,
                 or the issuer's signing keys cannot be fetched or read.
         """
-        header, claims = await self._signing_keys.verify(id_token)
+        verified = await self._signing_keys.verify(id_token)
+        header, claims = verified.header, verified.claims
         token = CodeIDToken(
             claims,
             # The real header: ``at_hash`` validation reads ``alg`` from it.
