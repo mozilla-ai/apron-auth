@@ -10,14 +10,13 @@ admin surface. Consumers must surface a deep link to that page.
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
+from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
+from joserfc.jwt import JWTClaimsRegistry
 from pydantic import SecretStr
 
 from apron_auth.errors import IdentityFetchError
@@ -25,6 +24,7 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig,
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -41,6 +41,12 @@ _MICROSOFT_CONSUMERS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
 _MICROSOFT_IDENTITY_HOST_SUFFIXES = ("login.microsoftonline.com",)
 _MICROSOFT_USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
 _MICROSOFT_ORGANIZATION_URL = "https://graph.microsoft.com/v1.0/organization"
+# One key set signs ID tokens for every tenant and personal accounts, except apps with custom signing keys.
+# It is pinned rather than discovered, so no metadata document can point verification at other keys.
+_MICROSOFT_KEYS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+
+# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
+_CLOCK_SKEW_SECONDS = 60
 
 # The v2.0 issuer for the commercial cloud. ``{tid}`` is the tenant GUID;
 # binding ``iss`` to ``tid`` this way is the chain of trust that promotes
@@ -54,141 +60,180 @@ _MICROSOFT_ISSUER_TEMPLATE = "https://login.microsoftonline.com/{tid}/v2.0"
 _GUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
 
 
-def _decode_jwt_claims(token: str) -> dict[str, Any] | None:
-    """Decode a JWT payload into a claims dict without verifying its signature.
+class _IdToken(NamedTuple):
+    """The fields of a Microsoft ID token whose signature and claims checked out."""
 
-    NOTE: callers must only pass a token received directly from the
-    provider's token endpoint over the back-channel, where the TLS
-    transport authenticates the issuer — signature verification is then
-    unnecessary, but validating the claims remains the caller's job.
+    claims: dict[str, Any]
+    issuer: str
+    subject: str
+    tenant_id: str
 
-    JWT segments are unpadded base64url, so the payload is re-padded
-    before decoding.
+
+def _verified_workforce_tenant_id(id_token: _IdToken) -> str | None:
+    """Return the workforce tenant GUID of a validated ID token, or ``None``.
+
+    ``None`` means there is no workforce tenancy to assert: the tenant is the personal-account (consumers) tenant,
+    or the user is a B2B guest rather than a member.
+
+    A guest signs in with the host tenant's ``tid`` but is not a member of it.
+    Microsoft's guidance is to treat a guest as a new user, so the tenant's verified domains must not be asserted.
+    The ``idp`` claim names the authenticating identity provider.
+    It is absent for members, so any ``idp`` that is present and is not exactly ``iss`` marks a guest.
 
     Args:
-        token: The JWT whose payload is decoded.
+        id_token: The validated ID token.
 
     Returns:
-        The decoded claims, or ``None`` when the token is not a parseable
-        JWT or its payload is not a JSON object.
+        The workforce tenant GUID, or ``None`` when no workforce tenancy can be asserted.
     """
-    parts = token.split(".")
-    if len(parts) < 2:
-        logger.debug("microsoft id token is not in JWT shape; skipping claim extraction")
+    if id_token.tenant_id == _MICROSOFT_CONSUMERS_TENANT:
         return None
-    try:
-        payload_b64 = parts[1]
-        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
-        payload_bytes = base64.urlsafe_b64decode(padded)
-        payload = json.loads(payload_bytes)
-    except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
-        # Surface a debug signal so operators can detect a future token-
-        # format change rather than every workforce sign-in silently
-        # degrading to ``tenancies=()``. The exception class is logged,
-        # never its value, so no token-derived bytes are emitted.
-        logger.debug("microsoft id token claim extraction failed: %s", type(exc).__name__)
+    if "idp" in id_token.claims and id_token.claims["idp"] != id_token.issuer:
         return None
-    if not isinstance(payload, dict):
-        logger.debug("microsoft id token payload was not a JSON object")
-        return None
-    return payload
+    return id_token.tenant_id
 
 
-def _verified_workforce_tenant_id(claims: dict[str, Any]) -> str | None:
-    """Return the validated workforce tenant GUID from ID-token claims, or ``None``.
+def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object) -> _IdToken:
+    """Validate a signature-checked Microsoft ID token's claims.
 
-    ``None`` means "no workforce tenancy to assert" and is returned when
-    any chain-of-trust check fails: ``tid`` is not a GUID, the tenant is
-    the personal-account (consumers) tenant, ``iss`` does not match
-    ``https://login.microsoftonline.com/{tid}/v2.0``, or the user is a
-    B2B guest rather than a member.
-
-    A guest signs in with the host tenant's ``tid`` and therefore passes
-    the GUID and issuer checks, but is not a member of it — Microsoft's
-    guidance is to treat a guest as a brand-new user, so the tenant's
-    verified domains must not be asserted. The ``idp`` claim records the
-    authenticating identity provider: it is absent for members (implicitly
-    the home tenant) and present and different from ``iss`` for guests.
+    ``iss`` must name the token's own tenant, and so must the signing key when it names an issuer.
+    ``aud`` must be the client identifier alone, because Microsoft issues ID tokens with a single audience.
+    Entra application IDs are GUIDs, so they match regardless of letter case.
 
     Args:
-        claims: The decoded ID-token claims.
+        claims: The claims of an ID token whose signature verified.
+        client_id: The client identifier the token's ``aud`` must name.
+        key_issuer: The ``issuer`` the verifying key was published with, or ``None`` when it names none.
 
     Returns:
-        The validated workforce tenant GUID, or ``None`` when no workforce
-        tenancy can be asserted.
+        The validated ID token.
+
+    Raises:
+        IdentityFetchError: If any claim does not validate.
     """
     tid = claims.get("tid")
     if not isinstance(tid, str) or not _GUID_RE.match(tid):
-        return None
-    if tid == _MICROSOFT_CONSUMERS_TENANT:
-        return None
-    if claims.get("iss") != _MICROSOFT_ISSUER_TEMPLATE.format(tid=tid):
-        return None
-    idp = claims.get("idp")
-    if isinstance(idp, str) and idp != claims.get("iss"):
-        return None
-    return tid
+        msg = "Microsoft ID token has an invalid tid claim"
+        raise IdentityFetchError(msg)
+    issuer = _MICROSOFT_ISSUER_TEMPLATE.format(tid=tid)
+    if claims.get("iss") != issuer:
+        msg = "Microsoft ID token has an invalid iss claim"
+        raise IdentityFetchError(msg)
+    # The key set lists each key's issuer with a tenant placeholder, so one key cannot vouch for another issuer.
+    if key_issuer is not None and (not isinstance(key_issuer, str) or key_issuer.replace("{tenantid}", tid) != issuer):
+        msg = "Microsoft ID token signing key belongs to another issuer"
+        raise IdentityFetchError(msg)
+    if not _same_client(claims.get("aud"), client_id):
+        msg = "Microsoft ID token has an invalid aud claim"
+        raise IdentityFetchError(msg)
+    subject = claims.get("sub")
+    if not isinstance(subject, str) or not subject:
+        msg = "Microsoft ID token has an invalid sub claim"
+        raise IdentityFetchError(msg)
+    lifetime = JWTClaimsRegistry(leeway=_CLOCK_SKEW_SECONDS, exp={"essential": True}, iat={"essential": True})
+    try:
+        lifetime.validate(claims)
+    except ExpiredTokenError as exc:
+        raise IdentityFetchError("Microsoft ID token has expired") from exc
+    except MissingClaimError as exc:
+        # The library joins several missing claim names with commas.
+        missing = ", ".join(exc.claim.split(","))
+        noun = "claims" if "," in exc.claim else "claim"
+        raise IdentityFetchError(f"Microsoft ID token is missing the {missing} {noun}") from exc
+    except ClaimError as exc:
+        raise IdentityFetchError(f"Microsoft ID token has an invalid {exc.claim} claim") from exc
+    except (JoseError, TypeError, ValueError) as exc:
+        # A claim of the wrong JSON type can raise outside the library's own errors.
+        raise IdentityFetchError("Microsoft ID token claims did not validate") from exc
+    return _IdToken(claims=claims, issuer=issuer, subject=subject, tenant_id=tid)
+
+
+def _same_client(audience: object, client_id: str) -> bool:
+    """Return whether an ID token's ``aud`` names ``client_id``, ignoring case when both are GUIDs.
+
+    Args:
+        audience: The token's ``aud`` claim.
+        client_id: The configured client identifier.
+
+    Returns:
+        Whether the audience is that one client.
+    """
+    if not isinstance(audience, str):
+        return False
+    if _GUID_RE.match(audience) and _GUID_RE.match(client_id):
+        return audience.lower() == client_id.lower()
+    return audience == client_id
 
 
 class MicrosoftIdentityHandler:
     """Fetch identity and a verified tenancy for Entra ID workforce sign-in.
 
-    Display fields (``email``, ``name``, ``picture``) come from Microsoft
-    Graph's OIDC ``/oidc/userinfo`` endpoint. The trust-bearing claims
-    (``sub``, ``tid``, ``iss``, ``idp``) come from the validated ID token
-    — never the access token, which Microsoft documents clients should
-    not parse. When the ID token establishes a workforce member of a
-    real organization tenant, the handler calls Graph
-    ``/v1.0/organization`` (readable with the ``User.Read`` scope) and
-    emits one :class:`TenancyContext` per admin-verified domain, each
-    with ``owns_email_domain=True`` — the Entra analog of Google
-    Workspace's ``hd`` claim.
+    Display fields (``email``, ``name``, ``picture``) come from Microsoft Graph's OIDC ``/oidc/userinfo`` endpoint.
+    The trust-bearing claims (``sub``, ``tid``, ``iss``, ``idp``) come from the ID token,
+    never the access token, which Microsoft documents clients should not parse.
 
-    When no ID token is present, or it does not establish a workforce
-    member (personal account, B2B guest, or a failed chain-of-trust
-    check), identity is still returned but with ``tenancies=()``: the
-    access-token ``tid`` is deliberately not used as a fallback tenancy
-    because it is not a validated trust boundary.
+    The ID token's signature is checked against Microsoft's published keys before any claim is used.
+    Its ``iss`` must name the token's own tenant, and its ``aud``, ``exp``, ``iat``, ``nbf`` and ``sub`` are validated.
+    A token that does not validate raises before any Graph request.
+    A userinfo response whose ``sub`` is missing or differs from the ID token's is refused.
+    The handler caches Microsoft's keys, so one handler serves every sign-in.
+    Only the v2.0 endpoints are supported, and an app that uses custom signing keys from claims mapping is not.
 
-    A directory lookup that fails or cannot be trusted degrades the same
-    way, to ``tenancies=()`` and a logged warning. Only the userinfo
-    call — which establishes identity itself — raises
-    :class:`IdentityFetchError`.
+    When the ID token establishes a workforce member of a real organization tenant,
+    the handler calls Graph ``/v1.0/organization`` (readable with the ``User.Read`` scope).
+    It emits one :class:`TenancyContext` per admin-verified domain, each with ``owns_email_domain=True``,
+    the Entra analog of Google Workspace's ``hd`` claim.
+
+    When no ID token is present, or it names a personal account or a B2B guest,
+    identity is still returned but with ``tenancies=()``.
+    The access-token ``tid`` is never a fallback tenancy, because it is not a validated trust boundary.
+    A directory lookup that fails or cannot be trusted degrades the same way, to ``tenancies=()`` and a logged warning.
     """
+
+    def __init__(self) -> None:
+        """Prepare the cache of Microsoft's ID token signing keys."""
+        # Microsoft signs ID tokens with RS256 only.
+        self._signing_keys = IssuerSigningKeys(_MICROSOFT_KEYS_URL, algorithms=(SigningAlgorithm.RS256,))
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields and any verified tenancy.
 
         Args:
-            material: The token material — access token and, when present,
-                the ID token whose validated claims establish a tenancy.
+            material: The token material: the access token and, when present, the ID token.
             config: The provider configuration the tokens were issued under.
 
         Returns:
-            The identity profile. A workforce sign-in with a validated
-            tenant contributes one domain-owning tenancy per admin-verified
-            domain; every other case yields ``tenancies=()``.
+            The identity profile.
+            A workforce sign-in contributes one domain-owning tenancy per admin-verified domain,
+            and every other case yields ``tenancies=()``.
 
         Raises:
-            IdentityFetchError: If the userinfo request fails or its
-                response cannot be parsed. Directory lookups never raise;
-                they degrade to no tenancy.
+            IdentityFetchError: If the ID token's signature or claims do not validate,
+                or Microsoft's signing keys cannot be fetched.
+                It is also raised if the userinfo request fails, its response cannot be parsed,
+                or it names no subject or a different one than the ID token.
+                Directory lookups never raise, and degrade to no tenancy instead.
         """
-        del config
+        id_token = None
+        if material.id_token:
+            verified = await self._signing_keys.verify(material.id_token)
+            id_token = _checked_id_token(verified.claims, config.client_id, verified.key.get("issuer"))
         payload = await self._fetch_userinfo(material.access_token)
+        if id_token is not None:
+            _require_matching_subject(id_token, payload)
 
-        claims = _decode_jwt_claims(material.id_token) if material.id_token else None
-        tenant_id = _verified_workforce_tenant_id(claims) if claims is not None else None
+        tenant_id = _verified_workforce_tenant_id(id_token) if id_token is not None else None
 
         tenancies: tuple[TenancyContext, ...] = ()
         if tenant_id is not None:
             tenancies = await self._fetch_verified_tenancies(material.access_token, tenant_id)
 
+        email = payload.get("email")
         return IdentityProfile(
             provider="microsoft",
-            subject=_subject(claims, payload),
-            email=payload.get("email"),
-            email_verified=_email_verified(claims),
+            subject=id_token.subject if id_token is not None else _userinfo_subject(payload),
+            email=email,
+            email_verified=_email_verified(id_token, email),
             name=payload.get("name"),
             avatar_url=payload.get("picture"),
             tenancies=tenancies,
@@ -358,48 +403,58 @@ class MicrosoftIdentityHandler:
         )
 
 
-def _subject(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> str | None:
-    """Return the user subject, preferring the validated ID-token ``sub``.
+def _require_matching_subject(id_token: _IdToken, userinfo: dict[str, Any]) -> None:
+    """Refuse a userinfo response that does not name the ID token's subject.
 
-    Falls back to the userinfo ``sub`` so identity is still keyed when no
-    ID token is present — identity does not require a verified tenancy.
+    OpenID Connect Core 1.0 section 5.3.2 requires the two to match, so a mismatch is refused, not reconciled.
 
     Args:
-        claims: The validated ID-token claims, or ``None`` when absent.
-        userinfo: The OIDC userinfo payload used as a fallback.
+        id_token: The validated ID token.
+        userinfo: The OIDC userinfo payload.
+
+    Raises:
+        IdentityFetchError: If userinfo names no subject or a different one.
+    """
+    userinfo_subject = userinfo.get("sub")
+    if not isinstance(userinfo_subject, str) or not userinfo_subject:
+        msg = "Microsoft userinfo response names no subject to match the ID token's"
+        raise IdentityFetchError(msg)
+    if userinfo_subject != id_token.subject:
+        msg = "Microsoft userinfo response names a different subject than the ID token"
+        raise IdentityFetchError(msg)
+
+
+def _userinfo_subject(userinfo: dict[str, Any]) -> str | None:
+    """Return the userinfo ``sub``, which keys identity when there is no ID token.
+
+    Args:
+        userinfo: The OIDC userinfo payload.
 
     Returns:
-        The ID-token ``sub`` when present, otherwise the userinfo ``sub``;
-        ``None`` when neither is available.
+        The subject, or ``None`` when userinfo names none.
     """
-    if claims is not None:
-        sub = claims.get("sub")
-        if isinstance(sub, str) and sub:
-            return sub
     sub = userinfo.get("sub")
     return sub if isinstance(sub, str) and sub else None
 
 
-def _email_verified(claims: dict[str, Any] | None) -> bool | None:
-    """Return the ID token's ``email_verified`` claim, or ``None`` when absent or not a boolean.
+def _email_verified(id_token: _IdToken | None, email: object) -> bool | None:
+    """Return the ID token's ``email_verified`` for ``email``, or ``None`` when it asserts nothing about it.
 
-    Entra ID does not emit ``email_verified`` for workforce sign-in by
-    default; the flag is honored only when the ID token carries it as a
-    genuine JSON boolean. The token is decoded without signature
-    verification — its trust comes from the back-channel TLS receipt — so
-    a non-boolean value is reported as unknown rather than coerced: a
-    bare ``bool()`` would read the string ``"false"`` as ``True``.
+    The claim vouches only for the ID token's own ``email``, so it counts only when that equals the reported email.
+    The comparison is exact, because a case-folded match would extend the assertion to an address the token never named.
+    Entra ID does not emit ``email_verified`` for workforce sign-in by default.
+    A non-boolean value is reported as unknown rather than coerced, because ``bool("false")`` is ``True``.
 
     Args:
-        claims: The validated ID-token claims, or ``None`` when absent.
+        id_token: The validated ID token, or ``None`` when absent.
+        email: The email the profile reports, from userinfo.
 
     Returns:
-        The ``email_verified`` claim when the ID token carries it as a
-        genuine boolean, else ``None``.
+        The claim when it is a genuine boolean asserted for ``email``, else ``None``.
     """
-    if claims is None:
+    if id_token is None or not isinstance(email, str) or id_token.claims.get("email") != email:
         return None
-    value = claims.get("email_verified")
+    value = id_token.claims.get("email_verified")
     return value if isinstance(value, bool) else None
 
 

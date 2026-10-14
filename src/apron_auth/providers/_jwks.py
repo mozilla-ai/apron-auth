@@ -17,7 +17,7 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import ConfigurationError, IdentityFetchError
 from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
@@ -86,26 +86,26 @@ class SigningAlgorithm(StrEnum):
     RS512 = ("RS512", RSAKey)
 
 
-class _Outcome(Enum):
-    """Each member is one outcome of checking a token against the cached keys."""
+class _RefusalReason(Enum):
+    """Each member is one reason no cached key verified a token."""
 
     NO_KEY = auto()
-    REFUSED = auto()
-    VERIFIED = auto()
+    SIGNATURE = auto()
 
 
-class _SignatureCheck(NamedTuple):
-    """The outcome of checking a token against the cached keys, with the last key's error when one refused it."""
+class _Refusal(NamedTuple):
+    """Why no cached key verified a token, with the last key's error when one raised."""
 
-    outcome: _Outcome
+    reason: _RefusalReason
     error: Exception | None = None
 
 
 class VerifiedToken(NamedTuple):
-    """The protected header and claims of a token whose signature verified."""
+    """The protected header and claims of a token whose signature verified, with the key that verified it."""
 
     header: dict[str, Any]
     claims: dict[str, Any]
+    key: _SigningKey
 
 
 class IssuerSigningKeys:
@@ -126,6 +126,7 @@ class IssuerSigningKeys:
         jwks_url: str,
         *,
         transport_factory: TransportFactory | None = None,
+        algorithms: tuple[SigningAlgorithm, ...] = tuple(SigningAlgorithm),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Bind the key set to the URL it is published at.
@@ -135,10 +136,22 @@ class IssuerSigningKeys:
         Args:
             jwks_url: The issuer's key set URL.
             transport_factory: Optional factory controlling the outbound connection for the key set fetch.
+            algorithms: A tuple of the signing algorithms this issuer uses, which defaults to every accepted one.
             clock: The monotonic clock that ages the cached keys.
+
+        Raises:
+            ConfigurationError: If ``algorithms`` names no accepted algorithm or is not a tuple of them.
         """
         self._jwks_url = jwks_url
         self._transport_factory = transport_factory
+        if (
+            not isinstance(algorithms, tuple)
+            or not algorithms
+            or not all(isinstance(algorithm, SigningAlgorithm) for algorithm in algorithms)
+        ):
+            msg = "An issuer's signing algorithms must name one or more accepted algorithms, and nothing else"
+            raise ConfigurationError(msg)
+        self._algorithms = frozenset(algorithms)
         self._clock = clock
         self._keys: list[_SigningKey] = []
         self._fetched_at: float | None = None
@@ -156,7 +169,7 @@ class IssuerSigningKeys:
             token: A compact signed token.
 
         Returns:
-            The token's protected header and its claims.
+            The token's protected header and claims, and the published key that verified it.
 
         Raises:
             IdentityFetchError: If the token is not a signed token, names a critical header parameter,
@@ -176,17 +189,20 @@ class IssuerSigningKeys:
             msg = "ID token names a critical header parameter that is not supported"
             raise IdentityFetchError(msg)
         try:
-            algorithm = SigningAlgorithm(header.get("alg"))
-        except (TypeError, ValueError) as exc:
-            raise IdentityFetchError("ID token uses a signing algorithm that is not accepted") from exc
+            algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
+        except (TypeError, ValueError):
+            algorithm = None
+        if algorithm is None or algorithm not in self._algorithms:
+            msg = "ID token uses a signing algorithm that is not accepted"
+            raise IdentityFetchError(msg)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
             raise IdentityFetchError("ID token header is not valid") from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
-        check = self._check_signature(compact, header.get("kid"), algorithm)
-        if check.outcome is not _Outcome.VERIFIED:
+        result = self._check_signature(compact, header.get("kid"), algorithm)
+        if isinstance(result, _Refusal):
             try:
                 await self._refetch_early(checked_keys)
             except IdentityFetchError as exc:
@@ -194,13 +210,13 @@ class IssuerSigningKeys:
                 logger.warning("The issuer's key set could not be refreshed for an unverified token: %s", exc)
             # The token is checked again against any key set stored since its first check, by any sign-in.
             if self._keys is not checked_keys:
-                check = self._check_signature(compact, header.get("kid"), algorithm)
-        if check.outcome is _Outcome.NO_KEY:
-            msg = "ID token is signed with a key the issuer does not publish"
-            raise IdentityFetchError(msg)
-        if check.outcome is not _Outcome.VERIFIED:
+                result = self._check_signature(compact, header.get("kid"), algorithm)
+        if isinstance(result, _Refusal):
+            if result.reason is _RefusalReason.NO_KEY:
+                msg = "ID token is signed with a key the issuer does not publish"
+                raise IdentityFetchError(msg)
             msg = "ID token signature did not verify"
-            raise IdentityFetchError(msg) from check.error
+            raise IdentityFetchError(msg) from result.error
         try:
             claims = json.loads(compact.payload)
         except (RecursionError, ValueError):
@@ -208,9 +224,11 @@ class IssuerSigningKeys:
         if not isinstance(claims, dict):
             msg = "ID token claims are not a JSON object"
             raise IdentityFetchError(msg)
-        return VerifiedToken(header, claims)
+        return VerifiedToken(header, claims, result)
 
-    def _check_signature(self, compact: CompactSignature, kid: object, algorithm: SigningAlgorithm) -> _SignatureCheck:
+    def _check_signature(
+        self, compact: CompactSignature, kid: object, algorithm: SigningAlgorithm
+    ) -> _SigningKey | _Refusal:
         """Check a parsed token against every cached key that could have signed it.
 
         Args:
@@ -219,20 +237,20 @@ class IssuerSigningKeys:
             algorithm: The token's signing algorithm.
 
         Returns:
-            Whether a key verified the token, no key could have signed it, or the candidate keys refused it.
+            The key that verified the token, or why none did: no key fits it, or every candidate refused it.
             A refusal carries the last key's error, when one raised.
         """
         candidates = self._candidates(kid, algorithm)
         if not candidates:
-            return _SignatureCheck(_Outcome.NO_KEY)
+            return _Refusal(_RefusalReason.NO_KEY)
         error: Exception | None = None
         for key in candidates:
             try:
                 if jws.validate_compact(compact, key, registry=algorithm.registry):
-                    return _SignatureCheck(_Outcome.VERIFIED)
+                    return key
             except (JoseError, TypeError, ValueError) as exc:
                 error = exc
-        return _SignatureCheck(_Outcome.REFUSED, error)
+        return _Refusal(_RefusalReason.SIGNATURE, error)
 
     def _candidates(self, kid: object, algorithm: SigningAlgorithm) -> list[_SigningKey]:
         """Return the cached keys that could have signed a token with this ``kid`` and algorithm.
