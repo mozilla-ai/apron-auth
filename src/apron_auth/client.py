@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
+from apron_auth._jwt import unverified_claims
 from apron_auth.errors import (
     INVALID_CLIENT,
     INVALID_GRANT,
@@ -18,6 +19,7 @@ from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
+    NonceValidationError,
     PermanentOAuthError,
     RevocationError,
     StateError,
@@ -50,6 +52,34 @@ class _TokenEndpointError(Exception):
         """
         super().__init__(message)
         self.error_code = error_code
+
+
+def _check_nonce(id_token: object, nonce: str) -> None:
+    """Refuse an ID token that does not carry the nonce sent with its authorization request.
+
+    NOTE: Callers must pass only an ID token the token endpoint returned, because its signature is not checked.
+
+    Args:
+        id_token: The ``id_token`` value from a token-endpoint response.
+        nonce: The nonce sent with the authorization request.
+
+    Raises:
+        NonceValidationError: If the ID token cannot be read, carries no nonce, or carries a different one.
+    """
+    msg = "ID token could not be read to check its nonce"
+    if not isinstance(id_token, str):
+        raise NonceValidationError(msg)
+    try:
+        claims = unverified_claims(id_token)
+    except ValueError as exc:
+        raise NonceValidationError(msg) from exc
+    claim = claims.get("nonce")
+    if claim is None:
+        msg = "ID token carries no nonce for the authorization request"
+        raise NonceValidationError(msg)
+    if not isinstance(claim, str) or not _same_secret(claim, nonce):
+        msg = "ID token nonce does not match the authorization request"
+        raise NonceValidationError(msg)
 
 
 def _same_secret(given: str, expected: str) -> bool:
@@ -188,6 +218,9 @@ class OAuthClient:
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
         A client without one takes ``pending_state``.
         Either way, a ``state`` that does not match the pending state is refused before the code is redeemed.
+        When the authorization request sent a nonce, an ID token in the response must carry it,
+        or no tokens are returned.
+        A response without an ID token is returned without a nonce check.
 
         When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is validated first.
         A mix-up attempt is then refused before any state is consumed and before the token endpoint is called.
@@ -214,6 +247,8 @@ class OAuthClient:
                 or is not given to a client without one.
             IssuerValidationError: If ``iss`` fails validation against the
                 provider's expected issuer.
+            NonceValidationError: If the response's ID token does not carry the nonce the request sent,
+                or the pending state of an OpenID request has no nonce.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
@@ -233,6 +268,13 @@ class OAuthClient:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
+        id_token = response.get("id_token")
+        if id_token is not None:
+            if pending.nonce:
+                _check_nonce(id_token, pending.nonce)
+            elif self._requests_openid():
+                msg = "The pending state has no nonce to check the ID token against"
+                raise NonceValidationError(msg)
         return self._parse_token_response(response, context=pending.metadata)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:

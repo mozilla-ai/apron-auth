@@ -94,7 +94,17 @@ class StateError(OAuthError):
 
 
 class TokenExchangeError(OAuthError):
-    """Authorization code exchange failed."""
+    """Authorization code exchange failed: the token endpoint refused the code, or this client refused its response."""
+
+
+# NonceValidationError follows its base class instead of A-Z order, because Python needs the base defined first.
+class NonceValidationError(TokenExchangeError):
+    """The ID token from a code exchange is not shown to carry the nonce sent with its authorization request.
+
+    The ID token may carry no nonce or a different one, or it may not be readable.
+    The pending state of an OpenID request may also have lost its nonce, so there is nothing to compare.
+    The token response may answer an authorization request this client did not start.
+    """
 
 
 class TokenRefreshError(OAuthError):

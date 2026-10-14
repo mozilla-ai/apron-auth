@@ -188,6 +188,8 @@ url, pending_state = await client.get_authorization_url(
 
 When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt, and refuse one older than your own time limit. With a `StateStore`, pass only `state` (see below).
 
+When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the ID token in the response does not carry it. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE.
+
 ```python
 tokens = await client.exchange_code(
     code="authorization-code-from-callback",
@@ -688,7 +690,8 @@ All exceptions inherit from `OAuthError`.
 
 | Exception                      | When it's raised                                                                                                |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `TokenExchangeError`           | Code exchange failed at the token endpoint.                                                                     |
+| `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused.                         |
+| `NonceValidationError`         | The ID token lacks the nonce or is unreadable, or the pending state lost it. Subclass of `TokenExchangeError`.  |
 | `TokenRefreshError`            | Refresh failed, but it might work if you try again (transient).                                                 |
 | `PermanentOAuthError`          | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
 | `RevocationError`              | The provider rejected the revocation request.                                                                   |
