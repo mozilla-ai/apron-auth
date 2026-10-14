@@ -1036,6 +1036,7 @@ class TestOidcIdentity:
         assert identity.subject == "u-1"
         assert "ID token dropped" in caplog.text
         assert token not in caplog.text
+        assert "Error" not in caplog.text
 
     async def test_refuses_when_neither_document_yields_a_subject(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1081,7 +1082,8 @@ class TestOidcIdentity:
         assert identity.name == "A Person"
         assert identity.raw["userinfo"] == {}
         assert "userinfo request failed" in caplog.text
-        assert "IdentityFetchError" in caplog.text
+        assert f"HTTP {status}" in caplog.text
+        assert "Error" not in caplog.text
 
     async def test_userinfo_failure_without_an_id_token_still_raises(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock

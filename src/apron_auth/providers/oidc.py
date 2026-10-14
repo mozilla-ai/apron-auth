@@ -449,9 +449,7 @@ class OidcIdentityHandler:
                 if claims is None:
                     raise
                 # Userinfo only enriches a subject the ID token already gave.
-                logger.warning(
-                    "OpenID userinfo request failed (%s); identity rests on the ID token alone", type(exc).__name__
-                )
+                logger.warning("OpenID userinfo request failed, identity rests on the ID token alone: %s", exc)
 
         claims_subject = _claim_str(claims, "sub")
         if claims is not None and claims_subject is None:
@@ -520,9 +518,8 @@ class OidcIdentityHandler:
         try:
             signature = jws.extract_compact(id_token.encode())
             claims = json.loads(signature.payload)
-        except (JoseError, ValueError, UnicodeDecodeError) as exc:
-            # The exception class only, so no token-derived bytes are emitted.
-            logger.warning("OpenID ID token dropped, identity falls back to userinfo: %s", type(exc).__name__)
+        except (JoseError, ValueError, UnicodeDecodeError):
+            logger.warning("OpenID ID token dropped, identity falls back to userinfo: token is not a parseable JWT")
             return None
         if not isinstance(claims, dict):
             logger.warning("OpenID ID token dropped, identity falls back to userinfo: payload was not a JSON object")
