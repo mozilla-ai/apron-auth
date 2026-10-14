@@ -65,6 +65,16 @@ class McpRegistrationError(OAuthError):
     """MCP OAuth dynamic client registration failed."""
 
 
+class OidcDiscoveryError(OAuthError):
+    """Reading an OpenID provider's configuration document failed.
+
+    It is raised when a URL is refused, or the document cannot be fetched or parsed.
+    It is also raised when the document omits a required endpoint or names another issuer.
+    An issuer mismatch is a refusal, not a transport failure.
+    OpenID Connect Discovery 1.0 section 4.3 requires the document to name the issuer it was fetched for.
+    """
+
+
 class PermanentOAuthError(OAuthError):
     """Token-endpoint rejection that retrying the identical request will not resolve.
 

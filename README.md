@@ -56,9 +56,121 @@ config, revocation_handler = google.preset(
 )
 ```
 
+### Any OpenID Connect provider
+
+A provider that implements OpenID Connect publishes its own endpoints, so there is
+nothing to hardcode: discover them from the issuer and hand the result to the preset.
+This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, and Ping without
+a module per product.
+
+```python
+from apron_auth import OAuthClient
+from apron_auth.providers import oidc
+
+metadata = await oidc.discover("https://sso.example.com/realms/acme")
+
+config, revocation_handler = oidc.preset(
+    client_id="your-client-id",
+    client_secret="your-client-secret",  # pragma: allowlist secret
+    scopes=["email", "profile"],
+    metadata=metadata,
+    redirect_uri="https://yourapp.com/callback",
+)
+
+client = OAuthClient(
+    config,
+    identity_handler=oidc.identity_handler(metadata),
+)
+```
+
+The issuer is a trust anchor, not just an address: `discover` refuses a configuration
+document that names a different one (OpenID Connect Discovery 1.0, section 4.3), and the
+discovered issuer carries onto the config. The authorization-response `iss` (RFC 9207) is
+validated before a code is redeemed only when the provider sends `iss` or advertises
+`authorization_response_iss_parameter_supported`.
+
+Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/<tid>/v2.0`.
+The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
+match by design.
+
+Always pass the identity handler explicitly, as above. `oidc` registers no inference
+resolver, but inference still runs on the config `preset` returns: a generic config whose
+endpoints sit on a host another provider claims (an Entra or Google issuer, for example)
+resolves to that provider's handler. `provider` is then `microsoft` or `google` instead of
+`oidc:<issuer>`, and adding the explicit handler later changes every user's `identity_key()`.
+Making inference skip generic configs is a tracked follow-up (#137).
+
+Build the handler and the config from the same `metadata`. The handler is bound to that
+metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,
+before any request. This keeps one issuer's access token away from another issuer's userinfo
+endpoint.
+
+ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
+OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check. The
+claims are always validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against
+the access token). The handler then refuses a userinfo response whose `sub` is missing or
+disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response,
+never a stored or front-channel token, because it does not verify signatures.
+
+Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
+answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
+identity rests on the ID token. With no usable ID token it is the only source, so the failure
+raises, as `IdentityScopeNotGrantedError` for a 403 `insufficient_scope` (RFC 6750).
+
+`IdentityProfile.provider` is `oidc:<issuer>`, not a bare `oidc`. A `sub` is unique only
+within an issuer, so two generic connections would otherwise collide on the
+`(provider, subject)` pair that `identity_key()` recommends as a user-table primary key.
+
+`IdentityProfile.email_verified` is `None` by default. On a self-run IdP the claim is
+whatever its admin set (Keycloak, Authentik and Zitadel all let an admin mark any address
+verified), so honoring it would change what `verified_email()` means for every other
+provider. Pass `trust_email_verified=True` to `oidc.identity_handler` to report it, which
+says "I trust this issuer's admin to verify addresses". A multi-tenant application where each
+customer brings its own IdP must not enable it for a tenant-supplied issuer: one tenant could
+mint `ceo@other-tenant.com` with `email_verified=true`. Key users on `identity_key()`, which
+stays safe either way. (A per-connection `verified_domains` option is the fuller design,
+tracked in #136.)
+
+PKCE is always on, and a provider whose `code_challenge_methods_supported` omits `S256` is
+refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only thing binding
+an authorization code to the session that requested it, but only where the provider enforces
+it: when the field is absent (Entra omits it) `preset` still uses PKCE and logs a WARNING,
+because a provider that ignores the challenge leaves the code unbound. A malformed
+`code_challenge_methods_supported` or `token_endpoint_auth_methods_supported` is a discovery
+error rather than "not advertised". `nonce` support is tracked in #135.
+
+`discover` requires an absolute `https` URL for the issuer, the document URL, and every
+endpoint the document names (no fragment; the issuer also has no query or userinfo, per
+Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because ID tokens are read without a signature check and rely on TLS to
+authenticate the issuer: over `http`, an on-path attacker chooses every claim and reads the
+client secret. `preset` and `identity_handler` apply the same rule to the metadata they are
+given, so metadata built without `discover` cannot skip it. For local development, pass
+`allow_insecure_http=True` to all three; each URL it lets through logs a WARNING.
+
+Beyond the scheme, `discover` applies no host policy, so a self-hosted IdP on a private
+network needs no opt-in. Whether a given issuer may be reached is a deployment question,
+and a check on the URL string cannot answer it anyway — a hostname resolving to an internal
+address passes any such test. Both `discover` and `identity_handler` accept a
+`transport_factory`, which is where that policy belongs: it controls the actual outbound
+connection, so a caller can pin DNS to validated addresses or route through its own egress.
+
+#### What this preset does not do
+
+Each is a deliberate limitation rather than an oversight:
+
+| Limitation | Why |
+| --- | --- |
+| Confidential clients only | `preset` requires a client secret; a public (native/SPA) client cannot be configured, though `ProviderConfig` models one |
+| No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, so PKCE is the only code-injection defense (and only where the provider enforces it) — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
+| No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata` |
+| No `response_mode` | The query default is always used |
+| A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |
+| A signed (`application/jwt`) userinfo response is refused | Signatures are not verified here, so it is refused rather than read unverified |
+
 ### Manual configuration
 
-If your provider doesn't have a preset, configure it directly.
+If your provider doesn't have a preset and doesn't implement OpenID Connect, configure it
+directly.
 
 ```python
 from pydantic import SecretStr
@@ -558,6 +670,7 @@ Discovery, registration, the token request, and token revocation all fetch URLs 
 | Salesforce | `salesforce.preset(...)` | RFC 7009 POST          | `False`                    |
 | Typeform   | `typeform.preset(...)`   | —                      | `False`                    |
 | HubSpot    | `hubspot.preset(...)`    | DELETE refresh-token   | `False`                    |
+| Any OpenID | `oidc.preset(...)`       | RFC 7009 POST, if advertised | `False`              |
 
 ## Scope reduction tiers
 
@@ -604,6 +717,7 @@ All exceptions inherit from `OAuthError`.
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
+| `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient.                                              |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
 
@@ -635,6 +749,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
 | `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
+| `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; ID token dropped or userinfo failure degraded; a refused discovery redirect (DEBUG). |
 
 Two levels are used. `WARNING` marks a capability that degraded without
 raising — a revocation the provider would not confirm, or a

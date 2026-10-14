@@ -13,9 +13,11 @@ by ``ProviderConfig.scope_metadata``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 
 import pytest
 
+from apron_auth.models import ServerMetadata
 from apron_auth.providers import (
     atlassian,
     github,
@@ -24,12 +26,20 @@ from apron_auth.providers import (
     linear,
     microsoft,
     notion,
+    oidc,
     salesforce,
     slack,
     typeform,
 )
 
 PROBE_CONSUMER_SCOPES = ["caller.read"]
+
+# A generic OpenID preset takes discovered metadata rather than hardcoding endpoints.
+PROBE_OIDC_METADATA = ServerMetadata(
+    authorize_url="https://sso.example.com/auth",
+    token_url="https://sso.example.com/token",
+    issuer="https://sso.example.com",
+)
 
 
 PRESETS: list[tuple[str, Callable[..., tuple]]] = [
@@ -40,6 +50,7 @@ PRESETS: list[tuple[str, Callable[..., tuple]]] = [
     ("linear", linear.preset),
     ("microsoft", microsoft.preset),
     ("notion", notion.preset),
+    ("oidc", partial(oidc.preset, metadata=PROBE_OIDC_METADATA)),
     ("salesforce", salesforce.preset),
     ("slack", slack.preset),
     ("typeform", typeform.preset),
