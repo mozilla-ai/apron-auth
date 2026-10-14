@@ -621,8 +621,12 @@ def _bearer_error(header: str) -> str | None:
         if position == len(header):
             return error
         has_comma = "," in separator
-        # Credentials follow their scheme after a space, and a comma straight after the scheme ends the challenge.
-        opens_credentials = previous is _ChallengeElement.AUTH_SCHEME and separator.startswith(" ")
+        # Credentials follow their scheme after spaces, and a comma straight after the scheme ends the challenge.
+        opens_credentials = (
+            previous is _ChallengeElement.AUTH_SCHEME
+            and separator.startswith(" ")
+            and (has_comma or not separator.strip(" "))
+        )
         if param := _AUTH_PARAM.match(header, position):
             if not (opens_credentials or (previous is _ChallengeElement.AUTH_PARAM and has_comma)):
                 return None

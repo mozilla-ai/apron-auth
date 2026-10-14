@@ -1717,6 +1717,7 @@ class TestBearerError:
             'Bearer error="insufficient_scope", Bearer error="insufficient_scope"',
             'Bearer\nerror="insufficient_scope"',
             'Bearer\u00a0error="insufficient_scope"',
+            'Bearer \terror="insufficient_scope"',
             'Bearer error="insufficient_scope\n"',
             'error="insufficient_scope"',
             'Bearer error="insufficient_scope',
