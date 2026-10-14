@@ -1729,17 +1729,17 @@ class TestBearerError:
         assert _bearer_error(header) == expected
 
     @pytest.mark.parametrize(
-        "header",
+        ("header", "expected"),
         [
-            'Bearer error="insufficient_scope_v2"',
-            'Bearer suberror="insufficient_scope"',
-            'Bearer error="Insufficient_Scope"',
-            'Basic error="insufficient_scope"',
+            ('Bearer error="insufficient_scope_v2"', "insufficient_scope_v2"),
+            ('Bearer suberror="insufficient_scope"', None),
+            ('Bearer error="Insufficient_Scope"', "Insufficient_Scope"),
+            ('Basic error="insufficient_scope"', None),
         ],
     )
-    def test_a_near_miss_is_not_the_scope_code(self, header: str) -> None:
-        """Only the exact code in a ``Bearer`` challenge counts."""
-        assert _bearer_error(header) != "insufficient_scope"
+    def test_a_near_miss_is_not_the_scope_code(self, header: str, expected: str | None) -> None:
+        """Only the exact code in a ``Bearer`` challenge counts, and the code is returned as sent."""
+        assert _bearer_error(header) == expected
 
     @pytest.mark.parametrize(
         "header",

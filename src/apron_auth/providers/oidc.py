@@ -6,7 +6,9 @@ This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, Ping,
 and any other provider that implements OpenID Connect Discovery 1.0.
 
 Always pass :func:`identity_handler` to :class:`~apron_auth.client.OAuthClient`.
-A config from :func:`preset` disallows handler inference.
+On a host that a built-in provider also serves,
+an inferred handler would change ``provider`` and every user's ``identity_key()``.
+A config from :func:`preset` therefore disallows handler inference.
 Without a handler, ``OAuthClient.fetch_identity`` raises :class:`~apron_auth.errors.IdentityNotSupportedError`.
 
 ID token signatures are not verified.
@@ -592,7 +594,7 @@ _TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
 
 
 class _ChallengeElement(Enum):
-    """Classify the elements of a ``WWW-Authenticate`` header."""
+    """Each member is one kind of element in a ``WWW-Authenticate`` header."""
 
     AUTH_PARAM = auto()
     AUTH_SCHEME = auto()
