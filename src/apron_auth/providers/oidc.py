@@ -27,8 +27,8 @@ Limitations
 * A token response without an ``id_token`` is accepted and identity falls back
   to userinfo alone, with a weaker claim to have vouched for it.
 * A signed (``application/jwt``) userinfo response is refused.
-* ``https`` is required for the issuer, the document URL and every endpoint;
-  :func:`discover` takes ``allow_insecure_http`` for local development.
+* ``https`` is required for the issuer, the document URL and every endpoint.
+  :func:`discover`, :func:`preset` and :func:`identity_handler` take ``allow_insecure_http`` for local development.
 """
 
 from __future__ import annotations
@@ -222,6 +222,7 @@ def preset(
     metadata: ServerMetadata,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    allow_insecure_http: bool = False,
 ) -> tuple[ProviderConfig, RevocationHandler | None]:
     """Create a provider configuration from a discovered OpenID provider.
 
@@ -265,6 +266,7 @@ def preset(
             consent behavior to compensate for, and an unexpected parameter on
             an arbitrary provider's authorization request is more likely to be
             refused than ignored.
+        allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
     Returns:
         The provider configuration, paired with a standard RFC 7009 revocation
@@ -272,7 +274,8 @@ def preset(
         when it does not.
 
     Raises:
-        ConfigurationError: If the metadata names no issuer, or if the provider
+        ConfigurationError: If the metadata names no issuer, holds a URL that
+            :func:`discover` would refuse, or if the provider
             advertises only token-endpoint auth methods this library cannot
             perform or advertises code-challenge methods that exclude
             ``S256``. None of these are failures of discovery — the document
@@ -284,6 +287,10 @@ def preset(
     if metadata.issuer is None:
         msg = "OpenID provider metadata names no issuer; an ID token's iss could not be validated"
         raise ConfigurationError(msg)
+    try:
+        _require_metadata_urls(metadata, allow_insecure_http=allow_insecure_http)
+    except OidcDiscoveryError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
     methods = metadata.code_challenge_methods
@@ -323,6 +330,7 @@ def identity_handler(
     *,
     transport_factory: TransportFactory | None = None,
     trust_email_verified: bool = False,
+    allow_insecure_http: bool = False,
 ) -> OidcIdentityHandler:
     """Build the identity handler for a discovered provider.
 
@@ -345,10 +353,19 @@ def identity_handler(
             addresses". A multi-tenant application must not enable it for a
             tenant-supplied issuer: one tenant could assert an address in
             another tenant's domain. Key users on ``identity_key()`` instead.
+        allow_insecure_http: Accept an ``http`` userinfo endpoint for local development, logging a WARNING.
 
     Returns:
         The identity handler for this provider.
+
+    Raises:
+        ConfigurationError: If the userinfo endpoint is a URL that :func:`discover` would refuse.
     """
+    if metadata.userinfo_url is not None:
+        try:
+            _require_url(metadata.userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
+        except OidcDiscoveryError as exc:
+            raise ConfigurationError(str(exc)) from exc
     return OidcIdentityHandler(
         userinfo_url=metadata.userinfo_url,
         transport_factory=transport_factory,
@@ -777,7 +794,7 @@ def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer
         parsed = urlparse(value)
         hostname = parsed.hostname
     except ValueError as exc:
-        msg = f"OpenID discovery received a malformed {field}"
+        msg = f"OpenID {field} is malformed"
         raise OidcDiscoveryError(msg) from exc
     if not parsed.scheme or not hostname:
         msg = f"OpenID {field} is not an absolute URL"
@@ -798,6 +815,24 @@ def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer
         msg = f"OpenID {field} must not carry userinfo"
         raise OidcDiscoveryError(msg)
     return value
+
+
+def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: bool) -> None:
+    """Require every URL in ``metadata`` to meet the rule :func:`discover` applies.
+
+    Args:
+        metadata: The metadata to check.
+        allow_insecure_http: Accept ``http`` URLs, logging a WARNING for each one.
+
+    Raises:
+        OidcDiscoveryError: If any URL is not acceptable.
+    """
+    _require_url(metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+    _require_url(metadata.authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
+    _require_url(metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
+    for field, url in (("revocation endpoint", metadata.revocation_url), ("userinfo endpoint", metadata.userinfo_url)):
+        if url is not None:
+            _require_url(url, field=field, allow_insecure_http=allow_insecure_http)
 
 
 def _optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:

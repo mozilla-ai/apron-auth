@@ -138,8 +138,9 @@ error rather than "not advertised". `nonce` support is tracked in #135.
 endpoint the document names (no fragment; the issuer also has no query or userinfo, per
 Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because ID tokens are read without a signature check and rely on TLS to
 authenticate the issuer: over `http`, an on-path attacker chooses every claim and reads the
-client secret. For local development, pass `allow_insecure_http=True`; each URL it lets
-through logs a WARNING.
+client secret. `preset` and `identity_handler` apply the same rule to the metadata they are
+given, so metadata built without `discover` cannot skip it. For local development, pass
+`allow_insecure_http=True` to all three; each URL it lets through logs a WARNING.
 
 Beyond the scheme, `discover` applies no host policy, so a self-hosted IdP on a private
 network needs no opt-in. Whether a given issuer may be reached is a deployment question,

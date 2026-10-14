@@ -254,12 +254,12 @@ class TestDiscover:
         The bare ``ValueError`` it raises would otherwise escape ``discover``,
         which documents ``OidcDiscoveryError`` for every bad input.
         """
-        with pytest.raises(OidcDiscoveryError, match="malformed issuer"):
+        with pytest.raises(OidcDiscoveryError, match="issuer is malformed"):
             await discover("https://[::1")
 
     async def test_reports_a_malformed_document_url_override(self):
         """An unparseable override surfaces as the ``OidcDiscoveryError`` this module documents."""
-        with pytest.raises(OidcDiscoveryError, match="malformed document URL"):
+        with pytest.raises(OidcDiscoveryError, match="document URL is malformed"):
             await discover(ISSUER, document_url="https://[::1")
 
     async def test_reports_an_unreachable_document(self, httpx_mock: HTTPXMock):
@@ -386,6 +386,54 @@ class TestHttpsRequirement:
             await discover(ISSUER, allow_insecure_http=True)
 
         assert caplog.text == ""
+
+    @pytest.mark.parametrize(
+        ("field", "label"),
+        [
+            ("issuer", "issuer"),
+            ("authorize_url", "authorization endpoint"),
+            ("token_url", "token endpoint"),
+            ("revocation_url", "revocation endpoint"),
+            ("userinfo_url", "userinfo endpoint"),
+        ],
+    )
+    def test_preset_refuses_http_metadata_built_without_discovery(self, field: str, label: str) -> None:
+        """Metadata that never passed through ``discover`` gets the same scheme rule."""
+        with pytest.raises(ConfigurationError, match=f"{label} must use https"):
+            preset(
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                scopes=[],
+                metadata=metadata(**{field: "http://idp.example/endpoint"}),
+            )
+
+    def test_preset_accepts_http_metadata_with_the_explicit_opt_in(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The opt-in on ``preset`` matches the one on ``discover``."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            config, _ = preset(
+                client_id=CLIENT_ID,
+                client_secret=CLIENT_SECRET,
+                scopes=[],
+                metadata=metadata(token_url="http://localhost:8080/token"),
+                allow_insecure_http=True,
+            )
+
+        assert config.token_url == "http://localhost:8080/token"
+        assert "token endpoint is plain http" in caplog.text
+
+    def test_identity_handler_refuses_an_http_userinfo_endpoint(self) -> None:
+        """The handler sends the access token to userinfo, so it applies the scheme rule too."""
+        with pytest.raises(ConfigurationError, match="userinfo endpoint must use https"):
+            identity_handler(metadata(userinfo_url="http://idp.example/userinfo"))
+
+    def test_identity_handler_accepts_http_userinfo_with_the_explicit_opt_in(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The opt-in on ``identity_handler`` matches the one on ``discover`` and ``preset``."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            identity_handler(metadata(userinfo_url="http://localhost:8080/userinfo"), allow_insecure_http=True)
+
+        assert "userinfo endpoint is plain http" in caplog.text
 
 
 class TestUrlValidation:
@@ -1129,7 +1177,7 @@ class TestOidcIdentity:
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = identity_handler(metadata(userinfo_url="https://[::1"))
+        handler = OidcIdentityHandler(userinfo_url="https://[::1")
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
