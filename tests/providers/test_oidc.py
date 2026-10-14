@@ -855,6 +855,16 @@ class TestHandlerInference:
 
         assert httpx_mock.get_requests() == []
 
+    async def test_a_client_with_the_generic_handler_establishes_identity(self, httpx_mock: HTTPXMock) -> None:
+        """The explicit handler is the one source of identity for a config that allows no inference."""
+        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+        client = OAuthClient(config, identity_handler=identity_handler(metadata()))
+
+        identity = await client.fetch_identity(TokenSet(access_token="access"))
+
+        assert identity.identity_key() == (f"oidc:{ISSUER}", "u-1")
+
 
 class TestOidcIdentity:
     """Establishing identity from an ID token and the userinfo endpoint."""
