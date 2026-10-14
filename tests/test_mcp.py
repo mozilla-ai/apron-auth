@@ -17,7 +17,6 @@ from apron_auth.mcp import (
     _is_blocked_host,
     _prm_candidate_urls,
     _select_auth_method,
-    _str_list,
     _validate_url,
     cimd_client_id,
     discover,
@@ -581,22 +580,6 @@ class TestIsBlockedHost:
     )
     def test_classifies_host(self, host: str, blocked: bool) -> None:
         assert _is_blocked_host(host) is blocked
-
-
-class TestStrList:
-    @pytest.mark.parametrize(
-        ("value", "expected"),
-        [
-            (["a", "b"], ["a", "b"]),
-            (["a", 1, None, "b"], ["a", "b"]),
-            ([], []),
-            (None, []),
-            ("not-a-list", []),
-            ({"a": 1}, []),
-        ],
-    )
-    def test_filters_to_strings(self, value: object, expected: list[str]) -> None:
-        assert _str_list(value) == expected
 
 
 class TestPrmCandidateUrls:

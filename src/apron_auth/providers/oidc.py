@@ -45,6 +45,7 @@ from joserfc import jws
 from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
@@ -70,14 +71,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-
-# Token-endpoint auth methods this library can perform, in preference order.
-_CONFIDENTIAL_AUTH_METHODS = (
-    TokenEndpointAuthMethod.CLIENT_SECRET_POST,
-    TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
-)
 
 # Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
 _CLOCK_SKEW_SECONDS = 60
@@ -196,7 +190,8 @@ async def discover(
         token_url=token_url,
         registration_url=registration_url,
         revocation_url=revocation_url,
-        scopes_supported=_str_list(document.get("scopes_supported")),
+        # An advisory list that a provider malforms should not fail discovery, so it is read leniently.
+        scopes_supported=str_list(document.get("scopes_supported")),
         code_challenge_methods=_strict_str_list(document, "code_challenge_methods_supported"),
         token_endpoint_auth_methods=_strict_str_list(document, "token_endpoint_auth_methods_supported"),
         issuer=declared_issuer,
@@ -684,30 +679,11 @@ def _claim_str(source: dict[str, Any] | None, name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _str_list(value: Any) -> list[str]:
-    """Return the string entries of a JSON array, or an empty list.
-
-    A non-array, or an array with non-string entries, yields only what is
-    usable rather than raising: these are advisory ``*_supported`` lists, and a
-    provider malforming one should not fail discovery outright.
-
-    Args:
-        value: The raw JSON value from the configuration document.
-
-    Returns:
-        The string entries, or ``[]``.
-    """
-    if not isinstance(value, list):
-        return []
-    return [entry for entry in value if isinstance(entry, str)]
-
-
 def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
     """Return a security-relevant list member, refusing a malformed one.
 
-    Unlike :func:`_str_list`, a present-but-malformed value is an error: these
-    lists gate a refusal (PKCE methods, token-endpoint auth methods), and
-    treating ``"plain"`` as "not advertised" would take the permissive branch.
+    A present but malformed value is an error, because these lists gate a refusal.
+    Treating ``"plain"`` as "not advertised" would take the permissive branch.
 
     Args:
         document: The configuration document.
@@ -750,7 +726,7 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
     """
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
-    for method in _CONFIDENTIAL_AUTH_METHODS:
+    for method in CONFIDENTIAL_AUTH_METHODS:
         if method in advertised:
             return method
     msg = "OpenID provider advertises no token-endpoint auth method this library can perform"
@@ -868,16 +844,12 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
             the response is not HTTP 200, or its body is not a JSON object.
     """
     try:
-        transport = transport_factory(url) if transport_factory is not None else None
+        client = discovery_client(url, transport_factory)
     except Exception as exc:
-        # The factory is caller code, so any exception from it means the connection was refused.
+        # Building the client calls the caller's transport factory, so any exception here means a refused connection.
         msg = "could not fetch the OpenID provider configuration (outbound connection refused)"
         raise OidcDiscoveryError(msg) from exc
-    async with httpx.AsyncClient(
-        transport=transport,
-        timeout=_DISCOVERY_TIMEOUT,
-        follow_redirects=False,
-    ) as client:
+    async with client:
         try:
             response = await client.get(url)
         except httpx.RequestError as exc:

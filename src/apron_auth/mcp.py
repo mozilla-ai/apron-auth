@@ -26,6 +26,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
@@ -40,17 +41,9 @@ UrlValidator = Callable[[str], None]
 
 logger = logging.getLogger(__name__)
 
-_DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
 _WELL_KNOWN_OIDC = "/.well-known/openid-configuration"
-
-# Token-endpoint auth methods this library can perform for a confidential
-# client, in the order it prefers them. authlib drives all of these.
-_CONFIDENTIAL_AUTH_METHODS = (
-    TokenEndpointAuthMethod.CLIENT_SECRET_POST,
-    TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
-)
 
 
 async def discover(
@@ -131,9 +124,9 @@ async def discover(
         token_url=token_url,
         registration_url=registration_url,
         revocation_url=revocation_url,
-        scopes_supported=_str_list(server_meta.get("scopes_supported")),
-        code_challenge_methods=_str_list(server_meta.get("code_challenge_methods_supported")),
-        token_endpoint_auth_methods=_str_list(server_meta.get("token_endpoint_auth_methods_supported")),
+        scopes_supported=str_list(server_meta.get("scopes_supported")),
+        code_challenge_methods=str_list(server_meta.get("code_challenge_methods_supported")),
+        token_endpoint_auth_methods=str_list(server_meta.get("token_endpoint_auth_methods_supported")),
         issuer=issuer if isinstance(issuer, str) else None,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
@@ -277,7 +270,7 @@ async def register_client(
     }
     if application_type is not None:
         payload["application_type"] = application_type
-    async with _discovery_client(registration_url, transport_factory) as client:
+    async with discovery_client(registration_url, transport_factory) as client:
         try:
             response = await client.post(registration_url, json=payload)
         except httpx.RequestError as exc:
@@ -366,13 +359,6 @@ def cimd_client_id(url: str) -> str:
     return url
 
 
-def _str_list(value: Any) -> list[str]:
-    """Return the string items of value when it is a list, else an empty list."""
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, str)]
-    return []
-
-
 def _select_auth_method(secret: SecretStr | None, advertised: list[str], registered: str | None = None) -> str:
     """Choose the token-endpoint authentication method for a discovered server.
 
@@ -385,7 +371,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
     Otherwise the method is derived. A secretless client is public and uses
     ``none``, unless the server publishes an explicit method list that omits
     ``none`` — then it accepts no public client and this raises. A confidential
-    client uses the first method in :data:`_CONFIDENTIAL_AUTH_METHODS` the server
+    client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server
     advertises; a server advertising only methods this library cannot perform is
     unusable, so this raises rather than yielding a config doomed to fail at
     token exchange. When the server advertises nothing, this defaults to
@@ -423,7 +409,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
         return TokenEndpointAuthMethod.NONE
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
-    for method in _CONFIDENTIAL_AUTH_METHODS:
+    for method in CONFIDENTIAL_AUTH_METHODS:
         if method in advertised:
             return method
     msg = "MCP server requires an unsupported client authentication method"
@@ -435,7 +421,7 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
 
     The registered method (RFC 7591) is authoritative for the client, so this
     honors ``none`` for a public client and the confidential methods in
-    :data:`_CONFIDENTIAL_AUTH_METHODS`. It raises rather than yielding an
+    :data:`CONFIDENTIAL_AUTH_METHODS`. It raises rather than yielding an
     internally inconsistent config when the method and the secret disagree — a
     confidential method with no secret to send, or ``none`` paired with a secret
     (a public client must carry none, and a lingering secret would be attached
@@ -458,7 +444,7 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
             msg = "MCP server registered a public client (none) but issued a client secret"
             raise McpDiscoveryError(msg)
         return TokenEndpointAuthMethod.NONE
-    if registered in _CONFIDENTIAL_AUTH_METHODS:
+    if registered in CONFIDENTIAL_AUTH_METHODS:
         if secret is None:
             msg = "MCP server registered a confidential auth method but issued no client secret"
             raise McpDiscoveryError(msg)
@@ -583,18 +569,6 @@ def _asm_candidate_urls(auth_server: str) -> list[str]:
     return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
 
 
-def _discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:
-    """Build the httpx client for a discovery or registration fetch.
-
-    Routes the connection through ``transport_factory`` when supplied and
-    disables redirect-following, so a validated URL cannot be bounced to an
-    unvalidated host mid-request. ``url`` selects the transport; the returned
-    client is not otherwise bound to it.
-    """
-    transport = transport_factory(url) if transport_factory is not None else None
-    return httpx.AsyncClient(transport=transport, timeout=_DISCOVERY_TIMEOUT, follow_redirects=False)
-
-
 async def _fetch_first_metadata(
     candidate_urls: Sequence[str],
     url_validator: UrlValidator | None,
@@ -610,7 +584,7 @@ async def _fetch_first_metadata(
     """
     for url in candidate_urls:
         _validate_url(url, url_validator)
-        async with _discovery_client(url, transport_factory) as client:
+        async with discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
             except httpx.RequestError as exc:
