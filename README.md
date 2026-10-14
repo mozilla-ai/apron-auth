@@ -723,12 +723,13 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | Logger                           | Emits                                                       |
 |----------------------------------|-------------------------------------------------------------|
 | `apron_auth.stores`              | Expired OAuth state discarded on lookup.                     |
-| `apron_auth.providers.microsoft` | Withheld tenancy assertions; ID-token claim parsing.         |
+| `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
+| `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
 | `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
-| `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; ID token dropped or userinfo failure degraded; a refused discovery redirect (DEBUG). |
+| `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; userinfo failure degraded; a refused discovery redirect (DEBUG). |
 
 Two levels are used. `WARNING` marks a capability that degraded without
 raising — a revocation the provider would not confirm, or a
