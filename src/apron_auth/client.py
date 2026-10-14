@@ -312,6 +312,11 @@ class OAuthClient:
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
 
+        NOTE: Callers must pass a token set straight from :meth:`exchange_code` or :meth:`refresh_token`.
+        They must never pass one reloaded from storage or built from untrusted input.
+        An identity handler may accept the ID token in it without a signature check,
+        which is safe only for a token the token endpoint returned over TLS.
+
         Args:
             tokens: The token set from :meth:`exchange_code` or
                 :meth:`refresh_token` to establish identity from.
