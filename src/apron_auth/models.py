@@ -295,13 +295,7 @@ class ServerMetadata(BaseModel, frozen=True):
     the RFC 9728 protected-resource identifier. Holds no client identity — only
     the server-advertised facts.
 
-    Two discovery paths produce this: :func:`apron_auth.mcp.discover`, which
-    reaches an authorization server through an MCP server's protected-resource
-    metadata, and :func:`apron_auth.providers.oidc.discover`, which reads an
-    OpenID provider's configuration document directly. The fields each path
-    leaves unset differ accordingly: an MCP discovery sets no
-    :attr:`userinfo_url`, and an OIDC discovery sets no
-    :attr:`resource`.
+    A field the server does not advertise is left at its default.
 
     Attributes:
         authorize_url: The authorization endpoint URL.
@@ -330,10 +324,8 @@ class ServerMetadata(BaseModel, frozen=True):
             from the RFC 9728 protected-resource metadata ``resource`` field;
             ``None`` when the metadata omits it or its value is not a string.
             This is the canonical URI to which a token's audience is bound.
-        userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when
-            the metadata omits it. An OpenID provider is not obliged to
-            advertise one, and a caller that finds it absent must establish
-            identity from the ID token alone.
+        userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when the metadata omits it.
+            An OpenID provider need not advertise one.
     """
 
     authorize_url: str
