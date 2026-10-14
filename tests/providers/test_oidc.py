@@ -24,6 +24,7 @@ from apron_auth.providers.identity import infer_identity_handler
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
+    _bearer_error,
     discover,
     discovery_url,
     identity_handler,
@@ -1250,6 +1251,35 @@ class TestOidcIdentity:
 
         assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
 
+    async def test_reads_a_scope_refusal_from_separate_header_lines(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A server may send each challenge on its own ``WWW-Authenticate`` line."""
+        httpx_mock.add_response(
+            url=USERINFO_URL,
+            status_code=403,
+            headers=[
+                ("WWW-Authenticate", 'Basic realm="x"'),
+                ("WWW-Authenticate", 'Bearer error="insufficient_scope"'),
+            ],
+        )
+
+        with pytest.raises(IdentityScopeNotGrantedError):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    async def test_a_near_miss_error_code_is_not_a_scope_error(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A near miss maps to the retryable fetch error, not to the scope error."""
+        httpx_mock.add_response(
+            url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": 'Bearer error="insufficient_scope_v2"'}
+        )
+
+        with pytest.raises(IdentityFetchError) as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+        assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
+
     async def test_a_disagreeing_subject_still_raises_when_userinfo_succeeds(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
@@ -1650,3 +1680,65 @@ class TestOidcIdentity:
 
         with pytest.raises(IdentityFetchError, match="invalid aud claim"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), other)
+
+
+class TestBearerError:
+    """Test how the parser reads the ``error`` code of a ``WWW-Authenticate`` header's ``Bearer`` challenge."""
+
+    @pytest.mark.parametrize(
+        ("header", "expected"),
+        [
+            ('Bearer error="insufficient_scope", scope="openid profile"', "insufficient_scope"),
+            ("Bearer error=insufficient_scope", "insufficient_scope"),
+            ('bearer realm="x", ERROR = "insufficient_scope"', "insufficient_scope"),
+            ('Basic realm="x", Bearer error="insufficient_scope"', "insufficient_scope"),
+            ('Negotiate abc==, Bearer error="insufficient_scope"', "insufficient_scope"),
+            ('Bearer ,, error="insufficient_scope",', "insufficient_scope"),
+            (', Bearer error="insufficient_scope"', "insufficient_scope"),
+            ('Bearer error="insufficient\\_scope"', "insufficient_scope"),
+            ('Bearer error="invalid_token", error_description="not error=insufficient_scope"', "invalid_token"),
+            ('Bearer error="insufficient_scope", error_description="needs \u2192 scope"', "insufficient_scope"),
+            ('Bearer realm="x"', None),
+            ("Bearer", None),
+            ("", None),
+        ],
+    )
+    def test_reads_the_code_from_a_well_formed_header(self, header: str, expected: str | None) -> None:
+        """Scheme and parameter names are case-insensitive, and empty list elements are allowed."""
+        assert _bearer_error(header) == expected
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            'Bearer error="insufficient_scope_v2"',
+            'Bearer suberror="insufficient_scope"',
+            'Bearer error="Insufficient_Scope"',
+            'Basic error="insufficient_scope"',
+        ],
+    )
+    def test_a_near_miss_is_not_the_scope_code(self, header: str) -> None:
+        """Only the exact code in a ``Bearer`` challenge counts."""
+        assert _bearer_error(header) != "insufficient_scope"
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            'Bearer abc==, error="insufficient_scope"',
+            'Bearer,error="insufficient_scope"',
+            'Bearer realm="x" error="insufficient_scope"',
+            'Bearer realm="x"error="insufficient_scope"',
+            'Bearer error="insufficient_scope" Basic',
+            'Bearer error="insufficient_scope", @@@',
+            'Bearer error="insufficient_scope", error="insufficient_scope"',
+            'Bearer error="insufficient_scope", Bearer error="insufficient_scope"',
+            'Bearer\nerror="insufficient_scope"',
+            'Bearer\u00a0error="insufficient_scope"',
+            'Bearer \terror="insufficient_scope"',
+            'Bearer error="insufficient_scope\n"',
+            'error="insufficient_scope"',
+            'Bearer error="insufficient_scope',
+        ],
+    )
+    def test_a_malformed_header_gives_no_code(self, header: str) -> None:
+        """A header that does not parse in full is never read as a scope refusal."""
+        assert _bearer_error(header) is None
