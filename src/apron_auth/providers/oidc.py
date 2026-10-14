@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
@@ -79,12 +80,6 @@ _USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 # Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
 _CLOCK_SKEW_SECONDS = 60
 
-
-# These patterns follow the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1, which allows empty list elements.
-_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
-_AUTH_PARAM = re.compile(rf'[\s,]*({_TOKEN})\s*=\s*({_TOKEN}|"(?:[^"\\]|\\.)*")')
-_AUTH_SCHEME = re.compile(rf"[\s,]*({_TOKEN})(?=[\s,]|$)")
-_TOKEN68 = re.compile(r"[\s,]*[0-9A-Za-z._~+/-]+=*")
 
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
@@ -585,33 +580,64 @@ class OidcIdentityHandler:
         return payload
 
 
+# These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
+_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+_QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t \x21-\x7e\x80-\xff])*"'
+_AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
+_AUTH_SCHEME = re.compile(_TOKEN)
+_TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
+
+
+class _ChallengeElement(Enum):
+    """Classify the elements of a ``WWW-Authenticate`` header."""
+
+    AUTH_PARAM = auto()
+    AUTH_SCHEME = auto()
+    TOKEN68 = auto()
+
+
 def _bearer_error(header: str) -> str | None:
     """Return the ``error`` parameter of a ``WWW-Authenticate`` header's ``Bearer`` challenge.
 
-    Text inside another parameter or another scheme's challenge is never read as the error code (RFC 6750 section 3).
+    The header must parse in full as RFC 9110 section 11.6.1 challenges, so a malformed header never yields a code.
+    Text inside another parameter or another scheme's challenge is never read as the code (RFC 6750 section 3).
 
     Args:
         header: The ``WWW-Authenticate`` header value, which may hold several challenges.
 
     Returns:
-        The error code, or ``None`` when there is no ``Bearer`` challenge with one or the header does not parse.
+        The error code, or ``None`` when the header does not parse or has no single ``Bearer`` error code.
     """
+    error: str | None = None
     scheme: str | None = None
+    previous: _ChallengeElement | None = None
     position = 0
-    while position < len(header):
+    while True:
+        start = position
+        while position < len(header) and header[position] in " \t,":
+            position += 1
+        separator = header[start:position]
+        if position == len(header):
+            return error
+        has_comma = "," in separator
+        # Credentials follow their scheme after a space, and a comma straight after the scheme ends the challenge.
+        opens_credentials = previous is _ChallengeElement.AUTH_SCHEME and separator.startswith(" ")
         if param := _AUTH_PARAM.match(header, position):
+            if not (opens_credentials or (previous is _ChallengeElement.AUTH_PARAM and has_comma)):
+                return None
             name, value = param.groups()
             if scheme == "bearer" and name.lower() == "error":
-                return re.sub(r"\\(.)", r"\1", value[1:-1]) if value.startswith('"') else value
-            position = param.end()
-        elif challenge := _AUTH_SCHEME.match(header, position):
-            scheme = challenge.group(1).lower()
-            position = challenge.end()
-        elif token68 := _TOKEN68.match(header, position):
-            position = token68.end()
+                if error is not None:
+                    return None
+                error = re.sub(r"\\(.)", r"\1", value[1:-1]) if value.startswith('"') else value
+            previous, position = _ChallengeElement.AUTH_PARAM, param.end()
+        elif opens_credentials and not has_comma and (token68 := _TOKEN68.match(header, position)):
+            previous, position = _ChallengeElement.TOKEN68, token68.end()
+        elif (previous is None or has_comma) and (challenge := _AUTH_SCHEME.match(header, position)):
+            scheme = challenge.group().lower()
+            previous, position = _ChallengeElement.AUTH_SCHEME, challenge.end()
         else:
             return None
-    return None
 
 
 def _claim_error_message(exc: ClaimError) -> str:
