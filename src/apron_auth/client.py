@@ -31,6 +31,8 @@ from apron_auth.providers.identity import infer_identity_handler
 from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from apron_auth.models import IdentityProfile, ProviderConfig
     from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
 
@@ -110,7 +112,7 @@ class OAuthClient:
         redirect_uri: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> tuple[str, OAuthPendingState]:
-        """Build an authorization URL with state and optional PKCE.
+        """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
 
         If a ``StateStore`` is configured, the pending state is saved
         automatically before returning.
@@ -140,32 +142,30 @@ class OAuthClient:
             "state": state,
         }
 
-        if self._config.scopes:
-            params["scope"] = join_scopes(self._config.scopes, self._config.scope_separator)
+        params.update(self._scope_params())
 
         if self._config.use_pkce:
             code_verifier = generate_code_verifier()
             params["code_challenge"] = generate_code_challenge(code_verifier)
             params["code_challenge_method"] = "S256"
 
-        params.update(self._config.extra_params)
+        query = self._authorization_query(params)
 
-        # The resource indicator (RFC 8707) is authoritative for audience
-        # binding, so it is applied after extra_params — the generic escape
-        # hatch must not be able to suppress or redirect it.
-        if self._config.resource is not None:
-            params["resource"] = self._config.resource
+        # The nonce is set on the built query, because the decision depends on its final scope
+        # and extra_params must not be able to replace it.
+        nonce = None
+        if self._sends_openid(query):
+            nonce = secrets.token_urlsafe(32)
+            query["nonce"] = nonce
 
         parsed = urlparse(self._config.authorize_url)
-        existing_params = parse_qs(parsed.query)
-        merged = {k: v[0] if len(v) == 1 else v for k, v in existing_params.items()}
-        merged.update(params)
-        url = urlunparse(parsed._replace(query=urlencode(merged, doseq=True)))
+        url = urlunparse(parsed._replace(query=urlencode(query, doseq=True)))
 
         pending_state = OAuthPendingState(
             state=state,
             redirect_uri=effective_redirect_uri,
             code_verifier=code_verifier,
+            nonce=nonce,
             created_at=time.time(),
             metadata=metadata or {},
         )
@@ -363,6 +363,37 @@ class OAuthClient:
         """
         return infer_identity_handler(self._config)
 
+    def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
+        """Return the query of an authorization URL that sends ``params``.
+
+        The authorization URL's own query is overridden by ``params``, then by ``extra_params``, then by the resource.
+
+        Args:
+            params: The request parameters this client sets.
+
+        Returns:
+            The query, with each parameter's value or values.
+        """
+        query: dict[str, str | list[str]] = {
+            name: values[0] if len(values) == 1 else values
+            for name, values in parse_qs(urlparse(self._config.authorize_url).query).items()
+        }
+        query.update(params)
+        query.update(self._config.extra_params)
+        # The resource indicator (RFC 8707) is authoritative for audience binding,
+        # so extra_params must not be able to suppress or redirect it.
+        if self._config.resource is not None:
+            query["resource"] = self._config.resource
+        return query
+
+    def _requests_openid(self) -> bool:
+        """Return whether this client's authorization request asks for the ``openid`` scope.
+
+        Returns:
+            ``True`` when a scope word the request sends is ``openid``.
+        """
+        return self._sends_openid(self._authorization_query(self._scope_params()))
+
     async def _resolve_pending_state(self, state: str, pending_state: OAuthPendingState | None) -> OAuthPendingState:
         """Return the pending state that matches the callback's state.
 
@@ -398,6 +429,38 @@ class OAuthClient:
             msg = "OAuth state does not match the pending authorization request"
             raise StateError(msg)
         return pending_state
+
+    def _scope_params(self) -> dict[str, str]:
+        """Return the ``scope`` request parameter for the configured scopes.
+
+        Returns:
+            The parameter, or no parameter when no scopes are configured.
+        """
+        if not self._config.scopes:
+            return {}
+        return {"scope": join_scopes(self._config.scopes, self._config.scope_separator)}
+
+    def _sends_openid(self, query: Mapping[str, str | list[str]]) -> bool:
+        """Return whether an authorization query asks for the ``openid`` scope.
+
+        A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma, or the configured separator.
+        A wider set of delimiters only sends a nonce more often, which a provider that does not use OpenID ignores.
+
+        Args:
+            query: The query of an authorization URL.
+
+        Returns:
+            ``True`` when a scope word in ``query`` is ``openid``.
+        """
+        scope = query.get("scope")
+        values = [scope] if isinstance(scope, str) else scope or []
+        delimiters = {",", self._config.scope_separator} - {""}
+        words: set[str] = set()
+        for value in values:
+            for delimiter in delimiters:
+                value = value.replace(delimiter, " ")
+            words.update(value.split())
+        return "openid" in words
 
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.

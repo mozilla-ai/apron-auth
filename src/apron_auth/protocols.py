@@ -25,6 +25,8 @@ DNS resolution to validated public addresses and prevent SSRF via rebinding.
 class StateStore(Protocol):
     """Caller provides persistence for OAuth state.
 
+    NOTE: Implementations must return every field of a saved pending state, including ``nonce``.
+
     Implementations are responsible for expiring stale entries.
     Each OAuthPendingState carries a created_at timestamp that
     implementations should use to enforce a maximum age (typically

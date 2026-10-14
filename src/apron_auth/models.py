@@ -665,6 +665,7 @@ class OAuthPendingState(BaseModel, frozen=True):
         state: Unique token identifying this authorization request.
         redirect_uri: Redirect URI for this flow.
         code_verifier: PKCE code verifier, if PKCE is enabled.
+        nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
         created_at: Unix timestamp when this state was created.
         metadata: Opaque caller-supplied context that apron-auth carries but never interprets.
             Attach application-specific data such as ``user_id`` or ``tenant_id`` here.
@@ -673,5 +674,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     state: str
     redirect_uri: str
     code_verifier: str | None = None
+    nonce: str | None = None
     created_at: float
     metadata: dict[str, Any] = {}

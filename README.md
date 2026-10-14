@@ -171,7 +171,7 @@ config = ProviderConfig(
 
 ### Authorization URL
 
-Build the URL to redirect the user to. State and PKCE are included automatically.
+Build the URL to redirect the user to. State and PKCE are included automatically, and so is a nonce when the request asks for the `openid` scope. Keep the whole pending state, not only some of its fields.
 
 ```python
 from apron_auth import OAuthClient

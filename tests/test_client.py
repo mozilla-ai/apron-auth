@@ -240,6 +240,89 @@ class TestGetAuthorizationUrl:
         _, s2 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
         assert s1.state != s2.state
 
+    async def test_nonce_sent_when_scopes_include_openid(self) -> None:
+        client = OAuthClient(config=_make_config(scopes=["email", "openid"]))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert pending_state.nonce
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_absent_without_openid_scope(self) -> None:
+        client = OAuthClient(config=_make_config(scopes=["email"]))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert "nonce" not in params
+        assert pending_state.nonce is None
+
+    async def test_nonce_not_overridden_by_extra_params(self) -> None:
+        client = OAuthClient(config=_make_config(extra_params={"nonce": "chosen-nonce"}))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert pending_state.nonce != "chosen-nonce"
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_not_overridden_by_authorize_url_query(self) -> None:
+        client = OAuthClient(config=_make_config(authorize_url="https://provider.example.com/authorize?nonce=fixed"))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params["nonce"] == [pending_state.nonce]
+
+    @pytest.mark.parametrize(
+        ("overrides", "sends_nonce"),
+        [
+            ({"scopes": [], "extra_params": {"scope": "openid email"}}, True),
+            ({"scopes": [], "scope_separator": ",", "extra_params": {"scope": "openid,email"}}, True),
+            ({"scopes": [], "scope_separator": ",", "extra_params": {"scope": "openid profile"}}, True),
+            ({"scopes": [], "extra_params": {"scope": "openid,email"}}, True),
+            ({"scopes": ["openid", "email"], "scope_separator": ", "}, True),
+            ({"scopes": ["openid"], "scope_separator": ""}, True),
+            ({"scopes": [], "authorize_url": "https://provider.example.com/authorize?scope=openid"}, True),
+            ({"scopes": ["openid"], "extra_params": {"scope": "email"}}, False),
+            ({"scopes": ["openidish"]}, False),
+        ],
+        ids=[
+            "extra-params",
+            "extra-params-comma",
+            "space-delimited",
+            "comma-with-space-separator",
+            "separator-with-space",
+            "empty-separator",
+            "authorize-url-query",
+            "overridden",
+            "lookalike",
+        ],
+    )
+    async def test_nonce_follows_the_scope_the_request_sends(
+        self, overrides: dict[str, object], sends_nonce: bool
+    ) -> None:
+        client = OAuthClient(config=_make_config(**overrides))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert ("nonce" in params) is sends_nonce
+        assert (pending_state.nonce is not None) is sends_nonce
+
+    async def test_repeated_authorize_url_scope_is_kept(self) -> None:
+        url_with_scopes = "https://provider.example.com/authorize?scope=openid&scope=email"
+        client = OAuthClient(config=_make_config(scopes=[], authorize_url=url_with_scopes))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params["scope"] == ["openid", "email"]
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_is_unique_per_call(self) -> None:
+        client = OAuthClient(config=_make_config())
+        _, s1 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        _, s2 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        assert s1.nonce != s2.nonce
+
+    async def test_nonce_saved_to_state_store(self) -> None:
+        store = AsyncMock()
+        store.save = AsyncMock()
+        client = OAuthClient(config=_make_config(), state_store=store)
+        _, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        saved_state = store.save.call_args[0][0]
+        assert saved_state.nonce == pending_state.nonce
+
 
 class TestExchangeCode:
     async def test_exchange_with_a_caller_kept_pending_state(self, httpx_mock: HTTPXMock) -> None:
