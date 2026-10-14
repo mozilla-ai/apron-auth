@@ -674,6 +674,12 @@ class TestPreset:
 
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
+    @pytest.mark.parametrize("secret", ["", "   "])
+    def test_refuses_an_empty_client_secret(self, secret: str) -> None:
+        """A confidential client with no secret would only fail later, at the token endpoint."""
+        with pytest.raises(ConfigurationError, match="client secret"):
+            preset(client_id=CLIENT_ID, client_secret=secret, scopes=[], metadata=metadata())
+
     def test_uses_basic_when_the_provider_advertises_no_method(self) -> None:
         """An absent list means ``client_secret_basic`` (OpenID Connect Discovery 1.0 section 3)."""
         config, _ = preset(
