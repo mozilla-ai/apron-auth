@@ -61,6 +61,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import StandardRevocationHandler
+from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -576,15 +577,16 @@ class OidcIdentityHandler:
                 exc.response.headers.get("www-authenticate", "")
             ):
                 raise IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope") from exc
-            raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
-        except (httpx.InvalidURL, httpx.RequestError) as exc:
-            # ``InvalidURL`` is not a ``RequestError``, but must still surface as ``IdentityFetchError``.
-            raise IdentityFetchError(f"Failed to fetch OpenID identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}") from exc
+        except httpx.RequestError as exc:
+            raise IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}") from exc
+        except httpx.InvalidURL as exc:
+            raise IdentityFetchError("Failed to fetch OpenID identity: invalid userinfo URL") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse OpenID identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse OpenID identity response") from exc
         if not isinstance(payload, dict):
             # A signed (``application/jwt``) userinfo response is refused rather than read unverified.
             msg = "OpenID identity response was not a JSON object"

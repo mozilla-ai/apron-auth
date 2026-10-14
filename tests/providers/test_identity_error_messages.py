@@ -10,6 +10,7 @@ Its errors must have no cause or context, which test_hubspot.py checks.
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 from typing import NamedTuple
 
 import httpx
@@ -17,7 +18,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityMaterial, ProviderConfig
+from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata
 from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import (
     atlassian,
@@ -26,16 +27,24 @@ from apron_auth.providers import (
     linear,
     microsoft,
     notion,
+    oidc,
     salesforce,
     slack,
     typeform,
+)
+
+_OIDC_METADATA = ServerMetadata(
+    authorize_url="https://sso.example.com/auth",
+    token_url="https://sso.example.com/token",
+    issuer="https://sso.example.com",
+    userinfo_url="https://sso.example.com/userinfo",
 )
 
 
 class _HandlerCase(NamedTuple):
     preset: Callable[..., tuple[ProviderConfig, object]]
     scopes: list[str]
-    handler: type[IdentityHandler]
+    handler: Callable[[], IdentityHandler]
 
 
 HANDLERS: dict[str, _HandlerCase] = {
@@ -45,6 +54,11 @@ HANDLERS: dict[str, _HandlerCase] = {
     "linear": _HandlerCase(linear.preset, ["read"], linear.LinearIdentityHandler),
     "microsoft": _HandlerCase(microsoft.preset, ["openid"], microsoft.MicrosoftIdentityHandler),
     "notion": _HandlerCase(notion.preset, ["read"], notion.NotionIdentityHandler),
+    "oidc": _HandlerCase(
+        partial(oidc.preset, metadata=_OIDC_METADATA),
+        ["openid"],
+        partial(oidc.identity_handler, _OIDC_METADATA),
+    ),
     "salesforce": _HandlerCase(salesforce.preset, ["openid"], salesforce.SalesforceIdentityHandler),
     "slack-oidc": _HandlerCase(slack.preset, ["openid"], slack.SlackIdentityHandler),
     "slack-workspace": _HandlerCase(slack.preset, ["channels:read"], slack.SlackIdentityHandler),
