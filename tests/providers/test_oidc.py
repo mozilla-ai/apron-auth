@@ -1250,6 +1250,45 @@ class TestOidcIdentity:
 
         assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
 
+    @pytest.mark.parametrize(
+        "challenge",
+        [
+            "Bearer error=insufficient_scope",
+            'bearer realm="x", ERROR = "insufficient_scope"',
+            'Basic realm="x", Bearer error="insufficient_scope"',
+        ],
+    )
+    async def test_reads_the_error_code_from_any_valid_bearer_challenge(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, challenge: str
+    ) -> None:
+        """Scheme and parameter names are case-insensitive, and the value may be a token or a quoted string."""
+        httpx_mock.add_response(url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": challenge})
+
+        with pytest.raises(IdentityScopeNotGrantedError):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+    @pytest.mark.parametrize(
+        "challenge",
+        [
+            'Bearer error="insufficient_scope_v2"',
+            'Bearer suberror="insufficient_scope"',
+            'Bearer error="invalid_token", error_description="not error=insufficient_scope"',
+            'Bearer error="Insufficient_Scope"',
+            'Basic error="insufficient_scope"',
+            'Basic abc==, Bearer realm="x"',
+        ],
+    )
+    async def test_only_an_exact_bearer_error_code_is_a_scope_error(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, challenge: str
+    ) -> None:
+        """A near miss is an ordinary fetch failure, so a caller does not discard a token that retrying could use."""
+        httpx_mock.add_response(url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": challenge})
+
+        with pytest.raises(IdentityFetchError) as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+        assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
+
     async def test_a_disagreeing_subject_still_raises_when_userinfo_succeeds(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):

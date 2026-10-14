@@ -80,8 +80,11 @@ _USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 _CLOCK_SKEW_SECONDS = 60
 
 
-# RFC 6750 section 3: ``error="insufficient_scope"`` in ``WWW-Authenticate``.
-_INSUFFICIENT_SCOPE = re.compile(r'error\s*=\s*"?insufficient_scope"?', re.IGNORECASE)
+# These patterns follow the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1, which allows empty list elements.
+_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+_AUTH_PARAM = re.compile(rf'[\s,]*({_TOKEN})\s*=\s*({_TOKEN}|"(?:[^"\\]|\\.)*")')
+_AUTH_SCHEME = re.compile(rf"[\s,]*({_TOKEN})(?=[\s,]|$)")
+_TOKEN68 = re.compile(r"[\s,]*[0-9A-Za-z._~+/-]+=*")
 
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
@@ -556,8 +559,9 @@ class OidcIdentityHandler:
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            if exc.response.status_code == 403 and _INSUFFICIENT_SCOPE.search(
-                exc.response.headers.get("www-authenticate", "")
+            if (
+                exc.response.status_code == 403
+                and _bearer_error(exc.response.headers.get("www-authenticate", "")) == "insufficient_scope"
             ):
                 raise IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope") from exc
             raise IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}") from exc
@@ -579,6 +583,35 @@ class OidcIdentityHandler:
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
         return payload
+
+
+def _bearer_error(header: str) -> str | None:
+    """Return the ``error`` parameter of a ``WWW-Authenticate`` header's ``Bearer`` challenge.
+
+    Text inside another parameter or another scheme's challenge is never read as the error code (RFC 6750 section 3).
+
+    Args:
+        header: The ``WWW-Authenticate`` header value, which may hold several challenges.
+
+    Returns:
+        The error code, or ``None`` when there is no ``Bearer`` challenge with one or the header does not parse.
+    """
+    scheme: str | None = None
+    position = 0
+    while position < len(header):
+        if param := _AUTH_PARAM.match(header, position):
+            name, value = param.groups()
+            if scheme == "bearer" and name.lower() == "error":
+                return re.sub(r"\\(.)", r"\1", value[1:-1]) if value.startswith('"') else value
+            position = param.end()
+        elif challenge := _AUTH_SCHEME.match(header, position):
+            scheme = challenge.group(1).lower()
+            position = challenge.end()
+        elif token68 := _TOKEN68.match(header, position):
+            position = token68.end()
+        else:
+            return None
+    return None
 
 
 def _claim_error_message(exc: ClaimError) -> str:
