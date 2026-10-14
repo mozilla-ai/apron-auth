@@ -10,12 +10,10 @@ A config from :func:`preset` disallows handler inference,
 because a built-in provider's handler for the same endpoint hosts would change every user's ``identity_key()``.
 Without a handler, ``OAuthClient.fetch_identity`` raises :class:`~apron_auth.errors.IdentityNotSupportedError`.
 
-ID token signatures are not verified.
-Tokens arrive on the token-endpoint response, where TLS authenticates the issuer.
-OpenID Connect Core 1.0 section 3.1.3.7 allows this.
-Claims are always validated per that section.
-Every URL here must be ``https``, because the design relies on TLS.
-Pass the handler only tokens from a token-endpoint response.
+ID token signatures are checked against the issuer's published key set,
+and the claims are validated per OpenID Connect Core 1.0 section 3.1.3.7.
+Every URL here must be ``https``, because the client secret and every token travel over these URLs,
+and the signing key set authenticates every ID token.
 
 Limitations
 -----------
@@ -137,8 +135,9 @@ async def discover(
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
-            It is off by default, because ID tokens are not signature-checked and rely on TLS for the issuer.
-            Over ``http``, an on-path attacker chooses every claim and reads the client secret.
+            It is off by default, because the client secret and every token travel over these URLs,
+            and the signing key set authenticates every ID token.
+            Over ``http``, an on-path attacker reads the secret and tokens, and can replace the keys.
             It is for local development only, and it logs a WARNING for each URL it lets through.
 
     Returns:
@@ -583,7 +582,7 @@ class OidcIdentityHandler:
 
         media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
         if media_type == "application/jwt":
-            # Signatures are not verified here, so a signed response is refused rather than read unverified.
+            # Its signing algorithm is agreed at client registration, which this handler does not know.
             msg = "OpenID provider returned a signed userinfo response, which is not supported"
             raise IdentityFetchError(msg)
         try:
