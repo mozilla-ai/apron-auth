@@ -860,10 +860,15 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
         The document as a JSON object.
 
     Raises:
-        OidcDiscoveryError: If the request fails, the response is not HTTP 200,
-            or its body is not a JSON object.
+        OidcDiscoveryError: If the transport factory refuses the connection, the request fails,
+            the response is not HTTP 200, or its body is not a JSON object.
     """
-    transport = transport_factory(url) if transport_factory is not None else None
+    try:
+        transport = transport_factory(url) if transport_factory is not None else None
+    except Exception as exc:
+        # The factory is caller code, so any exception from it means the connection was refused.
+        msg = "could not fetch the OpenID provider configuration (outbound connection refused)"
+        raise OidcDiscoveryError(msg) from exc
     async with httpx.AsyncClient(
         transport=transport,
         timeout=_DISCOVERY_TIMEOUT,

@@ -322,6 +322,18 @@ class TestDiscoveryTransportFactory:
 
         assert seen == [override]
 
+    async def test_a_refusing_factory_surfaces_as_a_discovery_error(self) -> None:
+        """A host-policy refusal is a discovery failure, not the factory's own exception."""
+
+        def refuse(url: str) -> httpx.AsyncBaseTransport:
+            raise PermissionError("blocked host secret-detail")
+
+        with pytest.raises(OidcDiscoveryError, match="could not fetch") as excinfo:
+            await discover(ISSUER, transport_factory=refuse)
+
+        assert "secret-detail" not in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, PermissionError)
+
 
 class TestHttpsRequirement:
     """Plain ``http`` is refused unless the caller opts in."""
