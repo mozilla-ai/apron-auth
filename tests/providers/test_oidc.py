@@ -394,6 +394,7 @@ class TestHttpsRequirement:
             ("authorize_url", "authorization endpoint"),
             ("token_url", "token endpoint"),
             ("revocation_url", "revocation endpoint"),
+            ("registration_url", "registration endpoint"),
             ("userinfo_url", "userinfo endpoint"),
         ],
     )

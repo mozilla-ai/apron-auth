@@ -808,7 +808,12 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     _require_url(metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
     _require_url(metadata.authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
     _require_url(metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
-    for field, url in (("revocation endpoint", metadata.revocation_url), ("userinfo endpoint", metadata.userinfo_url)):
+    optional_urls = (
+        ("registration endpoint", metadata.registration_url),
+        ("revocation endpoint", metadata.revocation_url),
+        ("userinfo endpoint", metadata.userinfo_url),
+    )
+    for field, url in optional_urls:
         if url is not None:
             _require_url(url, field=field, allow_insecure_http=allow_insecure_http)
 
