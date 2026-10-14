@@ -1681,6 +1681,7 @@ class TestBearerError:
             (', Bearer error="insufficient_scope"', "insufficient_scope"),
             ('Bearer error="insufficient\\_scope"', "insufficient_scope"),
             ('Bearer error="invalid_token", error_description="not error=insufficient_scope"', "invalid_token"),
+            ('Bearer error="insufficient_scope", error_description="needs \u2192 scope"', "insufficient_scope"),
             ('Bearer realm="x"', None),
             ("Bearer", None),
             ("", None),

@@ -582,7 +582,8 @@ class OidcIdentityHandler:
 
 # These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
 _TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
-_QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\xff]|\\[\t \x21-\x7e\x80-\xff])*"'
+# The header arrives decoded as text, so obs-text matches any non-ASCII character.
+_QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\U0010ffff]|\\[\t \x21-\x7e\x80-\U0010ffff])*"'
 _AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
 _AUTH_SCHEME = re.compile(_TOKEN)
 _TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
