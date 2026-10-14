@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
@@ -49,7 +50,11 @@ class _TokenEndpointError(Exception):
 
 
 class OAuthClient:
-    """Stateless OAuth 2.0 client for authorization code flows."""
+    """OAuth 2.0 client for authorization code flows, which keeps no per-user state.
+
+    NOTE: Callers must not use one client from event loops in several threads at once,
+    because the identity handler it infers may keep caches that are not thread-safe.
+    """
 
     DEFAULT_PERMANENT_ERROR_CODES = frozenset({INVALID_GRANT, UNAUTHORIZED_CLIENT, INVALID_CLIENT})
 
@@ -333,7 +338,7 @@ class OAuthClient:
                 provider for the configuration.
             IdentityFetchError: If the handler fails to fetch identity.
         """
-        handler = self._identity_handler or infer_identity_handler(self._config)
+        handler = self._identity_handler or self._inferred_identity_handler
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)
@@ -344,6 +349,17 @@ class OAuthClient:
             raise
         except Exception as exc:
             raise IdentityFetchError(str(exc)) from exc
+
+    @cached_property
+    def _inferred_identity_handler(self) -> IdentityHandler | None:
+        """Return the built-in handler inferred for this config, inferring it on first use.
+
+        Keeping one handler lets its caches, such as an issuer's signing keys, serve every sign-in.
+
+        Returns:
+            The inferred handler, or ``None`` when no built-in provider matches the config.
+        """
+        return infer_identity_handler(self._config)
 
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.

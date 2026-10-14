@@ -1101,6 +1101,42 @@ class TestFetchIdentity:
 
         assert identity.email == "custom@example.com"
 
+    async def test_fetch_identity_infers_the_handler_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The client keeps the handler it inferred, so a handler's caches serve every sign-in."""
+        built: list[object] = []
+
+        class DummyIdentityHandler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                return IdentityProfile(email="inferred@example.com")
+
+        def infer(config: ProviderConfig) -> DummyIdentityHandler:
+            built.append(config)
+            return DummyIdentityHandler()
+
+        monkeypatch.setattr("apron_auth.client.infer_identity_handler", infer)
+        client = OAuthClient(config=_make_config())
+
+        await client.fetch_identity(TokenSet(access_token="access-abc"))
+        await client.fetch_identity(TokenSet(access_token="access-abc"))
+
+        assert len(built) == 1
+
+    async def test_fetch_identity_remembers_that_no_handler_was_inferred(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A config with no built-in handler is not inferred again on every call."""
+        calls: list[ProviderConfig] = []
+
+        def infer(config: ProviderConfig) -> None:
+            calls.append(config)
+
+        monkeypatch.setattr("apron_auth.client.infer_identity_handler", infer)
+        client = OAuthClient(config=_make_config())
+
+        for _ in range(2):
+            with pytest.raises(IdentityNotSupportedError):
+                await client.fetch_identity(TokenSet(access_token="access-abc"))
+
+        assert len(calls) == 1
+
     async def test_fetch_identity_provider_error_wrapped(self, httpx_mock):
         httpx_mock.add_response(
             url="https://www.googleapis.com/oauth2/v3/userinfo",
