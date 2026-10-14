@@ -232,12 +232,7 @@ only the access token and, for OIDC providers, the ID token — before
 being handed to the provider's identity handler, so handlers never
 receive the refresh token or caller context.
 
-Built-in identity handlers are inferred from standard Google, GitHub,
-HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear
-endpoint hostnames, so they apply to both the bundled `preset(...)`
-configs and any manually constructed `ProviderConfig` pointing at those
-hosts. For other providers, pass a custom `identity_handler` to
-`OAuthClient`.
+Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler, and the generic OpenID preset sets it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
