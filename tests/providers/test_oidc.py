@@ -456,7 +456,15 @@ class TestUrlValidation:
     @pytest.mark.parametrize("field", ["authorization_endpoint", "token_endpoint"])
     @pytest.mark.parametrize(
         "bad",
-        ["", "/relative/path", "javascript:alert(1)", "idp.example/token", f"{ISSUER}/token#frag", 5],
+        [
+            "",
+            "/relative/path",
+            "javascript:alert(1)",
+            "idp.example/token",
+            f"{ISSUER}/token#frag",
+            f"{ISSUER}/token#",
+            5,
+        ],
     )
     async def test_refuses_a_bad_required_endpoint(self, httpx_mock: HTTPXMock, field: str, bad: object):
         """An empty, relative, scripting or fragment-bearing endpoint never becomes a config."""
@@ -487,6 +495,7 @@ class TestUrlValidation:
             ("https://sso.example.com/realms/acme?x=1", "query"),
             ("https://sso.example.com/realms/acme?", "query"),
             ("https://sso.example.com/realms/acme#frag", "fragment"),
+            ("https://sso.example.com/realms/acme#", "fragment"),
             ("https://user@sso.example.com/realms/acme", "userinfo"),
             ("https://user:pw@sso.example.com/realms/acme", "userinfo"),  # pragma: allowlist secret
         ],
