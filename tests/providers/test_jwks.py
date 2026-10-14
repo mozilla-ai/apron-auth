@@ -170,7 +170,7 @@ class TestVerify:
         with pytest.raises(IdentityFetchError, match="critical header parameter"):
             await IssuerSigningKeys(JWKS_URL).verify(f"{header}.{payload}.{signature}")
 
-    @pytest.mark.parametrize("header", [["alg"], "alg"])
+    @pytest.mark.parametrize("header", [["alg"], "alg", ["alg", "b64"], "b64alg"])
     async def test_refuses_a_header_that_is_not_a_json_object(self, header: object) -> None:
         """A header segment that decodes to another JSON value is not a signed token."""
         token = f"{_b64(json.dumps(header).encode())}.{_b64(b'{}')}.sig"

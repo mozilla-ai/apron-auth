@@ -179,7 +179,7 @@ class IssuerSigningKeys:
         try:
             compact = jws.extract_compact(token.encode(), registry=_PARSING_REGISTRY)
             header = compact.headers()
-        except (JoseError, RecursionError, ValueError) as exc:
+        except (JoseError, RecursionError, TypeError, ValueError) as exc:
             raise IdentityFetchError("ID token is not a signed token") from exc
         if not isinstance(header, dict):
             msg = "ID token is not a signed token"
