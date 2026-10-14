@@ -568,10 +568,14 @@ class OidcIdentityHandler:
         Raises:
             IdentityScopeNotGrantedError: If the endpoint answers 403
                 ``insufficient_scope``.
-            IdentityFetchError: If the request fails, its response cannot be
-                parsed, or it is not a JSON object.
+            IdentityFetchError: If the transport factory refuses the connection, the request fails,
+                its response cannot be parsed, or it is not a JSON object.
         """
-        transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
+        try:
+            transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
+        except Exception as exc:
+            # The factory is caller code, so any exception from it means the connection was refused.
+            raise IdentityFetchError("Failed to fetch OpenID identity: outbound connection refused") from exc
         try:
             async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
                 response = await client.get(

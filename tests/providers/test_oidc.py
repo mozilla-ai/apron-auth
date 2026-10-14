@@ -1401,6 +1401,39 @@ class TestOidcIdentity:
         assert seen == [USERINFO_URL]
         assert identity.subject == "u-1"
 
+    async def test_a_refusing_transport_factory_degrades_to_the_id_token(
+        self, config: ProviderConfig, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A host-policy refusal from the caller's factory is a failed userinfo call like any other."""
+
+        def refuse(url: str) -> httpx.AsyncBaseTransport:
+            raise PermissionError("blocked host secret-detail")
+
+        handler = identity_handler(metadata(), transport_factory=refuse)
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            identity = await handler.fetch_identity(
+                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
+            )
+
+        assert identity.subject == "u-1"
+        assert "userinfo request failed" in caplog.text
+        assert "secret-detail" not in caplog.text
+
+    async def test_a_refusing_transport_factory_without_an_id_token_raises(self, config: ProviderConfig) -> None:
+        """With no ID token, the refusal surfaces as the handler's own error, not the factory's."""
+
+        def refuse(url: str) -> httpx.AsyncBaseTransport:
+            raise PermissionError("blocked host secret-detail")
+
+        handler = identity_handler(metadata(), transport_factory=refuse)
+
+        with pytest.raises(IdentityFetchError, match="Failed to fetch") as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
+        assert "secret-detail" not in str(excinfo.value)
+        assert isinstance(excinfo.value.__cause__, PermissionError)
+
     async def test_reports_an_unparseable_userinfo_body(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
