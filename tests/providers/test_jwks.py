@@ -14,8 +14,8 @@ from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError
-from apron_auth.providers._jwks import IssuerSigningKeys
+from apron_auth.errors import ConfigurationError, IdentityFetchError
+from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
 RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
@@ -230,6 +230,33 @@ class TestVerify:
 
         with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
+
+    @pytest.mark.parametrize(
+        "algorithms",
+        [
+            (),
+            None,
+            SigningAlgorithm.RS256,
+            ("RS256",),
+            [SigningAlgorithm.RS256],
+            (SigningAlgorithm.RS256, "RS256"),
+            ("RS256", SigningAlgorithm.RS256),
+        ],
+    )
+    def test_refuses_algorithms_that_are_not_a_tuple_of_members(self, algorithms: Any) -> None:
+        """Only a non-empty tuple of accepted algorithms configures an issuer, whatever else is passed."""
+        with pytest.raises(ConfigurationError, match="signing algorithms"):
+            IssuerSigningKeys(JWKS_URL, algorithms=algorithms)
+
+    async def test_refuses_an_algorithm_the_issuer_does_not_use(self, httpx_mock: HTTPXMock) -> None:
+        """An issuer limited to some algorithms refuses a token signed by its own key with another one."""
+        httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY), is_optional=True)
+        keys = IssuerSigningKeys(JWKS_URL, algorithms=(SigningAlgorithm.RS256,))
+
+        with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
+            await keys.verify(signed(RSA_KEY, alg="PS256"))
+
+        assert httpx_mock.get_requests() == []
 
     @pytest.mark.parametrize("token", ["", "not-a-token", "a.b", "a.b.c"])
     async def test_refuses_a_token_that_is_not_a_signed_token(self, token: str) -> None:

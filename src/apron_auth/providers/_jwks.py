@@ -17,7 +17,7 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import ConfigurationError, IdentityFetchError
 from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
@@ -126,6 +126,7 @@ class IssuerSigningKeys:
         jwks_url: str,
         *,
         transport_factory: TransportFactory | None = None,
+        algorithms: tuple[SigningAlgorithm, ...] = tuple(SigningAlgorithm),
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Bind the key set to the URL it is published at.
@@ -135,10 +136,22 @@ class IssuerSigningKeys:
         Args:
             jwks_url: The issuer's key set URL.
             transport_factory: Optional factory controlling the outbound connection for the key set fetch.
+            algorithms: A tuple of the signing algorithms this issuer uses, which defaults to every accepted one.
             clock: The monotonic clock that ages the cached keys.
+
+        Raises:
+            ConfigurationError: If ``algorithms`` names no accepted algorithm or is not a tuple of them.
         """
         self._jwks_url = jwks_url
         self._transport_factory = transport_factory
+        if (
+            not isinstance(algorithms, tuple)
+            or not algorithms
+            or not all(isinstance(algorithm, SigningAlgorithm) for algorithm in algorithms)
+        ):
+            msg = "An issuer's signing algorithms must name one or more accepted algorithms, and nothing else"
+            raise ConfigurationError(msg)
+        self._algorithms = frozenset(algorithms)
         self._clock = clock
         self._keys: list[_SigningKey] = []
         self._fetched_at: float | None = None
@@ -176,9 +189,12 @@ class IssuerSigningKeys:
             msg = "ID token names a critical header parameter that is not supported"
             raise IdentityFetchError(msg)
         try:
-            algorithm = SigningAlgorithm(header.get("alg"))
-        except (TypeError, ValueError) as exc:
-            raise IdentityFetchError("ID token uses a signing algorithm that is not accepted") from exc
+            algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
+        except (TypeError, ValueError):
+            algorithm = None
+        if algorithm is None or algorithm not in self._algorithms:
+            msg = "ID token uses a signing algorithm that is not accepted"
+            raise IdentityFetchError(msg)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
