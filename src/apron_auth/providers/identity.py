@@ -94,12 +94,15 @@ def infer_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     Returns:
         The single matching identity handler, or ``None`` when no built-in
         provider matches.
+        It is also ``None`` when ``config`` does not allow identity inference.
 
     Raises:
         TypeError: If a matched resolver returns a value that is neither an
             identity handler nor ``None``.
         ConfigurationError: If more than one provider matches ``config``.
     """
+    if not config.allow_identity_inference:
+        return None
     matches: list[tuple[str, IdentityHandler]] = []
     for registration in _identity_resolver_registrations():
         handler = registration.resolver(config)

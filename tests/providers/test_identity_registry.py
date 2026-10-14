@@ -93,6 +93,23 @@ class TestInferIdentityHandler:
 
         assert isinstance(infer_identity_handler(_make_config()), Handler)
 
+    def test_a_config_that_disallows_inference_consults_no_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A config that opts out gets no handler, even from a resolver that would match it."""
+        consulted: list[ProviderConfig] = []
+
+        def resolver(config: ProviderConfig) -> None:
+            consulted.append(config)
+
+        registrations = (IdentityResolverRegistration(provider="only", resolver=resolver),)
+        monkeypatch.setattr(
+            "apron_auth.providers.identity._identity_resolver_registrations",
+            lambda: registrations,
+        )
+        config = _make_config().model_copy(update={"allow_identity_inference": False})
+
+        assert infer_identity_handler(config) is None
+        assert consulted == []
+
     def test_non_handler_match_raises_type_error(self, monkeypatch):
         def bad_resolver(config: ProviderConfig):
             del config

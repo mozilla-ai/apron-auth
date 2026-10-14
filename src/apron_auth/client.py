@@ -311,6 +311,7 @@ class OAuthClient:
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
+        The config can disallow that inference, and identity is then unsupported without a handler.
 
         NOTE: Callers must pass a token set straight from :meth:`exchange_code` or :meth:`refresh_token`.
         They must never pass one reloaded from storage or built from untrusted input.
