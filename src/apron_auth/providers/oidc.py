@@ -852,9 +852,11 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
     ) as client:
         try:
             response = await client.get(url)
-        except (httpx.InvalidURL, httpx.RequestError) as exc:
-            # The exception class only; the value adds just the request line.
-            msg = f"could not fetch the OpenID provider configuration ({type(exc).__name__})"
+        except httpx.RequestError as exc:
+            msg = f"could not fetch the OpenID provider configuration ({describe_http_error(exc)})"
+            raise OidcDiscoveryError(msg) from exc
+        except httpx.InvalidURL as exc:
+            msg = "could not fetch the OpenID provider configuration (invalid URL)"
             raise OidcDiscoveryError(msg) from exc
         if response.status_code != 200:
             if 300 <= response.status_code < 400:

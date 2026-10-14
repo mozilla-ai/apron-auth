@@ -266,8 +266,11 @@ class TestDiscover:
         """A transport error surfaces as ``OidcDiscoveryError``, not a raw httpx error."""
         httpx_mock.add_exception(httpx.ConnectError("no route"), url=DOCUMENT_URL)
 
-        with pytest.raises(OidcDiscoveryError, match="could not fetch"):
+        with pytest.raises(OidcDiscoveryError, match="could not fetch") as excinfo:
             await discover(ISSUER)
+
+        assert "network error" in str(excinfo.value)
+        assert "ConnectError" not in str(excinfo.value)
 
     async def test_reports_a_document_that_is_json_but_not_an_object(self, httpx_mock: HTTPXMock):
         """Valid JSON, wrong shape — distinct from a body that will not parse at all."""
