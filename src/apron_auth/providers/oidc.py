@@ -320,15 +320,21 @@ def identity_handler(
             addresses". A multi-tenant application must not enable it for a
             tenant-supplied issuer: one tenant could assert an address in
             another tenant's domain. Key users on ``identity_key()`` instead.
-        allow_insecure_http: Accept an ``http`` userinfo endpoint for local development, logging a WARNING.
+        allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
+            Each one logs a WARNING.
 
     Returns:
         The identity handler for this provider.
 
     Raises:
-        ConfigurationError: If the userinfo endpoint is a URL that :func:`discover` would refuse.
+        ConfigurationError: If the metadata names no issuer,
+            or its issuer or userinfo endpoint is a URL that :func:`discover` would refuse.
     """
+    if metadata.issuer is None:
+        msg = "OpenID provider metadata names no issuer; an identity handler could not be bound to one"
+        raise ConfigurationError(msg)
     return OidcIdentityHandler(
+        issuer=metadata.issuer,
         userinfo_url=metadata.userinfo_url,
         transport_factory=transport_factory,
         trust_email_verified=trust_email_verified,
@@ -366,14 +372,16 @@ class OidcIdentityHandler:
     def __init__(
         self,
         *,
+        issuer: str,
         userinfo_url: str | None,
         transport_factory: TransportFactory | None = None,
         trust_email_verified: bool = False,
         allow_insecure_http: bool = False,
     ) -> None:
-        """Configure where this handler reads userinfo from.
+        """Bind this handler to an issuer and configure where it reads userinfo from.
 
         Args:
+            issuer: The issuer this handler serves. It refuses a config that names any other issuer.
             userinfo_url: The provider's userinfo endpoint, or ``None`` when it
                 advertises none and identity rests on the ID token alone.
             transport_factory: Optional factory controlling the outbound
@@ -381,16 +389,19 @@ class OidcIdentityHandler:
             trust_email_verified: Report the issuer's ``email_verified`` claim;
                 see :func:`identity_handler`. When ``False``, it is reported as
                 ``None``.
-            allow_insecure_http: Accept an ``http`` userinfo endpoint for local development, logging a WARNING.
+            allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
+                Each one logs a WARNING.
 
         Raises:
-            ConfigurationError: If the userinfo endpoint is a URL that :func:`discover` would refuse.
+            ConfigurationError: If the issuer or the userinfo endpoint is a URL that :func:`discover` would refuse.
         """
-        if userinfo_url is not None:
-            try:
+        try:
+            _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+            if userinfo_url is not None:
                 _require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
-            except OidcDiscoveryError as exc:
-                raise ConfigurationError(str(exc)) from exc
+        except OidcDiscoveryError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self._issuer = issuer
         self._trust_email_verified = trust_email_verified
         self._userinfo_url = userinfo_url
         self._transport_factory = transport_factory
@@ -410,8 +421,8 @@ class OidcIdentityHandler:
             :func:`_provider_name`) and ``tenancies`` is always empty.
 
         Raises:
-            ConfigurationError: If ``config`` names no issuer, which leaves an
-                ID token's ``iss`` with nothing to be checked against.
+            ConfigurationError: If ``config`` names no issuer, or names one other than this handler's.
+                Either way, no request is sent.
             IdentityScopeNotGrantedError: If there is no usable ID token and the
                 userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             IdentityFetchError: If the ID token's claims do not validate or its ``sub`` is not a non-empty string.
@@ -420,6 +431,9 @@ class OidcIdentityHandler:
         """
         if config.issuer is None:
             msg = "OpenID provider config names no issuer; an ID token's iss could not be validated"
+            raise ConfigurationError(msg)
+        if config.issuer != self._issuer:
+            msg = "OpenID identity handler was built for a different issuer than the provider config names"
             raise ConfigurationError(msg)
         issuer = config.issuer
         claims = (

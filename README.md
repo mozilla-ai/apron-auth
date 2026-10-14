@@ -100,6 +100,11 @@ resolves to that provider's handler. `provider` is then `microsoft` or `google` 
 `oidc:<issuer>`, and adding the explicit handler later changes every user's `identity_key()`.
 Making inference skip generic configs is a tracked follow-up (#137).
 
+Build the handler and the config from the same `metadata`. The handler is bound to that
+metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,
+before any request. This keeps one issuer's access token away from another issuer's userinfo
+endpoint.
+
 ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
 OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check. The
 claims are always validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against

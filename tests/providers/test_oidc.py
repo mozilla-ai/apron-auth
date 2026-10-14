@@ -438,14 +438,14 @@ class TestHttpsRequirement:
     def test_handler_constructor_refuses_an_http_userinfo_endpoint(self) -> None:
         """Building the handler directly applies the same scheme rule as the factory."""
         with pytest.raises(ConfigurationError, match="userinfo endpoint must use https"):
-            OidcIdentityHandler(userinfo_url="http://idp.example/userinfo")
+            OidcIdentityHandler(issuer=ISSUER, userinfo_url="http://idp.example/userinfo")
 
     def test_handler_constructor_accepts_http_userinfo_with_the_explicit_opt_in(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The opt-in on the constructor matches the one on the factory."""
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
-            OidcIdentityHandler(userinfo_url="http://localhost:8080/userinfo", allow_insecure_http=True)
+            OidcIdentityHandler(issuer=ISSUER, userinfo_url="http://localhost:8080/userinfo", allow_insecure_http=True)
 
         assert "userinfo endpoint is plain http" in caplog.text
 
@@ -739,6 +739,11 @@ class TestIdentityHandlerFactory:
     def test_builds_a_handler_without_a_userinfo_endpoint(self):
         """Identity can rest on the ID token alone."""
         assert isinstance(identity_handler(metadata(userinfo_url=None)), OidcIdentityHandler)
+
+    def test_refuses_metadata_naming_no_issuer(self) -> None:
+        """A handler with no issuer could not check that a config belongs to it."""
+        with pytest.raises(ConfigurationError, match="names no issuer"):
+            identity_handler(metadata(issuer=None))
 
 
 class TestHandlerInference:
@@ -1191,7 +1196,7 @@ class TestOidcIdentity:
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = OidcIdentityHandler(userinfo_url="https://idp.example/\x00")
+        handler = OidcIdentityHandler(issuer=ISSUER, userinfo_url="https://idp.example/\x00")
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
@@ -1327,17 +1332,18 @@ class TestOidcIdentity:
         """
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"}, is_reusable=True)
         other_issuer = "https://sso.other.example"
+        other_metadata = metadata(issuer=other_issuer, userinfo_url=None)
         other_config, _ = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
-            metadata=metadata(issuer=other_issuer, userinfo_url=None),
+            metadata=other_metadata,
         )
 
         mine = await handler.fetch_identity(
             IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
         )
-        theirs = await handler.fetch_identity(
+        theirs = await identity_handler(other_metadata).fetch_identity(
             IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", iss=other_issuer)),
             other_config,
         )
@@ -1499,6 +1505,28 @@ class TestOidcIdentity:
 
         with pytest.raises(ConfigurationError, match="names no issuer"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), issuerless)
+
+    @pytest.mark.parametrize("with_id_token", [True, False])
+    async def test_refuses_a_config_for_another_issuer_before_any_request(
+        self, handler: OidcIdentityHandler, httpx_mock: HTTPXMock, with_id_token: bool
+    ) -> None:
+        """A handler for one issuer never sends another issuer's access token to its userinfo endpoint."""
+        other_issuer = "https://other.example.com"
+        other, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(issuer=other_issuer, userinfo_url=f"{other_issuer}/userinfo"),
+        )
+        material = IdentityMaterial(
+            access_token="access",
+            id_token=id_token(iss=other_issuer) if with_id_token else None,
+        )
+
+        with pytest.raises(ConfigurationError, match="different issuer"):
+            await handler.fetch_identity(material, other)
+
+        assert httpx_mock.get_requests() == []
 
     async def test_validates_against_the_config_not_the_handler(self, handler: OidcIdentityHandler):
         """Issuer and client id come from the config, so the pair cannot disagree."""
