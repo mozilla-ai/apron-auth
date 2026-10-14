@@ -594,7 +594,7 @@ _TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
 
 
 class _ChallengeElement(Enum):
-    """Classify the elements of a ``WWW-Authenticate`` header."""
+    """Each member is one kind of element in a ``WWW-Authenticate`` header."""
 
     AUTH_PARAM = auto()
     AUTH_SCHEME = auto()
