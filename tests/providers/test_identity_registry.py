@@ -14,12 +14,13 @@ from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers.identity import _identity_resolver_registrations, infer_identity_handler
 
 
-def _make_config() -> ProviderConfig:
+def _make_config(*, allow_identity_inference: bool = True) -> ProviderConfig:
     return ProviderConfig(
         client_id="test-client",
         client_secret=SecretStr("test-secret"),
         authorize_url="https://provider.example.com/authorize",
         token_url="https://provider.example.com/token",
+        allow_identity_inference=allow_identity_inference,
     )
 
 
@@ -92,6 +93,27 @@ class TestInferIdentityHandler:
         )
 
         assert isinstance(infer_identity_handler(_make_config()), Handler)
+
+    def test_a_config_that_disallows_inference_consults_no_resolver(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A config that opts out gets no handler, even from a resolver that would match it."""
+
+        class Handler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> None:
+                del material, config
+
+        consulted: list[ProviderConfig] = []
+
+        def resolver(config: ProviderConfig) -> Handler:
+            consulted.append(config)
+            return Handler()
+
+        registrations = (IdentityResolverRegistration(provider="only", resolver=resolver),)
+        monkeypatch.setattr(
+            "apron_auth.providers.identity._identity_resolver_registrations",
+            lambda: registrations,
+        )
+        assert infer_identity_handler(_make_config(allow_identity_inference=False)) is None
+        assert consulted == []
 
     def test_non_handler_match_raises_type_error(self, monkeypatch):
         def bad_resolver(config: ProviderConfig):

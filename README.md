@@ -93,12 +93,7 @@ Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/
 The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
 match by design.
 
-Always pass the identity handler explicitly, as above. `oidc` registers no inference
-resolver, but inference still runs on the config `preset` returns: a generic config whose
-endpoints sit on a host another provider claims (an Entra or Google issuer, for example)
-resolves to that provider's handler. `provider` is then `microsoft` or `google` instead of
-`oidc:<issuer>`, and adding the explicit handler later changes every user's `identity_key()`.
-Making inference skip generic configs is a tracked follow-up (#137).
+Always pass the identity handler explicitly, as above. The config that `preset` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. Inference would otherwise give a config on an Entra or Google host that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
 
 Build the handler and the config from the same `metadata`. The handler is bound to that
 metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,
@@ -237,12 +232,7 @@ only the access token and, for OIDC providers, the ID token — before
 being handed to the provider's identity handler, so handlers never
 receive the refresh token or caller context.
 
-Built-in identity handlers are inferred from standard Google, GitHub,
-HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear
-endpoint hostnames, so they apply to both the bundled `preset(...)`
-configs and any manually constructed `ProviderConfig` pointing at those
-hosts. For other providers, pass a custom `identity_handler` to
-`OAuthClient`.
+Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler, and the generic OpenID preset sets it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.

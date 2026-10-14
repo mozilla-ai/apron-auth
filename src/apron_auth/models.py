@@ -145,6 +145,10 @@ class ProviderConfig(BaseModel, frozen=True):
             resource. ``None`` (the default) emits no ``resource`` parameter
             anywhere, preserving behavior for providers that do not use
             resource indicators.
+        allow_identity_inference: Whether a built-in identity handler may be inferred from the endpoint hosts.
+            Set ``False`` when the hosts do not decide which identity contract applies,
+            for example a generic OpenID provider on a host that a built-in provider also serves.
+            Defaults to ``True``.
     """
 
     client_id: str
@@ -166,6 +170,7 @@ class ProviderConfig(BaseModel, frozen=True):
     issuer: str | None = None
     require_iss: bool = False
     resource: str | None = None
+    allow_identity_inference: bool = True
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
