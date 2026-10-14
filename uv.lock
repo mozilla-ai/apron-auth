@@ -64,9 +64,9 @@ tests = [
 
 [package.metadata]
 requires-dist = [
-    { name = "authlib", specifier = ">=1.6.12" },
+    { name = "authlib", specifier = ">=1.7.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "joserfc", specifier = ">=1.6" },
+    { name = "joserfc", specifier = ">=1.6.1" },
     { name = "pydantic", specifier = ">=2.0" },
 ]
 
