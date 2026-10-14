@@ -795,13 +795,13 @@ def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer
     elif scheme != "https":
         msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
         raise OidcDiscoveryError(msg)
-    if parsed.fragment or "#" in value:
+    if "#" in value:
         msg = f"OpenID {field} must not carry a fragment"
         raise OidcDiscoveryError(msg)
-    if is_issuer and (parsed.query or "?" in value):
+    if is_issuer and "?" in value:
         msg = f"OpenID {field} must not carry a query"
         raise OidcDiscoveryError(msg)
-    if is_issuer and (parsed.username is not None or parsed.password is not None or "@" in parsed.netloc):
+    if is_issuer and "@" in parsed.netloc:
         msg = f"OpenID {field} must not carry userinfo"
         raise OidcDiscoveryError(msg)
     return value
