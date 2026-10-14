@@ -28,6 +28,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -81,12 +82,12 @@ class NotionIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Notion identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Notion identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Notion identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Notion identity response") from exc
 
         bot = payload.get("bot") if isinstance(payload, dict) else None
         owner = bot.get("owner") if isinstance(bot, dict) else None

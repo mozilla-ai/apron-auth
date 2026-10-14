@@ -37,7 +37,7 @@ class TestHubSpotIdentityHandler:
         formatted = "".join(traceback.format_exception(exc_info.value))
         assert secret not in formatted
         assert exc_info.value.__cause__ is None
-        assert exc_info.value.__suppress_context__ is True
+        assert exc_info.value.__context__ is None
 
     async def test_happy_path_returns_identity_profile(self, httpx_mock: HTTPXMock):
         payload = {
@@ -166,8 +166,9 @@ class TestHubSpotIdentityHandler:
         formatted = "".join(traceback.format_exception(exc_info.value))
         assert secret not in formatted
         assert exc_info.value.__cause__ is None
-        assert exc_info.value.__suppress_context__ is True
-        assert "ConnectError" in str(exc_info.value)
+        assert exc_info.value.__context__ is None
+        assert "network error" in str(exc_info.value)
+        assert "ConnectError" not in str(exc_info.value)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
@@ -184,8 +185,10 @@ class TestHubSpotIdentityHandler:
         )
         handler = HubSpotIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Failed to parse HubSpot identity response"):
+        with pytest.raises(IdentityFetchError, match="Failed to parse HubSpot identity response") as exc_info:
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_subject_is_none_when_user_id_missing(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(

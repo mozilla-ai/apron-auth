@@ -19,6 +19,7 @@ from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -103,10 +104,8 @@ class AtlassianIdentityHandler:
     than failing the fetch, and an individual field the response does not
     carry as a non-empty string is dropped rather than propagated.
 
-    The bearer token travels in the ``Authorization`` header on both
-    calls (not the URL), so default httpx exception messages — which
-    embed the request URL — do not embed the token; the standard
-    ``raise ... from exc`` chain is therefore safe here.
+    The bearer token travels in the ``Authorization`` header on both calls, not in the URL.
+    A chained HTTP client error therefore cannot carry the token.
     """
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -163,12 +162,13 @@ class AtlassianIdentityHandler:
             response = await client.get(_ATLASSIAN_ACCESSIBLE_RESOURCES_URL, headers=headers)
             response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Atlassian accessible resources: {exc}") from exc
+            reason = describe_http_error(exc)
+            raise IdentityFetchError(f"Failed to fetch Atlassian accessible resources: {reason}") from exc
 
         try:
             resources = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Atlassian accessible resources response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Atlassian accessible resources response") from exc
 
         return _build_tenancies(resources)
 
@@ -203,7 +203,7 @@ class AtlassianIdentityHandler:
             logger.warning(
                 "atlassian user identity lookup failed (%s); "
                 "emitting a tenancy-only profile without person-level fields",
-                type(exc).__name__,
+                describe_http_error(exc),
             )
             return {}
 

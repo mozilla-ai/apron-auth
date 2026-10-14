@@ -38,6 +38,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -202,12 +203,12 @@ class SlackIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Slack identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Slack identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Slack identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Slack identity response") from exc
 
         if not isinstance(payload, dict):
             raise IdentityFetchError("Slack identity response was not a JSON object")
@@ -342,12 +343,12 @@ class SlackIdentityHandler:
             )
             response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Slack {endpoint_label}: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Slack {endpoint_label}: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Slack {endpoint_label} response: {exc}") from exc
+            raise IdentityFetchError(f"Failed to parse Slack {endpoint_label} response") from exc
 
         if not isinstance(payload, dict):
             raise IdentityFetchError(f"Slack {endpoint_label} response was not a JSON object")

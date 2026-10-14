@@ -23,6 +23,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -215,12 +216,12 @@ class MicrosoftIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Microsoft identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Microsoft identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Microsoft identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Microsoft identity response") from exc
         if not isinstance(payload, dict):
             raise IdentityFetchError("Microsoft identity response was not a JSON object")
         return payload
@@ -264,7 +265,7 @@ class MicrosoftIdentityHandler:
             logger.warning(
                 "microsoft directory lookup could not resolve the tenant's verified domains "
                 "(%s); not asserting domain ownership",
-                type(exc).__name__,
+                describe_http_error(exc),
             )
             return None
 

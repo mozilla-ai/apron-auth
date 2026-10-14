@@ -9,14 +9,13 @@ deep link to HubSpot's connected-apps settings for manual removal.
 
 Identity is fetched via HubSpot's access-token introspection endpoint,
 which carries the bearer token in the URL path rather than an
-``Authorization`` header. The handler therefore takes care never to
-include the request URL — or any string derived from a captured httpx
-exception, since those typically embed the URL — in the messages of
-:class:`IdentityFetchError`, and explicitly breaks the exception
-cause chain (``raise ... from None``) on the request and parse paths
-so that default traceback rendering and ``logging.exception()`` —
-which walk ``__cause__`` and ``__context__`` — cannot surface the
-URL-embedded token through the wrapped httpx exception.
+``Authorization`` header.
+An :class:`IdentityFetchError` from the identity handler holds no request URL,
+no HTTP client text, and no cause or context.
+The token-bearing request therefore cannot be reached from the error.
+
+NOTE: An error reporter that captures frame local variables can still record the token.
+The request URL is a local variable while the request runs, and no error handling can remove it.
 
 The introspection response mixes user and portal/account fields:
 ``user`` / ``user_id`` identify the HubSpot user, while ``hub_id`` /
@@ -30,7 +29,7 @@ no human handle in the introspection payload to put there.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import httpx
@@ -46,6 +45,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -77,10 +77,8 @@ class HubSpotIdentityHandler:
     HubSpot exposes ``GET /oauth/v1/access-tokens/{access_token}`` as
     the OAuth-token introspection endpoint. The bearer token travels
     in the URL path, not an ``Authorization`` header, which makes the
-    request URL itself a secret. To avoid leaking that secret on
-    failure, this handler never includes the request URL — or any
-    captured ``httpx`` exception's string form, which typically embeds
-    the URL — in :class:`IdentityFetchError` messages.
+    request URL itself a secret.
+    An :class:`IdentityFetchError` from this handler holds no request URL, no HTTP client text, and no cause or context.
 
     The introspection response mixes user and portal/account identity:
 
@@ -117,33 +115,7 @@ class HubSpotIdentityHandler:
         """
         del config
         introspect_url = f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(material.access_token, safe='')}"
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(introspect_url)
-                response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            # Drop the cause chain: ``raise_for_status`` builds a message that
-            # embeds the request URL (which contains the access token), so any
-            # caller printing the traceback would leak the token.
-            status_code = exc.response.status_code
-            raise IdentityFetchError(
-                f"Failed to fetch HubSpot identity: HTTP {status_code}",
-            ) from None
-        except httpx.RequestError as exc:
-            # Drop the cause chain: httpx transport errors commonly include the
-            # request URL — and therefore the access token — in their str().
-            error_name = type(exc).__name__
-            raise IdentityFetchError(
-                f"Failed to fetch HubSpot identity: {error_name}",
-            ) from None
-
-        try:
-            payload = response.json()
-        except ValueError:
-            # Drop the cause chain: JSON decoder errors can include surrounding
-            # bytes, which for a 2xx body are unlikely to leak the token but
-            # are stripped here for symmetry with the request-error paths.
-            raise IdentityFetchError("Failed to parse HubSpot identity response") from None
+        payload = await self._introspect(introspect_url)
 
         user_id = payload.get("user_id")
         hub_id = payload.get("hub_id")
@@ -177,6 +149,34 @@ class HubSpotIdentityHandler:
             tenancies=tenancies,
             raw=payload,
         )
+
+    async def _introspect(self, introspect_url: str) -> Any:
+        """Request the introspection endpoint and return the decoded body.
+
+        Args:
+            introspect_url: The introspection URL, which carries the access token.
+
+        Returns:
+            The decoded JSON body.
+
+        Raises:
+            IdentityFetchError: If the request fails or its response cannot be parsed.
+                The error has no cause or context, so the token-bearing request cannot be reached from it.
+        """
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(introspect_url)
+                response.raise_for_status()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            failure = f"Failed to fetch HubSpot identity: {describe_http_error(exc)}"
+        else:
+            try:
+                return response.json()
+            except ValueError:
+                failure = "Failed to parse HubSpot identity response"
+        # NOTE: This raise must stay outside the except blocks.
+        # Inside them, Python sets __context__ to the caught error.
+        raise IdentityFetchError(failure)
 
 
 class HubSpotRevocationHandler:

@@ -15,6 +15,7 @@ from pydantic import SecretStr
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.scopes import parse_scope
 
@@ -73,12 +74,12 @@ class TypeformIdentityHandler:
                 )
                 response.raise_for_status()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Typeform identity: {exc}") from exc
+            raise IdentityFetchError(f"Failed to fetch Typeform identity: {describe_http_error(exc)}") from exc
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Typeform identity response: {exc}") from exc
+            raise IdentityFetchError("Failed to parse Typeform identity response") from exc
 
         if not isinstance(payload, dict):
             raise IdentityFetchError("Typeform identity response was not a JSON object")
