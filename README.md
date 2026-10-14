@@ -100,7 +100,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `IdentityFetchError`, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: no `nonce` binds an ID token to the request yet, so a validly signed token replayed from elsewhere would pass.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `IdentityFetchError`, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce before it returns the tokens.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -121,13 +121,7 @@ mint `ceo@other-tenant.com` with `email_verified=true`. Key users on `identity_k
 stays safe either way. (A per-connection `verified_domains` option is the fuller design,
 tracked in #136.)
 
-PKCE is always on, and a provider whose `code_challenge_methods_supported` omits `S256` is
-refused at `preset` time. Since this preset sends no `nonce`, PKCE is the only thing binding
-an authorization code to the session that requested it, but only where the provider enforces
-it: when the field is absent (Entra omits it) `preset` still uses PKCE and logs a WARNING,
-because a provider that ignores the challenge leaves the code unbound. A malformed
-`code_challenge_methods_supported` or `token_endpoint_auth_methods_supported` is a discovery
-error rather than "not advertised". `nonce` support is tracked in #135.
+PKCE is always on, and a provider whose `code_challenge_methods_supported` omits `S256` is refused at `preset` time. PKCE binds an authorization code to the session that requested it only where the provider enforces it: when the field is absent (Entra omits it) `preset` still uses PKCE and logs a WARNING, because a provider that ignores the challenge leaves the code unbound. When the request asks for `openid`, as the preset's scopes do unless `extra_params` replaces the scope, `get_authorization_url` also sends a `nonce`, and `exchange_code` refuses an ID token that does not carry it. A malformed `code_challenge_methods_supported` or `token_endpoint_auth_methods_supported` is a discovery error rather than "not advertised".
 
 `discover` requires an absolute `https` URL for the issuer, the document URL, the signing key set, and every endpoint the document names (no fragment; the issuer also has no query or userinfo, per Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because the client secret and every token travel over them and the signing key set authenticates every ID token: over `http`, an on-path attacker reads the secret and tokens, and can replace the keys. `preset` and `identity_handler` apply the same rule to the metadata they are given, so metadata built without `discover` cannot skip it. For local development, pass `allow_insecure_http=True` to all three; each URL it lets through logs a WARNING.
 
@@ -145,10 +139,10 @@ Each is a deliberate limitation rather than an oversight:
 | Limitation | Why |
 | --- | --- |
 | Confidential clients only | `preset` requires a client secret; a public (native/SPA) client cannot be configured, though `ProviderConfig` models one |
-| No `nonce`, and no per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so a `nonce` through it would be one constant reused on every request — worse than omitting it. `nonce` is OPTIONAL for the code flow, so PKCE is the only code-injection defense (and only where the provider enforces it) — which is why `preset` *refuses* a provider advertising no `S256` method rather than configuring one without PKCE |
+| No per-request `prompt` / `login_hint` / `max_age` / `acr_values` / `ui_locales` / `display` / `id_token_hint` | `extra_params` is fixed on a frozen config, so each would be one constant reused on every request |
 | No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata` |
 | No `response_mode` | The query default is always used |
-| A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |
+| A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it. Such a response carries no nonce to check, so PKCE alone binds its code to the session that started the flow |
 | A signed (`application/jwt`) userinfo response is refused | Its signing algorithm is agreed at client registration, which the handler does not know, so it is refused rather than read unverified |
 
 ### Manual configuration

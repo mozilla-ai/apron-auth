@@ -20,8 +20,7 @@ Limitations
 
 * Confidential clients only.
   :func:`preset` requires a client secret.
-* No ``nonce`` and no per-request authorization parameters.
-  PKCE is the only code-injection defense, and it holds only where the provider enforces it.
+* No per-request authorization parameters, such as ``prompt`` or ``login_hint``.
 * No RP-Initiated Logout and no ``response_mode``.
   The query default is used.
 * A token response without an ``id_token`` is accepted.
@@ -216,8 +215,7 @@ def preset(
     ``openid`` is merged into ``scopes``, because without it the provider returns no ID token.
 
     PKCE is always on, with ``S256`` challenges.
-    No ``nonce`` is sent, so PKCE is the only code-injection defense (RFC 9700).
-    A provider whose advertised methods exclude ``S256`` is therefore refused, not configured without PKCE.
+    A provider whose advertised methods exclude ``S256`` is refused, not configured without PKCE.
     A provider that advertises no methods still gets PKCE, with a WARNING.
     PKCE binds the code only if the provider enforces it.
 
@@ -365,7 +363,7 @@ class OidcIdentityHandler:
     OpenID Connect Core 1.0 section 5.3.2 requires the two to match.
 
     NOTE: Callers must pass only tokens taken from a token-endpoint response, never a stored or front-channel token.
-    No ``nonce`` binds an ID token to this client's request, so a validly signed token replayed from elsewhere passes.
+    The handler checks no ``nonce``, so a validly signed token replayed from elsewhere passes.
 
     NOTE: Callers must not use one handler from event loops in several threads at once,
     because its key cache is unguarded.
