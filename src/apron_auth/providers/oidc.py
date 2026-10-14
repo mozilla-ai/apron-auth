@@ -10,12 +10,10 @@ A config from :func:`preset` disallows handler inference,
 because a built-in provider's handler for the same endpoint hosts would change every user's ``identity_key()``.
 Without a handler, ``OAuthClient.fetch_identity`` raises :class:`~apron_auth.errors.IdentityNotSupportedError`.
 
-ID token signatures are not verified.
-Tokens arrive on the token-endpoint response, where TLS authenticates the issuer.
-OpenID Connect Core 1.0 section 3.1.3.7 allows this.
-Claims are always validated per that section.
-Every URL here must be ``https``, because the design relies on TLS.
-Pass the handler only tokens from a token-endpoint response.
+ID token signatures are checked against the issuer's published key set,
+and the claims are validated per OpenID Connect Core 1.0 section 3.1.3.7.
+Every URL here must be ``https``, because the client secret and every token travel over these URLs,
+and the signing key set authenticates every ID token.
 
 Limitations
 -----------
@@ -36,7 +34,6 @@ Limitations
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from enum import Enum, auto
@@ -46,7 +43,6 @@ from urllib.parse import urlparse
 import httpx
 from authlib.oidc.core import CodeIDToken
 from authlib.oidc.discovery import get_well_known_url
-from joserfc import jws
 from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
@@ -67,6 +63,7 @@ from apron_auth.models import (
 )
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._http_errors import describe_http_error
+from apron_auth.providers._jwks import IssuerSigningKeys
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -138,8 +135,9 @@ async def discover(
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
-            It is off by default, because ID tokens are not signature-checked and rely on TLS for the issuer.
-            Over ``http``, an on-path attacker chooses every claim and reads the client secret.
+            It is off by default, because the client secret and every token travel over these URLs,
+            and the signing key set authenticates every ID token.
+            Over ``http``, an on-path attacker reads the secret and tokens, and can replace the keys.
             It is for local development only, and it logs a WARNING for each URL it lets through.
 
     Returns:
@@ -148,7 +146,7 @@ async def discover(
     Raises:
         OidcDiscoveryError: If the issuer is malformed, or a URL is not ``https`` and ``allow_insecure_http`` is unset.
             It is also raised if the document cannot be fetched or parsed, omits a required endpoint,
-            or names an issuer other than ``issuer``.
+            names no signing key set, or names an issuer other than ``issuer``.
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
@@ -172,6 +170,10 @@ async def discover(
         raise OidcDiscoveryError(msg)
     authorize_url = _require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
     token_url = _require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
+    jwks_url = _optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
+    if jwks_url is None:
+        msg = "OpenID provider configuration names no signing key set"
+        raise OidcDiscoveryError(msg)
 
     userinfo_url = _optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
     revocation_url = _optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
@@ -189,6 +191,7 @@ async def discover(
         issuer=declared_issuer,
         iss_parameter_supported=document.get("authorization_response_iss_parameter_supported") is True,
         userinfo_url=userinfo_url,
+        jwks_url=jwks_url,
     )
 
 
@@ -234,7 +237,7 @@ def preset(
 
     Raises:
         ConfigurationError: If ``client_secret`` is empty,
-            or the metadata names no issuer or holds a URL that :func:`discover` would refuse.
+            or the metadata names no issuer or no signing key set, or holds a URL that :func:`discover` would refuse.
             It is also raised if the provider advertises only token-endpoint auth methods this library cannot perform,
             or code-challenge methods that exclude ``S256``.
             These are configuration faults, not discovery failures, so they do not raise :class:`OidcDiscoveryError`.
@@ -244,6 +247,9 @@ def preset(
         raise ConfigurationError(msg)
     if metadata.issuer is None:
         msg = "OpenID provider metadata names no issuer; an ID token's iss could not be validated"
+        raise ConfigurationError(msg)
+    if not metadata.jwks_url:
+        msg = "OpenID provider metadata names no signing key set; ID tokens could not be verified"
         raise ConfigurationError(msg)
     try:
         _require_metadata_urls(metadata, allow_insecure_http=allow_insecure_http)
@@ -293,12 +299,15 @@ def identity_handler(
 ) -> OidcIdentityHandler:
     """Build the identity handler for a discovered provider.
 
+    The handler caches the issuer's signing keys, so build one per issuer and keep it.
+    A new handler fetches the keys again on its first sign-in.
+
     NOTE: Callers must always pass it to :class:`~apron_auth.client.OAuthClient`.
     The module docstring explains why.
 
     Args:
         metadata: The provider's discovered metadata, from :func:`discover`.
-        transport_factory: Optional factory controlling the outbound connection for the userinfo request.
+        transport_factory: Optional factory controlling the outbound connections for userinfo and the signing key set.
         trust_email_verified: Report the issuer's ``email_verified`` claim on the profile.
             It is off by default, so ``email_verified`` is ``None``
             and :meth:`~apron_auth.models.IdentityProfile.verified_email` returns nothing.
@@ -307,22 +316,26 @@ def identity_handler(
             A multi-tenant application must not enable it for a tenant-supplied issuer,
             because one tenant could assert an address in another tenant's domain.
             Key users on ``identity_key()`` instead.
-        allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
+        allow_insecure_http: Accept an ``http`` issuer, userinfo endpoint and signing key set for local development.
             Each one logs a WARNING.
 
     Returns:
         The identity handler for this provider.
 
     Raises:
-        ConfigurationError: If the metadata names no issuer,
-            or its issuer or userinfo endpoint is a URL that :func:`discover` would refuse.
+        ConfigurationError: If the metadata names no issuer or no signing key set,
+            or its issuer, userinfo endpoint or signing key set is a URL that :func:`discover` would refuse.
     """
     if metadata.issuer is None:
         msg = "OpenID provider metadata names no issuer; an identity handler could not be bound to one"
         raise ConfigurationError(msg)
+    if not metadata.jwks_url:
+        msg = "OpenID provider metadata names no signing key set; ID tokens could not be verified"
+        raise ConfigurationError(msg)
     return OidcIdentityHandler(
         issuer=metadata.issuer,
         userinfo_url=metadata.userinfo_url,
+        jwks_url=metadata.jwks_url,
         transport_factory=transport_factory,
         trust_email_verified=trust_email_verified,
         allow_insecure_http=allow_insecure_http,
@@ -333,9 +346,11 @@ class OidcIdentityHandler:
     """Establish identity from an ID token's claims and the userinfo endpoint.
 
     The handler is bound to one issuer, and it refuses a config that names another.
+    It caches the issuer's signing keys, so one handler per issuer serves every sign-in.
 
     The ID token is the trust-bearing source.
-    Its ``iss``, ``aud``, ``azp``, ``exp`` and ``sub`` are validated before any claim is read.
+    Its signature is checked against the issuer's published keys before any claim is read.
+    Its ``iss``, ``aud``, ``azp``, ``exp`` and ``sub`` are then validated.
     ``sub`` is taken from it in preference to userinfo, because the caller makes access decisions on it.
     Userinfo supplies display fields, and it stands in entirely when the provider returns no ID token.
     OpenID Connect Core 1.0 section 3.1.3.3 requires an ID token when ``openid`` was requested.
@@ -343,14 +358,17 @@ class OidcIdentityHandler:
 
     When an ID token validated, the userinfo call only adds detail.
     If it fails, a WARNING is logged and identity rests on the ID token.
-    With no usable ID token, userinfo is the only source, so its failure raises.
-
-    NOTE: Callers must pass only tokens taken from a token-endpoint response over TLS,
-    never a stored or front-channel token.
-    The ID token is validated without a signature check, which is safe only on that channel.
+    With no ID token, userinfo is the only source, so its failure raises.
+    An ID token that does not verify raises, and identity never falls back to userinfo for it.
 
     A userinfo response whose ``sub`` is missing or differs from the ID token's is refused, not reconciled.
     OpenID Connect Core 1.0 section 5.3.2 requires the two to match.
+
+    NOTE: Callers must pass only tokens taken from a token-endpoint response, never a stored or front-channel token.
+    No ``nonce`` binds an ID token to this client's request, so a validly signed token replayed from elsewhere passes.
+
+    NOTE: Callers must not use one handler from event loops in several threads at once,
+    because its key cache is unguarded.
     """
 
     def __init__(
@@ -358,6 +376,7 @@ class OidcIdentityHandler:
         *,
         issuer: str,
         userinfo_url: str | None,
+        jwks_url: str,
         transport_factory: TransportFactory | None = None,
         trust_email_verified: bool = False,
         allow_insecure_http: bool = False,
@@ -368,25 +387,29 @@ class OidcIdentityHandler:
             issuer: The issuer this handler serves. It refuses a config that names any other issuer.
             userinfo_url: The provider's userinfo endpoint.
                 It is ``None`` when the provider advertises none, and identity then rests on the ID token alone.
-            transport_factory: Optional factory controlling the outbound connection for the userinfo request.
+            jwks_url: The issuer's signing key set, which every ID token must verify against.
+            transport_factory: Optional factory controlling the outbound connections for userinfo and the key set.
             trust_email_verified: Report the issuer's ``email_verified`` claim, as :func:`identity_handler` describes.
                 When ``False``, the claim is reported as ``None``.
-            allow_insecure_http: Accept an ``http`` issuer and userinfo endpoint for local development.
+            allow_insecure_http: Accept an ``http`` issuer, userinfo endpoint and signing key set for local development.
                 Each one logs a WARNING.
 
         Raises:
-            ConfigurationError: If the issuer or the userinfo endpoint is a URL that :func:`discover` would refuse.
+            ConfigurationError: If the issuer, the userinfo endpoint or the signing key set is a URL
+                that :func:`discover` would refuse.
         """
         try:
             _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
             if userinfo_url is not None:
                 _require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
+            _require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
         self._trust_email_verified = trust_email_verified
         self._userinfo_url = userinfo_url
         self._transport_factory = transport_factory
+        self._signing_keys = IssuerSigningKeys(jwks_url, transport_factory=transport_factory)
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields for a generic OpenID sign-in.
@@ -405,7 +428,8 @@ class OidcIdentityHandler:
                 Either way, no request is sent.
             IdentityScopeNotGrantedError: If there is no usable ID token,
                 and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
-            IdentityFetchError: If the ID token's claims do not validate or its ``sub`` is not a non-empty string.
+            IdentityFetchError: If the ID token's signature or claims do not validate,
+                its ``sub`` is not a non-empty string, or the issuer's signing keys cannot be fetched or read.
                 It is also raised when userinfo fails and there is no validated ID token,
                 when userinfo names no subject or a different one than the ID token, or when neither yields a subject.
         """
@@ -417,7 +441,7 @@ class OidcIdentityHandler:
             raise ConfigurationError(msg)
         issuer = config.issuer
         claims = (
-            self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
+            await self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
             if material.id_token
             else None
         )
@@ -468,18 +492,14 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any] | None:
-        """Return the ID token's claims once they check out.
+    async def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any]:
+        """Return the ID token's claims once its signature and claims check out.
 
-        Claims are validated per OpenID Connect Core 1.0 section 3.1.3.7.
+        The signature is checked against the issuer's published keys before any claim is read.
+        Claims are then validated per OpenID Connect Core 1.0 section 3.1.3.7.
         ``iss``, ``sub``, ``aud``, ``exp`` and ``iat`` are essential.
         ``azp`` is required when the audience is not solely this client.
         ``at_hash`` is checked against the access token.
-        The signature is not checked, as the module docstring explains.
-
-        A token that is not a parseable JWT gives ``None``, and identity falls back to userinfo.
-        The provider has still authenticated somebody, and userinfo says who.
-        A token that parses but has wrong claims raises, because it was minted for someone else or by someone else.
 
         Args:
             id_token: The ID token from the token-endpoint response.
@@ -489,24 +509,17 @@ class OidcIdentityHandler:
             client_id: The client identifier the token's ``aud`` must name.
 
         Returns:
-            The validated claims, or ``None`` when the token is unparseable.
+            The validated claims.
 
         Raises:
-            IdentityFetchError: If any claim does not validate.
+            IdentityFetchError: If the signature or any claim does not validate,
+                or the issuer's signing keys cannot be fetched or read.
         """
-        try:
-            signature = jws.extract_compact(id_token.encode())
-            claims = json.loads(signature.payload)
-        except (JoseError, ValueError):
-            logger.warning("OpenID ID token dropped, identity falls back to userinfo: token is not a parseable JWT")
-            return None
-        if not isinstance(claims, dict):
-            logger.warning("OpenID ID token dropped, identity falls back to userinfo: payload was not a JSON object")
-            return None
+        header, claims = await self._signing_keys.verify(id_token)
         token = CodeIDToken(
             claims,
             # The real header: ``at_hash`` validation reads ``alg`` from it.
-            signature.headers(),
+            header,
             # ``CodeIDToken`` does not compare ``aud`` to ``client_id`` itself, so it is declared here.
             {
                 "iss": {"values": [issuer], "essential": True},
@@ -569,7 +582,7 @@ class OidcIdentityHandler:
 
         media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
         if media_type == "application/jwt":
-            # Signatures are not verified here, so a signed response is refused rather than read unverified.
+            # Its signing algorithm is agreed at client registration, which this handler does not know.
             msg = "OpenID provider returned a signed userinfo response, which is not supported"
             raise IdentityFetchError(msg)
         try:
@@ -836,6 +849,7 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     optional_urls = (
         ("registration endpoint", metadata.registration_url),
         ("revocation endpoint", metadata.revocation_url),
+        ("signing key set", metadata.jwks_url),
         ("userinfo endpoint", metadata.userinfo_url),
     )
     for field, url in optional_urls:

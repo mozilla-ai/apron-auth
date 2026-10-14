@@ -100,12 +100,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID tokens are read from the token-endpoint response, where TLS authenticates the issuer;
-OpenID Connect Core 1.0 section 3.1.3.7 permits that in place of a signature check. The
-claims are always validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against
-the access token). The handler then refuses a userinfo response whose `sub` is missing or
-disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response,
-never a stored or front-channel token, because it does not verify signatures.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `IdentityFetchError`, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: no `nonce` binds an ID token to the request yet, so a validly signed token replayed from elsewhere would pass.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -134,13 +129,7 @@ because a provider that ignores the challenge leaves the code unbound. A malform
 `code_challenge_methods_supported` or `token_endpoint_auth_methods_supported` is a discovery
 error rather than "not advertised". `nonce` support is tracked in #135.
 
-`discover` requires an absolute `https` URL for the issuer, the document URL, and every
-endpoint the document names (no fragment; the issuer also has no query or userinfo, per
-Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because ID tokens are read without a signature check and rely on TLS to
-authenticate the issuer: over `http`, an on-path attacker chooses every claim and reads the
-client secret. `preset` and `identity_handler` apply the same rule to the metadata they are
-given, so metadata built without `discover` cannot skip it. For local development, pass
-`allow_insecure_http=True` to all three; each URL it lets through logs a WARNING.
+`discover` requires an absolute `https` URL for the issuer, the document URL, the signing key set, and every endpoint the document names (no fragment; the issuer also has no query or userinfo, per Discovery 1.0 section 4.1; a bad value raises `OidcDiscoveryError` naming the field), because the client secret and every token travel over them and the signing key set authenticates every ID token: over `http`, an on-path attacker reads the secret and tokens, and can replace the keys. `preset` and `identity_handler` apply the same rule to the metadata they are given, so metadata built without `discover` cannot skip it. For local development, pass `allow_insecure_http=True` to all three; each URL it lets through logs a WARNING.
 
 Beyond the scheme, `discover` applies no host policy, so a self-hosted IdP on a private
 network needs no opt-in. Whether a given issuer may be reached is a deployment question,
@@ -160,7 +149,7 @@ Each is a deliberate limitation rather than an oversight:
 | No RP-Initiated Logout | `end_session_endpoint` is neither read nor carried on `ServerMetadata` |
 | No `response_mode` | The query default is always used |
 | A token response with no `id_token` is accepted | Section 3.1.3.3 requires one; identity falls back to userinfo alone, with a weaker claim to have vouched for it |
-| A signed (`application/jwt`) userinfo response is refused | Signatures are not verified here, so it is refused rather than read unverified |
+| A signed (`application/jwt`) userinfo response is refused | Its signing algorithm is agreed at client registration, which the handler does not know, so it is refused rather than read unverified |
 
 ### Manual configuration
 
