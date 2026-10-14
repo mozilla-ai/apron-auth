@@ -665,6 +665,17 @@ class TestPreset:
 
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
+    def test_uses_basic_when_the_provider_advertises_no_method(self) -> None:
+        """An absent list means ``client_secret_basic`` (OpenID Connect Discovery 1.0 section 3)."""
+        config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(token_endpoint_auth_methods=[]),
+        )
+
+        assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+
     def test_falls_back_to_basic_when_that_is_all_that_is_advertised(self):
         """``client_secret_basic`` is used when it is the only method on offer."""
         config, _ = preset(

@@ -715,10 +715,10 @@ def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
 def _select_auth_method(advertised: Sequence[str]) -> str:
     """Choose the token-endpoint auth method for a confidential client.
 
-    Prefers ``client_secret_post`` among the methods the provider advertises,
-    and falls back to it when the provider advertises none, which RFC 8414
-    section 2 reads as ``client_secret_basic`` but which providers omit far
-    more often than they mean it.
+    Prefers ``client_secret_post`` among the methods the provider advertises.
+    When the provider advertises none, it uses ``client_secret_basic``.
+    That is the default in OpenID Connect Discovery 1.0 section 3.
+    RFC 6749 section 2.3.1 also requires every server to support that method.
 
     Args:
         advertised: The methods the provider advertises support for.
@@ -733,7 +733,7 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
             error rather than a discovery failure.
     """
     if not advertised:
-        return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+        return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
     for method in _CONFIDENTIAL_AUTH_METHODS:
         if method in advertised:
             return method
