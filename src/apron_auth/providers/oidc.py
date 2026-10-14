@@ -569,7 +569,7 @@ class OidcIdentityHandler:
             IdentityScopeNotGrantedError: If the endpoint answers 403
                 ``insufficient_scope``.
             IdentityFetchError: If the transport factory refuses the connection, the request fails,
-                its response cannot be parsed, or it is not a JSON object.
+                or the response is signed, cannot be parsed, or is not a JSON object.
         """
         try:
             transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
@@ -594,12 +594,16 @@ class OidcIdentityHandler:
         except httpx.InvalidURL as exc:
             raise IdentityFetchError("Failed to fetch OpenID identity: invalid userinfo URL") from exc
 
+        media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+        if media_type == "application/jwt":
+            # Signatures are not verified here, so a signed response is refused rather than read unverified.
+            msg = "OpenID provider returned a signed userinfo response, which is not supported"
+            raise IdentityFetchError(msg)
         try:
             payload = response.json()
         except ValueError as exc:
             raise IdentityFetchError("Failed to parse OpenID identity response") from exc
         if not isinstance(payload, dict):
-            # A signed (``application/jwt``) userinfo response is refused rather than read unverified.
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
         return payload

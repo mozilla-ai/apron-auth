@@ -1446,6 +1446,19 @@ class TestOidcIdentity:
         assert "secret-detail" not in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, PermissionError)
 
+    async def test_refuses_a_signed_userinfo_response(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ) -> None:
+        """A signed userinfo response is named as unsupported, not reported as a broken body."""
+        httpx_mock.add_response(
+            url=USERINFO_URL,
+            headers={"Content-Type": "application/jwt; charset=utf-8"},
+            content=id_token(sub="u-1").encode(),
+        )
+
+        with pytest.raises(IdentityFetchError, match="signed userinfo"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+
     async def test_reports_an_unparseable_userinfo_body(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
     ):
