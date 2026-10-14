@@ -840,13 +840,13 @@ def _optional_url(document: dict[str, Any], key: str, field: str, allow_insecure
         allow_insecure_http: Passed through to :func:`_require_url`.
 
     Returns:
-        The endpoint, or ``None`` when the document omits it.
+        The endpoint, or ``None`` when the document omits it or gives an empty string.
 
     Raises:
-        OidcDiscoveryError: If the member is present but not an acceptable URL.
+        OidcDiscoveryError: If the member is present and not empty, but not an acceptable URL.
     """
     value = document.get(key)
-    if value is None:
+    if value is None or value == "":
         return None
     return _require_url(value, field=field, allow_insecure_http=allow_insecure_http)
 

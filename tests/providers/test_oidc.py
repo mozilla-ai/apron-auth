@@ -487,13 +487,31 @@ class TestUrlValidation:
             await discover(ISSUER)
 
     @pytest.mark.parametrize("field", ["userinfo_endpoint", "revocation_endpoint", "registration_endpoint"])
-    @pytest.mark.parametrize("bad", ["", "/relative", "javascript:alert(1)", f"{ISSUER}/x#frag"])
+    @pytest.mark.parametrize("bad", ["/relative", "javascript:alert(1)", f"{ISSUER}/x#frag"])
     async def test_refuses_a_bad_optional_endpoint_when_present(self, httpx_mock: HTTPXMock, field: str, bad: str):
         """An optional endpoint is validated whenever the document names one."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: bad}))
 
         with pytest.raises(OidcDiscoveryError, match="endpoint"):
             await discover(ISSUER)
+
+    @pytest.mark.parametrize(
+        ("field", "attribute"),
+        [
+            ("userinfo_endpoint", "userinfo_url"),
+            ("revocation_endpoint", "revocation_url"),
+            ("registration_endpoint", "registration_url"),
+        ],
+    )
+    async def test_treats_an_empty_optional_endpoint_as_absent(
+        self, httpx_mock: HTTPXMock, field: str, attribute: str
+    ) -> None:
+        """An empty string names no endpoint, so discovery carries on without it."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: ""}))
+
+        discovered = await discover(ISSUER)
+
+        assert getattr(discovered, attribute) is None
 
     async def test_names_the_offending_field(self, httpx_mock: HTTPXMock):
         """The error says which member was wrong, so an operator can find it."""
