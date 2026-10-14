@@ -36,6 +36,7 @@ DOCUMENT_URL = f"{ISSUER}/.well-known/openid-configuration"
 AUTHORIZE_URL = f"{ISSUER}/protocol/openid-connect/auth"
 TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 USERINFO_URL = f"{ISSUER}/protocol/openid-connect/userinfo"
+JWKS_URL = f"{ISSUER}/protocol/openid-connect/certs"
 CLIENT_ID = "otari"
 CLIENT_SECRET = "s3cret"  # pragma: allowlist secret
 # Codes that differ from ``insufficient_scope`` by a prefix, a suffix, padding or letter case.
@@ -49,6 +50,7 @@ def document(**overrides: Any) -> dict[str, Any]:
         "authorization_endpoint": AUTHORIZE_URL,
         "token_endpoint": TOKEN_URL,
         "userinfo_endpoint": USERINFO_URL,
+        "jwks_uri": JWKS_URL,
         "scopes_supported": ["openid", "email", "profile"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
@@ -109,6 +111,7 @@ def metadata(**overrides: Any) -> ServerMetadata:
         "authorize_url": AUTHORIZE_URL,
         "token_url": TOKEN_URL,
         "userinfo_url": USERINFO_URL,
+        "jwks_url": JWKS_URL,
         "issuer": ISSUER,
     }
     base.update(overrides)
@@ -159,6 +162,7 @@ class TestDiscover:
         assert discovered.authorize_url == AUTHORIZE_URL
         assert discovered.token_url == TOKEN_URL
         assert discovered.userinfo_url == USERINFO_URL
+        assert discovered.jwks_url == JWKS_URL
         assert discovered.issuer == ISSUER
         assert discovered.code_challenge_methods == ["S256"]
 
@@ -187,6 +191,17 @@ class TestDiscover:
         httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
 
         with pytest.raises(OidcDiscoveryError, match="declares no issuer"):
+            await discover(ISSUER)
+
+    @pytest.mark.parametrize("value", [None, ""])
+    async def test_refuses_a_document_without_a_signing_key_set(self, httpx_mock: HTTPXMock, value: str | None) -> None:
+        """OpenID Connect Discovery 1.0 section 3 makes ``jwks_uri`` REQUIRED."""
+        payload = document(jwks_uri=value)
+        if value is None:
+            del payload["jwks_uri"]
+        httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
+
+        with pytest.raises(OidcDiscoveryError, match="names no signing key set"):
             await discover(ISSUER)
 
     async def test_refuses_a_document_missing_an_endpoint(self, httpx_mock: HTTPXMock):
@@ -364,6 +379,7 @@ class TestHttpsRequirement:
             ("userinfo_endpoint", "userinfo endpoint"),
             ("revocation_endpoint", "revocation endpoint"),
             ("registration_endpoint", "registration endpoint"),
+            ("jwks_uri", "signing key set"),
         ],
     )
     async def test_refuses_an_http_endpoint(self, httpx_mock: HTTPXMock, field: str, label: str):
@@ -454,14 +470,19 @@ class TestHttpsRequirement:
     def test_handler_constructor_refuses_an_http_userinfo_endpoint(self) -> None:
         """Building the handler directly applies the same scheme rule as the factory."""
         with pytest.raises(ConfigurationError, match="userinfo endpoint must use https"):
-            OidcIdentityHandler(issuer=ISSUER, userinfo_url="http://idp.example/userinfo")
+            OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url="http://idp.example/userinfo")
 
     def test_handler_constructor_accepts_http_userinfo_with_the_explicit_opt_in(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """The opt-in on the constructor matches the one on the factory."""
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
-            OidcIdentityHandler(issuer=ISSUER, userinfo_url="http://localhost:8080/userinfo", allow_insecure_http=True)
+            OidcIdentityHandler(
+                issuer=ISSUER,
+                jwks_url=JWKS_URL,
+                userinfo_url="http://localhost:8080/userinfo",
+                allow_insecure_http=True,
+            )
 
         assert "userinfo endpoint is plain http" in caplog.text
 
@@ -746,6 +767,12 @@ class TestPreset:
                 metadata=metadata(token_endpoint_auth_methods=["private_key_jwt"]),
             )
 
+    @pytest.mark.parametrize("jwks_url", [None, ""])
+    def test_refuses_metadata_naming_no_signing_key_set(self, jwks_url: str | None) -> None:
+        """A config whose ID tokens could not be verified is not built."""
+        with pytest.raises(ConfigurationError, match="names no signing key set"):
+            preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata(jwks_url=jwks_url))
+
     def test_refuses_metadata_naming_no_issuer(self):
         """An issuer-less config would silently skip every ``iss`` check.
 
@@ -804,6 +831,17 @@ class TestIdentityHandlerFactory:
         """A handler with no issuer could not check that a config belongs to it."""
         with pytest.raises(ConfigurationError, match="names no issuer"):
             identity_handler(metadata(issuer=None))
+
+    @pytest.mark.parametrize("jwks_url", [None, ""])
+    def test_refuses_metadata_without_a_signing_key_set(self, jwks_url: str | None) -> None:
+        """A handler that cannot verify ID tokens is not built."""
+        with pytest.raises(ConfigurationError, match="names no signing key set"):
+            identity_handler(metadata(jwks_url=jwks_url))
+
+    def test_refuses_an_insecure_signing_key_set_url(self) -> None:
+        """The key set URL meets the same rule as every other endpoint."""
+        with pytest.raises(ConfigurationError, match="signing key set must use https"):
+            identity_handler(metadata(jwks_url="http://sso.example.com/certs"))
 
 
 class TestHandlerInference:
@@ -1315,7 +1353,7 @@ class TestOidcIdentity:
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = OidcIdentityHandler(issuer=ISSUER, userinfo_url="https://idp.example/\x00")
+        handler = OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url="https://idp.example/\x00")
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)

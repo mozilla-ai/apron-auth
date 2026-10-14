@@ -39,6 +39,7 @@ PROBE_OIDC_METADATA = ServerMetadata(
     authorize_url="https://sso.example.com/auth",
     token_url="https://sso.example.com/token",
     issuer="https://sso.example.com",
+    jwks_url="https://sso.example.com/certs",
 )
 
 

@@ -38,6 +38,7 @@ _OIDC_METADATA = ServerMetadata(
     token_url="https://sso.example.com/token",
     issuer="https://sso.example.com",
     userinfo_url="https://sso.example.com/userinfo",
+    jwks_url="https://sso.example.com/certs",
 )
 
 

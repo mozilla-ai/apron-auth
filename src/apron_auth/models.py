@@ -331,6 +331,7 @@ class ServerMetadata(BaseModel, frozen=True):
             This is the canonical URI to which a token's audience is bound.
         userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when the metadata omits it.
             An OpenID provider need not advertise one.
+        jwks_url: The issuer's JSON Web Key Set (JWKS) URL, or ``None`` when the metadata omits it.
     """
 
     authorize_url: str
@@ -345,6 +346,7 @@ class ServerMetadata(BaseModel, frozen=True):
     supports_cimd: bool = False
     resource: str | None = None
     userinfo_url: str | None = None
+    jwks_url: str | None = None
 
 
 class ClientRegistration(BaseModel, frozen=True):
