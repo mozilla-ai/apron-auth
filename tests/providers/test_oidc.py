@@ -435,6 +435,20 @@ class TestHttpsRequirement:
 
         assert "userinfo endpoint is plain http" in caplog.text
 
+    def test_handler_constructor_refuses_an_http_userinfo_endpoint(self) -> None:
+        """Building the handler directly applies the same scheme rule as the factory."""
+        with pytest.raises(ConfigurationError, match="userinfo endpoint must use https"):
+            OidcIdentityHandler(userinfo_url="http://idp.example/userinfo")
+
+    def test_handler_constructor_accepts_http_userinfo_with_the_explicit_opt_in(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The opt-in on the constructor matches the one on the factory."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            OidcIdentityHandler(userinfo_url="http://localhost:8080/userinfo", allow_insecure_http=True)
+
+        assert "userinfo endpoint is plain http" in caplog.text
+
 
 class TestUrlValidation:
     """Issuer and endpoint URLs are validated as absolute, well-formed URLs."""
@@ -1177,7 +1191,7 @@ class TestOidcIdentity:
 
     async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = OidcIdentityHandler(userinfo_url="https://[::1")
+        handler = OidcIdentityHandler(userinfo_url="https://idp.example/\x00")
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)

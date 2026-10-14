@@ -328,15 +328,11 @@ def identity_handler(
     Raises:
         ConfigurationError: If the userinfo endpoint is a URL that :func:`discover` would refuse.
     """
-    if metadata.userinfo_url is not None:
-        try:
-            _require_url(metadata.userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
-        except OidcDiscoveryError as exc:
-            raise ConfigurationError(str(exc)) from exc
     return OidcIdentityHandler(
         userinfo_url=metadata.userinfo_url,
         transport_factory=transport_factory,
         trust_email_verified=trust_email_verified,
+        allow_insecure_http=allow_insecure_http,
     )
 
 
@@ -373,6 +369,7 @@ class OidcIdentityHandler:
         userinfo_url: str | None,
         transport_factory: TransportFactory | None = None,
         trust_email_verified: bool = False,
+        allow_insecure_http: bool = False,
     ) -> None:
         """Configure where this handler reads userinfo from.
 
@@ -384,7 +381,16 @@ class OidcIdentityHandler:
             trust_email_verified: Report the issuer's ``email_verified`` claim;
                 see :func:`identity_handler`. When ``False``, it is reported as
                 ``None``.
+            allow_insecure_http: Accept an ``http`` userinfo endpoint for local development, logging a WARNING.
+
+        Raises:
+            ConfigurationError: If the userinfo endpoint is a URL that :func:`discover` would refuse.
         """
+        if userinfo_url is not None:
+            try:
+                _require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
+            except OidcDiscoveryError as exc:
+                raise ConfigurationError(str(exc)) from exc
         self._trust_email_verified = trust_email_verified
         self._userinfo_url = userinfo_url
         self._transport_factory = transport_factory
