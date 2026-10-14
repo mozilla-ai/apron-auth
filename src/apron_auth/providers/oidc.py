@@ -549,6 +549,10 @@ class OidcIdentityHandler:
             # A malformed header or claim shape can escape as ``TypeError``; the contract is ``IdentityFetchError``.
             msg = "OpenID ID token claims did not validate"
             raise IdentityFetchError(msg) from exc
+        # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
+        if claims.get("iss") != issuer:
+            msg = "OpenID ID token has an invalid iss claim"
+            raise IdentityFetchError(msg)
         return claims
 
     async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:

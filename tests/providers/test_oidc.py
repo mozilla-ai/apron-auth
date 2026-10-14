@@ -1003,6 +1003,14 @@ class TestOidcIdentity:
                 config,
             )
 
+    @pytest.mark.parametrize("iss", [[ISSUER], ["https://attacker.example", ISSUER]])
+    async def test_refuses_an_id_token_naming_its_issuer_in_a_list(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, iss: list[str]
+    ) -> None:
+        """``iss`` must be exactly the issuer string, not a list that contains it."""
+        with pytest.raises(IdentityFetchError, match=r"invalid iss claim"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(iss=iss)), config)
+
     async def test_refuses_an_id_token_minted_for_another_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
