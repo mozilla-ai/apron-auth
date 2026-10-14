@@ -524,7 +524,7 @@ class OidcIdentityHandler:
         try:
             signature = jws.extract_compact(id_token.encode())
             claims = json.loads(signature.payload)
-        except (JoseError, ValueError, UnicodeDecodeError):
+        except (JoseError, ValueError):
             logger.warning("OpenID ID token dropped, identity falls back to userinfo: token is not a parseable JWT")
             return None
         if not isinstance(claims, dict):
