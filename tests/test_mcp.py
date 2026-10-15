@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import McpDiscoveryError, McpRegistrationError
+from apron_auth.errors import IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
@@ -23,7 +23,16 @@ from apron_auth.mcp import (
     register_client,
     to_provider_config,
 )
-from apron_auth.models import ApplicationType, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
+from apron_auth.models import (
+    ApplicationType,
+    IdentityMaterial,
+    IdentityProfile,
+    ProviderConfig,
+    ServerMetadata,
+    TokenEndpointAuthMethod,
+    TokenSet,
+)
+from apron_auth.providers.identity import infer_identity_handler
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
@@ -230,6 +239,77 @@ class TestToProviderConfig:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
         with pytest.raises(McpDiscoveryError):
             to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
+
+
+class TestToProviderConfigIdentityInference:
+    @pytest.fixture(
+        params=[
+            pytest.param(
+                ("https://mcp.linear.app/authorize", "https://mcp.linear.app/token"),
+                id="linear",
+            ),
+            pytest.param(
+                ("https://accounts.google.com/o/oauth2/v2/auth", "https://oauth2.googleapis.com/token"),
+                id="google",
+            ),
+        ]
+    )
+    def claimed_metadata(self, request: pytest.FixtureRequest) -> ServerMetadata:
+        """Return metadata for an authorization server on a host that a built-in provider also serves."""
+        authorize_url, token_url = request.param
+        return ServerMetadata(authorize_url=authorize_url, token_url=token_url)
+
+    def test_a_config_on_a_claimed_host_infers_nothing(self, claimed_metadata: ServerMetadata) -> None:
+        """The built-in handler would send a token issued for the MCP server to that provider's API."""
+        config = to_provider_config(claimed_metadata, client_id="c")
+
+        assert infer_identity_handler(config) is None
+
+    def test_a_config_on_a_claimed_host_infers_a_handler_when_it_allows_inference(
+        self, claimed_metadata: ServerMetadata
+    ) -> None:
+        """The fixture hosts match a built-in provider, so the opt-out is what prevents inference."""
+        config = ProviderConfig(
+            client_id="c",
+            client_secret="s",
+            authorize_url=claimed_metadata.authorize_url,
+            token_url=claimed_metadata.token_url,
+        )
+
+        assert infer_identity_handler(config) is not None
+
+    async def test_a_client_without_a_handler_refuses_before_any_request(
+        self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
+    ) -> None:
+        """The client raises the unsupported-identity error and sends nothing to the provider."""
+        client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"))
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity(TokenSet(access_token="access"))
+
+        assert httpx_mock.get_requests() == []
+
+    async def test_a_client_with_an_explicit_handler_establishes_identity(
+        self, claimed_metadata: ServerMetadata
+    ) -> None:
+        """The explicit handler is the one source of identity for a config that allows no inference."""
+
+        class McpIdentityHandler:
+            def __init__(self) -> None:
+                self.calls: list[tuple[IdentityMaterial, ProviderConfig]] = []
+
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                self.calls.append((material, config))
+                return IdentityProfile(provider="mcp", subject="u-1")
+
+        config = to_provider_config(claimed_metadata, client_id="c")
+        handler = McpIdentityHandler()
+        client = OAuthClient(config, identity_handler=handler)
+
+        identity = await client.fetch_identity(TokenSet(access_token="access"))
+
+        assert identity.identity_key() == ("mcp", "u-1")
+        assert [(material.access_token, used_config) for material, used_config in handler.calls] == [("access", config)]
 
 
 class TestSelectAuthMethod:

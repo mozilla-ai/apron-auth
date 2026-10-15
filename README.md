@@ -217,7 +217,7 @@ only the access token and, for OIDC providers, the ID token — before
 being handed to the provider's identity handler, so handlers never
 receive the refresh token or caller context.
 
-Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler, and the generic OpenID preset sets it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
+Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler. The generic OpenID preset and `mcp.to_provider_config` set it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
@@ -616,6 +616,10 @@ tokens = await client.exchange_code(
     iss="iss-from-callback",
 )
 ```
+
+The config that `to_provider_config` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. Inference would otherwise give an authorization server on a built-in provider's host that provider's handler, which sends the MCP server's access token to that provider's API.
+
+A `ProviderConfig` that you build by hand from `discover` output allows inference by default, so set `allow_identity_inference=False` on it yourself. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
 
