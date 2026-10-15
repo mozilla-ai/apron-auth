@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 import weakref
@@ -17,6 +16,7 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
+from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth.errors import ConfigurationError, IdentityFetchError
 from apron_auth.providers._http_errors import describe_http_error
 
@@ -31,28 +31,6 @@ _KEY_MAX_AGE_SECONDS = 3600
 _REFETCH_INTERVAL_SECONDS = 60
 
 _SigningKey = ECKey | OKPKey | RSAKey
-
-# A certificate chain (``x5c``) in the header and a 8192-bit RSA signature both exceed the library's default limits.
-_MAX_HEADER_LENGTH = 16384
-_MAX_SIGNATURE_LENGTH = 2048
-
-
-def _registry(algorithms: list[str] | None = None) -> JWSRegistry:
-    """Return a registry that ignores non-critical header parameters it does not know, as RFC 7515 allows.
-
-    Args:
-        algorithms: The algorithms the registry accepts, or ``None`` for one that only parses.
-
-    Returns:
-        The registry, with size limits large enough for a certificate chain in the header.
-    """
-    registry = JWSRegistry(algorithms=algorithms, strict_check_header=False)
-    registry.max_header_length = _MAX_HEADER_LENGTH
-    registry.max_signature_length = _MAX_SIGNATURE_LENGTH
-    return registry
-
-
-_PARSING_REGISTRY = _registry()
 
 
 class SigningAlgorithm(StrEnum):
@@ -71,7 +49,7 @@ class SigningAlgorithm(StrEnum):
         member._value_ = value
         member.key_type = key_type
         member.curves = curves
-        member.registry = _registry([value])
+        member.registry = jws_registry([value])
         return member
 
     EDDSA = ("EdDSA", OKPKey, ("Ed25519", "Ed448"))
@@ -177,13 +155,10 @@ class IssuerSigningKeys:
                 It is also raised if the key set cannot be fetched or read.
         """
         try:
-            compact = jws.extract_compact(token.encode(), registry=_PARSING_REGISTRY)
-            header = compact.headers()
-        except (JoseError, RecursionError, ValueError) as exc:
+            compact = parse_compact(token)
+        except ValueError as exc:
             raise IdentityFetchError("ID token is not a signed token") from exc
-        if not isinstance(header, dict):
-            msg = "ID token is not a signed token"
-            raise IdentityFetchError(msg)
+        header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
             msg = "ID token names a critical header parameter that is not supported"
@@ -217,11 +192,8 @@ class IssuerSigningKeys:
                 raise IdentityFetchError(msg)
             msg = "ID token signature did not verify"
             raise IdentityFetchError(msg) from result.error
-        try:
-            claims = json.loads(compact.payload)
-        except (RecursionError, ValueError):
-            claims = None
-        if not isinstance(claims, dict):
+        claims = compact_claims(compact)
+        if claims is None:
             msg = "ID token claims are not a JSON object"
             raise IdentityFetchError(msg)
         return VerifiedToken(header, claims, result)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import time
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
@@ -16,6 +18,7 @@ from apron_auth.errors import (
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
     IssuerValidationError,
+    NonceValidationError,
     PermanentOAuthError,
     RevocationError,
     StateError,
@@ -42,6 +45,23 @@ def _make_config(**overrides: object) -> ProviderConfig:
     }
     defaults.update(overrides)
     return ProviderConfig(**defaults)
+
+
+def _pending_state(**overrides: object) -> OAuthPendingState:
+    defaults = {
+        "state": "pending-state",
+        "redirect_uri": "https://app.example.com/callback",
+        "created_at": time.time(),
+    }
+    defaults.update(overrides)
+    return OAuthPendingState(**defaults)
+
+
+def _id_token(claims: object) -> str:
+    """Return a compact token carrying ``claims``, with a signature nothing here checks."""
+    segments = [{"alg": "RS256"}, claims]
+    encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
+    return ".".join([*encoded, "c2ln"])
 
 
 class TestGetAuthorizationUrl:
@@ -230,9 +250,92 @@ class TestGetAuthorizationUrl:
         _, s2 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
         assert s1.state != s2.state
 
+    async def test_nonce_sent_when_scopes_include_openid(self) -> None:
+        client = OAuthClient(config=_make_config(scopes=["email", "openid"]))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert pending_state.nonce
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_absent_without_openid_scope(self) -> None:
+        client = OAuthClient(config=_make_config(scopes=["email"]))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert "nonce" not in params
+        assert pending_state.nonce is None
+
+    async def test_nonce_not_overridden_by_extra_params(self) -> None:
+        client = OAuthClient(config=_make_config(extra_params={"nonce": "chosen-nonce"}))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert pending_state.nonce != "chosen-nonce"
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_not_overridden_by_authorize_url_query(self) -> None:
+        client = OAuthClient(config=_make_config(authorize_url="https://provider.example.com/authorize?nonce=fixed"))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params["nonce"] == [pending_state.nonce]
+
+    @pytest.mark.parametrize(
+        ("overrides", "sends_nonce"),
+        [
+            ({"scopes": [], "extra_params": {"scope": "openid email"}}, True),
+            ({"scopes": [], "scope_separator": ",", "extra_params": {"scope": "openid,email"}}, True),
+            ({"scopes": [], "scope_separator": ",", "extra_params": {"scope": "openid profile"}}, True),
+            ({"scopes": [], "extra_params": {"scope": "openid,email"}}, True),
+            ({"scopes": ["openid", "email"], "scope_separator": ", "}, True),
+            ({"scopes": ["openid"], "scope_separator": ""}, True),
+            ({"scopes": [], "authorize_url": "https://provider.example.com/authorize?scope=openid"}, True),
+            ({"scopes": ["openid"], "extra_params": {"scope": "email"}}, False),
+            ({"scopes": ["openidish"]}, False),
+        ],
+        ids=[
+            "extra-params",
+            "extra-params-comma",
+            "space-delimited",
+            "comma-with-space-separator",
+            "separator-with-space",
+            "empty-separator",
+            "authorize-url-query",
+            "overridden",
+            "lookalike",
+        ],
+    )
+    async def test_nonce_follows_the_scope_the_request_sends(
+        self, overrides: dict[str, object], sends_nonce: bool
+    ) -> None:
+        client = OAuthClient(config=_make_config(**overrides))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert ("nonce" in params) is sends_nonce
+        assert (pending_state.nonce is not None) is sends_nonce
+
+    async def test_repeated_authorize_url_scope_is_kept(self) -> None:
+        url_with_scopes = "https://provider.example.com/authorize?scope=openid&scope=email"
+        client = OAuthClient(config=_make_config(scopes=[], authorize_url=url_with_scopes))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params["scope"] == ["openid", "email"]
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_nonce_is_unique_per_call(self) -> None:
+        client = OAuthClient(config=_make_config())
+        _, s1 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        _, s2 = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        assert s1.nonce != s2.nonce
+
+    async def test_nonce_saved_to_state_store(self) -> None:
+        store = AsyncMock()
+        store.save = AsyncMock()
+        client = OAuthClient(config=_make_config(), state_store=store)
+        _, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        saved_state = store.save.call_args[0][0]
+        assert saved_state.nonce == pending_state.nonce
+
 
 class TestExchangeCode:
-    async def test_exchange_with_direct_params(self, httpx_mock):
+    async def test_exchange_with_a_caller_kept_pending_state(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={
@@ -247,7 +350,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert isinstance(tokens, TokenSet)
         assert tokens.access_token == "access-abc"
@@ -265,8 +369,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
-            code_verifier="test-verifier",
+            state="pending-state",
+            pending_state=_pending_state(code_verifier="test-verifier"),
         )
         request = httpx_mock.get_request()
         assert b"code_verifier=test-verifier" in request.content
@@ -280,7 +384,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         request = httpx_mock.get_request()
         body = parse_qs(request.content.decode())
@@ -295,7 +400,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         request = httpx_mock.get_request()
         assert b"resource" not in request.content
@@ -355,7 +461,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         assert tokens.context == {}
 
-    async def test_exchange_direct_params_context_empty(self, httpx_mock):
+    async def test_exchange_pending_state_without_metadata_has_empty_context(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -364,9 +470,119 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert tokens.context == {}
+
+    async def test_exchange_pending_state_metadata_becomes_context(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(metadata={"user_id": "U123"}),
+        )
+        assert tokens.context == {"user_id": "U123"}
+
+    async def test_exchange_sends_the_pending_state_redirect_uri_and_verifier(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_config())
+        await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(redirect_uri="https://app.example.com/other", code_verifier="verifier"),
+        )
+        body = parse_qs(httpx_mock.get_request().content.decode())
+        assert body["redirect_uri"] == ["https://app.example.com/other"]
+        assert body["code_verifier"] == ["verifier"]
+
+    async def test_exchange_leaves_out_an_empty_redirect_uri(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_config())
+        await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(redirect_uri="")
+        )
+        assert "redirect_uri" not in parse_qs(httpx_mock.get_request().content.decode(), keep_blank_values=True)
+
+    async def test_exchange_sends_the_stored_redirect_uri_and_verifier(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(code_verifier="stored-verifier"))
+        client = OAuthClient(config=_make_config(), state_store=store)
+        await client.exchange_code(code="auth-code-123", state="pending-state")
+        body = parse_qs(httpx_mock.get_request().content.decode())
+        assert body["redirect_uri"] == ["https://app.example.com/callback"]
+        assert body["code_verifier"] == ["stored-verifier"]
+
+    async def test_exchange_state_not_matching_pending_state_raises(self, httpx_mock: HTTPXMock) -> None:
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="forged-state", pending_state=_pending_state())
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize("state", ["pénding-state", "pending-state\ud800"], ids=["non-ascii", "lone-surrogate"])
+    async def test_exchange_unicode_state_mismatch_raises_state_error(self, httpx_mock: HTTPXMock, state: str) -> None:
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state=state, pending_state=_pending_state())
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_with_pending_state_and_a_state_store_raises(self, httpx_mock: HTTPXMock) -> None:
+        store = AsyncMock()
+        store.consume = AsyncMock()
+        client = OAuthClient(config=_make_config(), state_store=store)
+        with pytest.raises(ConfigurationError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+        store.consume.assert_not_awaited()
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_stored_pending_state_for_another_state(self, httpx_mock: HTTPXMock) -> None:
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(state="other-state"))
+        client = OAuthClient(config=_make_config(), state_store=store)
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize("state", [None, ""], ids=["absent", "empty"])
+    async def test_exchange_callback_without_state_raises_state_error(
+        self, httpx_mock: HTTPXMock, state: str | None
+    ) -> None:
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state=state, pending_state=_pending_state())  # type: ignore[arg-type]
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize("state", [None, ""], ids=["absent", "empty"])
+    async def test_exchange_callback_without_state_does_not_touch_the_store(
+        self, httpx_mock: HTTPXMock, state: str | None
+    ) -> None:
+        store = AsyncMock()
+        store.consume = AsyncMock()
+        client = OAuthClient(config=_make_config(), state_store=store)
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state=state)  # type: ignore[arg-type]
+        store.consume.assert_not_awaited()
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_state_without_state_store_raises(self, httpx_mock: HTTPXMock) -> None:
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(ConfigurationError):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert httpx_mock.get_requests() == []
 
     async def test_exchange_no_key_collision(self, httpx_mock):
         httpx_mock.add_response(
@@ -410,7 +626,8 @@ class TestExchangeCode:
         with pytest.raises(TokenExchangeError):
             await client.exchange_code(
                 code="bad-code",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
             )
 
     async def test_exchange_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -423,7 +640,8 @@ class TestExchangeCode:
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
                 code="bad-code",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
             )
         assert exc_info.value.error_code == "invalid_grant"
 
@@ -437,7 +655,8 @@ class TestExchangeCode:
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
                 code="bad-code",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
             )
         assert str(exc_info.value) == "invalid_grant: Code expired"
 
@@ -454,7 +673,8 @@ class TestExchangeCode:
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
                 code="bad-code",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
             )
         assert exc_info.value.error_code == "invalid_grant"
         assert str(exc_info.value) == "invalid_grant"
@@ -474,7 +694,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert tokens.metadata["team_id"] == "T123"
         assert tokens.metadata["authed_user"] == {"id": "U456"}
@@ -488,7 +709,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         request = httpx_mock.get_request()
         assert b"client_id=test-client" in request.content
@@ -503,7 +725,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         request = httpx_mock.get_request()
         assert request.headers.get("authorization", "").startswith("Basic ")
@@ -517,7 +740,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert tokens.access_token == "access-abc"
         request = httpx_mock.get_request()
@@ -540,7 +764,7 @@ class TestExchangeCode:
         )
         config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
         client = OAuthClient(config=config)
-        await client.exchange_code(code="code", redirect_uri="https://app.example.com/callback")
+        await client.exchange_code(code="code", state="pending-state", pending_state=_pending_state())
         request = httpx_mock.get_request()
         assert (b"client_secret=" in request.content) is expect_secret_sent
 
@@ -559,7 +783,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config, transport_factory=factory)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert tokens.access_token == "access-abc"
         assert calls == ["https://provider.example.com/token"]
@@ -573,7 +798,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
             iss="https://provider.example.com",
         )
         assert tokens.access_token == "access-abc"
@@ -584,7 +810,8 @@ class TestExchangeCode:
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
                 code="auth-code-123",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
                 iss="https://attacker.example.com",
             )
         assert httpx_mock.get_requests() == []
@@ -595,7 +822,8 @@ class TestExchangeCode:
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
                 code="auth-code-123",
-                redirect_uri="https://app.example.com/callback",
+                state="pending-state",
+                pending_state=_pending_state(),
             )
         assert httpx_mock.get_requests() == []
 
@@ -608,7 +836,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
         )
         assert tokens.access_token == "access-abc"
 
@@ -621,7 +850,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
             code="auth-code-123",
-            redirect_uri="https://app.example.com/callback",
+            state="pending-state",
+            pending_state=_pending_state(),
             iss="https://anything.example.com",
         )
         assert tokens.access_token == "access-abc"
@@ -638,6 +868,159 @@ class TestExchangeCode:
                 iss="https://attacker.example.com",
             )
         store.consume.assert_not_awaited()
+
+
+class TestExchangeCodeNonce:
+    async def _exchange(
+        self,
+        httpx_mock: HTTPXMock,
+        response: dict[str, object],
+        nonce: str | None = "sent-nonce",
+        scopes: tuple[str, ...] = ("openid", "email"),
+    ) -> TokenSet:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", **response},
+        )
+        client = OAuthClient(config=_make_config(scopes=list(scopes)))
+        return await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce=nonce)
+        )
+
+    async def test_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchange(httpx_mock, {"id_token": _id_token({"sub": "u-1", "nonce": "sent-nonce"})})
+        assert tokens.access_token == "access-abc"
+
+    async def test_response_without_id_token_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchange(httpx_mock, {})
+        assert tokens.access_token == "access-abc"
+
+    async def test_id_token_is_not_checked_without_the_openid_scope(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchange(httpx_mock, {"id_token": "not-a-token"}, nonce=None, scopes=("email",))
+        assert tokens.access_token == "access-abc"
+
+    async def test_openid_pending_state_without_a_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        id_token = _id_token({"sub": "u-1", "nonce": "sent-nonce"})
+        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
+            await self._exchange(httpx_mock, {"id_token": id_token}, nonce=None)
+
+    async def test_openid_pending_state_with_an_empty_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        id_token = _id_token({"sub": "u-1", "nonce": ""})
+        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
+            await self._exchange(httpx_mock, {"id_token": id_token}, nonce="")
+
+    async def test_openid_pending_state_without_a_nonce_is_accepted_without_an_id_token(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        tokens = await self._exchange(httpx_mock, {}, nonce=None)
+        assert tokens.access_token == "access-abc"
+
+    @pytest.mark.parametrize(
+        ("id_token", "message"),
+        [
+            (_id_token({"sub": "u-1", "nonce": "other-nonce"}), "ID token nonce does not match"),
+            (_id_token({"sub": "u-1", "nonce": "sént-nonce"}), "ID token nonce does not match"),
+            (_id_token({"sub": "u-1", "nonce": ["sent-nonce"]}), "ID token nonce does not match"),
+            (_id_token({"sub": "u-1"}), "ID token carries no nonce"),
+            (_id_token(["sent-nonce"]), "ID token could not be read"),
+            ("not-a-token", "ID token could not be read"),
+        ],
+        ids=[
+            "mismatch",
+            "non-ascii",
+            "not-a-string",
+            "missing",
+            "claims-not-object",
+            "not-compact",
+        ],
+    )
+    async def test_id_token_without_the_sent_nonce_is_refused(
+        self, httpx_mock: HTTPXMock, id_token: object, message: str
+    ) -> None:
+        with pytest.raises(NonceValidationError, match=message) as exc_info:
+            await self._exchange(httpx_mock, {"id_token": id_token})
+        assert isinstance(exc_info.value, TokenExchangeError)
+
+    async def test_unreadable_id_token_keeps_the_reason(self, httpx_mock: HTTPXMock) -> None:
+        with pytest.raises(NonceValidationError) as exc_info:
+            await self._exchange(httpx_mock, {"id_token": "not-a-token"})
+        assert isinstance(exc_info.value.__cause__, ValueError)
+
+    async def test_null_id_token_counts_as_absent(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchange(httpx_mock, {"id_token": None})
+        assert tokens.access_token == "access-abc"
+
+    @pytest.mark.parametrize("id_token", ["", 42, False, {}], ids=["empty", "number", "false", "object"])
+    async def test_id_token_that_is_not_a_compact_token_is_refused(
+        self, httpx_mock: HTTPXMock, id_token: object
+    ) -> None:
+        with pytest.raises(NonceValidationError, match="ID token could not be read"):
+            await self._exchange(httpx_mock, {"id_token": id_token})
+
+    async def test_sent_nonce_is_checked_after_the_scopes_change(self, httpx_mock: HTTPXMock) -> None:
+        id_token = _id_token({"sub": "u-1", "nonce": "other-nonce"})
+        with pytest.raises(NonceValidationError, match="ID token nonce does not match"):
+            await self._exchange(httpx_mock, {"id_token": id_token}, scopes=("email",))
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"scopes": [], "extra_params": {"scope": "openid email"}},
+            {"scopes": [], "authorize_url": "https://provider.example.com/authorize?scope=openid"},
+        ],
+        ids=["extra-params", "authorize-url-query"],
+    )
+    async def test_openid_scope_from_any_source_needs_a_nonce(
+        self, httpx_mock: HTTPXMock, overrides: dict[str, object]
+    ) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "x"})},
+        )
+        client = OAuthClient(config=_make_config(**overrides))
+        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+    async def test_stored_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "sent-nonce"})},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(nonce="sent-nonce"))
+        client = OAuthClient(config=_make_config(), state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert tokens.access_token == "access-abc"
+
+    async def test_stored_nonce_is_checked(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "other"})},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(nonce="sent-nonce"))
+        client = OAuthClient(config=_make_config(), state_store=store)
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+
+    async def test_stored_openid_pending_state_without_a_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "x"})},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(nonce=None))
+        client = OAuthClient(config=_make_config(), state_store=store)
+        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+
+    async def test_refresh_checks_no_nonce(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-new", "token_type": "Bearer", "id_token": _id_token({"sub": "u-1"})},
+        )
+        tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-xyz")
+        assert tokens.access_token == "access-new"
 
 
 class TestRefreshToken:
