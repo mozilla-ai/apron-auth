@@ -215,18 +215,23 @@ class HubSpotRevocationHandler:
 
         Raises:
             RevocationError: If the request fails to reach the endpoint.
+                The error has no cause or context.
         """
         try:
             response = await client.delete(url)
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
-        if response.status_code in (204, 404):
-            return True
-        logger.warning(
-            "HubSpot revocation returned unexpected status %s",
-            response.status_code,
-        )
-        return False
+            failure = f"Failed to revoke HubSpot token: {describe_http_error(exc)}"
+        else:
+            if response.status_code in (204, 404):
+                return True
+            logger.warning(
+                "HubSpot revocation returned unexpected status %s",
+                response.status_code,
+            )
+            return False
+        # NOTE: This raise must stay outside the except block.
+        # Inside it, Python sets __context__ to the caught error.
+        raise RevocationError(failure)
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
@@ -246,6 +251,7 @@ class HubSpotRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The error has no cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"

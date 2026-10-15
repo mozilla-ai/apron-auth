@@ -117,6 +117,7 @@ class GoogleRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The error has no cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -128,8 +129,12 @@ class GoogleRevocationHandler:
                     params={"token": token},
                 )
             except httpx.RequestError as exc:
-                raise RevocationError(str(exc)) from exc
-        return response.is_success
+                failure = f"Failed to revoke Google token: {describe_http_error(exc)}"
+            else:
+                return response.is_success
+        # NOTE: This raise must stay outside the except block.
+        # Inside it, Python sets __context__ to the caught error.
+        raise RevocationError(failure)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
