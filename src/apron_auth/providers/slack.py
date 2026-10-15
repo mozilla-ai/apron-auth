@@ -40,6 +40,7 @@ from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, 
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -194,21 +195,16 @@ class SlackIdentityHandler:
             IdentityScopeNotGrantedError: If Slack reports ``missing_scope``.
             IdentityFetchError: If the request fails, its response cannot be
                 parsed, or Slack reports another ``ok=false`` error.
+                The failed request's error is not attached as its cause or context.
         """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.post(
                     _SLACK_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Slack identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Slack identity response") from exc
+                ),
+                "Slack identity",
+            )
 
         if not isinstance(payload, dict):
             raise IdentityFetchError("Slack identity response was not a JSON object")
@@ -335,20 +331,12 @@ class SlackIdentityHandler:
         Raises:
             IdentityFetchError: If the request fails, its response cannot be
                 parsed, or it is not a JSON object.
+                The failed request's error is not attached as its cause or context.
         """
-        try:
-            response = await client.post(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Slack {endpoint_label}: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError(f"Failed to parse Slack {endpoint_label} response") from exc
+        payload = await fetch_identity_json(
+            client.post(url, headers={"Authorization": f"Bearer {access_token}"}),
+            f"Slack {endpoint_label}",
+        )
 
         if not isinstance(payload, dict):
             raise IdentityFetchError(f"Slack {endpoint_label} response was not a JSON object")

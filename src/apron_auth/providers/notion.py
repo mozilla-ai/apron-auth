@@ -20,7 +20,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -30,6 +30,7 @@ from apron_auth.models import (
 )
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -69,25 +70,20 @@ class NotionIdentityHandler:
         Raises:
             IdentityFetchError: If the userinfo request fails or its
                 response cannot be parsed.
+                The failed request's error is not attached as its cause or context.
         """
         del config
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.get(
                     _NOTION_USERINFO_URL,
                     headers={
                         "Authorization": f"Bearer {material.access_token}",
                         "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
                     },
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Notion identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Notion identity response") from exc
+                ),
+                "Notion identity",
+            )
 
         bot = payload.get("bot") if isinstance(payload, dict) else None
         owner = bot.get("owner") if isinstance(bot, dict) else None

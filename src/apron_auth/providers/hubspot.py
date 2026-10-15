@@ -35,7 +35,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -46,6 +46,7 @@ from apron_auth.models import (
 )
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -163,20 +164,8 @@ class HubSpotIdentityHandler:
             IdentityFetchError: If the request fails or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(introspect_url)
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            failure = f"Failed to fetch HubSpot identity: {describe_http_error(exc)}"
-        else:
-            try:
-                return response.json()
-            except ValueError:
-                failure = "Failed to parse HubSpot identity response"
-        # NOTE: This raise must stay outside the except blocks.
-        # Inside them, Python sets __context__ to the caught error.
-        raise IdentityFetchError(failure)
+        async with httpx.AsyncClient() as client:
+            return await fetch_identity_json(client.get(introspect_url), "HubSpot identity")
 
 
 class HubSpotRevocationHandler:

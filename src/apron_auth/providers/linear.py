@@ -19,12 +19,12 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -59,26 +59,21 @@ class LinearIdentityHandler:
             IdentityFetchError: If the GraphQL request fails, the response
                 cannot be parsed, or it carries GraphQL errors or an
                 unexpected shape.
+                The failed request's error is not attached as its cause or context.
         """
         del config
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.post(
                     _LINEAR_GRAPHQL_URL,
                     headers={
                         "Authorization": f"Bearer {material.access_token}",
                         "Content-Type": "application/json",
                     },
                     json={"query": _LINEAR_VIEWER_QUERY},
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Linear identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Linear identity response") from exc
+                ),
+                "Linear identity",
+            )
 
         if not isinstance(payload, dict):
             raise IdentityFetchError("Linear GraphQL response was not a JSON object")
