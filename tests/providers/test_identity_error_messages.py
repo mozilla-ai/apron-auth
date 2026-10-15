@@ -1,14 +1,14 @@
-"""Identity fetch error messages across the built-in handlers.
+"""Identity fetch errors across the built-in handlers.
 
-Callers log and show these messages, so they report a failure in domain terms.
-They never repeat the HTTP client's own text, which carries the request URL.
-
-HubSpot is not in this matrix because its introspection URL carries the access token.
-Its errors must have no cause or context, which test_hubspot.py checks.
+Each message describes a failure in domain terms.
+It never repeats the HTTP client's own text, which carries the request URL.
+The error never chains the failed request, which carries the access token, or the decoder's error.
 """
 
 from __future__ import annotations
 
+import json
+import traceback
 from collections.abc import Callable
 from functools import partial
 from typing import NamedTuple
@@ -24,6 +24,7 @@ from apron_auth.providers import (
     atlassian,
     github,
     google,
+    hubspot,
     linear,
     microsoft,
     notion,
@@ -32,6 +33,8 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
+
+ACCESS_TOKEN = "access-SECRET-xyz"  # pragma: allowlist secret
 
 _OIDC_METADATA = ServerMetadata(
     authorize_url="https://sso.example.com/auth",
@@ -52,6 +55,7 @@ HANDLERS: dict[str, _HandlerCase] = {
     "atlassian": _HandlerCase(atlassian.preset, ["read:jira-work"], atlassian.AtlassianIdentityHandler),
     "github": _HandlerCase(github.preset, ["read:user"], github.GitHubIdentityHandler),
     "google": _HandlerCase(google.preset, ["openid"], google.GoogleIdentityHandler),
+    "hubspot": _HandlerCase(hubspot.preset, ["contacts"], hubspot.HubSpotIdentityHandler),
     "linear": _HandlerCase(linear.preset, ["read"], linear.LinearIdentityHandler),
     "microsoft": _HandlerCase(microsoft.preset, ["openid"], microsoft.MicrosoftIdentityHandler),
     "notion": _HandlerCase(notion.preset, ["read"], notion.NotionIdentityHandler),
@@ -75,8 +79,14 @@ async def _fetch_identity_error(name: str) -> IdentityFetchError:
         scopes=case.scopes,
     )
     with pytest.raises(IdentityFetchError) as exc_info:
-        await case.handler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        await case.handler().fetch_identity(IdentityMaterial(access_token=ACCESS_TOKEN), config)
     return exc_info.value
+
+
+def _assert_unchained(error: IdentityFetchError) -> None:
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert ACCESS_TOKEN not in "".join(traceback.format_exception(error))
 
 
 @pytest.mark.parametrize("name", list(HANDLERS))
@@ -87,7 +97,7 @@ async def test_status_error_reports_status_code_without_request_url(name: str, h
 
     assert "HTTP 403" in str(error)
     assert "https://" not in str(error)
-    assert isinstance(error.__cause__, httpx.HTTPStatusError)
+    _assert_unchained(error)
 
 
 @pytest.mark.parametrize("name", list(HANDLERS))
@@ -102,7 +112,7 @@ async def test_transport_error_reports_failure_kind_without_request_url(name: st
     assert "network error" in str(error)
     assert "ConnectError" not in str(error)
     assert "https://" not in str(error)
-    assert isinstance(error.__cause__, httpx.ConnectError)
+    _assert_unchained(error)
 
 
 @pytest.mark.parametrize("name", list(HANDLERS))
@@ -111,5 +121,7 @@ async def test_unparseable_body_omits_decoder_text(name: str, httpx_mock: HTTPXM
 
     error = await _fetch_identity_error(name)
 
-    assert isinstance(error.__cause__, ValueError)
-    assert str(error.__cause__) not in str(error)
+    with pytest.raises(ValueError) as decoder_error:
+        json.loads(b"not-json")
+    assert str(decoder_error.value) not in str(error)
+    _assert_unchained(error)

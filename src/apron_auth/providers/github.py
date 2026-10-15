@@ -17,10 +17,11 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -138,26 +139,18 @@ class GitHubIdentityHandler:
         Raises:
             IdentityFetchError: If a profile or email request fails, or a
                 response cannot be parsed.
+                The failed request's error is not attached as its cause or context.
         """
         del config
         headers = {
             "Authorization": f"Bearer {material.access_token}",
             **_GITHUB_API_HEADERS,
         }
-        try:
-            async with httpx.AsyncClient() as client:
-                user_response = await client.get(_GITHUB_USER_URL, headers=headers)
-                user_response.raise_for_status()
-                emails_response = await client.get(_GITHUB_EMAILS_URL, headers=headers)
-                emails_response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch GitHub identity: {describe_http_error(exc)}") from exc
-
-        try:
-            user_payload = user_response.json()
-            emails_payload = emails_response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse GitHub identity response") from exc
+        async with httpx.AsyncClient() as client:
+            user_payload = await fetch_identity_json(client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity")
+            emails_payload = await fetch_identity_json(
+                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity"
+            )
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")

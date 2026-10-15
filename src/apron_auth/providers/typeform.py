@@ -12,11 +12,11 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
@@ -58,6 +58,7 @@ class TypeformIdentityHandler:
             IdentityFetchError: If the userinfo request fails or its
                 response cannot be parsed. When the granted scopes are
                 unknown, a missing ``accounts:read`` also surfaces here.
+                The failed request's error is not attached as its cause or context.
         """
         # NOTE: Typeform answers a missing scope and a bad token with the same 403, so only a known grant is checked.
         granted_scopes = parse_scope(material.scope or "", config.scope_separator)
@@ -66,20 +67,14 @@ class TypeformIdentityHandler:
             if _TYPEFORM_USERINFO_SCOPE not in granted:
                 raise IdentityScopeNotGrantedError(f"Typeform identity requires the {_TYPEFORM_USERINFO_SCOPE} scope")
 
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.get(
                     _TYPEFORM_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token}"},
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Typeform identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Typeform identity response") from exc
+                ),
+                "Typeform identity",
+            )
 
         if not isinstance(payload, dict):
             raise IdentityFetchError("Typeform identity response was not a JSON object")

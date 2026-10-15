@@ -16,10 +16,11 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -46,22 +47,17 @@ class GoogleIdentityHandler:
         Raises:
             IdentityFetchError: If the userinfo request fails or its
                 response cannot be parsed.
+                The failed request's error is not attached as its cause or context.
         """
         del config
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.get(
                     _GOOGLE_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token}"},
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Google identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Google identity response") from exc
+                ),
+                "Google identity",
+            )
         # Honor email_verified only as a genuine boolean; a bare bool()
         # would coerce a non-boolean (e.g. the string "false") to True.
         email_verified = payload.get("email_verified")

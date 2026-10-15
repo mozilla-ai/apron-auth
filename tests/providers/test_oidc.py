@@ -1323,8 +1323,10 @@ class TestOidcIdentity:
             headers={"WWW-Authenticate": 'Bearer error="insufficient_scope", scope="openid profile"'},
         )
 
-        with pytest.raises(IdentityScopeNotGrantedError):
+        with pytest.raises(IdentityScopeNotGrantedError) as excinfo:
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__context__ is None
 
     async def test_a_bare_403_is_not_a_scope_error(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1380,8 +1382,32 @@ class TestOidcIdentity:
         """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
         handler = OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url="https://idp.example/\x00")
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch"):
+        with pytest.raises(IdentityFetchError, match="Failed to fetch") as excinfo:
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__context__ is None
+
+    async def test_reports_a_token_that_cannot_be_sent(self, handler: OidcIdentityHandler, config: ProviderConfig):
+        """A token that is not ASCII cannot go in a header, and the error must not repeat it."""
+        token = "access-SECRET-\u00e9"
+
+        with pytest.raises(IdentityFetchError, match="request failed") as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token=token), config)
+
+        assert token not in repr(excinfo.value.args)
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__context__ is None
+
+    async def test_reports_a_deeply_nested_userinfo_response(
+        self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
+    ):
+        """A body nested deeper than the decoder allows is a parse failure, not a raw recursion error."""
+        httpx_mock.add_response(url=USERINFO_URL, content=b"[" * 100_000 + b"]" * 100_000)
+
+        with pytest.raises(IdentityFetchError, match="Failed to parse") as excinfo:
+            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        assert excinfo.value.__cause__ is None
+        assert excinfo.value.__context__ is None
 
     async def test_reports_a_non_object_userinfo_response(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock

@@ -14,12 +14,12 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -86,6 +86,7 @@ class SalesforceIdentityHandler:
             IdentityFetchError: If ``authorize_url`` is not a Salesforce
                 host, the userinfo request fails, or its response cannot be
                 parsed.
+                The failed request's error is not attached as its cause or context.
         """
         host = urlparse(config.authorize_url).hostname or ""
         if not matches_suffix(host, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
@@ -97,20 +98,14 @@ class SalesforceIdentityHandler:
             raise IdentityFetchError(msg)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"
 
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
+        async with httpx.AsyncClient() as client:
+            payload = await fetch_identity_json(
+                client.get(
                     userinfo_url,
                     headers={"Authorization": f"Bearer {material.access_token}"},
-                )
-                response.raise_for_status()
-        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-            raise IdentityFetchError(f"Failed to fetch Salesforce identity: {describe_http_error(exc)}") from exc
-
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse Salesforce identity response") from exc
+                ),
+                "Salesforce identity",
+            )
 
         # Honor email_verified only as a genuine boolean; a bare bool()
         # would coerce a non-boolean (e.g. the string "false") to True.

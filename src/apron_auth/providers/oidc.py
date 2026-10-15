@@ -554,12 +554,15 @@ class OidcIdentityHandler:
             IdentityScopeNotGrantedError: If the endpoint answers 403 ``insufficient_scope``.
             IdentityFetchError: If the transport factory refuses the connection, the request fails,
                 or the response is signed, cannot be parsed, or is not a JSON object.
+                A refusal chains the factory's exception.
+                Any other failure attaches neither the failed request's error nor the decoder's as its cause or context.
         """
         try:
             transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
         except Exception as exc:
             # The factory is caller code, so any exception from it means the connection was refused.
             raise IdentityFetchError("Failed to fetch OpenID identity: outbound connection refused") from exc
+        failure: IdentityFetchError | None = None
         try:
             async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
                 response = await client.get(
@@ -572,22 +575,31 @@ class OidcIdentityHandler:
                 exc.response.status_code == 403
                 and _bearer_error(exc.response.headers.get("www-authenticate", "")) == "insufficient_scope"
             ):
-                raise IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope") from exc
-            raise IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}") from exc
+                failure = IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope")
+            else:
+                failure = IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}")
+        # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
+        except httpx.InvalidURL:
+            failure = IdentityFetchError("Failed to fetch OpenID identity: invalid userinfo URL")
         except httpx.RequestError as exc:
-            raise IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}") from exc
-        except httpx.InvalidURL as exc:
-            raise IdentityFetchError("Failed to fetch OpenID identity: invalid userinfo URL") from exc
-
-        media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
-        if media_type == "application/jwt":
-            # Its signing algorithm is agreed at client registration, which this handler does not know.
-            msg = "OpenID provider returned a signed userinfo response, which is not supported"
-            raise IdentityFetchError(msg)
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise IdentityFetchError("Failed to parse OpenID identity response") from exc
+            failure = IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}")
+        except Exception:
+            # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
+            failure = IdentityFetchError("Failed to fetch OpenID identity: request failed")
+        else:
+            media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            if media_type == "application/jwt":
+                # Its signing algorithm is agreed at client registration, which this handler does not know.
+                msg = "OpenID provider returned a signed userinfo response, which is not supported"
+                raise IdentityFetchError(msg)
+            try:
+                payload = response.json()
+            except (RecursionError, ValueError):
+                failure = IdentityFetchError("Failed to parse OpenID identity response")
+        if failure is not None:
+            # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.
+            # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
+            raise failure
         if not isinstance(payload, dict):
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
