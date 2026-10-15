@@ -23,7 +23,15 @@ from apron_auth.mcp import (
     register_client,
     to_provider_config,
 )
-from apron_auth.models import ApplicationType, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
+from apron_auth.models import (
+    ApplicationType,
+    IdentityMaterial,
+    IdentityProfile,
+    ProviderConfig,
+    ServerMetadata,
+    TokenEndpointAuthMethod,
+    TokenSet,
+)
 from apron_auth.providers.identity import infer_identity_handler
 
 _REGISTER_URL = "https://auth.example.com/register"
@@ -266,6 +274,22 @@ class TestToProviderConfigIdentityInference:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity(TokenSet(access_token="access"))
 
+        assert httpx_mock.get_requests() == []
+
+    async def test_a_client_with_an_explicit_handler_establishes_identity(
+        self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
+    ) -> None:
+        """The explicit handler is the one source of identity for a config that allows no inference."""
+
+        class McpIdentityHandler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                return IdentityProfile(provider="mcp", subject="u-1")
+
+        client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"), identity_handler=McpIdentityHandler())
+
+        identity = await client.fetch_identity(TokenSet(access_token="access"))
+
+        assert identity.identity_key() == ("mcp", "u-1")
         assert httpx_mock.get_requests() == []
 
 
