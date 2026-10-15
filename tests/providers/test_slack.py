@@ -474,6 +474,46 @@ class TestSlackRevocationHandler:
         assert exc_info.value.__context__ is None
         assert httpx_mock.get_requests() == []
 
+    @pytest.mark.parametrize(
+        "body",
+        [{"ok": "false"}, {"ok": "true"}, {"ok": 1}, {"ok": None}, {}],
+        ids=["string-false", "string-true", "int-one", "null", "missing"],
+    )
+    async def test_ok_that_is_not_true_returns_false(self, body: dict[str, object], httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        assert await handler.revoke("access-abc", config) is False
+
+    async def test_deeply_nested_response_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
+        # The depth is far past any interpreter's JSON nesting limit, so decoding raises RecursionError.
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        with pytest.raises(RevocationError, match="^Failed to parse Slack revocation response$") as exc_info:
+            await handler.revoke("access-abc", config)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    async def test_non_object_response_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json=["ok"])
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        with pytest.raises(RevocationError, match="^Slack revocation response was not a JSON object$") as exc_info:
+            await handler.revoke("access-abc", config)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    async def test_error_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, status_code=500, json={"ok": True})
+        from apron_auth.providers.slack import preset
+
+        config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        assert await handler.revoke("access-abc", config) is False
+
 
 class TestSlackWorkspaceBotIdentity:
     """``SlackIdentityHandler`` branch for tokens without ``openid``.

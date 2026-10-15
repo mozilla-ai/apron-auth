@@ -425,12 +425,13 @@ class SlackRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when Slack confirms revocation (``ok=true``).
+            ``True`` when Slack confirms revocation with the boolean ``"ok": true``.
+            ``False`` for an error status, or for an ``ok`` value that is missing or anything other than ``true``.
 
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the revocation URL is invalid, the request cannot be sent,
-                the request fails to reach the endpoint, or its response body is not valid JSON.
+                the request fails to reach the endpoint, or its response body is not a valid JSON object.
                 The caught error is not attached as its cause or context.
         """
         if config.revocation_url is None:
@@ -455,10 +456,13 @@ class SlackRevocationHandler:
                     return False
                 try:
                     data = response.json()
-                except ValueError:
+                # A body nested deeper than the decoder allows raises RecursionError, which is not a ValueError.
+                except (RecursionError, ValueError):
                     failure_message = "Failed to parse Slack revocation response"
                 else:
-                    return data.get("ok", False)
+                    if not isinstance(data, dict):
+                        raise RevocationError("Slack revocation response was not a JSON object")
+                    return data.get("ok") is True
         # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
         # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
         raise RevocationError(failure_message)
