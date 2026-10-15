@@ -10,9 +10,8 @@ deep link to HubSpot's connected-apps settings for manual removal.
 Identity is fetched via HubSpot's access-token introspection endpoint,
 which carries the bearer token in the URL path rather than an
 ``Authorization`` header.
-An :class:`IdentityFetchError` from the identity handler holds no request URL,
-no HTTP client text, and no cause or context.
-The token-bearing request therefore cannot be reached from the error.
+An :class:`IdentityFetchError` from the identity handler holds no request URL and no HTTP client text.
+The failed request's error is not attached as its cause or context, so the request cannot be reached from it.
 
 NOTE: An error reporter that captures frame local variables can still record the token.
 The request URL is a local variable while the request runs, and no error handling can remove it.
@@ -78,7 +77,8 @@ class HubSpotIdentityHandler:
     the OAuth-token introspection endpoint. The bearer token travels
     in the URL path, not an ``Authorization`` header, which makes the
     request URL itself a secret.
-    An :class:`IdentityFetchError` from this handler holds no request URL, no HTTP client text, and no cause or context.
+    An :class:`IdentityFetchError` from this handler holds no request URL and no HTTP client text.
+    The failed request's error is not attached as its cause or context.
 
     The introspection response mixes user and portal/account identity:
 
@@ -161,7 +161,7 @@ class HubSpotIdentityHandler:
 
         Raises:
             IdentityFetchError: If the request fails or its response cannot be parsed.
-                The error has no cause or context, so the token-bearing request cannot be reached from it.
+                The failed request's error is not attached as its cause or context.
         """
         try:
             async with httpx.AsyncClient() as client:
