@@ -158,6 +158,10 @@ def to_provider_config(
     the code exchange can validate the authorization-response ``iss`` (RFC 9207).
     The RFC 8707 resource indicator defaults to the discovered protected-resource
     identifier and can be overridden by ``resource``.
+    The config disallows identity handler inference.
+    An authorization server's host does not decide which identity contract applies to its tokens.
+
+    NOTE: Callers must pass an ``identity_handler`` to :class:`~apron_auth.client.OAuthClient` to fetch identity.
 
     Args:
         metadata: Metadata from :func:`discover`.
@@ -209,6 +213,7 @@ def to_provider_config(
         issuer=metadata.issuer,
         require_iss=metadata.iss_parameter_supported,
         resource=resource if resource is not None else metadata.resource,
+        allow_identity_inference=False,
     )
 
 
