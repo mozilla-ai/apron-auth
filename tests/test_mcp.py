@@ -265,6 +265,19 @@ class TestToProviderConfigIdentityInference:
 
         assert infer_identity_handler(config) is None
 
+    def test_a_config_on_a_claimed_host_infers_a_handler_when_it_allows_inference(
+        self, claimed_metadata: ServerMetadata
+    ) -> None:
+        """The fixture hosts match a built-in provider, so the opt-out is what prevents inference."""
+        config = ProviderConfig(
+            client_id="c",
+            client_secret="s",
+            authorize_url=claimed_metadata.authorize_url,
+            token_url=claimed_metadata.token_url,
+        )
+
+        assert infer_identity_handler(config) is not None
+
     async def test_a_client_without_a_handler_refuses_before_any_request(
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
@@ -277,20 +290,26 @@ class TestToProviderConfigIdentityInference:
         assert httpx_mock.get_requests() == []
 
     async def test_a_client_with_an_explicit_handler_establishes_identity(
-        self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
+        self, claimed_metadata: ServerMetadata
     ) -> None:
         """The explicit handler is the one source of identity for a config that allows no inference."""
 
         class McpIdentityHandler:
+            def __init__(self) -> None:
+                self.calls: list[tuple[IdentityMaterial, ProviderConfig]] = []
+
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                self.calls.append((material, config))
                 return IdentityProfile(provider="mcp", subject="u-1")
 
-        client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"), identity_handler=McpIdentityHandler())
+        config = to_provider_config(claimed_metadata, client_id="c")
+        handler = McpIdentityHandler()
+        client = OAuthClient(config, identity_handler=handler)
 
         identity = await client.fetch_identity(TokenSet(access_token="access"))
 
         assert identity.identity_key() == ("mcp", "u-1")
-        assert httpx_mock.get_requests() == []
+        assert [(material.access_token, used_config) for material, used_config in handler.calls] == [("access", config)]
 
 
 class TestSelectAuthMethod:
