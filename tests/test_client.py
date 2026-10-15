@@ -941,10 +941,11 @@ class TestExchangeCodeNonce:
             await self._exchange(httpx_mock, {"id_token": id_token})
         assert isinstance(exc_info.value, TokenExchangeError)
 
-    async def test_unreadable_id_token_keeps_the_reason(self, httpx_mock: HTTPXMock) -> None:
+    async def test_unreadable_id_token_error_has_no_cause(self, httpx_mock: HTTPXMock) -> None:
         with pytest.raises(NonceValidationError) as exc_info:
             await self._exchange(httpx_mock, {"id_token": "not-a-token"})
-        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_null_id_token_counts_as_absent(self, httpx_mock: HTTPXMock) -> None:
         tokens = await self._exchange(httpx_mock, {"id_token": None})
@@ -1368,9 +1369,10 @@ class TestRevokeToken:
 
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config, revocation_handler=BrokenHandler())
-        with pytest.raises(RevocationError, match="something unexpected") as exc_info:
+        with pytest.raises(RevocationError, match="^Failed to revoke token$") as exc_info:
             await client.revoke_token(token="access-token")
-        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_revocation_error_not_double_wrapped(self):
         class ErrorHandler:
@@ -1866,5 +1868,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=BoomHandler())
 
-        with pytest.raises(IdentityFetchError, match="boom"):
+        with pytest.raises(IdentityFetchError, match="^Failed to fetch identity$") as exc_info:
             await client.fetch_identity(TokenSet(access_token="access-abc"))
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None

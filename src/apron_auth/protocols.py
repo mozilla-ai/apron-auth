@@ -65,6 +65,10 @@ class RevocationHandler(Protocol):
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token at the provider.
 
+        NOTE: Implementations must keep credentials out of a raised error's message and attributes.
+        A raised error's cause and context are discarded.
+        An error that is not one of this library's errors is replaced by a fixed message.
+
         Args:
             token: The token to revoke.
             config: The provider configuration to revoke against.
@@ -81,6 +85,10 @@ class IdentityHandler(Protocol):
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using the provider API.
+
+        NOTE: Implementations must keep credentials out of a raised error's message and attributes.
+        A raised error's cause and context are discarded.
+        An error that is not one of this library's errors is replaced by a fixed message.
 
         Args:
             material: The token material to establish identity from.

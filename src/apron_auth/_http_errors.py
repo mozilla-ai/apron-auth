@@ -5,7 +5,7 @@ from __future__ import annotations
 import httpx
 
 
-def describe_http_error(exc: httpx.RequestError | httpx.HTTPStatusError) -> str:
+def describe_http_error(exc: httpx.HTTPError) -> str:
     """Describe a failed request by its status code or the kind of transport failure.
 
     The description never includes the request URL, the HTTP client's message text, or its error class names.
