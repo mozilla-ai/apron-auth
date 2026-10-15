@@ -22,6 +22,7 @@ from apron_auth.errors import (
     IdentityFetchError,
     IdentityNotSupportedError,
     NonceValidationError,
+    OAuthError,
     PermanentOAuthError,
     RevocationError,
     StateError,
@@ -98,9 +99,11 @@ def _check_nonce(id_token: object, nonce: str) -> None:
     try:
         claims = unverified_claims(id_token)
     except ValueError:
-        claims = None
+        readable = False
+    else:
+        readable = True
     # NOTE: This check raises outside the except block, so the error does not chain the decoder's error.
-    if claims is None:
+    if not readable:
         raise NonceValidationError(msg)
     claim = claims.get("nonce")
     if claim is None:
@@ -374,6 +377,8 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise
+        except OAuthError as exc:
+            failure_message = str(exc)
         except httpx.HTTPError as exc:
             failure_message = f"Failed to revoke token: {describe_http_error(exc)}"
         except Exception:
@@ -434,6 +439,8 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise
+        except OAuthError as exc:
+            failure_message = str(exc)
         except httpx.HTTPError as exc:
             failure_message = f"Failed to fetch identity: {describe_http_error(exc)}"
         except Exception:
@@ -573,7 +580,7 @@ class OAuthClient:
                 The caught error is not attached as its cause or context.
                 Its message and ``error_code`` repeat no exact secret that the request sent.
         """
-        from authlib.integrations.base_client.errors import OAuthError
+        from authlib.integrations.base_client.errors import OAuthError as AuthlibOAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
         sent_secrets = [data[field] for field in _SENT_SECRET_FIELDS if field in data]
@@ -590,7 +597,7 @@ class OAuthClient:
             ) as client:
                 token = await client.fetch_token(self._config.token_url, **data)
             return dict(token)
-        except OAuthError as exc:
+        except AuthlibOAuthError as exc:
             # Authlib raises OAuthError for 4xx responses that contain an
             # OAuth error body ({"error": "...", "error_description": "..."}).
             # The .error attribute carries the OAuth error code (e.g.

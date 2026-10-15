@@ -67,6 +67,7 @@ class RevocationHandler(Protocol):
 
         NOTE: Implementations must keep credentials out of a raised error's message and attributes.
         A raised error's cause and context are discarded.
+        An error that is not one of this library's errors is replaced by a fixed message.
 
         Args:
             token: The token to revoke.
@@ -87,6 +88,7 @@ class IdentityHandler(Protocol):
 
         NOTE: Implementations must keep credentials out of a raised error's message and attributes.
         A raised error's cause and context are discarded.
+        An error that is not one of this library's errors is replaced by a fixed message.
 
         Args:
             material: The token material to establish identity from.
