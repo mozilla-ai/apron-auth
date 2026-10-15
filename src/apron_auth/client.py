@@ -254,9 +254,8 @@ class OAuthClient:
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
         A client without one takes ``pending_state``.
         Either way, a ``state`` that does not match the pending state is refused before the code is redeemed.
-        When the authorization request sent a nonce, an ID token in the response must carry it,
+        When the authorization request sent a nonce, the response must carry an ID token with that nonce,
         or no tokens are returned.
-        A response without an ID token is returned without a nonce check.
 
         When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is validated first.
         A mix-up attempt is then refused before any state is consumed and before the token endpoint is called.
@@ -283,8 +282,9 @@ class OAuthClient:
                 or is not given to a client without one.
             IssuerValidationError: If ``iss`` fails validation against the
                 provider's expected issuer.
-            NonceValidationError: If the response's ID token does not carry the nonce the request sent,
-                or the pending state of an OpenID request has no nonce.
+            NonceValidationError: If the request sent a nonce and the response carries no ID token,
+                or an ID token that does not carry that nonce,
+                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
@@ -292,6 +292,11 @@ class OAuthClient:
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
+
+        if not pending.nonce and self._requests_openid():
+            # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.
+            msg = "The pending state has no nonce to check the token response against"
+            raise NonceValidationError(msg)
 
         data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
@@ -306,12 +311,12 @@ class OAuthClient:
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
         id_token = response.get("id_token")
-        if id_token is not None:
-            if pending.nonce:
-                _check_nonce(id_token, pending.nonce)
-            elif self._requests_openid():
-                msg = "The pending state has no nonce to check the ID token against"
+        if pending.nonce:
+            if id_token is None:
+                # OpenID Connect Core section 3.1.3.3 requires an ID token, and without one no nonce is checked.
+                msg = "Token response carries no ID token for the OpenID request"
                 raise NonceValidationError(msg)
+            _check_nonce(id_token, pending.nonce)
         return self._parse_token_response(response, context=pending.metadata)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
@@ -545,7 +550,7 @@ class OAuthClient:
         """Return whether an authorization query asks for the ``openid`` scope.
 
         A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma, or the configured separator.
-        A wider set of delimiters only sends a nonce more often, which a provider that does not use OpenID ignores.
+        A wider set of delimiters treats more scope strings as OpenID requests, which must then return an ID token.
 
         Args:
             query: The query of an authorization URL.

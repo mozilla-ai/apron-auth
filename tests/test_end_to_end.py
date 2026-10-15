@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
@@ -24,6 +27,14 @@ from apron_auth import (
     TokenRefreshError,
     TokenSet,
 )
+
+
+def _id_token(nonce: str | None) -> str:
+    """Return a compact token carrying ``nonce``, with a signature nothing here checks."""
+    assert nonce, "an OpenID authorization request always carries a nonce"
+    segments = [{"alg": "RS256"}, {"sub": "u-1", "nonce": nonce}]
+    encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
+    return ".".join([*encoded, "c2ln"])
 
 
 class TestFullOAuthFlow:
@@ -58,6 +69,7 @@ class TestFullOAuthFlow:
                 "refresh_token": "refresh-token-xyz",
                 "expires_in": 3600,
                 "scope": "openid email",
+                "id_token": _id_token(pending_state.nonce),
             },
         )
         tokens = await client.exchange_code(
@@ -140,6 +152,7 @@ class TestMetadataFlowsThroughStateStore:
                 "access_token": "access-token-abc",
                 "token_type": "Bearer",
                 "team_id": "T-provider",
+                "id_token": _id_token(pending_state.nonce),
             },
         )
         tokens = await client.exchange_code(

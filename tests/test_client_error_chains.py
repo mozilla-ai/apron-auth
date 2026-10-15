@@ -44,7 +44,7 @@ def _config(**overrides: object) -> ProviderConfig:
         "authorize_url": "https://provider.example.com/authorize",
         "token_url": "https://provider.example.com/token",
         "revocation_url": "https://provider.example.com/revoke",
-        "scopes": ["openid"],
+        "scopes": ["email"],
     }
     defaults.update(overrides)
     return ProviderConfig(**defaults)
