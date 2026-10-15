@@ -56,6 +56,30 @@ class _TokenEndpointError(Exception):
         self.error_code = error_code
 
 
+# The grant fields of a token request that hold a secret.
+_SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
+
+
+def _redact(text: str, values: list[str]) -> str:
+    """Return ``text`` with each exact occurrence of a secret value replaced by a placeholder.
+
+    Longer values are replaced first, so a value that contains another leaves no fragment behind.
+
+    NOTE: An encoded or truncated copy of a value is not found.
+
+    Args:
+        text: Text from a provider that may echo a value it was sent.
+        values: The secret values to remove.
+
+    Returns:
+        The text without an exact copy of any of the values.
+    """
+    for secret in sorted(values, key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
 def _check_nonce(id_token: object, nonce: str) -> None:
     """Refuse an ID token that does not carry the nonce sent with its authorization request.
 
@@ -257,7 +281,7 @@ class OAuthClient:
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
-                It does not chain the failed request's error.
+                It neither chains the failed request's error nor repeats an exact secret the request sent.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
@@ -300,7 +324,7 @@ class OAuthClient:
                 ``error_code`` to decide how to handle it.
             TokenRefreshError: If the refresh fails transiently and a
                 retry may succeed.
-                It does not chain the failed request's error.
+                It neither chains the failed request's error nor repeats an exact secret the request sent.
         """
         data = {
             "grant_type": "refresh_token",
@@ -547,10 +571,14 @@ class OAuthClient:
                 errors; its ``error_code`` carries the OAuth error code
                 when one is available.
                 The caught error is not attached as its cause or context.
+                Its message and ``error_code`` repeat no exact secret that the request sent.
         """
         from authlib.integrations.base_client.errors import OAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
+        sent_secrets = [data[field] for field in _SENT_SECRET_FIELDS if field in data]
+        if self._config.client_secret is not None:
+            sent_secrets.append(self._config.client_secret.get_secret_value())
         try:
             client_secret = self._config.client_secret
             transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
@@ -568,8 +596,8 @@ class OAuthClient:
             # The .error attribute carries the OAuth error code (e.g.
             # "invalid_grant") which refresh_token uses to distinguish
             # permanent from transient failures.
-            error_code = exc.error if isinstance(exc.error, str) else ""
-            description = exc.description if isinstance(exc.description, str) else ""
+            error_code = _redact(exc.error, sent_secrets) if isinstance(exc.error, str) else ""
+            description = _redact(exc.description, sent_secrets) if isinstance(exc.description, str) else ""
             prefix = error_code or "unspecified token endpoint error"
             msg = f"{prefix}: {description}" if description else prefix
             failure = _TokenEndpointError(msg, error_code=error_code)
@@ -582,9 +610,9 @@ class OAuthClient:
             try:
                 body = exc.response.json()
                 raw_error_code = body.get("error", "")
-                error_code = raw_error_code if isinstance(raw_error_code, str) else ""
+                error_code = _redact(raw_error_code, sent_secrets) if isinstance(raw_error_code, str) else ""
                 raw_description = body.get("error_description", "")
-                description = raw_description if isinstance(raw_description, str) else ""
+                description = _redact(raw_description, sent_secrets) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
             except Exception:

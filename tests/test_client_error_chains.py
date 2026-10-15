@@ -173,6 +173,40 @@ class TestTokenRequestErrors:
         assert str(error) == "token response could not be read"
         _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
 
+    async def test_refresh_error_description_echo_is_redacted(self, httpx_mock: HTTPXMock) -> None:
+        description = f"token {REFRESH_TOKEN} for secret {CLIENT_SECRET} is not valid"
+        httpx_mock.add_response(status_code=400, json={"error": "invalid_request", "error_description": description})
+
+        error = await self._refresh_error()
+
+        assert str(error) == "invalid_request: token [redacted] for secret [redacted] is not valid"
+        _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
+
+    async def test_exchange_error_description_echo_is_redacted(self, httpx_mock: HTTPXMock) -> None:
+        description = f"code {CODE} does not match verifier {VERIFIER}"
+        httpx_mock.add_response(status_code=400, json={"error": "invalid_grant", "error_description": description})
+
+        error = await self._exchange_error()
+
+        assert str(error) == "invalid_grant: code [redacted] does not match verifier [redacted]"
+        _assert_carries_no_secret(error, CLIENT_SECRET, CODE, VERIFIER)
+
+    async def test_server_error_description_echo_is_redacted(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(status_code=503, json={"error_description": f"retry {REFRESH_TOKEN} later"})
+
+        error = await self._refresh_error()
+
+        assert str(error) == "HTTP 503: retry [redacted] later"
+        _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
+
+    async def test_error_code_echo_is_redacted(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(status_code=400, json={"error": REFRESH_TOKEN})
+
+        error = await self._refresh_error()
+
+        assert error.error_code == "[redacted]"
+        _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
+
 
 class TestHandlerErrors:
     @pytest.mark.parametrize(("failure", "kind"), TRANSPORT_FAILURES)
