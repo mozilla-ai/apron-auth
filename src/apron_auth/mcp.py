@@ -144,7 +144,11 @@ def to_provider_config(
     redirect_uri: str | None = None,
     resource: str | None = None,
 ) -> ProviderConfig:
-    """Fold discovered metadata and a client identity into a ProviderConfig.
+    """Fold discovered metadata and a client identity into a ProviderConfig that infers no identity handler.
+
+    An authorization server's host does not decide which identity contract applies to its tokens.
+
+    NOTE: Callers must supply their own identity handler to fetch identity with the returned config.
 
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
@@ -158,10 +162,6 @@ def to_provider_config(
     the code exchange can validate the authorization-response ``iss`` (RFC 9207).
     The RFC 8707 resource indicator defaults to the discovered protected-resource
     identifier and can be overridden by ``resource``.
-    The config disallows identity handler inference.
-    An authorization server's host does not decide which identity contract applies to its tokens.
-
-    NOTE: Callers must pass an ``identity_handler`` to :class:`~apron_auth.client.OAuthClient` to fetch identity.
 
     Args:
         metadata: Metadata from :func:`discover`.

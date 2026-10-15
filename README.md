@@ -617,7 +617,7 @@ tokens = await client.exchange_code(
 )
 ```
 
-The config that `to_provider_config` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. Inference would otherwise give an authorization server on a built-in provider's host that provider's handler, which sends the MCP server's access token to that provider's API.
+The config that `to_provider_config` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. Inference would otherwise give an authorization server on a built-in provider's host that provider's handler, which sends the MCP server's access token to that provider's API. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
 
