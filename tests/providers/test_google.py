@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import traceback
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
@@ -299,11 +301,21 @@ class TestGoogleRevocationHandler:
         assert request.method == "POST"
         assert "token=access-abc" in str(request.url)
 
-    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+    async def test_network_error_raises_revocation_error_without_the_token(self, httpx_mock: HTTPXMock) -> None:
+        """The token is in the request URL, so the error has no cause or context."""
+        secret = "access-SECRET-xyz"  # pragma: allowlist secret
+
+        def refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(f"Connection refused for url {request.url}", request=request)
+
+        httpx_mock.add_callback(refuse)
         from apron_auth.providers.google import preset
 
         config, handler = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
-        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
-            await handler.revoke("access-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        with pytest.raises(RevocationError) as exc_info:
+            await handler.revoke(secret, config)
+        assert str(exc_info.value) == "Failed to revoke Google token: network error"
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in formatted
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None

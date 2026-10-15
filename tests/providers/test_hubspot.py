@@ -436,8 +436,14 @@ class TestHubSpotRevocationHandler:
         expected = "https://api.hubapi.com/oauth/v1/refresh-tokens/a%2Fb%2Bc%3Dd%20e"
         assert str(request.url) == expected
 
-    async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
+    async def test_network_error_raises_revocation_error_without_the_token(self, httpx_mock: HTTPXMock) -> None:
+        """The refresh token is in the request URL, so the error has no cause or context."""
+        secret = "refresh-SECRET-xyz"  # pragma: allowlist secret
+
+        def refuse(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError(f"Connection refused for url {request.url}", request=request)
+
+        httpx_mock.add_callback(refuse)
         from apron_auth.providers.hubspot import preset
 
         config, handler = preset(
@@ -445,9 +451,13 @@ class TestHubSpotRevocationHandler:
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
-            await handler.revoke("refresh-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        with pytest.raises(RevocationError) as exc_info:
+            await handler.revoke(secret, config)
+        assert str(exc_info.value) == "Failed to revoke HubSpot token: network error"
+        formatted = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in formatted
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_accepts_injected_client(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=204)

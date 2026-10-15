@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -28,7 +29,6 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -188,6 +188,7 @@ class NotionRevocationHandler:
 
         Raises:
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
@@ -197,14 +198,18 @@ class NotionRevocationHandler:
                 auth=auth,
             )
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
-        if response.status_code in (200, 400):
-            return True
-        logger.warning(
-            "Notion revocation returned unexpected status %d",
-            response.status_code,
-        )
-        return False
+            failure_message = f"Failed to revoke Notion token: {describe_http_error(exc)}"
+        else:
+            if response.status_code in (200, 400):
+                return True
+            logger.warning(
+                "Notion revocation returned unexpected status %d",
+                response.status_code,
+            )
+            return False
+        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.
@@ -221,6 +226,7 @@ class NotionRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"

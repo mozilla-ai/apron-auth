@@ -15,10 +15,10 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -117,6 +117,7 @@ class GoogleRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -128,8 +129,12 @@ class GoogleRevocationHandler:
                     params={"token": token},
                 )
             except httpx.RequestError as exc:
-                raise RevocationError(str(exc)) from exc
-        return response.is_success
+                failure_message = f"Failed to revoke Google token: {describe_http_error(exc)}"
+            else:
+                return response.is_success
+        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

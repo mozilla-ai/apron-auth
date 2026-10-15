@@ -35,10 +35,10 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -443,6 +443,7 @@ class SlackRevocationHandler:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint or
                 its response body is not valid JSON.
+                The caught error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -454,14 +455,19 @@ class SlackRevocationHandler:
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as exc:
-                raise RevocationError(str(exc)) from exc
-        if not response.is_success:
-            return False
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise RevocationError(f"Failed to parse Slack revocation response: {exc}") from exc
-        return data.get("ok", False)
+                failure_message = f"Failed to revoke Slack token: {describe_http_error(exc)}"
+            else:
+                if not response.is_success:
+                    return False
+                try:
+                    data = response.json()
+                except ValueError:
+                    failure_message = "Failed to parse Slack revocation response"
+                else:
+                    return data.get("ok", False)
+        # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
+        # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

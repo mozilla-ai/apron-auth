@@ -19,10 +19,10 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClai
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import SecretStr
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 

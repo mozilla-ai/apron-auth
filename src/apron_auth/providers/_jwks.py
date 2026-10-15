@@ -16,9 +16,9 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
+from apron_auth._http_errors import describe_http_error
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth.errors import ConfigurationError, IdentityFetchError
-from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
     from collections.abc import Callable

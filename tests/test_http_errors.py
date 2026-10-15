@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from apron_auth.providers._http_errors import describe_http_error
+from apron_auth._http_errors import describe_http_error
 
 _REQUEST = httpx.Request("GET", "https://api.example.com/me?token=secret-token")
 

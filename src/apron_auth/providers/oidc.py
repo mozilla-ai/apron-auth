@@ -46,6 +46,7 @@ from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
@@ -61,7 +62,6 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._jwks import IssuerSigningKeys
 
 if TYPE_CHECKING:

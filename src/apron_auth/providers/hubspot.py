@@ -10,9 +10,8 @@ deep link to HubSpot's connected-apps settings for manual removal.
 Identity is fetched via HubSpot's access-token introspection endpoint,
 which carries the bearer token in the URL path rather than an
 ``Authorization`` header.
-An :class:`IdentityFetchError` from the identity handler holds no request URL,
-no HTTP client text, and no cause or context.
-The token-bearing request therefore cannot be reached from the error.
+An :class:`IdentityFetchError` from the identity handler holds no request URL and no HTTP client text.
+The failed request's error is not attached as its cause or context, so the request cannot be reached from it.
 
 NOTE: An error reporter that captures frame local variables can still record the token.
 The request URL is a local variable while the request runs, and no error handling can remove it.
@@ -35,6 +34,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import IdentityFetchError, RevocationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -45,7 +45,6 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._http_errors import describe_http_error
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 
 if TYPE_CHECKING:
@@ -78,7 +77,8 @@ class HubSpotIdentityHandler:
     the OAuth-token introspection endpoint. The bearer token travels
     in the URL path, not an ``Authorization`` header, which makes the
     request URL itself a secret.
-    An :class:`IdentityFetchError` from this handler holds no request URL, no HTTP client text, and no cause or context.
+    An :class:`IdentityFetchError` from this handler holds no request URL and no HTTP client text.
+    The failed request's error is not attached as its cause or context.
 
     The introspection response mixes user and portal/account identity:
 
@@ -161,7 +161,7 @@ class HubSpotIdentityHandler:
 
         Raises:
             IdentityFetchError: If the request fails or its response cannot be parsed.
-                The error has no cause or context, so the token-bearing request cannot be reached from it.
+                The failed request's error is not attached as its cause or context.
         """
         try:
             async with httpx.AsyncClient() as client:
@@ -215,18 +215,23 @@ class HubSpotRevocationHandler:
 
         Raises:
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         try:
             response = await client.delete(url)
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
-        if response.status_code in (204, 404):
-            return True
-        logger.warning(
-            "HubSpot revocation returned unexpected status %s",
-            response.status_code,
-        )
-        return False
+            failure_message = f"Failed to revoke HubSpot token: {describe_http_error(exc)}"
+        else:
+            if response.status_code in (204, 404):
+                return True
+            logger.warning(
+                "HubSpot revocation returned unexpected status %s",
+                response.status_code,
+            )
+            return False
+        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
@@ -246,6 +251,7 @@ class HubSpotRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
