@@ -16,11 +16,12 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.client import OAuthClient, _TokenEndpointError
+from apron_auth.client import OAuthClient, _redact, _TokenEndpointError
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     OAuthError,
+    PermanentOAuthError,
     RevocationError,
     TokenExchangeError,
     TokenRefreshError,
@@ -208,6 +209,28 @@ class TestTokenRequestErrors:
         assert error.error_code == "[redacted]"
         _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
 
+    async def test_form_encoded_echo_is_redacted(self, httpx_mock: HTTPXMock) -> None:
+        secret = "s3cr/t+=x"  # pragma: allowlist secret
+        httpx_mock.add_response(
+            status_code=400, json={"error": "invalid_client", "error_description": "bad s3cr%2Ft%2B%3Dx"}
+        )
+        client = OAuthClient(_config(client_secret=SecretStr(secret)))
+
+        with pytest.raises(OAuthError) as exc_info:
+            await client.refresh_token(REFRESH_TOKEN)
+
+        assert str(exc_info.value) == "invalid_client: bad [redacted]"
+
+    async def test_redacted_error_code_still_classifies_the_failure(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(status_code=400, json={"error": "invalid_grant"})
+        client = OAuthClient(_config())
+
+        with pytest.raises(PermanentOAuthError) as exc_info:
+            await client.refresh_token("grant")
+
+        assert exc_info.value.error_code == "invalid_[redacted]"
+        assert "grant" not in str(exc_info.value).replace("invalid_[redacted]", "")
+
 
 class TestHandlerErrors:
     @pytest.mark.parametrize(("failure", "kind"), TRANSPORT_FAILURES)
@@ -334,3 +357,8 @@ class TestHandlerDomainErrors:
 
         assert str(exc_info.value) == "Custom identity failed"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
+
+
+class TestRedact:
+    def test_a_short_value_inside_a_placeholder_leaves_the_placeholder_intact(self) -> None:
+        assert _redact("x long-value-1 y red z", ["long-value-1", "red"]) == "x [redacted] y [redacted] z"

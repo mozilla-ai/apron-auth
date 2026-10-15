@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import secrets
 import time
+from collections.abc import Iterable
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -45,40 +47,42 @@ if TYPE_CHECKING:
 class _TokenEndpointError(Exception):
     """Internal exception carrying the OAuth error code from the token endpoint."""
 
-    def __init__(self, message: str, error_code: str = "") -> None:
+    def __init__(self, message: str, error_code: str = "", *, permanent: bool = False) -> None:
         """Create the error.
 
         Args:
             message: Human-readable description of the failure.
             error_code: The OAuth error code from the token endpoint when
                 one is available, else an empty string.
+            permanent: Whether the endpoint's own error code is one the client treats as permanent.
+                It is decided before the code is redacted, so redaction cannot change it.
         """
         super().__init__(message)
         self.error_code = error_code
+        self.permanent = permanent
 
 
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
 
-def _redact(text: str, values: list[str]) -> str:
-    """Return ``text`` with each exact occurrence of a secret value replaced by a placeholder.
+def _redact(text: str, values: Iterable[str]) -> str:
+    """Return ``text`` with each exact or form-encoded copy of a secret value replaced by a placeholder.
 
-    Longer values are replaced first, so a value that contains another leaves no fragment behind.
-
-    NOTE: An encoded or truncated copy of a value is not found.
+    NOTE: Other encodings and truncated copies are not found.
 
     Args:
         text: Text from a provider that may echo a value it was sent.
         values: The secret values to remove.
 
     Returns:
-        The text without an exact copy of any of the values.
+        The text without an exact or form-encoded copy of any of the values.
     """
-    for secret in sorted(values, key=len, reverse=True):
-        if secret:
-            text = text.replace(secret, "[redacted]")
-    return text
+    copies = {copy for value in values if value for copy in (value, quote_plus(value))}
+    if not copies:
+        return text
+    pattern = "|".join(re.escape(copy) for copy in sorted(copies, key=len, reverse=True))
+    return re.sub(pattern, "[redacted]", text)
 
 
 def _check_nonce(id_token: object, nonce: str) -> None:
@@ -284,7 +288,7 @@ class OAuthClient:
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
-                It neither chains the failed request's error nor repeats an exact secret the request sent.
+                It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
@@ -327,7 +331,7 @@ class OAuthClient:
                 ``error_code`` to decide how to handle it.
             TokenRefreshError: If the refresh fails transiently and a
                 retry may succeed.
-                It neither chains the failed request's error nor repeats an exact secret the request sent.
+                It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         data = {
             "grant_type": "refresh_token",
@@ -338,7 +342,7 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            if exc.error_code in self._permanent_error_codes:
+            if exc.permanent:
                 raise PermanentOAuthError(str(exc), error_code=exc.error_code) from exc
             raise TokenRefreshError(str(exc), error_code=exc.error_code) from exc
         return self._parse_token_response(response)
@@ -578,14 +582,11 @@ class OAuthClient:
                 errors; its ``error_code`` carries the OAuth error code
                 when one is available.
                 The caught error is not attached as its cause or context.
-                Its message and ``error_code`` repeat no exact secret that the request sent.
+                Its message and ``error_code`` repeat no exact or form-encoded secret that the request sent.
         """
         from authlib.integrations.base_client.errors import OAuthError as AuthlibOAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-        sent_secrets = [data[field] for field in _SENT_SECRET_FIELDS if field in data]
-        if self._config.client_secret is not None:
-            sent_secrets.append(self._config.client_secret.get_secret_value())
         try:
             client_secret = self._config.client_secret
             transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
@@ -603,28 +604,35 @@ class OAuthClient:
             # The .error attribute carries the OAuth error code (e.g.
             # "invalid_grant") which refresh_token uses to distinguish
             # permanent from transient failures.
-            error_code = _redact(exc.error, sent_secrets) if isinstance(exc.error, str) else ""
-            description = _redact(exc.description, sent_secrets) if isinstance(exc.description, str) else ""
+            raw_error_code = exc.error if isinstance(exc.error, str) else ""
+            error_code = self._redact_sent(raw_error_code, data)
+            description = self._redact_sent(exc.description, data) if isinstance(exc.description, str) else ""
             prefix = error_code or "unspecified token endpoint error"
             msg = f"{prefix}: {description}" if description else prefix
-            failure = _TokenEndpointError(msg, error_code=error_code)
+            failure = _TokenEndpointError(
+                msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
+            )
         except httpx.HTTPStatusError as exc:
             # Authlib calls raise_for_status() for 5xx responses, producing
             # an httpx.HTTPStatusError. We attempt to extract the OAuth
             # error code from the response body if present.
+            raw_error_code = ""
             error_code = ""
             msg = f"HTTP {exc.response.status_code}"
             try:
                 body = exc.response.json()
-                raw_error_code = body.get("error", "")
-                error_code = _redact(raw_error_code, sent_secrets) if isinstance(raw_error_code, str) else ""
+                raw_value = body.get("error", "")
+                raw_error_code = raw_value if isinstance(raw_value, str) else ""
+                error_code = self._redact_sent(raw_error_code, data)
                 raw_description = body.get("error_description", "")
-                description = _redact(raw_description, sent_secrets) if isinstance(raw_description, str) else ""
+                description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
             except Exception:
                 pass
-            failure = _TokenEndpointError(msg, error_code=error_code)
+            failure = _TokenEndpointError(
+                msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
+            )
         except httpx.RequestError as exc:
             failure = _TokenEndpointError(describe_http_error(exc), error_code="")
         except json.JSONDecodeError:
@@ -634,6 +642,21 @@ class OAuthClient:
         # NOTE: The caught error can hold the request, which carries the client secret and the grant.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise failure
+
+    def _redact_sent(self, text: str, data: dict[str, str]) -> str:
+        """Return provider text with each secret that a token request sent replaced by a placeholder.
+
+        Args:
+            text: Text from the token endpoint.
+            data: The grant-specific form fields the request sent.
+
+        Returns:
+            The text without the client secret or the grant's secret fields.
+        """
+        values = [data[field] for field in _SENT_SECRET_FIELDS if field in data]
+        if self._config.client_secret is not None:
+            values.append(self._config.client_secret.get_secret_value())
+        return _redact(text, values)
 
     def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> TokenSet:
         """Parse a token endpoint response into a TokenSet.
