@@ -2,10 +2,12 @@
 
 Each message describes a failure in domain terms.
 It never repeats the HTTP client's own text, which carries the request URL.
+The error never carries the failed request, which holds the token and can hold the client secret.
 """
 
 from __future__ import annotations
 
+import traceback
 from collections.abc import Callable
 
 import httpx
@@ -50,9 +52,6 @@ HANDLERS: dict[str, Callable[[], tuple[ProviderConfig, RevocationHandler]]] = {
     "standard": _standard,
 }
 
-# NOTE: These handlers send the token in the request URL, so their errors carry no cause.
-TOKEN_IN_URL = {"google", "hubspot"}
-
 
 async def _revocation_error(
     name: str, httpx_mock: HTTPXMock, failure: type[httpx.RequestError] = httpx.ConnectError
@@ -87,8 +86,10 @@ async def test_transport_error_reports_failure_kind_without_request_url(
     assert TOKEN not in str(error)
 
 
-@pytest.mark.parametrize("name", sorted(set(HANDLERS) - TOKEN_IN_URL))
-async def test_token_in_body_or_header_error_keeps_its_cause(name: str, httpx_mock: HTTPXMock) -> None:
+@pytest.mark.parametrize("name", list(HANDLERS))
+async def test_error_does_not_carry_the_failed_request(name: str, httpx_mock: HTTPXMock) -> None:
     error = await _revocation_error(name, httpx_mock)
 
-    assert isinstance(error.__cause__, httpx.ConnectError)
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert TOKEN not in "".join(traceback.format_exception(error))

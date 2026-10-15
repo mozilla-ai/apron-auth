@@ -264,7 +264,8 @@ class TestGitHubRevocationHandler:
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$") as exc_info:
             await handler.revoke("access-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_network_error_with_injected_client_keeps_client_open(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))

@@ -443,6 +443,7 @@ class SlackRevocationHandler:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint or
                 its response body is not valid JSON.
+                The caught error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -454,14 +455,19 @@ class SlackRevocationHandler:
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as exc:
-                raise RevocationError(f"Failed to revoke Slack token: {describe_http_error(exc)}") from exc
-        if not response.is_success:
-            return False
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise RevocationError("Failed to parse Slack revocation response") from exc
-        return data.get("ok", False)
+                failure_message = f"Failed to revoke Slack token: {describe_http_error(exc)}"
+            else:
+                if not response.is_success:
+                    return False
+                try:
+                    data = response.json()
+                except ValueError:
+                    failure_message = "Failed to parse Slack revocation response"
+                else:
+                    return data.get("ok", False)
+        # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
+        # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

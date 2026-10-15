@@ -219,6 +219,7 @@ class GitHubRevocationHandler:
         Raises:
             ValueError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
             msg = "revocation_url is required but not set in ProviderConfig"
@@ -250,6 +251,7 @@ class GitHubRevocationHandler:
 
         Raises:
             RevocationError: If the request fails to reach the endpoint.
+                The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
         try:
@@ -261,23 +263,27 @@ class GitHubRevocationHandler:
                 json={"access_token": token},
             )
         except httpx.RequestError as exc:
-            raise RevocationError(f"Failed to revoke GitHub token: {describe_http_error(exc)}") from exc
-        # 204: grant removed. 404: already gone — idempotent re-disconnect.
-        if response.status_code in (204, 404):
-            return True
-        # 422: validation failed or spam-throttled per GitHub docs. Treat
-        # as a soft failure so callers can continue with local cleanup.
-        if response.status_code == 422:
+            failure_message = f"Failed to revoke GitHub token: {describe_http_error(exc)}"
+        else:
+            # 204: grant removed. 404: already gone — idempotent re-disconnect.
+            if response.status_code in (204, 404):
+                return True
+            # 422: validation failed or spam-throttled per GitHub docs. Treat
+            # as a soft failure so callers can continue with local cleanup.
+            if response.status_code == 422:
+                logger.warning(
+                    "GitHub grant revocation returned 422 (validation failed "
+                    "or spam-throttled); the grant may still exist at GitHub"
+                )
+                return False
             logger.warning(
-                "GitHub grant revocation returned 422 (validation failed "
-                "or spam-throttled); the grant may still exist at GitHub"
+                "GitHub grant revocation returned unexpected status %s",
+                response.status_code,
             )
             return False
-        logger.warning(
-            "GitHub grant revocation returned unexpected status %s",
-            response.status_code,
-        )
-        return False
+        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

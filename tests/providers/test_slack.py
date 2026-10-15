@@ -440,7 +440,8 @@ class TestSlackRevocationHandler:
         config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Failed to revoke Slack token: network error$") as exc_info:
             await handler.revoke("access-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_malformed_json_response_raises_revocation_error(self, httpx_mock: HTTPXMock):
         """A 2xx body that is not valid JSON must surface as ``RevocationError``,
@@ -452,7 +453,8 @@ class TestSlackRevocationHandler:
         with pytest.raises(RevocationError) as exc_info:
             await handler.revoke("access-abc", config)
         assert str(exc_info.value) == "Failed to parse Slack revocation response"
-        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
 
 class TestSlackWorkspaceBotIdentity:

@@ -257,7 +257,8 @@ class TestNotionRevocationHandler:
         handler = NotionRevocationHandler()
         with pytest.raises(RevocationError, match="^Failed to revoke Notion token: network error$") as exc_info:
             await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_network_error_with_injected_client(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
@@ -265,7 +266,8 @@ class TestNotionRevocationHandler:
         handler = NotionRevocationHandler(client=client)
         with pytest.raises(RevocationError, match="^Failed to revoke Notion token: network error$") as exc_info:
             await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
         assert not client.is_closed
         await client.aclose()
 

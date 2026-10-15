@@ -175,7 +175,8 @@ class TestStandardRevocationHandler:
         handler = StandardRevocationHandler()
         with pytest.raises(RevocationError, match="^Failed to revoke token: network error$") as exc_info:
             await handler.revoke("access-token-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_network_error_with_injected_client(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
@@ -184,7 +185,8 @@ class TestStandardRevocationHandler:
         handler = StandardRevocationHandler(client=client)
         with pytest.raises(RevocationError, match="^Failed to revoke token: network error$") as exc_info:
             await handler.revoke("access-token-abc", config)
-        assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
         assert not client.is_closed
         await client.aclose()
 
