@@ -1,17 +1,16 @@
-"""Generic MCP-server OAuth support: discover metadata, build a ProviderConfig.
+"""Generic Model Context Protocol (MCP) server OAuth support: discover metadata, build a ProviderConfig.
 
-Discovers a remote MCP server's OAuth endpoints via RFC 9728 (Protected
-Resource Metadata) and RFC 8414 (Authorization Server Metadata), then folds
-them together with a client identity into a
-:class:`~apron_auth.models.ProviderConfig` for the existing
-:class:`~apron_auth.client.OAuthClient`.
+This module discovers a remote MCP server's OAuth endpoints from its RFC 9728 and RFC 8414 metadata.
+It folds them together with client credentials into a :class:`~apron_auth.models.ProviderConfig`.
+That config infers no identity handler.
+An authorization server's host does not decide which identity contract applies to its tokens.
+This module is stateless and stores no credentials.
 
-Discovery fetches URLs taken from server-supplied metadata. The baseline
-requires HTTPS and rejects non-public IP-literal hosts, and an optional
-``url_validator`` may reject URLs; because these do not stop DNS-based
-rebinding, a caller handling untrusted input should supply a
-``transport_factory`` whose transport pins DNS to validated addresses. This
-module is stateless and stores no credentials.
+Discovery fetches URLs taken from server-supplied metadata.
+It requires HTTPS, rejects non-public IP-literal hosts, and applies an optional ``url_validator`` to every URL.
+
+NOTE: These checks do not stop DNS rebinding.
+A caller handling untrusted input should supply a ``transport_factory`` whose transport pins DNS to validated addresses.
 """
 
 from __future__ import annotations
@@ -144,11 +143,7 @@ def to_provider_config(
     redirect_uri: str | None = None,
     resource: str | None = None,
 ) -> ProviderConfig:
-    """Fold discovered metadata and a client identity into a ProviderConfig that infers no identity handler.
-
-    An authorization server's host does not decide which identity contract applies to its tokens.
-
-    NOTE: Callers must supply their own identity handler to fetch identity with the returned config.
+    """Fold discovered metadata and client credentials into a ProviderConfig that infers no identity handler.
 
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
@@ -162,6 +157,12 @@ def to_provider_config(
     the code exchange can validate the authorization-response ``iss`` (RFC 9207).
     The RFC 8707 resource indicator defaults to the discovered protected-resource
     identifier and can be overridden by ``resource``.
+
+    The returned config disallows identity handler inference, and no parameter re-enables it.
+    An authorization server's host does not decide which identity contract applies to its tokens.
+
+    NOTE: Callers must supply an explicit identity handler to fetch identity with the returned config.
+    They should choose a built-in handler only when that provider's API accepts this server's tokens.
 
     Args:
         metadata: Metadata from :func:`discover`.
