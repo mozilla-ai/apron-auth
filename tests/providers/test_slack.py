@@ -456,6 +456,24 @@ class TestSlackRevocationHandler:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    async def test_invalid_revocation_url_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(is_optional=True)
+        from apron_auth.providers.slack import SlackRevocationHandler
+
+        config = ProviderConfig(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url="https://slack.com/api/oauth.v2.access",
+            revocation_url="https://slack.com/api/auth.revoke\x00",
+        )
+        handler = SlackRevocationHandler()
+        with pytest.raises(RevocationError, match="^Failed to revoke Slack token: invalid URL$") as exc_info:
+            await handler.revoke("access-abc", config)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+        assert httpx_mock.get_requests() == []
+
 
 class TestSlackWorkspaceBotIdentity:
     """``SlackIdentityHandler`` branch for tokens without ``openid``.
