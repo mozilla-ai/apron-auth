@@ -454,13 +454,13 @@ class SlackRevocationHandler:
                     headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as exc:
-                raise RevocationError(str(exc)) from exc
+                raise RevocationError(f"Failed to revoke Slack token: {describe_http_error(exc)}") from exc
         if not response.is_success:
             return False
         try:
             data = response.json()
         except ValueError as exc:
-            raise RevocationError(f"Failed to parse Slack revocation response: {exc}") from exc
+            raise RevocationError("Failed to parse Slack revocation response") from exc
         return data.get("ok", False)
 
 

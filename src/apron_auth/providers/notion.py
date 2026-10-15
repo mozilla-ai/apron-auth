@@ -197,7 +197,7 @@ class NotionRevocationHandler:
                 auth=auth,
             )
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
+            raise RevocationError(f"Failed to revoke Notion token: {describe_http_error(exc)}") from exc
         if response.status_code in (200, 400):
             return True
         logger.warning(

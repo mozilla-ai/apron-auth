@@ -262,7 +262,7 @@ class TestGitHubRevocationHandler:
         from apron_auth.providers.github import preset
 
         config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+        with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$") as exc_info:
             await handler.revoke("access-abc", config)
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
@@ -273,7 +273,7 @@ class TestGitHubRevocationHandler:
         config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         client = httpx.AsyncClient()
         handler = GitHubRevocationHandler(client=client)
-        with pytest.raises(RevocationError, match="Connection refused"):
+        with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$"):
             await handler.revoke("access-abc", config)
         assert not client.is_closed
         await client.aclose()

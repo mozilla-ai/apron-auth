@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import httpx
 
 from apron_auth.errors import RevocationError
+from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
@@ -195,5 +196,5 @@ class StandardRevocationHandler:
                 auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
+            raise RevocationError(f"Failed to revoke token: {describe_http_error(exc)}") from exc
         return response.is_success

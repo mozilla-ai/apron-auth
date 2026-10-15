@@ -438,7 +438,7 @@ class TestSlackRevocationHandler:
         from apron_auth.providers.slack import preset
 
         config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
-        with pytest.raises(RevocationError, match="Connection refused") as exc_info:
+        with pytest.raises(RevocationError, match="^Failed to revoke Slack token: network error$") as exc_info:
             await handler.revoke("access-abc", config)
         assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
 
@@ -451,6 +451,7 @@ class TestSlackRevocationHandler:
         config, handler = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError) as exc_info:
             await handler.revoke("access-abc", config)
+        assert str(exc_info.value) == "Failed to parse Slack revocation response"
         assert isinstance(exc_info.value.__cause__, ValueError)
 
 

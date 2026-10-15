@@ -261,7 +261,7 @@ class GitHubRevocationHandler:
                 json={"access_token": token},
             )
         except httpx.RequestError as exc:
-            raise RevocationError(str(exc)) from exc
+            raise RevocationError(f"Failed to revoke GitHub token: {describe_http_error(exc)}") from exc
         # 204: grant removed. 404: already gone — idempotent re-disconnect.
         if response.status_code in (204, 404):
             return True
