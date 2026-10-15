@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -1039,6 +1040,167 @@ class TestExchangeCodeNonce:
         )
         tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-xyz")
         assert tokens.access_token == "access-new"
+
+
+class TestExchangeCodeNonceRevocation:
+    REVOKE_URL = "https://provider.example.com/revoke"
+
+    async def _refused(
+        self,
+        httpx_mock: HTTPXMock,
+        response: dict[str, object],
+        revocation_url: str | None = REVOKE_URL,
+    ) -> NonceValidationError:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", **response},
+        )
+        client = OAuthClient(config=_make_config(revocation_url=revocation_url))
+        with pytest.raises(NonceValidationError) as exc_info:
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+        return exc_info.value
+
+    def _revoked(self, httpx_mock: HTTPXMock) -> list[str]:
+        return [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+        ]
+
+    async def test_a_mismatched_nonce_revokes_both_tokens(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+
+        await self._refused(
+            httpx_mock, {"refresh_token": "refresh-xyz", "id_token": _id_token({"sub": "u-1", "nonce": "other"})}
+        )
+
+        assert sorted(self._revoked(httpx_mock)) == ["access-abc", "refresh-xyz"]
+
+    async def test_a_response_without_an_id_token_revokes_the_access_token(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL)
+
+        await self._refused(httpx_mock, {})
+
+        assert self._revoked(httpx_mock) == ["access-abc"]
+
+    async def test_a_revocation_failure_still_raises_the_nonce_error(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, status_code=503, is_reusable=True)
+
+        error = await self._refused(httpx_mock, {"refresh_token": "refresh-xyz"})
+
+        assert str(error) == "Token response carries no ID token for the OpenID request"
+        assert "refresh-xyz" not in caplog.text
+        assert "access-abc" not in caplog.text
+        assert "could not be revoked" in caplog.text
+
+    async def test_a_transport_failure_while_revoking_still_raises_the_nonce_error(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        httpx_mock.add_exception(httpx.ConnectError("refused"), url=self.REVOKE_URL)
+
+        error = await self._refused(httpx_mock, {})
+
+        assert isinstance(error, NonceValidationError)
+        assert error.__context__ is None
+        assert "network error" in caplog.text
+
+    async def test_a_provider_without_revocation_logs_that_the_tokens_stay_valid(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await self._refused(httpx_mock, {}, revocation_url=None)
+
+        assert len(httpx_mock.get_requests()) == 1
+        assert "stay valid" in caplog.text
+
+    @pytest.mark.parametrize(
+        ("failure", "reason"),
+        [
+            (ConfigurationError("revocation needs client authentication"), "revocation needs client authentication"),
+            (RuntimeError("raw-SECRET-text"), "(Failed to revoke token)"),
+        ],
+        ids=["library-error", "unexpected-error"],
+    )
+    async def test_a_handler_failure_is_logged_in_domain_terms(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, failure: Exception, reason: str
+    ) -> None:
+        class FailingHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                raise failure
+
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=FailingHandler())
+
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+
+        assert reason in caplog.text
+        assert "raw-SECRET-text" not in caplog.text
+
+    async def test_a_cancelled_revocation_still_raises_the_nonce_error(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class CancelledHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                raise asyncio.CancelledError
+
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=CancelledHandler())
+
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+
+        assert "(interrupted)" in caplog.text
+
+    async def test_a_pending_state_without_a_nonce_redeems_no_code(self, httpx_mock: HTTPXMock) -> None:
+        client = OAuthClient(config=_make_config(scopes=["openid"], revocation_url=self.REVOKE_URL))
+
+        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce=None)
+            )
+
+        assert httpx_mock.get_requests() == []
+
+    async def test_a_refused_response_without_tokens_logs_nothing(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"token_type": "Bearer"})
+        client = OAuthClient(config=_make_config(revocation_url=None))
+
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+
+        assert "stay valid" not in caplog.text
+
+    async def test_a_warning_names_the_revocation_host(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, status_code=503)
+
+        await self._refused(httpx_mock, {})
+
+        assert "provider.example.com" in caplog.text
+
+    async def test_a_verified_response_revokes_nothing(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "id_token": _id_token({"sub": "u-1", "nonce": "sent-nonce"})},
+        )
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL))
+
+        await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+        )
+
+        assert httpx_mock.get_requests(url=self.REVOKE_URL) == []
 
 
 class TestRefreshToken:
