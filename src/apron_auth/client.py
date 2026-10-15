@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import secrets
 import time
 from functools import cached_property
@@ -11,6 +12,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth._jwt import unverified_claims
 from apron_auth.errors import (
     INVALID_CLIENT,
@@ -71,8 +73,11 @@ def _check_nonce(id_token: object, nonce: str) -> None:
         raise NonceValidationError(msg)
     try:
         claims = unverified_claims(id_token)
-    except ValueError as exc:
-        raise NonceValidationError(msg) from exc
+    except ValueError:
+        claims = None
+    # NOTE: This check raises outside the except block, so the error does not chain the decoder's error.
+    if claims is None:
+        raise NonceValidationError(msg)
     claim = claims.get("nonce")
     if claim is None:
         msg = "ID token carries no nonce for the authorization request"
@@ -252,6 +257,7 @@ class OAuthClient:
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
+                It does not chain the failed request's error.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
@@ -294,6 +300,7 @@ class OAuthClient:
                 ``error_code`` to decide how to handle it.
             TokenRefreshError: If the refresh fails transiently and a
                 retry may succeed.
+                It does not chain the failed request's error.
         """
         data = {
             "grant_type": "refresh_token",
@@ -307,8 +314,6 @@ class OAuthClient:
             if exc.error_code in self._permanent_error_codes:
                 raise PermanentOAuthError(str(exc), error_code=exc.error_code) from exc
             raise TokenRefreshError(str(exc), error_code=exc.error_code) from exc
-        except Exception as exc:
-            raise TokenRefreshError(str(exc)) from exc
         return self._parse_token_response(response)
 
     async def revoke_token(self, token: str) -> bool:
@@ -328,6 +333,7 @@ class OAuthClient:
                 configured.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
+                It chains nothing from the handler.
         """
         if not self._config.revocation_url:
             msg = "revocation_url is not configured for this provider"
@@ -339,14 +345,23 @@ class OAuthClient:
 
         try:
             result = await handler.revoke(token, self._config)
-        except RevocationError:
+        except RevocationError as exc:
+            # NOTE: A handler's own error can chain a request that carries the token.
+            exc.__cause__ = None
+            exc.__context__ = None
             raise
-        except Exception as exc:
-            raise RevocationError(str(exc)) from exc
-        if not result:
-            msg = "Token revocation failed"
-            raise RevocationError(msg)
-        return True
+        except httpx.HTTPError as exc:
+            failure_message = f"Failed to revoke token: {describe_http_error(exc)}"
+        except Exception:
+            failure_message = "Failed to revoke token"
+        else:
+            if not result:
+                msg = "Token revocation failed"
+                raise RevocationError(msg)
+            return True
+        # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(failure_message)
 
     async def fetch_identity(self, tokens: TokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.
@@ -381,6 +396,7 @@ class OAuthClient:
             ConfigurationError: If built-in inference matches more than one
                 provider for the configuration.
             IdentityFetchError: If the handler fails to fetch identity.
+                It chains nothing from the handler.
         """
         handler = self._identity_handler or self._inferred_identity_handler
         if handler is None:
@@ -389,10 +405,18 @@ class OAuthClient:
         material = IdentityMaterial.from_token_set(tokens)
         try:
             return await handler.fetch_identity(material, self._config)
-        except IdentityFetchError:
+        except IdentityFetchError as exc:
+            # NOTE: A handler's own error can chain a request that carries the token.
+            exc.__cause__ = None
+            exc.__context__ = None
             raise
-        except Exception as exc:
-            raise IdentityFetchError(str(exc)) from exc
+        except httpx.HTTPError as exc:
+            failure_message = f"Failed to fetch identity: {describe_http_error(exc)}"
+        except Exception:
+            failure_message = "Failed to fetch identity"
+        # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise IdentityFetchError(failure_message)
 
     @cached_property
     def _inferred_identity_handler(self) -> IdentityHandler | None:
@@ -509,7 +533,6 @@ class OAuthClient:
 
         Authlib handles token_endpoint_auth_method (client_secret_post vs
         client_secret_basic), request encoding, and response parsing.
-        Three error paths are possible — see inline comments.
 
         Args:
             data: The grant-specific form fields for the request (e.g.
@@ -523,6 +546,7 @@ class OAuthClient:
                 fails with a non-success status, or the request otherwise
                 errors; its ``error_code`` carries the OAuth error code
                 when one is available.
+                The caught error is not attached as its cause or context.
         """
         from authlib.integrations.base_client.errors import OAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -548,7 +572,7 @@ class OAuthClient:
             description = exc.description if isinstance(exc.description, str) else ""
             prefix = error_code or "unspecified token endpoint error"
             msg = f"{prefix}: {description}" if description else prefix
-            raise _TokenEndpointError(msg, error_code=error_code) from exc
+            failure = _TokenEndpointError(msg, error_code=error_code)
         except httpx.HTTPStatusError as exc:
             # Authlib calls raise_for_status() for 5xx responses, producing
             # an httpx.HTTPStatusError. We attempt to extract the OAuth
@@ -565,11 +589,16 @@ class OAuthClient:
                 msg = f"{prefix}: {description}" if description else prefix
             except Exception:
                 pass
-            raise _TokenEndpointError(msg, error_code=error_code) from exc
-        except Exception as exc:
-            # Network errors (ConnectError, TimeoutException), JSON decode
-            # errors, or anything else. No error_code available.
-            raise _TokenEndpointError(str(exc), error_code="") from exc
+            failure = _TokenEndpointError(msg, error_code=error_code)
+        except httpx.RequestError as exc:
+            failure = _TokenEndpointError(describe_http_error(exc), error_code="")
+        except json.JSONDecodeError:
+            failure = _TokenEndpointError("token response could not be read", error_code="")
+        except Exception:
+            failure = _TokenEndpointError("request failed", error_code="")
+        # NOTE: The caught error can hold the request, which carries the client secret and the grant.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise failure
 
     def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> TokenSet:
         """Parse a token endpoint response into a TokenSet.
