@@ -7,8 +7,10 @@ The error never carries the failed request, which holds the token and can hold t
 
 from __future__ import annotations
 
+import json
 import traceback
 from collections.abc import Callable
+from urllib.parse import unquote, unquote_plus
 
 import httpx
 import pytest
@@ -93,3 +95,38 @@ async def test_error_does_not_carry_the_failed_request(name: str, httpx_mock: HT
     assert error.__cause__ is None
     assert error.__context__ is None
     assert TOKEN not in "".join(traceback.format_exception(error))
+
+
+# NOTE: Only Slack sends the token in a header, where a token that is not ASCII cannot go.
+SENDS_TOKEN_IN_HEADER = {"slack"}
+NON_ASCII_TOKEN = "token-SECRET-\u20ac"
+
+
+@pytest.mark.parametrize("name", sorted(SENDS_TOKEN_IN_HEADER))
+async def test_token_that_cannot_be_sent_is_a_request_failure(name: str, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(is_optional=True)
+    config, handler = HANDLERS[name]()
+
+    with pytest.raises(RevocationError) as exc_info:
+        await handler.revoke(NON_ASCII_TOKEN, config)
+
+    assert str(exc_info.value).endswith(" token: request failed")
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__context__ is None
+    assert NON_ASCII_TOKEN not in "".join(traceback.format_exception(exc_info.value))
+    assert httpx_mock.get_requests() == []
+
+
+@pytest.mark.parametrize("name", sorted(set(HANDLERS) - SENDS_TOKEN_IN_HEADER))
+async def test_token_that_is_not_ascii_reaches_the_endpoint(name: str, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(json={"ok": True})
+    config, handler = HANDLERS[name]()
+
+    await handler.revoke(NON_ASCII_TOKEN, config)
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    url = unquote(str(request.url))
+    body = unquote_plus(request.content.decode())
+    json_escaped = json.dumps(NON_ASCII_TOKEN)[1:-1]
+    assert NON_ASCII_TOKEN in url or NON_ASCII_TOKEN in body or json_escaped in body

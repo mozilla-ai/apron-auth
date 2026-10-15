@@ -429,8 +429,8 @@ class SlackRevocationHandler:
 
         Raises:
             ValueError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint or
-                its response body is not valid JSON.
+            RevocationError: If the revocation URL is invalid, the request cannot be sent,
+                the request fails to reach the endpoint, or its response body is not valid JSON.
                 The caught error is not attached as its cause or context.
         """
         if config.revocation_url is None:
@@ -442,8 +442,14 @@ class SlackRevocationHandler:
                     config.revocation_url,
                     headers={"Authorization": f"Bearer {token}"},
                 )
+            # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
+            except httpx.InvalidURL:
+                failure_message = "Failed to revoke Slack token: invalid URL"
             except httpx.RequestError as exc:
                 failure_message = f"Failed to revoke Slack token: {describe_http_error(exc)}"
+            except Exception:
+                # Any other send failure can repeat the token's header, like the encoding error for a non-ASCII token.
+                failure_message = "Failed to revoke Slack token: request failed"
             else:
                 if not response.is_success:
                     return False
