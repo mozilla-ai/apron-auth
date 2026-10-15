@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 
+from apron_auth._http_errors import describe_http_error
 from apron_auth.errors import RevocationError
-from apron_auth.providers._http_errors import describe_http_error
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
