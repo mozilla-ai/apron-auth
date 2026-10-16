@@ -439,6 +439,18 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com/mcp")
         assert meta.authorize_url == "https://auth.example.com/authorize"
 
+    async def test_prm_falls_back_to_root_after_a_deeply_nested_body(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A body that nests too deeply to decode is skipped like any other non-JSON body."""
+        httpx_mock.add_response(url=_PRM_PATH, content=b"[" * 100_000 + b"]" * 100_000)
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
+            meta = await discover("https://mcp.example.com/mcp")
+        assert meta.authorize_url == "https://auth.example.com/authorize"
+        assert any("protected resource metadata returned a non-JSON body" in message for message in caplog.messages)
+
     async def test_resource_metadata_hint_tried_first(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://mcp.example.com/custom-prm",
@@ -848,6 +860,12 @@ class TestRegisterClient:
     async def test_non_object_response_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=["not", "a", "dict"])
         with pytest.raises(McpRegistrationError):
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+    async def test_deeply_nested_response_raises(self, httpx_mock: HTTPXMock) -> None:
+        """A body that nests too deeply to decode is a non-JSON response, not a raw recursion error."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, content=b"[" * 100_000 + b"]" * 100_000)
+        with pytest.raises(McpRegistrationError, match="non-JSON"):
             await register_client(_REGISTER_URL, _REDIRECT_URI)
 
     @pytest.mark.parametrize("url", ["http://auth.example.com/register", "https://127.0.0.1/register"])

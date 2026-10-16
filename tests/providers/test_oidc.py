@@ -250,6 +250,13 @@ class TestDiscover:
         with pytest.raises(OidcDiscoveryError, match="not JSON"):
             await discover(ISSUER)
 
+    async def test_reports_a_deeply_nested_document(self, httpx_mock: HTTPXMock) -> None:
+        """A body that nests too deeply to decode is a discovery failure, not a raw recursion error."""
+        httpx_mock.add_response(url=DOCUMENT_URL, content=b"[" * 100_000 + b"]" * 100_000)
+
+        with pytest.raises(OidcDiscoveryError, match="not JSON"):
+            await discover(ISSUER)
+
     async def test_honors_a_document_url_override(self, httpx_mock: HTTPXMock):
         """An explicit document URL is fetched in place of the well-known one."""
         override = "https://sso.example.com/nonstandard-config"

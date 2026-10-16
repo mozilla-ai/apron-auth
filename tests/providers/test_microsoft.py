@@ -522,6 +522,21 @@ class TestMicrosoftOrganizationDegradation:
         assert identity.tenancies == ()
         assert "could not parse the tenant's verified domains" in caplog.text
 
+    async def test_deeply_nested_degrades_to_no_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A body that nests too deeply to decode degrades like any other unreadable body."""
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
+        with caplog.at_level(logging.WARNING):
+            identity = await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert "could not parse the tenant's verified domains" in caplog.text
+
     async def test_empty_collection_degrades_to_no_tenancy(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ):

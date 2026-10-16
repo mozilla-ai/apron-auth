@@ -16,6 +16,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -231,7 +232,7 @@ class AtlassianIdentityHandler:
             return {}
 
         try:
-            payload = response.json()
+            payload = decode_json_body(response)
         except ValueError:
             logger.warning(
                 "atlassian user identity lookup could not parse the response; "

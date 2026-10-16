@@ -26,6 +26,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
+from apron_auth._json_body import decode_json_body
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
@@ -288,7 +289,7 @@ async def register_client(
             msg = f"client registration failed: HTTP {response.status_code}"
             raise McpRegistrationError(msg)
         try:
-            data = response.json()
+            data = decode_json_body(response)
         except ValueError:
             msg = "client registration returned a non-JSON response"
             raise McpRegistrationError(msg) from None
@@ -602,7 +603,7 @@ async def _fetch_first_metadata(
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
                 continue
             try:
-                payload = response.json()
+                payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
                 continue
