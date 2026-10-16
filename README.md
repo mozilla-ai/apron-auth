@@ -162,6 +162,8 @@ config = ProviderConfig(
 )
 ```
 
+`extra_params` adds fixed parameters to every authorization request. A parameter that binds the request to the client (`client_id`, `code_challenge`, `code_challenge_method`, `nonce`, `redirect_uri`, `resource`, `response_type`, `state`) or replaces it as a whole (`request`, `request_uri`) is refused when the config is built. Use the typed fields for `redirect_uri` and `resource` instead.
+
 ### Authorization URL
 
 Build the URL to redirect the user to. State and PKCE are included automatically, and so is a nonce when the request asks for the `openid` scope. Keep the whole pending state, not only some of its fields.

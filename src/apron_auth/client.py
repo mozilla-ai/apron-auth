@@ -34,7 +34,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import IdentityMaterial, OAuthPendingState, TokenSet
+from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, IdentityMaterial, OAuthPendingState, TokenSet
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.identity import infer_identity_handler
@@ -597,6 +597,7 @@ class OAuthClient:
         """Return the query of an authorization URL that sends ``params``.
 
         The authorization URL's own query is overridden by ``params``, then by ``extra_params``, then by the resource.
+        A reserved parameter is dropped from the URL's own query and from ``extra_params``, so only this client sets it.
 
         Args:
             params: The request parameters this client sets.
@@ -604,12 +605,21 @@ class OAuthClient:
         Returns:
             The query, with each parameter's value or values.
         """
+        # A reserved parameter binds the request to this client, or replaces the request as a whole,
+        # so the config must not set one, even when it was built without validation.
         query: dict[str, str | list[str]] = {
             name: values[0] if len(values) == 1 else values
             for name, values in parse_qs(urlparse(self._config.authorize_url).query).items()
+            if name not in RESERVED_AUTHORIZATION_PARAMS
         }
         query.update(params)
-        query.update(self._config.extra_params)
+        query.update(
+            {
+                name: value
+                for name, value in self._config.extra_params.items()
+                if name not in RESERVED_AUTHORIZATION_PARAMS
+            }
+        )
         # The resource indicator (RFC 8707) is authoritative for audience binding,
         # so extra_params must not be able to suppress or redirect it.
         if self._config.resource is not None:
