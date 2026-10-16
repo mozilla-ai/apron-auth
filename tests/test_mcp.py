@@ -798,9 +798,27 @@ class TestIsBlockedHost:
             ("0x7f000001", True),
             ("017700000001", True),
             ("127.1", True),
+            # Ranges that are neither private nor reserved, but not globally reachable either.
+            ("100.64.0.1", True),
+            ("192.0.2.1", True),
+            ("198.18.0.1", True),
+            ("240.0.0.1", True),
+            ("::ffff:127.0.0.1", True),
+            ("2001:db8::1", True),
+            ("ff02::1", True),
+            # Reserved space the registry counts as global in part.
+            ("64:ff9b::a00:1", True),
+            ("::2", True),
+            ("fe00::1", True),
+            # A trailing dot names the same host.
+            ("localhost.", True),
+            ("app.localhost.", True),
+            ("127.0.0.1.", True),
+            ("2130706433.", True),
             ("mcp.example.com", False),
             ("8.8.8.8", False),
             ("134744072", False),
+            ("::ffff:8.8.8.8", False),
             ("2606:4700:4700::1111", False),
         ],
     )
@@ -885,6 +903,7 @@ class TestValidateUrl:
             "https://2130706433",
             "https://0x7f000001",
             "https://127.1",
+            "https://100.64.0.1",
         ],
     )
     def test_rejects_unusable_url(self, url: str) -> None:
@@ -1044,6 +1063,8 @@ class TestRegisterClient:
             "http://2130706433:8080/callback",
             "http://0x7f000001:8080/callback",
             "http://0177.0.0.1:8080/callback",
+            "http://localhost.:8080/callback",
+            "http://127.0.0.1.:8080/callback",
         ],
     )
     async def test_application_type_inferred_native_from_loopback_redirect(
@@ -1070,6 +1091,13 @@ class TestRegisterClient:
         request = httpx_mock.get_request()
         assert request is not None
         assert "application_type" not in json.loads(request.content)
+
+    async def test_loopback_redirect_with_a_trailing_dot_still_infers_native(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, "http://localhost.:8080/callback")
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["application_type"] == "native"
 
     async def test_explicit_application_type_overrides_loopback_inference(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})

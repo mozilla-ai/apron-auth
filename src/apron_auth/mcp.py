@@ -7,7 +7,8 @@ An authorization server's host does not decide which identity contract applies t
 This module is stateless and stores no credentials.
 
 Discovery fetches URLs taken from server-supplied metadata.
-It requires HTTPS, rejects non-public IP-literal hosts, and applies an optional ``url_validator`` to every URL.
+It requires HTTPS, rejects IP-literal hosts that are not globally reachable, and applies an optional
+``url_validator`` to every URL.
 
 NOTE: These checks do not stop DNS rebinding.
 A caller handling untrusted input should supply a ``transport_factory`` whose transport pins DNS to validated addresses.
@@ -61,7 +62,8 @@ async def discover(
     ``resource_metadata_url`` hint, then well-known locations), reads its
     resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
-    and non-public-IP-literal block are defense-in-depth; they do not stop a
+    and the block on IP literals that are not globally reachable are
+    defense-in-depth; they do not stop a
     hostname that resolves to an internal address, so untrusted ``server_url``
     values need a ``transport_factory`` that pins DNS to validated addresses.
 
@@ -504,21 +506,34 @@ def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None
     return ipaddress.ip_address(packed)
 
 
+def _host_name(host: str) -> str:
+    """Return the host without the trailing dot that names the same host."""
+    return host.rstrip(".")
+
+
 def _is_blocked_host(host: str) -> bool:
-    """Return whether host is empty, localhost, or a non-public IP address."""
-    if not host or host == "localhost" or host.endswith(".localhost"):
+    """Return whether host is empty, localhost, or an IP address that is not globally reachable.
+
+    The address registry decides what is globally reachable, so a range that is neither private
+    nor reserved, such as shared address space, is still blocked.
+    Reserved and multicast space stay blocked explicitly, because the registry counts parts of
+    them as global, such as the NAT64 prefix that embeds any IPv4 address.
+    An IPv4-mapped IPv6 address is classified as the IPv4 address it maps.
+    """
+    host = _host_name(host)
+    if not host or _is_localhost_name(host):
         return True
     address = _parse_ip(host)
     if address is None:
         return False
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return not address.is_global or address.is_reserved or address.is_multicast
+
+
+def _is_localhost_name(host: str) -> bool:
+    """Return whether host is ``localhost`` or a name under it."""
+    return host == "localhost" or host.endswith(".localhost")
 
 
 def _infer_application_type(redirect_uri: str) -> str | None:
@@ -530,10 +545,10 @@ def _infer_application_type(redirect_uri: str) -> str | None:
     considered it.
     """
     try:
-        host = urlparse(redirect_uri).hostname or ""
+        host = _host_name(urlparse(redirect_uri).hostname or "")
     except ValueError:
         return None
-    if host == "localhost" or host.endswith(".localhost"):
+    if _is_localhost_name(host):
         return ApplicationType.NATIVE
     address = _parse_ip(host)
     if address is not None and address.is_loopback:
