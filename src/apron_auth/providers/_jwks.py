@@ -180,9 +180,12 @@ class IssuerSigningKeys:
         if isinstance(result, _Refusal):
             try:
                 await self._refetch_early(checked_keys)
-            except IdentityFetchError as exc:
+            except IdentityFetchError:
                 # The cached key set is still within its hour, so the result against it stands.
-                logger.warning("The issuer's key set could not be refreshed for an unverified token: %s", exc)
+                logger.warning(
+                    "The issuer's key set could not be refreshed for an unverified token, "
+                    "so the cached key set stays in use"
+                )
             # The token is checked again against any key set stored since its first check, by any sign-in.
             if self._keys is not checked_keys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -339,7 +342,7 @@ class IssuerSigningKeys:
             raise IdentityFetchError("Failed to fetch the issuer's signing keys: invalid key set URL") from exc
         except Exception as exc:
             # A caller's transport can raise anything, and it must still count as a failed fetch.
-            logger.debug("The issuer's key set request failed unexpectedly", exc_info=exc)
+            # NOTE: A transport's exception can render the request it attempted, so it is chained, never logged.
             raise IdentityFetchError("Failed to fetch the issuer's signing keys: request failed") from exc
         try:
             document = response.json()

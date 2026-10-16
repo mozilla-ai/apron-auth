@@ -748,14 +748,7 @@ configuring `apron_auth` reaches all of them, and adapters, filters, and
 
 ### What is never logged
 
-Access tokens, refresh tokens, client secrets, and ID-token payload bytes
-are never written to logs at any level. Exception *values* are not logged
-either — in their place goes whichever non-sensitive primitive actually
-carries diagnostic signal, such as an HTTP status code or an exception
-class name. A raised exception's rendering can embed the request that
-carried a credential, and for some providers a token travels in the URL
-path, so
-the exception value is not safe to emit generically.
+Access tokens, refresh tokens, client secrets, and ID-token payload bytes are never written to logs at any level. Exception *values* are not logged either — in their place goes whichever non-sensitive primitive actually carries diagnostic signal, such as an HTTP status code or an exception class name. Where no such primitive is at hand, the line is fixed text only. A raised exception's rendering can embed the request that carried a credential, and for some providers a token travels in the URL path, so the exception value is not safe to emit generically.
 
 This is a contract, not an implementation detail: if you find a
 credential in log output, treat it as a bug and report it.

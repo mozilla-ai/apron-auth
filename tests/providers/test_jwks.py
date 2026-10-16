@@ -497,7 +497,9 @@ class TestCaching:
         verified = await keys.verify(signed(RSA_KEY))
 
         assert verified.claims == {"sub": "u-1"}
-        assert "HTTP 503" in caplog.text
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.providers._jwks"] == [
+            "The issuer's key set could not be refreshed for an unverified token, so the cached key set stays in use"
+        ]
 
     async def test_a_failed_early_refetch_does_not_block_the_hourly_refetch(self, httpx_mock: HTTPXMock) -> None:
         """Once the issuer recovers, the hourly refetch runs even if an early refetch failed just before it."""
@@ -619,8 +621,11 @@ class TestFetchFailures:
         with pytest.raises(IdentityFetchError, match="invalid key set URL"):
             await IssuerSigningKeys("https://sso.example.com/\x00").verify(signed(RSA_KEY))
 
-    async def test_reports_a_transport_that_fails_unexpectedly(self) -> None:
-        """A caller transport that raises its own error is a failed fetch, rate limited like any other."""
+    async def test_reports_a_transport_that_fails_unexpectedly(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A caller transport that raises its own error is a failed fetch, rate limited like any other.
+
+        The path logs nothing, because the transport's exception can render the request it attempted.
+        """
         calls: list[str] = []
 
         def fail(request: httpx.Request) -> httpx.Response:
@@ -629,11 +634,13 @@ class TestFetchFailures:
 
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(fail))
 
-        for _ in range(2):
-            with pytest.raises(IdentityFetchError, match="Failed to fetch the issuer's signing keys"):
-                await keys.verify(signed(RSA_KEY))
+        with caplog.at_level(logging.DEBUG, logger="apron_auth.providers._jwks"):
+            for _ in range(2):
+                with pytest.raises(IdentityFetchError, match="Failed to fetch the issuer's signing keys"):
+                    await keys.verify(signed(RSA_KEY))
 
         assert calls == [JWKS_URL]
+        assert [record for record in caplog.records if record.name == "apron_auth.providers._jwks"] == []
 
     async def test_reports_a_transport_factory_that_refuses_the_connection(self) -> None:
         """Caller code that raises is reported as a refused connection."""
