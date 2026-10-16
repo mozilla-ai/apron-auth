@@ -292,6 +292,24 @@ class TestAtlassianIdentityHandler:
         assert identity.tenancies[0].id == "cloud-1"
         assert "could not parse" in caplog.text
 
+    async def test_me_deeply_nested_2xx_degrades_to_tenancy_only_profile(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A body that nests too deeply to decode degrades like any other unreadable body."""
+        resources = [{"id": "cloud-1"}]
+        httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
+        httpx_mock.add_response(url=ATLASSIAN_ME_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
+        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        handler = AtlassianIdentityHandler()
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject is None
+        assert identity.raw == {}
+        assert identity.tenancies[0].id == "cloud-1"
+        assert "could not parse" in caplog.text
+
     async def test_me_non_string_person_fields_are_dropped(self, httpx_mock: HTTPXMock) -> None:
         """A well-formed object whose person fields carry the wrong type
         must not fail the fetch: the tenancies are already established,

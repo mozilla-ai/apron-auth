@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 import httpx
 
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth.errors import (
     INVALID_CLIENT,
@@ -748,7 +749,10 @@ class OAuthClient:
             error_code = ""
             msg = f"HTTP {exc.response.status_code}"
             try:
-                body = exc.response.json()
+                body = decode_json_body(exc.response)
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
                 raw_value = body.get("error", "")
                 raw_error_code = raw_value if isinstance(raw_value, str) else ""
                 error_code = self._redact_sent(raw_error_code, data)
@@ -756,14 +760,13 @@ class OAuthClient:
                 description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
-            except Exception:
-                pass
             failure = _TokenEndpointError(
                 msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
             )
         except httpx.RequestError as exc:
             failure = _TokenEndpointError(describe_http_error(exc), error_code="")
-        except json.JSONDecodeError:
+        # NOTE: The token client decodes a success body itself, so a deeply nested body surfaces here as RecursionError.
+        except (json.JSONDecodeError, RecursionError):
             failure = _TokenEndpointError("token response could not be read", error_code="")
         except Exception:
             failure = _TokenEndpointError("request failed", error_code="")

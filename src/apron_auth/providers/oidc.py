@@ -47,6 +47,7 @@ from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
@@ -609,8 +610,8 @@ class OidcIdentityHandler:
                 msg = "OpenID provider returned a signed userinfo response, which is not supported"
                 raise IdentityFetchError(msg)
             try:
-                payload = response.json()
-            except (RecursionError, ValueError):
+                payload = decode_json_body(response)
+            except ValueError:
                 failure = IdentityFetchError("Failed to parse OpenID identity response")
         if failure is not None:
             # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.
@@ -939,7 +940,7 @@ async def _fetch_document(url: str, transport_factory: TransportFactory | None) 
             msg = f"OpenID provider configuration returned HTTP {response.status_code}"
             raise OidcDiscoveryError(msg)
         try:
-            document = response.json()
+            document = decode_json_body(response)
         except ValueError as exc:
             msg = "OpenID provider configuration was not JSON"
             raise OidcDiscoveryError(msg) from exc
