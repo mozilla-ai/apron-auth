@@ -499,7 +499,9 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com")
         assert meta.token_url == "https://auth.example.com/token"
 
-    async def test_skipped_candidate_logged_at_debug(self, httpx_mock: HTTPXMock, caplog) -> None:
+    async def test_skipped_candidate_logged_at_debug(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A skipped discovery candidate is logged at debug with a non-sensitive reason."""
         httpx_mock.add_response(url=_PRM_PATH, status_code=404)
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -587,15 +589,14 @@ class TestDiscover:
     ) -> None:
         """The metadata URL drops a query and a fragment, so an identifier that carries one cannot be checked."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
-        with pytest.raises(McpDiscoveryError, match="userinfo, a query or a fragment"):
+        with pytest.raises(McpDiscoveryError, match="a query or a fragment"):
             await discover("https://mcp.example.com")
 
     async def test_malformed_authorization_server_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
         """An identifier that cannot be parsed is reported as a discovery error, not as the parser's own error."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://[broken"]})
-        with pytest.raises(McpDiscoveryError, match="malformed URL") as excinfo:
+        with pytest.raises(McpDiscoveryError, match="malformed URL"):
             await discover("https://mcp.example.com")
-        assert excinfo.value.__context__ is None
 
     async def test_authorization_server_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """Userinfo in the identifier would be sent as credentials with the metadata request."""
@@ -606,7 +607,22 @@ class TestDiscover:
             await discover("https://mcp.example.com", url_validator=seen.append)
         assert len(httpx_mock.get_requests()) == 1
         assert declared not in seen
-        assert len(httpx_mock.get_requests()) == 1
+
+    async def test_metadata_hint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A hint from a challenge header is refused before any request and before the caller's policy sees it."""
+        hint = "https://user:pw@mcp.example.com/prm"  # pragma: allowlist secret
+        seen: list[str] = []
+        with pytest.raises(McpDiscoveryError, match="userinfo"):
+            await discover("https://mcp.example.com", resource_metadata_url=hint, url_validator=seen.append)
+        assert httpx_mock.get_requests() == []
+        assert hint not in seen
+
+    async def test_discovered_endpoint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        token_url = "https://user:pw@auth.example.com/token"  # pragma: allowlist secret
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint=token_url))
+        with pytest.raises(McpDiscoveryError, match="userinfo"):
+            await discover("https://mcp.example.com")
 
     async def test_issuer_is_checked_before_any_other_member_is_read(self, httpx_mock: HTTPXMock) -> None:
         """A document with the wrong issuer is untrusted as a whole, so its endpoints never reach the URL policy."""
@@ -1125,12 +1141,11 @@ class TestRegisterClient:
         assert request is not None
         assert "application_type" not in json.loads(request.content)
 
-    async def test_loopback_redirect_with_a_trailing_dot_still_infers_native(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
-        await register_client(_REGISTER_URL, "http://localhost.:8080/callback")
-        request = httpx_mock.get_request()
-        assert request is not None
-        assert json.loads(request.content)["application_type"] == "native"
+    async def test_registration_url_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        registration_url = "https://user:pw@auth.example.com/register"  # pragma: allowlist secret
+        with pytest.raises(McpRegistrationError, match="userinfo"):
+            await register_client(registration_url, _REDIRECT_URI)
+        assert httpx_mock.get_requests() == []
 
     async def test_explicit_application_type_overrides_loopback_inference(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})

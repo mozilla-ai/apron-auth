@@ -7,8 +7,8 @@ An authorization server's host does not decide which identity contract applies t
 This module is stateless and stores no credentials.
 
 Discovery fetches URLs taken from server-supplied metadata.
-It requires HTTPS, rejects IP-literal hosts that are not globally reachable, and applies an optional
-``url_validator`` to every URL.
+It requires HTTPS, refuses userinfo, blocks the name ``localhost`` and names under it, blocks IP-literal
+hosts that are not globally reachable, and applies an optional ``url_validator`` to every URL.
 
 NOTE: These checks do not stop DNS rebinding.
 A caller handling untrusted input should supply a ``transport_factory`` whose transport pins DNS to validated addresses.
@@ -62,8 +62,8 @@ async def discover(
     ``resource_metadata_url`` hint, then well-known locations), reads its
     resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
-    and the block on IP literals that are not globally reachable are
-    defense-in-depth; they do not stop a
+    and the block on ``localhost`` names and on IP literals that are not
+    globally reachable are defense-in-depth; they do not stop any other
     hostname that resolves to an internal address, so untrusted ``server_url``
     values need a ``transport_factory`` that pins DNS to validated addresses.
 
@@ -102,21 +102,12 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg)
-    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL drops them.
-    # Userinfo would travel into the metadata URL as credentials, so it is refused as well, before any
-    # caller policy sees the string. The delimiters are checked, so an empty query or fragment counts.
-    try:
-        has_userinfo = urlparse(auth_server).username is not None
-    except ValueError:
-        has_userinfo = None
-    # NOTE: This raise stays outside the except block, because the parse error repeats the URL.
-    if has_userinfo is None:
-        msg = "MCP OAuth received a malformed URL"
-        raise McpDiscoveryError(msg)
-    if has_userinfo or "?" in auth_server or "#" in auth_server:
-        msg = "protected resource metadata declares an authorization server with userinfo, a query or a fragment"
-        raise McpDiscoveryError(msg)
     _validate_url(auth_server, url_validator)
+    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
+    # The delimiters are checked, so an empty query or fragment counts.
+    if "?" in auth_server or "#" in auth_server:
+        msg = "protected resource metadata declares an authorization server with a query or a fragment"
+        raise McpDiscoveryError(msg)
 
     server_meta = await _fetch_first_metadata(
         _asm_candidate_urls(auth_server),
@@ -257,7 +248,7 @@ async def register_client(
     for a confidential client, a ``client_secret``. Any
     ``token_endpoint_auth_method`` the response states is captured too — it is
     authoritative for this client and may differ from the requested method. The
-    URL is validated (HTTPS, non-public host, ``url_validator``) and the request
+    URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the request
     goes through ``transport_factory`` when supplied. An error never echoes the
     response body, which carries the issued secret.
 
@@ -519,7 +510,7 @@ def _parse_url(url: str) -> ParseResult:
 
 
 def _host_name(host: str) -> str:
-    """Return the host without the trailing dot that names the same host."""
+    """Return the host without trailing dots, which name the same host."""
     return host.rstrip(".")
 
 
@@ -575,9 +566,10 @@ def _validate_url(
 ) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
-    Raises ``error_cls`` when the URL is malformed, not HTTPS, or targets a
-    non-public host. An ``OAuthError`` from ``url_validator`` propagates
-    unchanged; any other validator exception is wrapped in ``error_cls``.
+    Raises ``error_cls`` when the URL is malformed, not HTTPS, carries userinfo, or
+    targets a host that is not globally reachable. An ``OAuthError`` from
+    ``url_validator`` propagates unchanged; any other validator exception is
+    wrapped in ``error_cls``. The validator sees only a URL that passed these checks.
     """
     try:
         parsed = _parse_url(url)
@@ -586,6 +578,10 @@ def _validate_url(
         raise error_cls(msg) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
+        raise error_cls(msg)
+    # Userinfo would be sent as credentials with the request, and could reach a log through the URL.
+    if parsed.username is not None:
+        msg = "MCP OAuth refused a URL that carries userinfo"
         raise error_cls(msg)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
