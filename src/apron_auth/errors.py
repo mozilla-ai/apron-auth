@@ -6,11 +6,11 @@ from __future__ import annotations
 # token-endpoint responses. ``error_code`` is a plain ``str`` because a provider
 # may return codes outside this set; these names let callers and this library
 # compare against the common values without bare string literals.
-INVALID_GRANT = "invalid_grant"
 INVALID_CLIENT = "invalid_client"
-UNAUTHORIZED_CLIENT = "unauthorized_client"
+INVALID_GRANT = "invalid_grant"
 SERVER_ERROR = "server_error"
 TEMPORARILY_UNAVAILABLE = "temporarily_unavailable"
+UNAUTHORIZED_CLIENT = "unauthorized_client"
 
 
 class OAuthError(Exception):

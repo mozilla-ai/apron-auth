@@ -17,6 +17,7 @@ CONFIDENTIAL_AUTH_METHODS = (
     TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
 )
 
+# The time limits, in seconds, on each discovery request: 5 to connect and 10 for each other step.
 DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 

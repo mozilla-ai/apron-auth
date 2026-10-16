@@ -28,8 +28,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The scopes the preset always requests, with the labels a consent screen shows.
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="offline_access",
+        label="Offline Access",
+        description="Issue refresh tokens for continued access without re-authorization",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="read:me",
+        label="User Profile",
+        description=(
+            "View your Atlassian account profile so the connection can be identified "
+            "by your name and email rather than by site alone"
+        ),
+        access_type="read",
+        required=False,
+    ),
+]
+
+# The scope strings that the preset adds to the caller's scopes.
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# The endpoint that lists the Atlassian sites the access token can reach.
 _ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _ATLASSIAN_IDENTITY_HOST_SUFFIXES = ("auth.atlassian.com",)
+
+# The endpoint that returns the signed-in user's profile.
 _ATLASSIAN_USERINFO_URL = "https://api.atlassian.com/me"
 
 
@@ -234,33 +263,11 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="atlassian",
     resolver=maybe_identity_handler,
 )
-
-
-BASE_SCOPE_METADATA = [
-    ScopeMetadata(
-        scope="offline_access",
-        label="Offline Access",
-        description="Issue refresh tokens for continued access without re-authorization",
-        access_type="read",
-        required=True,
-    ),
-    ScopeMetadata(
-        scope="read:me",
-        label="User Profile",
-        description=(
-            "View your Atlassian account profile so the connection can be identified "
-            "by your name and email rather than by site alone"
-        ),
-        access_type="read",
-        required=False,
-    ),
-]
-
-BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(

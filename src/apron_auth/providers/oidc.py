@@ -72,12 +72,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-
-# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
-_CLOCK_SKEW_SECONDS = 60
-
-
+# The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
         scope="openid",
@@ -88,7 +83,23 @@ BASE_SCOPE_METADATA = [
     ),
 ]
 
+# The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
+_CLOCK_SKEW_SECONDS = 60
+
+# These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
+# Later patterns build on earlier ones, so their order is fixed.
+_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+# The header arrives decoded as text, so obs-text matches any non-ASCII character.
+_QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\U0010ffff]|\\[\t \x21-\x7e\x80-\U0010ffff])*"'
+_AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
+_AUTH_SCHEME = re.compile(_TOKEN)
+_TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
+
+# The time limits, in seconds, on each userinfo request: 5 to connect and 10 for each other step.
+_USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
@@ -609,15 +620,6 @@ class OidcIdentityHandler:
             msg = "OpenID identity response was not a JSON object"
             raise IdentityFetchError(msg)
         return payload
-
-
-# These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
-_TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
-# The header arrives decoded as text, so obs-text matches any non-ASCII character.
-_QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\U0010ffff]|\\[\t \x21-\x7e\x80-\U0010ffff])*"'
-_AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
-_AUTH_SCHEME = re.compile(_TOKEN)
-_TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
 
 
 class _ChallengeElement(Enum):

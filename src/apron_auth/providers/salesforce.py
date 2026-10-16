@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
+# The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
         scope="refresh_token",
@@ -42,10 +43,17 @@ BASE_SCOPE_METADATA = [
     ),
 ]
 
+# The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
+# The characters that make an instance host unsafe to put into a URL.
 _FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
+# NOTE: The identity fetch also refuses to send the access token to a userinfo host outside them.
 _SALESFORCE_IDENTITY_HOST_SUFFIXES = ("salesforce.com",)
+
+# The path of the userinfo endpoint on the user's Salesforce instance.
 _SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
 
 
@@ -175,6 +183,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="salesforce",
     resolver=maybe_identity_handler,

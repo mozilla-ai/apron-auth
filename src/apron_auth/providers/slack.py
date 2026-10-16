@@ -46,15 +46,34 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
+# The endpoint that identifies the token's user and workspace.
 _SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
+
+# The suffix of a workspace host, such as acme.slack.com.
 _SLACK_HOST_SUFFIX = ".slack.com"
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
+
+# The error code Slack returns when the token lacks a scope the method needs.
 _SLACK_MISSING_SCOPE_ERROR = "missing_scope"
+
+# The userinfo claim that holds the workspace domain.
 _SLACK_TEAM_DOMAIN_CLAIM = "https://slack.com/team_domain"
+
+# The userinfo claim that holds the workspace ID.
 _SLACK_TEAM_ID_CLAIM = "https://slack.com/team_id"
+
+# The endpoint that returns the workspace of the token.
 _SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
+
+# The userinfo claim that holds the workspace name.
 _SLACK_TEAM_NAME_CLAIM = "https://slack.com/team_name"
+
+# The OpenID userinfo endpoint for Sign in with Slack.
 _SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
+
+# The userinfo claim that holds the Slack user ID.
 _SLACK_USER_ID_CLAIM = "https://slack.com/user_id"
 
 
@@ -490,6 +509,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return SlackIdentityHandler()
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="slack",
     resolver=maybe_identity_handler,
