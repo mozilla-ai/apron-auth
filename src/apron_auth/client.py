@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 import httpx
 
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth.errors import (
     INVALID_CLIENT,
@@ -748,7 +749,7 @@ class OAuthClient:
             error_code = ""
             msg = f"HTTP {exc.response.status_code}"
             try:
-                body = exc.response.json()
+                body = decode_json_body(exc.response)
                 raw_value = body.get("error", "")
                 raw_error_code = raw_value if isinstance(raw_value, str) else ""
                 error_code = self._redact_sent(raw_error_code, data)

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth.errors import IdentityFetchError
 
 
@@ -39,8 +40,8 @@ async def fetch_identity_json(request: Awaitable[httpx.Response], label: str) ->
         failure_message = f"Failed to fetch {label}: request failed"
     else:
         try:
-            return response.json()
-        except (RecursionError, ValueError):
+            return decode_json_body(response)
+        except ValueError:
             failure_message = f"Failed to parse {label} response"
     # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.

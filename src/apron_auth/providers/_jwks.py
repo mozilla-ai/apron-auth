@@ -17,6 +17,7 @@ from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth.errors import ConfigurationError, IdentityFetchError
 
@@ -347,8 +348,8 @@ class IssuerSigningKeys:
             # NOTE: A transport's exception can render the request it attempted, so it is chained, never logged.
             raise IdentityFetchError("Failed to fetch the issuer's signing keys: request failed") from exc
         try:
-            document = response.json()
-        except (RecursionError, ValueError) as exc:
+            document = decode_json_body(response)
+        except ValueError as exc:
             raise IdentityFetchError("The issuer's signing keys could not be read") from exc
         entries = document.get("keys") if isinstance(document, dict) else None
         if not isinstance(entries, list):

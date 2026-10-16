@@ -36,6 +36,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
+from apron_auth._json_body import decode_json_body
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -474,9 +475,8 @@ class SlackRevocationHandler:
                 if not response.is_success:
                     return False
                 try:
-                    data = response.json()
-                # A body nested deeper than the decoder allows raises RecursionError, which is not a ValueError.
-                except (RecursionError, ValueError):
+                    data = decode_json_body(response)
+                except ValueError:
                     failure_message = "Failed to parse Slack revocation response"
                 else:
                     if not isinstance(data, dict):
