@@ -526,7 +526,8 @@ def preset(
     admin-verified domains.
 
     Args:
-        client_id: The OAuth client identifier.
+        client_id: The OAuth client identifier. A GUID is stored in lowercase, which names the same
+            application and is how Entra names it in an ID token's audience.
         client_secret: The OAuth client secret.
         scopes: Additional scopes to request; merged with the required
             base scopes.
@@ -543,6 +544,10 @@ def preset(
         defaults.update(extra_params)
 
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+
+    # Entra names the client in an ID token's audience by its lowercase GUID, and a GUID is case-insensitive.
+    if _GUID_RE.match(client_id):
+        client_id = client_id.lower()
 
     config = ProviderConfig(
         client_id=client_id,

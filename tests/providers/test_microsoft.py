@@ -100,6 +100,20 @@ class TestMicrosoftPreset:
         assert isinstance(config, ProviderConfig)
         assert handler is None
 
+    def test_a_guid_client_id_is_lowercased(self):
+        """Entra names the client by its lowercase GUID in an ID token's audience."""
+        from apron_auth.providers.microsoft import preset
+
+        guid = "ABCDEF12-3456-7890-ABCD-EF1234567890"
+        config, _ = preset(client_id=guid, client_secret="msecret", scopes=[])
+        assert config.client_id == guid.lower()
+
+    def test_a_client_id_that_is_not_a_guid_is_kept(self):
+        from apron_auth.providers.microsoft import preset
+
+        config, _ = preset(client_id="My-App", client_secret="msecret", scopes=[])
+        assert config.client_id == "My-App"
+
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.microsoft import preset
 
