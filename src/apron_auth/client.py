@@ -750,6 +750,9 @@ class OAuthClient:
             msg = f"HTTP {exc.response.status_code}"
             try:
                 body = decode_json_body(exc.response)
+            except ValueError:
+                body = None
+            if isinstance(body, dict):
                 raw_value = body.get("error", "")
                 raw_error_code = raw_value if isinstance(raw_value, str) else ""
                 error_code = self._redact_sent(raw_error_code, data)
@@ -757,8 +760,6 @@ class OAuthClient:
                 description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
-            except Exception:
-                pass
             failure = _TokenEndpointError(
                 msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
             )

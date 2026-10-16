@@ -1558,6 +1558,22 @@ class TestRefreshToken:
 
     @pytest.mark.parametrize(
         "content",
+        [b'["maintenance"]', b"[" * 100_000 + b"]" * 100_000],
+        ids=["not an object", "deeply nested"],
+    )
+    async def test_refresh_server_error_with_unusable_body_keeps_status_prefix(
+        self, httpx_mock: HTTPXMock, content: bytes
+    ) -> None:
+        """A failure body that holds no error object leaves the status as the whole message."""
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, content=content)
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == ""
+        assert str(exc_info.value) == "HTTP 503"
+
+    @pytest.mark.parametrize(
+        "content",
         [b"not json", b"[" * 100_000 + b"]" * 100_000],
         ids=["not JSON", "deeply nested"],
     )
