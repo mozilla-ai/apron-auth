@@ -636,6 +636,35 @@ Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) 
 
 Discovery, registration, the token request, and token revocation all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and `OAuthClient` each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection; the `OAuthClient` factory governs both the token request and revocation. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
 
+## Verifying workload identity tokens
+
+A workload on Google Cloud, GitHub Actions or Kubernetes can fetch a token its platform signed, naming the workload and an audience it chose. A server that trusts the platform can accept that token in place of a secret the workload would otherwise hold, as the OAuth 2.0 JWT bearer grant does (RFC 7523). `apron_auth.workload` is the server side of that: it checks the token, and the server decides what the identity it names may do.
+
+```python
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.workload import WorkloadTokenVerifier
+
+verifier = WorkloadTokenVerifier("https://accounts.google.com", transport_factory=my_transport_factory)
+
+try:
+    identity = await verifier.verify(token, audience="https://gateway.example.com")
+except TokenExpiredError:
+    ...  # tell the workload to fetch a fresh token
+except TokenVerificationError:
+    ...  # refuse the token; retrying it cannot succeed
+except IdentityFetchError:
+    ...  # the issuer is unreachable; ask the workload to retry later
+
+identity.subject  # the platform's stable identifier for the workload
+identity.email  # set only when the token marks it verified, as Google does for a service account
+```
+
+The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Pass `jwks_url` to skip discovery. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. Only public-key algorithms are accepted, and an RSA key must be at least 2048 bits. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
+
+`audience=None` checks only that the token names some audience, for a server that matches the audience itself, for example against rules it stores. Such a server must then match it before trusting the token, because a token minted for another service would otherwise pass.
+
+The configuration document and key set URLs are fetched through `transport_factory`, as in [SSRF safety](#ssrf-safety). The issuer is the caller's, but the key set URL comes from the issuer's document.
+
 ## Provider presets
 
 | Provider   | Preset                   | Revocation             | `disconnect_fully_revokes` |
@@ -701,6 +730,8 @@ All exceptions inherit from `OAuthError`.
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient.                                              |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
+| `TokenVerificationError`       | A signed token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`. |
+| `TokenExpiredError`            | A signed token verified but has expired. Subclass of `TokenVerificationError`.                                  |
 
 ## Logging
 

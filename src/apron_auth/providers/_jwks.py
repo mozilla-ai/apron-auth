@@ -19,7 +19,7 @@ from apron_auth._discovery import discovery_client
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
-from apron_auth.errors import ConfigurationError, IdentityFetchError
+from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -153,30 +153,30 @@ class IssuerSigningKeys:
             The token's protected header and claims, and the published key that verified it.
 
         Raises:
-            IdentityFetchError: If the token is not a signed token, names a critical header parameter,
+            TokenVerificationError: If the token is not a signed token, names a critical header parameter,
                 names an algorithm outside the accepted list, names no published key, or fails the signature check.
-                It is also raised if the key set cannot be fetched or read.
+            IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
             compact = parse_compact(token)
         except ValueError as exc:
-            raise IdentityFetchError("ID token is not a signed token") from exc
+            raise TokenVerificationError("ID token is not a signed token") from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
             msg = "ID token names a critical header parameter that is not supported"
-            raise IdentityFetchError(msg)
+            raise TokenVerificationError(msg)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
             msg = "ID token uses a signing algorithm that is not accepted"
-            raise IdentityFetchError(msg)
+            raise TokenVerificationError(msg)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise IdentityFetchError("ID token header is not valid") from exc
+            raise TokenVerificationError("ID token header is not valid") from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -195,13 +195,13 @@ class IssuerSigningKeys:
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
                 msg = "ID token is signed with a key the issuer does not publish"
-                raise IdentityFetchError(msg)
+                raise TokenVerificationError(msg)
             msg = "ID token signature did not verify"
-            raise IdentityFetchError(msg) from result.error
+            raise TokenVerificationError(msg) from result.error
         claims = compact_claims(compact)
         if claims is None:
             msg = "ID token claims are not a JSON object"
-            raise IdentityFetchError(msg)
+            raise TokenVerificationError(msg)
         return VerifiedToken(header, claims, result)
 
     def _check_signature(

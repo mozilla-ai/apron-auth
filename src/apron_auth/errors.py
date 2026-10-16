@@ -112,3 +112,16 @@ class TokenRefreshError(OAuthError):
 
     ``error_code`` carries the OAuth error code when the provider supplied one, and is empty for network-level failures.
     """
+
+
+# TokenVerificationError and TokenExpiredError follow their base classes instead of A-Z order, as above.
+class TokenVerificationError(IdentityFetchError):
+    """A signed token was refused: it is malformed, no published key verifies it, or its claims do not validate.
+
+    Retrying the same token cannot succeed.
+    A failure to fetch the issuer's signing keys is not a refusal, and raises the base class instead.
+    """
+
+
+class TokenExpiredError(TokenVerificationError):
+    """A signed token verified but has expired, so the caller must obtain a fresh one."""
