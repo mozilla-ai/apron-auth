@@ -453,7 +453,12 @@ class OidcIdentityHandler:
                 if claims is None:
                     raise
                 # Userinfo only enriches a subject the ID token already gave.
-                logger.warning("OpenID userinfo request failed, identity rests on the ID token alone: %s", exc)
+                if isinstance(exc, IdentityScopeNotGrantedError):
+                    logger.warning(
+                        "OpenID userinfo refused the token for lack of scope, identity rests on the ID token alone"
+                    )
+                else:
+                    logger.warning("OpenID userinfo request failed, identity rests on the ID token alone")
 
         claims_subject = _claim_str(claims, "sub")
         if claims is not None and claims_subject is None:

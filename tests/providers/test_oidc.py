@@ -1300,9 +1300,33 @@ class TestOidcIdentity:
         assert identity.email == "person@acme.com"
         assert identity.name == "A Person"
         assert identity.raw["userinfo"] == {}
-        assert "userinfo request failed" in caplog.text
-        assert f"HTTP {status}" in caplog.text
-        assert "Error" not in caplog.text
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.providers.oidc"] == [
+            "OpenID userinfo request failed, identity rests on the ID token alone"
+        ]
+
+    async def test_a_scope_refusal_degrades_to_the_id_token_with_its_own_warning(
+        self,
+        handler: OidcIdentityHandler,
+        config: ProviderConfig,
+        httpx_mock: HTTPXMock,
+        caplog: pytest.LogCaptureFixture,
+    ):
+        """A scope refusal is a configuration fault, so its warning differs from a failed request's."""
+        httpx_mock.add_response(
+            url=USERINFO_URL,
+            status_code=403,
+            headers={"WWW-Authenticate": 'Bearer error="insufficient_scope", scope="openid profile"'},
+        )
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
+            identity = await handler.fetch_identity(
+                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
+            )
+
+        assert identity.subject == "u-1"
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.providers.oidc"] == [
+            "OpenID userinfo refused the token for lack of scope, identity rests on the ID token alone"
+        ]
 
     async def test_userinfo_failure_without_an_id_token_still_raises(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
