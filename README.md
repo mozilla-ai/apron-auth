@@ -628,7 +628,7 @@ When using CIMD, you host the `client-metadata.json` yourself at the `client_id`
 
 Unlike DCR or pre-registered credentials — which are bound to the authorization server that issued them and must be re-registered when that server changes — a CIMD `client_id` is a self-hosted URL, portable across authorization servers with no re-registration.
 
-`discover` records the authorization server's issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
+`discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 
 Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. Omit it (or pass `None`) to derive the method from the client's secret and the server's advertised set.
 

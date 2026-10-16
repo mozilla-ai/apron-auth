@@ -45,7 +45,7 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import (
@@ -165,14 +165,7 @@ async def discover(
         url = document_url
     document = await _fetch_document(url, transport_factory)
 
-    declared_issuer = document.get("issuer")
-    if not isinstance(declared_issuer, str) or not declared_issuer:
-        msg = "OpenID provider configuration declares no issuer"
-        raise OidcDiscoveryError(msg)
-    # Compared exactly: RFC 8414 section 2 allows no trailing slash, and normalizing would hide a mismatch.
-    if declared_issuer != issuer:
-        msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
-        raise OidcDiscoveryError(msg)
+    require_declared_issuer(document, issuer, "OpenID provider configuration", OidcDiscoveryError)
 
     authorize_url = document.get("authorization_endpoint")
     token_url = document.get("token_endpoint")
@@ -199,7 +192,7 @@ async def discover(
         scopes_supported=str_list(document.get("scopes_supported")),
         code_challenge_methods=_strict_str_list(document, "code_challenge_methods_supported"),
         token_endpoint_auth_methods=_strict_str_list(document, "token_endpoint_auth_methods_supported"),
-        issuer=declared_issuer,
+        issuer=issuer,
         iss_parameter_supported=document.get("authorization_response_iss_parameter_supported") is True,
         userinfo_url=userinfo_url,
         jwks_url=jwks_url,

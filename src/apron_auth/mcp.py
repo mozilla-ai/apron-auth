@@ -25,7 +25,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, str_list
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
@@ -80,7 +80,10 @@ async def discover(
 
     Raises:
         McpDiscoveryError: If a URL is rejected, no metadata document can be
-            fetched, or a required field is absent.
+            fetched, a required field is absent, or the authorization server
+            metadata names an issuer other than the server it was fetched from.
+            The first document fetched is authoritative, so a mismatched issuer
+            ends discovery rather than trying the next candidate URL.
     """
     _validate_url(server_url, url_validator)
 
@@ -97,6 +100,20 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg)
+    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL drops them.
+    # Userinfo would travel into the metadata URL as credentials, so it is refused as well, before any
+    # caller policy sees the string. The delimiters are checked, so an empty query or fragment counts.
+    try:
+        has_userinfo = urlparse(auth_server).username is not None
+    except ValueError:
+        has_userinfo = None
+    # NOTE: This raise stays outside the except block, because the parse error repeats the URL.
+    if has_userinfo is None:
+        msg = "MCP OAuth received a malformed URL"
+        raise McpDiscoveryError(msg)
+    if has_userinfo or "?" in auth_server or "#" in auth_server:
+        msg = "protected resource metadata declares an authorization server with userinfo, a query or a fragment"
+        raise McpDiscoveryError(msg)
     _validate_url(auth_server, url_validator)
 
     server_meta = await _fetch_first_metadata(
@@ -105,6 +122,8 @@ async def discover(
         transport_factory,
         "authorization server metadata",
     )
+    require_declared_issuer(server_meta, auth_server, "authorization server metadata", McpDiscoveryError)
+
     authorize_url = server_meta.get("authorization_endpoint")
     token_url = server_meta.get("token_endpoint")
     if not isinstance(authorize_url, str) or not isinstance(token_url, str):
@@ -119,7 +138,6 @@ async def discover(
         if url is not None:
             _validate_url(url, url_validator)
 
-    issuer = server_meta.get("issuer")
     resource = resource_meta.get("resource")
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -129,7 +147,7 @@ async def discover(
         scopes_supported=str_list(server_meta.get("scopes_supported")),
         code_challenge_methods=str_list(server_meta.get("code_challenge_methods_supported")),
         token_endpoint_auth_methods=str_list(server_meta.get("token_endpoint_auth_methods_supported")),
-        issuer=issuer if isinstance(issuer, str) else None,
+        issuer=auth_server,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
         resource=resource if isinstance(resource, str) else None,
@@ -569,7 +587,11 @@ def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> l
 
 
 def _asm_candidate_urls(auth_server: str) -> list[str]:
-    """Return the ordered RFC 8414 metadata URLs to try, with OIDC fallback."""
+    """Return the ordered RFC 8414 metadata URLs to try, with OIDC fallback.
+
+    A terminating slash on the identifier's path is removed before the well-known segment is inserted,
+    as RFC 8414 section 3.1 requires. The identifier itself is not changed.
+    """
     parsed = urlparse(auth_server)
     base = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")

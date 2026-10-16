@@ -45,6 +45,7 @@ _ASM_OIDC = "https://auth.example.com/.well-known/openid-configuration"
 
 def _asm_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
+        "issuer": "https://auth.example.com",
         "authorization_endpoint": "https://auth.example.com/authorize",
         "token_endpoint": "https://auth.example.com/token",
         "code_challenge_methods_supported": ["S256"],
@@ -520,12 +521,143 @@ class TestDiscover:
         assert meta.issuer == "https://auth.example.com"
         assert meta.iss_parameter_supported is True
 
-    async def test_issuer_and_iss_support_default_when_absent(self, httpx_mock: HTTPXMock) -> None:
+    async def test_iss_support_default_when_absent(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
-        assert meta.issuer is None
         assert meta.iss_parameter_supported is False
+
+    async def test_issuer_absent_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """Metadata that declares no issuer cannot be bound to the authorization server it came from."""
+        payload = _asm_payload()
+        del payload["issuer"]
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=payload)
+        with pytest.raises(McpDiscoveryError, match="declares no issuer"):
+            await discover("https://mcp.example.com")
+
+    @pytest.mark.parametrize("issuer", [None, 42, ""], ids=["null", "not a string", "empty"])
+    async def test_issuer_that_is_not_a_name_is_refused_as_absent(self, httpx_mock: HTTPXMock, issuer: object) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
+        with pytest.raises(McpDiscoveryError, match="declares no issuer"):
+            await discover("https://mcp.example.com")
+
+    @pytest.mark.parametrize(
+        "issuer",
+        [
+            "https://evil.example.com",
+            "http://auth.example.com",
+            "https://auth.example.com/tenant",
+            "https://auth.example.com/",
+            "https://AUTH.example.com",
+        ],
+        ids=["other host", "other scheme", "other path", "terminating slash", "other case"],
+    )
+    async def test_issuer_that_is_not_the_authorization_server_is_refused(
+        self, httpx_mock: HTTPXMock, issuer: str
+    ) -> None:
+        """The issuer must be identical to the identifier the metadata URL was built from, with no normalization."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
+        with pytest.raises(McpDiscoveryError, match="different issuer"):
+            await discover("https://mcp.example.com")
+
+    async def test_declared_authorization_server_with_a_terminating_slash_must_match_exactly(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A declared identifier with a terminating slash is compared as declared, not as the URL was built."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer="https://auth.example.com/"))
+        meta = await discover("https://mcp.example.com")
+        assert meta.issuer == "https://auth.example.com/"
+
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            "https://auth.example.com/?tenant=b",
+            "https://auth.example.com/#frag",
+            "https://auth.example.com/?",
+            "https://auth.example.com/#",
+        ],
+        ids=["query", "fragment", "empty query", "empty fragment"],
+    )
+    async def test_authorization_server_with_a_query_or_fragment_is_refused(
+        self, httpx_mock: HTTPXMock, declared: str
+    ) -> None:
+        """The metadata URL drops a query and a fragment, so an identifier that carries one cannot be checked."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
+        with pytest.raises(McpDiscoveryError, match="userinfo, a query or a fragment"):
+            await discover("https://mcp.example.com")
+
+    async def test_malformed_authorization_server_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
+        """An identifier that cannot be parsed is reported as a discovery error, not as the parser's own error."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://[broken"]})
+        with pytest.raises(McpDiscoveryError, match="malformed URL") as excinfo:
+            await discover("https://mcp.example.com")
+        assert excinfo.value.__context__ is None
+
+    async def test_authorization_server_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """Userinfo in the identifier would be sent as credentials with the metadata request."""
+        declared = "https://user:pw@auth.example.com"  # pragma: allowlist secret
+        seen: list[str] = []
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
+        with pytest.raises(McpDiscoveryError, match="userinfo"):
+            await discover("https://mcp.example.com", url_validator=seen.append)
+        assert len(httpx_mock.get_requests()) == 1
+        assert declared not in seen
+        assert len(httpx_mock.get_requests()) == 1
+
+    async def test_issuer_is_checked_before_any_other_member_is_read(self, httpx_mock: HTTPXMock) -> None:
+        """A document with the wrong issuer is untrusted as a whole, so its endpoints never reach the URL policy."""
+        seen: list[str] = []
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(
+            url=_ASM_ROOT,
+            json=_asm_payload(issuer="https://evil.example.com", authorization_endpoint="https://evil.example.com/a"),
+        )
+        with pytest.raises(McpDiscoveryError, match="different issuer"):
+            await discover("https://mcp.example.com", url_validator=seen.append)
+        assert "https://evil.example.com/a" not in seen
+
+    async def test_issuer_of_a_path_scoped_authorization_server_includes_the_path(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant"]})
+        httpx_mock.add_response(
+            url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
+            json=_asm_payload(issuer="https://auth.example.com/tenant"),
+        )
+        meta = await discover("https://mcp.example.com")
+        assert meta.issuer == "https://auth.example.com/tenant"
+
+    async def test_issuer_of_a_path_scoped_authorization_server_without_the_path_is_refused(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant"]})
+        httpx_mock.add_response(
+            url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
+            json=_asm_payload(issuer="https://auth.example.com"),
+        )
+        with pytest.raises(McpDiscoveryError, match="different issuer"):
+            await discover("https://mcp.example.com")
+
+    async def test_identifier_with_a_terminating_slash_is_fetched_without_it(self, httpx_mock: HTTPXMock) -> None:
+        """The slash is removed only to build the metadata URL; the declared identifier still has to match."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant/"]})
+        httpx_mock.add_response(
+            url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
+            json=_asm_payload(issuer="https://auth.example.com/tenant/"),
+        )
+        meta = await discover("https://mcp.example.com")
+        assert meta.issuer == "https://auth.example.com/tenant/"
+
+    async def test_identifier_with_a_terminating_slash_is_not_matched_without_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant/"]})
+        httpx_mock.add_response(
+            url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
+            json=_asm_payload(issuer="https://auth.example.com/tenant"),
+        )
+        with pytest.raises(McpDiscoveryError, match="different issuer"):
+            await discover("https://mcp.example.com")
 
     async def test_supports_cimd_captured(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -578,8 +710,10 @@ class TestDiscover:
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
-        httpx_mock.add_response(url=_ASM_ROOT, json={"authorization_endpoint": "https://auth.example.com/authorize"})
-        with pytest.raises(McpDiscoveryError):
+        payload = _asm_payload()
+        del payload["token_endpoint"]
+        httpx_mock.add_response(url=_ASM_ROOT, json=payload)
+        with pytest.raises(McpDiscoveryError, match="missing an endpoint"):
             await discover("https://mcp.example.com")
 
     async def test_unfetchable_prm_raises(self, httpx_mock: HTTPXMock) -> None:
@@ -1021,6 +1155,7 @@ class TestEndToEndFlow:
                 return httpx.Response(
                     200,
                     json={
+                        "issuer": "https://auth.example.com",
                         "authorization_endpoint": "https://auth.example.com/authorize",
                         "token_endpoint": "https://auth.example.com/token",
                         "registration_endpoint": _REGISTER_URL,
