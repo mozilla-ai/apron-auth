@@ -9,7 +9,7 @@ import logging
 import re
 import secrets
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
@@ -46,6 +46,10 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
 
 logger = logging.getLogger(__name__)
+
+# The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
+# NOTE: The exchange_code docstring states this value.
+_REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
 
 class _TokenEndpointError(Exception):
@@ -87,6 +91,18 @@ def _redact(text: str, values: Iterable[str]) -> str:
         return text
     pattern = "|".join(re.escape(copy) for copy in sorted(copies, key=len, reverse=True))
     return re.sub(pattern, "[redacted]", text)
+
+
+async def _cancel_and_wait(tasks: Sequence[asyncio.Task[None]]) -> None:
+    """Cancel the tasks that are still running, and wait until every task has finished.
+
+    Args:
+        tasks: The tasks to cancel and wait for.
+    """
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.wait(tasks)
 
 
 def _check_id_token(id_token: object, nonce: str | None) -> None:
@@ -140,6 +156,16 @@ def _check_nonce(id_token: object, nonce: str) -> None:
     if not isinstance(claim, str) or not _same_secret(claim, nonce):
         msg = "ID token nonce does not match the authorization request"
         raise NonceValidationError(msg)
+
+
+def _read_task_exception(task: asyncio.Task[None]) -> None:
+    """Mark a finished task's exception as retrieved, so asyncio never logs it with its text.
+
+    Args:
+        task: The finished task.
+    """
+    if not task.cancelled():
+        task.exception()
 
 
 def _same_secret(given: str, expected: str) -> bool:
@@ -310,6 +336,8 @@ class OAuthClient:
                 or an ID token that does not carry that nonce,
                 or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
+                A revocation unfinished after 10 seconds is canceled,
+                but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
@@ -347,13 +375,21 @@ class OAuthClient:
     async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
-        Revocation is best effort.
-        Both tokens are revoked at once, each bounded by the revocation handler's own timeout.
-        A failure, or a revocation that is canceled on its own, is logged by token kind and host, never by error text.
-        If the caller is canceled, the revocations are canceled with it.
+        Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
+        Both tokens are revoked at once.
+        Each revocation that fails, is canceled on its own, or is unfinished at the limit is logged.
+        A log line names the token kind and the host, never error text.
+        The error of a revocation unfinished at the limit is not raised.
+        If the caller is canceled, the revocations are canceled with it, and nothing is logged.
+
+        NOTE: A revocation handler that ignores cancellation can delay the refusal without bound.
 
         Args:
             response: The refused token-endpoint response.
+
+        Raises:
+            BaseException: If a revocation that finished before the limit raised an error that is not an exception,
+                which revoke_token does not convert.
         """
         tokens = [
             (label, token)
@@ -369,16 +405,29 @@ class OAuthClient:
             )
             return
         host = urlparse(revocation_url).hostname
-        results = await asyncio.gather(
-            *(self._revoke_one_refused_token(label, token, host) for label, token in tokens), return_exceptions=True
-        )
-        for (label, _), result in zip(tokens, results, strict=True):
-            if isinstance(result, asyncio.CancelledError):
+        tasks = [asyncio.create_task(self._revoke_one_refused_token(label, token, host)) for label, token in tokens]
+        for task in tasks:
+            task.add_done_callback(_read_task_exception)
+        try:
+            _, timed_out = await asyncio.wait(tasks, timeout=_REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS)
+        finally:
+            await _cancel_and_wait(tasks)
+        error: BaseException | None = None
+        for (label, _), task in zip(tokens, tasks, strict=True):
+            if task in timed_out:
+                logger.warning(
+                    "revoking the %s of a refused token response at %s did not finish within the time limit",
+                    label,
+                    host,
+                )
+            elif task.cancelled():
                 logger.warning(
                     "the %s of a refused token response could not be revoked at %s (interrupted)", label, host
                 )
-            elif isinstance(result, BaseException):
-                raise result
+            elif error is None:
+                error = task.exception()
+        if error is not None:
+            raise error
 
     async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
         """Revoke one token of a refused token response, and log a failure instead of raising it.
