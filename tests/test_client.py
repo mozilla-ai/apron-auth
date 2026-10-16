@@ -1153,6 +1153,176 @@ class TestExchangeCodeNonceRevocation:
 
         assert "(interrupted)" in caplog.text
 
+    async def test_a_revocation_that_never_returns_stops_at_the_time_limit(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
+
+        class SlowRefreshHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                if token == "refresh-xyz":
+                    await asyncio.Event().wait()
+                return True
+
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
+        )
+        client = OAuthClient(
+            config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=SlowRefreshHandler()
+        )
+
+        with pytest.raises(NonceValidationError):
+            await asyncio.wait_for(
+                client.exchange_code(
+                    code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+                ),
+                timeout=5,
+            )
+
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.client"] == [
+            "revoking the refresh token of a refused token response at provider.example.com "
+            "did not finish within the time limit"
+        ]
+
+    async def test_each_unfinished_revocation_is_logged_with_its_own_reason(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
+
+        class MixedHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                if token == "access-abc":
+                    raise asyncio.CancelledError
+                await asyncio.Event().wait()
+                return True
+
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
+        )
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=MixedHandler())
+
+        with pytest.raises(NonceValidationError):
+            await asyncio.wait_for(
+                client.exchange_code(
+                    code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+                ),
+                timeout=5,
+            )
+
+        assert sorted(record.getMessage() for record in caplog.records if record.name == "apron_auth.client") == [
+            "revoking the refresh token of a refused token response at provider.example.com "
+            "did not finish within the time limit",
+            "the access token of a refused token response could not be revoked at provider.example.com (interrupted)",
+        ]
+
+    @pytest.mark.parametrize("ending", ["returns", "raises"])
+    async def test_a_revocation_that_ends_after_the_limit_is_logged_as_timed_out(
+        self,
+        httpx_mock: HTTPXMock,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+        ending: str,
+    ) -> None:
+        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
+
+        class HandlerAbortError(BaseException):
+            pass
+
+        class SwallowingHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    if ending == "raises":
+                        raise HandlerAbortError from None
+                return True
+
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
+        client = OAuthClient(
+            config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=SwallowingHandler()
+        )
+
+        with pytest.raises(NonceValidationError):
+            await asyncio.wait_for(
+                client.exchange_code(
+                    code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+                ),
+                timeout=5,
+            )
+
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.client"] == [
+            "revoking the access token of a refused token response at provider.example.com "
+            "did not finish within the time limit"
+        ]
+
+    async def test_every_outcome_is_logged_before_a_handler_abort_is_raised(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
+
+        class HandlerAbortError(BaseException):
+            pass
+
+        class AbortingHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                if token == "refresh-xyz":
+                    raise HandlerAbortError
+                await asyncio.Event().wait()
+                return True
+
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
+        )
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=AbortingHandler())
+
+        with pytest.raises(HandlerAbortError):
+            await asyncio.wait_for(
+                client.exchange_code(
+                    code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+                ),
+                timeout=5,
+            )
+
+        assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.client"] == [
+            "revoking the access token of a refused token response at provider.example.com "
+            "did not finish within the time limit"
+        ]
+
+    async def test_a_canceled_caller_cancels_the_revocations(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        started = asyncio.Event()
+        canceled: list[str] = []
+
+        class HangingHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    canceled.append(token)
+                    raise
+                return True
+
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=HangingHandler())
+        exchange = asyncio.create_task(
+            client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+        )
+        await asyncio.wait_for(started.wait(), timeout=5)
+
+        exchange.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await exchange
+        assert canceled == ["access-abc"]
+        assert [record for record in caplog.records if record.name == "apron_auth.client"] == []
+
     async def test_a_pending_state_without_a_nonce_redeems_no_code(self, httpx_mock: HTTPXMock) -> None:
         client = OAuthClient(config=_make_config(scopes=["openid"], revocation_url=self.REVOKE_URL))
 
