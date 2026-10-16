@@ -9,6 +9,9 @@ from joserfc import jws
 from joserfc.errors import JoseError
 from joserfc.jws import CompactSignature, JWSRegistry
 
+# The clock difference, in seconds, allowed between this client and an issuer when a token's times are checked.
+CLOCK_SKEW_SECONDS = 60
+
 # A certificate chain (``x5c``) in the header and an 8192-bit RSA signature both exceed the library's default limits.
 _MAX_HEADER_LENGTH = 16384
 _MAX_SIGNATURE_LENGTH = 2048

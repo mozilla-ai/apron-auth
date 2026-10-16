@@ -48,6 +48,7 @@ from pydantic import SecretStr
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
@@ -86,9 +87,6 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
-
-# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
-_CLOCK_SKEW_SECONDS = 60
 
 # These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
 # Later patterns build on earlier ones, so their order is fixed.
@@ -537,7 +535,7 @@ class OidcIdentityHandler:
             {"client_id": client_id, "access_token": access_token},
         )
         try:
-            token.validate(leeway=_CLOCK_SKEW_SECONDS)
+            token.validate(leeway=CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
             raise IdentityFetchError(_claim_error_message(exc)) from exc
         except (JoseError, TypeError, ValueError) as exc:
