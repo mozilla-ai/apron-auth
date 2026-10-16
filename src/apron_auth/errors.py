@@ -99,9 +99,9 @@ class TokenExchangeError(OAuthError):
 
 # NonceValidationError follows its base class instead of A-Z order, because Python needs the base defined first.
 class NonceValidationError(TokenExchangeError):
-    """The ID token from a code exchange is not shown to carry the nonce sent with its authorization request.
+    """A code exchange is not shown to answer the authorization request whose nonce it should carry.
 
-    The ID token may carry no nonce or a different one, or it may not be readable.
+    The response may carry no ID token, or one with no nonce or a different one, or one that cannot be read.
     The pending state of an OpenID request may also have lost its nonce, so there is nothing to compare.
     The token response may answer an authorization request this client did not start.
     """
