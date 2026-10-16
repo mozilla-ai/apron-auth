@@ -6,6 +6,7 @@ import asyncio
 import hmac
 import json
 import logging
+import math
 import re
 import secrets
 import time
@@ -18,7 +19,7 @@ import httpx
 
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import unverified_claims
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, unverified_claims
 from apron_auth.errors import (
     INVALID_CLIENT,
     INVALID_GRANT,
@@ -26,6 +27,7 @@ from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
     IdentityNotSupportedError,
+    IdTokenValidationError,
     NonceValidationError,
     OAuthError,
     PermanentOAuthError,
@@ -105,50 +107,103 @@ async def _cancel_and_wait(tasks: Sequence[asyncio.Task[None]]) -> None:
         await asyncio.wait(tasks)
 
 
-def _check_id_token(id_token: object, nonce: str | None) -> None:
-    """Refuse a token response whose ID token does not carry the nonce its authorization request sent.
+def _audience_names(audience: object) -> set[str] | None:
+    """Return the names an ``aud`` claim lists, or ``None`` when it is not a name or a list of names.
+
+    The members are checked before they are collected, because a member that is not a name may not be hashable.
+    """
+    if isinstance(audience, str):
+        return {audience}
+    if isinstance(audience, list) and all(isinstance(name, str) for name in audience):
+        return set(audience)
+    return None
+
+
+def _check_claims(claims: Mapping[str, Any], *, client_id: str, issuer: str | None) -> None:
+    """Refuse ID token claims that were not issued to this client, or that are no longer valid.
+
+    The checks follow OpenID Connect Core section 3.1.3.7: the issuer must match when one is known,
+    the audience must name this client and no other party unless this client is the authorized party,
+    and the expiry must lie ahead, within the allowed clock skew.
+
+    Args:
+        claims: The ID token's claims.
+        client_id: This client's identifier.
+        issuer: The issuer the token must name, or ``None`` when no issuer is known.
+
+    Raises:
+        IdTokenValidationError: If the claims name another issuer, audience or authorized party,
+            the audience is not a name or a list of names, or the expiry is absent, not a number, or in the past.
+    """
+    if issuer is not None and claims.get("iss") != issuer:
+        msg = "ID token issuer does not match the configured issuer"
+        raise IdTokenValidationError(msg)
+    audiences = _audience_names(claims.get("aud"))
+    if audiences is None:
+        msg = "ID token audience is not a name or a list of names"
+        raise IdTokenValidationError(msg)
+    if not audiences:
+        msg = "ID token names no audience"
+        raise IdTokenValidationError(msg)
+    if client_id not in audiences:
+        msg = "ID token audience does not include this client"
+        raise IdTokenValidationError(msg)
+    authorized_party = claims.get("azp")
+    if len(audiences) > 1 and authorized_party is None:
+        msg = "ID token names several audiences without an authorized party"
+        raise IdTokenValidationError(msg)
+    if authorized_party is not None and authorized_party != client_id:
+        msg = "ID token authorized party is not this client"
+        raise IdTokenValidationError(msg)
+    expiry = _finite_number(claims.get("exp"))
+    if expiry is None or expiry + CLOCK_SKEW_SECONDS < time.time():
+        msg = "ID token has expired or carries no usable expiry"
+        raise IdTokenValidationError(msg)
+
+
+def _check_id_token(id_token: object, nonce: str | None, *, client_id: str, issuer: str | None) -> None:
+    """Refuse a token response whose ID token was not issued to this client for the request it answers.
+
+    Every ID token the response carries has its claims checked. The nonce is checked only when the
+    authorization request sent one, which is the OpenID case, and then the ID token is required.
+
+    NOTE: The ID token's signature is not checked, which OpenID Connect Core section 3.1.3.7 allows
+    only for a token received from the token endpoint over TLS, so the configured token endpoint must use it.
 
     Args:
         id_token: The ``id_token`` value from the token response, or ``None`` when it has none.
         nonce: The nonce the authorization request sent, or ``None`` when it sent none.
+        client_id: This client's identifier.
+        issuer: The issuer the token must name, or ``None`` when no issuer is known.
 
     Raises:
+        IdTokenValidationError: If the ID token cannot be read, names another issuer, audience or
+            authorized party, or has expired.
         NonceValidationError: If a nonce was sent and the response carries no ID token,
             or an ID token that does not carry that nonce.
     """
-    if not nonce:
-        return
     if id_token is None:
+        if not nonce:
+            return
         # OpenID Connect Core section 3.1.3.3 requires an ID token, and without one no nonce is checked.
         msg = "Token response carries no ID token for the OpenID request"
         raise NonceValidationError(msg)
-    _check_nonce(id_token, nonce)
+    claims = _id_token_claims(id_token)
+    _check_claims(claims, client_id=client_id, issuer=issuer)
+    if nonce:
+        _check_nonce(claims, nonce)
 
 
-def _check_nonce(id_token: object, nonce: str) -> None:
-    """Refuse an ID token that does not carry the nonce sent with its authorization request.
-
-    NOTE: Callers must pass only an ID token the token endpoint returned, because its signature is not checked.
+def _check_nonce(claims: Mapping[str, Any], nonce: str) -> None:
+    """Refuse ID token claims that do not carry the nonce sent with the authorization request.
 
     Args:
-        id_token: The ``id_token`` value from a token-endpoint response.
+        claims: The ID token's claims.
         nonce: The nonce sent with the authorization request.
 
     Raises:
-        NonceValidationError: If the ID token cannot be read, carries no nonce, or carries a different one.
+        NonceValidationError: If the claims carry no nonce, or a different one.
     """
-    msg = "ID token could not be read to check its nonce"
-    if not isinstance(id_token, str):
-        raise NonceValidationError(msg)
-    try:
-        claims = unverified_claims(id_token)
-    except ValueError:
-        readable = False
-    else:
-        readable = True
-    # NOTE: This check raises outside the except block, so the error does not chain the decoder's error.
-    if not readable:
-        raise NonceValidationError(msg)
     claim = claims.get("nonce")
     if claim is None:
         msg = "ID token carries no nonce for the authorization request"
@@ -156,6 +211,41 @@ def _check_nonce(id_token: object, nonce: str) -> None:
     if not isinstance(claim, str) or not _same_secret(claim, nonce):
         msg = "ID token nonce does not match the authorization request"
         raise NonceValidationError(msg)
+
+
+def _finite_number(value: object) -> int | float | None:
+    """Return ``value`` when it is a finite number, else ``None``.
+
+    A boolean is not a number here, and an integer is always finite, however large.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    return value
+
+
+def _id_token_claims(id_token: object) -> dict[str, Any]:
+    """Return the claims of an ID token from a token response, without checking its signature.
+
+    Args:
+        id_token: The ``id_token`` value from a token-endpoint response.
+
+    Returns:
+        The token's claims.
+
+    Raises:
+        IdTokenValidationError: If the ID token is not a string, or cannot be read.
+    """
+    msg = "ID token could not be read"
+    if not isinstance(id_token, str):
+        raise IdTokenValidationError(msg)
+    try:
+        return unverified_claims(id_token)
+    except ValueError:
+        pass
+    # NOTE: This raise stays outside the except block, so the error does not chain the decoder's error.
+    raise IdTokenValidationError(msg)
 
 
 def _read_task_exception(task: asyncio.Task[None]) -> None:
@@ -330,6 +420,10 @@ class OAuthClient:
         Raises:
             ConfigurationError: If ``pending_state`` is given to a client with a ``StateStore``,
                 or is not given to a client without one.
+            IdTokenValidationError: If the response carries an ID token that cannot be read, names another
+                audience or authorized party, has expired, or names another issuer when the config has one.
+                Every ID token the response carries is checked, whether or not the request sent a nonce.
+                The response's tokens are revoked first.
             IssuerValidationError: If ``iss`` fails validation against the
                 provider's expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
@@ -365,9 +459,11 @@ class OAuthClient:
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
         try:
-            _check_id_token(response.get("id_token"), pending.nonce)
-        except NonceValidationError:
-            # NOTE: A response that fails the check against a sent nonce may answer a request the client never made.
+            _check_id_token(
+                response.get("id_token"), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
+            )
+        except IdTokenValidationError:
+            # NOTE: A response whose ID token fails a check may answer a request the client never made.
             await self._revoke_refused_tokens(response)
             raise
         return self._parse_token_response(response, context=pending.metadata)
