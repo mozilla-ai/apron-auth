@@ -1556,6 +1556,23 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
 
+    @pytest.mark.parametrize(
+        "content",
+        [b"not json", b"[" * 100_000 + b"]" * 100_000],
+        ids=["not JSON", "deeply nested"],
+    )
+    async def test_refresh_unreadable_success_body_is_reported(self, httpx_mock: HTTPXMock, content: bytes) -> None:
+        """A success body that cannot be decoded is reported as unreadable, with no chain to the decoder."""
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=200, content=content)
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert str(exc_info.value) == "token response could not be read"
+        endpoint_error = exc_info.value.__cause__
+        assert endpoint_error is not None
+        assert endpoint_error.__cause__ is None
+        assert endpoint_error.__context__ is None
+
     async def test_refresh_non_string_error_value_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",

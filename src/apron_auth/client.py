@@ -764,7 +764,8 @@ class OAuthClient:
             )
         except httpx.RequestError as exc:
             failure = _TokenEndpointError(describe_http_error(exc), error_code="")
-        except json.JSONDecodeError:
+        # NOTE: The token client decodes a success body itself, so a deeply nested body surfaces here as RecursionError.
+        except (json.JSONDecodeError, RecursionError):
             failure = _TokenEndpointError("token response could not be read", error_code="")
         except Exception:
             failure = _TokenEndpointError("request failed", error_code="")
