@@ -7,7 +7,8 @@ An authorization server's host does not decide which identity contract applies t
 This module is stateless and stores no credentials.
 
 Discovery fetches URLs taken from server-supplied metadata.
-It requires HTTPS, rejects non-public IP-literal hosts, and applies an optional ``url_validator`` to every URL.
+It requires HTTPS, refuses userinfo, blocks the name ``localhost`` and names under it, blocks IP-literal
+hosts that are not globally reachable, and applies an optional ``url_validator`` to every URL.
 
 NOTE: These checks do not stop DNS rebinding.
 A caller handling untrusted input should supply a ``transport_factory`` whose transport pins DNS to validated addresses.
@@ -20,7 +21,7 @@ import logging
 import socket
 from collections.abc import Callable, Sequence
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
 from pydantic import SecretStr
@@ -61,7 +62,8 @@ async def discover(
     ``resource_metadata_url`` hint, then well-known locations), reads its
     resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
-    and non-public-IP-literal block are defense-in-depth; they do not stop a
+    and the block on ``localhost`` names and on IP literals that are not
+    globally reachable are defense-in-depth; they do not stop any other
     hostname that resolves to an internal address, so untrusted ``server_url``
     values need a ``transport_factory`` that pins DNS to validated addresses.
 
@@ -100,21 +102,12 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg)
-    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL drops them.
-    # Userinfo would travel into the metadata URL as credentials, so it is refused as well, before any
-    # caller policy sees the string. The delimiters are checked, so an empty query or fragment counts.
-    try:
-        has_userinfo = urlparse(auth_server).username is not None
-    except ValueError:
-        has_userinfo = None
-    # NOTE: This raise stays outside the except block, because the parse error repeats the URL.
-    if has_userinfo is None:
-        msg = "MCP OAuth received a malformed URL"
-        raise McpDiscoveryError(msg)
-    if has_userinfo or "?" in auth_server or "#" in auth_server:
-        msg = "protected resource metadata declares an authorization server with userinfo, a query or a fragment"
-        raise McpDiscoveryError(msg)
     _validate_url(auth_server, url_validator)
+    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
+    # The delimiters are checked, so an empty query or fragment counts.
+    if "?" in auth_server or "#" in auth_server:
+        msg = "protected resource metadata declares an authorization server with a query or a fragment"
+        raise McpDiscoveryError(msg)
 
     server_meta = await _fetch_first_metadata(
         _asm_candidate_urls(auth_server),
@@ -255,7 +248,7 @@ async def register_client(
     for a confidential client, a ``client_secret``. Any
     ``token_endpoint_auth_method`` the response states is captured too — it is
     authoritative for this client and may differ from the requested method. The
-    URL is validated (HTTPS, non-public host, ``url_validator``) and the request
+    URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the request
     goes through ``transport_factory`` when supplied. An error never echoes the
     response body, which carries the issued secret.
 
@@ -300,6 +293,9 @@ async def register_client(
     async with discovery_client(registration_url, transport_factory) as client:
         try:
             response = await client.post(registration_url, json=payload)
+        except httpx.InvalidURL as exc:
+            msg = "client registration request failed: malformed URL"
+            raise McpRegistrationError(msg) from exc
         except httpx.RequestError as exc:
             msg = f"client registration request failed: {type(exc).__name__}"
             raise McpRegistrationError(msg) from exc
@@ -362,10 +358,7 @@ def cimd_client_id(url: str) -> str:
             path segment.
     """
     try:
-        parsed = urlparse(url)
-        # Accessing .port forces its validation; an out-of-range or non-numeric
-        # port raises ValueError, which urlparse itself defers until this access.
-        _ = parsed.port
+        parsed = _parse_url(url)
     except ValueError as exc:
         msg = "CIMD client_id must be a valid URL"
         raise ValueError(msg) from exc
@@ -504,21 +497,46 @@ def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None
     return ipaddress.ip_address(packed)
 
 
+def _parse_url(url: str) -> ParseResult:
+    """Parse a URL and validate its port.
+
+    Raises:
+        ValueError: If the URL is malformed, or its port is out of range or not a number.
+    """
+    parsed = urlparse(url)
+    # The parser validates the port only when it is read.
+    _ = parsed.port
+    return parsed
+
+
+def _host_name(host: str) -> str:
+    """Return the host without trailing dots, which name the same host."""
+    return host.rstrip(".")
+
+
 def _is_blocked_host(host: str) -> bool:
-    """Return whether host is empty, localhost, or a non-public IP address."""
-    if not host or host == "localhost" or host.endswith(".localhost"):
+    """Return whether host is empty, localhost, or an IP address that is not globally reachable.
+
+    The address registry decides what is globally reachable, so a range that is neither private
+    nor reserved, such as shared address space, is still blocked.
+    Reserved and multicast space stay blocked explicitly, because the registry counts parts of
+    them as global, such as the NAT64 prefix that embeds any IPv4 address.
+    An IPv4-mapped IPv6 address is classified as the IPv4 address it maps.
+    """
+    host = _host_name(host)
+    if not host or _is_localhost_name(host):
         return True
     address = _parse_ip(host)
     if address is None:
         return False
-    return (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    )
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return not address.is_global or address.is_reserved or address.is_multicast
+
+
+def _is_localhost_name(host: str) -> bool:
+    """Return whether host is ``localhost`` or a name under it."""
+    return host == "localhost" or host.endswith(".localhost")
 
 
 def _infer_application_type(redirect_uri: str) -> str | None:
@@ -530,10 +548,10 @@ def _infer_application_type(redirect_uri: str) -> str | None:
     considered it.
     """
     try:
-        host = urlparse(redirect_uri).hostname or ""
+        host = _host_name(urlparse(redirect_uri).hostname or "")
     except ValueError:
         return None
-    if host == "localhost" or host.endswith(".localhost"):
+    if _is_localhost_name(host):
         return ApplicationType.NATIVE
     address = _parse_ip(host)
     if address is not None and address.is_loopback:
@@ -548,16 +566,22 @@ def _validate_url(
 ) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
-    Raises ``error_cls`` when the URL is malformed, not HTTPS, or targets a
-    non-public host. An ``OAuthError`` from ``url_validator`` propagates
-    unchanged; any other validator exception is wrapped in ``error_cls``.
+    Raises ``error_cls`` when the URL is malformed, not HTTPS, carries userinfo, or
+    targets a host that is not globally reachable. An ``OAuthError`` from
+    ``url_validator`` propagates unchanged; any other validator exception is
+    wrapped in ``error_cls``. The validator sees only a URL that passed these checks.
     """
     try:
-        parsed = urlparse(url)
+        parsed = _parse_url(url)
     except ValueError as exc:
-        raise error_cls("MCP OAuth received a malformed URL") from exc
+        msg = "MCP OAuth received a malformed URL"
+        raise error_cls(msg) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
+        raise error_cls(msg)
+    # Userinfo would be sent as credentials with the request, and could reach a log through the URL.
+    if parsed.username is not None:
+        msg = "MCP OAuth refused a URL that carries userinfo"
         raise error_cls(msg)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
@@ -622,6 +646,10 @@ async def _fetch_first_metadata(
         async with discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
+            except httpx.InvalidURL as exc:
+                # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
+                msg = "MCP OAuth received a malformed URL"
+                raise McpDiscoveryError(msg) from exc
             except httpx.RequestError as exc:
                 logger.debug("MCP discovery: %s request failed (%s)", what, type(exc).__name__)
                 continue
