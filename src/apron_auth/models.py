@@ -356,7 +356,7 @@ class ServerMetadata(BaseModel, frozen=True):
         token_endpoint_auth_methods: The token-endpoint authentication
             methods the server advertises; empty when it advertises none.
         issuer: The authorization server's issuer identifier, or ``None``
-            when the metadata omits it. Used to validate the
+            when the metadata was built by hand rather than discovered. Used to validate the
             authorization-response ``iss`` parameter (RFC 9207).
         iss_parameter_supported: Whether the server advertises support for
             returning the ``iss`` parameter on the authorization response;

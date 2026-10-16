@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 import httpx
 
+from apron_auth.errors import OAuthError
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
@@ -19,6 +21,33 @@ CONFIDENTIAL_AUTH_METHODS = (
 
 # The time limits, in seconds, on each discovery request: 5 to connect and 10 for each other step.
 DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
+
+
+def require_declared_issuer(
+    document: Mapping[str, object], expected: str, what: str, error_cls: type[OAuthError]
+) -> None:
+    """Check that a metadata document declares ``expected`` as its issuer.
+
+    RFC 8414 section 3.3 and OpenID Connect Discovery 1.0 section 4.3 both require the declared issuer
+    to be identical to the issuer identifier.
+    It is compared exactly: no normalization is specified, and a trailing slash is part of the identifier.
+
+    Args:
+        document: The decoded metadata document.
+        expected: The issuer identifier the document must declare.
+        what: The document's name for the error message, such as ``"OpenID provider configuration"``.
+        error_cls: The error raised for a document that fails the check.
+
+    Raises:
+        OAuthError: An instance of ``error_cls``, if the document declares no issuer or a different one.
+    """
+    issuer = document.get("issuer")
+    if not isinstance(issuer, str) or not issuer:
+        msg = f"{what} declares no issuer"
+        raise error_cls(msg)
+    if issuer != expected:
+        msg = f"{what} declares a different issuer than the one it was fetched for"
+        raise error_cls(msg)
 
 
 def discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:
