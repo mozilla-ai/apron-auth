@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 # NOTE: The exchange_code docstring states this value.
 _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
+# The grant fields of a token request that hold a secret.
+_SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
+
 
 class _TokenEndpointError(Exception):
     """Internal exception carrying the OAuth error code from the token endpoint."""
@@ -68,10 +71,6 @@ class _TokenEndpointError(Exception):
         super().__init__(message)
         self.error_code = error_code
         self.permanent = permanent
-
-
-# The grant fields of a token request that hold a secret.
-_SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
 
 def _redact(text: str, values: Iterable[str]) -> str:
