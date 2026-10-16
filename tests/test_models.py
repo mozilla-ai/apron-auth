@@ -7,6 +7,7 @@ from pydantic import SecretStr, ValidationError
 
 from apron_auth.errors import IssuerValidationError
 from apron_auth.models import (
+    _RESERVED_AUTHORIZATION_PARAMS,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
@@ -160,6 +161,58 @@ class TestProviderConfig:
         assert config.use_pkce is False
         assert config.token_endpoint_auth_method == "client_secret_basic"
         assert config.extra_params == {"access_type": "offline"}
+
+    @pytest.mark.parametrize("name", sorted(_RESERVED_AUTHORIZATION_PARAMS))
+    def test_extra_params_cannot_set_a_reserved_parameter(self, name: str) -> None:
+        """A parameter that binds the request to the client, or replaces it, is refused when the config is built."""
+        with pytest.raises(ValidationError, match=f"reserved authorization request parameters: {name}"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                extra_params={name: "value"},
+            )
+
+    def test_extra_params_error_names_every_refused_parameter(self) -> None:
+        with pytest.raises(ValidationError, match="response_type, state"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                extra_params={"state": "fixed", "prompt": "consent", "response_type": "token"},
+            )
+
+    @pytest.mark.parametrize(
+        "params",
+        [{"scope": "openid email"}, {"access_type": "offline", "prompt": "consent"}],
+        ids=["scope", "provider parameters"],
+    )
+    def test_extra_params_may_set_scope_and_provider_parameters(self, params: dict[str, str]) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            extra_params=params,
+        )
+        assert config.extra_params == params
+
+    def test_reserved_parameters_are_the_ones_that_bind_or_replace_the_request(self) -> None:
+        """Removing a name from the reserved set must be a deliberate change, not a silent one."""
+        assert {
+            "client_id",
+            "code_challenge",
+            "code_challenge_method",
+            "nonce",
+            "redirect_uri",
+            "request",
+            "request_uri",
+            "resource",
+            "response_type",
+            "state",
+        } == RESERVED_AUTHORIZATION_PARAMS
 
     def test_frozen(self) -> None:
         config = ProviderConfig(

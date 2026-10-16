@@ -150,9 +150,9 @@ class TestGetAuthorizationUrl:
         assert "resource" not in params
 
     async def test_resource_not_overridden_by_extra_params(self) -> None:
-        config = _make_config(
-            resource="https://mcp.example.com/",
-            extra_params={"resource": "https://attacker.example.com/"},
+        """The resource wins even for a config that was built without validation."""
+        config = _make_config(resource="https://mcp.example.com/").model_copy(
+            update={"extra_params": {"resource": "https://attacker.example.com/"}}
         )
         client = OAuthClient(config=config)
         url, _ = await client.get_authorization_url(
@@ -271,7 +271,9 @@ class TestGetAuthorizationUrl:
         assert pending_state.nonce is None
 
     async def test_nonce_not_overridden_by_extra_params(self) -> None:
-        client = OAuthClient(config=_make_config(extra_params={"nonce": "chosen-nonce"}))
+        """The nonce wins even for a config that was built without validation."""
+        config = _make_config().model_copy(update={"extra_params": {"nonce": "chosen-nonce"}})
+        client = OAuthClient(config=config)
         url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
         params = parse_qs(urlparse(url).query)
         assert pending_state.nonce != "chosen-nonce"

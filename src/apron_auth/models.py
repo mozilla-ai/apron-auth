@@ -12,6 +12,23 @@ from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scope
 
 AccessType = Literal["read", "write", "admin"]
 
+# The authorization request parameters that bind the request to the client, plus the request object parameters
+# that would replace them all. extra_params must not set them.
+_RESERVED_AUTHORIZATION_PARAMS = frozenset(
+    {
+        "client_id",
+        "code_challenge",
+        "code_challenge_method",
+        "nonce",
+        "redirect_uri",
+        "request",
+        "request_uri",
+        "resource",
+        "response_type",
+        "state",
+    }
+)
+
 
 class TokenEndpointAuthMethod:
     """RFC 7591/8414 token_endpoint_auth_method values."""
@@ -65,6 +82,10 @@ class ProviderConfig(BaseModel, frozen=True):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Attributes:
+        extra_params: Fixed parameters added to every authorization request.
+            A reserved parameter is refused at construction, and the error names it.
+            Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
+            or replace the request as a whole, such as ``request_uri``.
         disconnect_fully_revokes: Whether ``revoke_token`` removes the
             user's portal-level OAuth grant.
 
@@ -195,6 +216,25 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         if not is_public and self.client_secret is None:
             msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _extra_params_do_not_set_reserved_parameters(self) -> ProviderConfig:
+        """Reject an extra parameter that is reserved for the authorization request itself.
+
+        A reserved parameter binds the request to the client, or replaces the request as a whole.
+        Refusing it at construction reports the misconfiguration before any sign-in.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``extra_params`` holds a reserved authorization request parameter.
+        """
+        refused = sorted(_RESERVED_AUTHORIZATION_PARAMS & self.extra_params.keys())
+        if refused:
+            msg = f"extra_params must not set reserved authorization request parameters: {', '.join(refused)}"
             raise ValueError(msg)
         return self
 
