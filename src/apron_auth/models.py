@@ -14,7 +14,7 @@ AccessType = Literal["read", "write", "admin"]
 
 # The authorization request parameters that bind the request to the client, plus the request object parameters
 # that would replace them all. extra_params must not set them.
-_RESERVED_AUTHORIZATION_PARAMS = frozenset(
+RESERVED_AUTHORIZATION_PARAMS = frozenset(
     {
         "client_id",
         "code_challenge",
@@ -232,7 +232,7 @@ class ProviderConfig(BaseModel, frozen=True):
         Raises:
             ValueError: If ``extra_params`` holds a reserved authorization request parameter.
         """
-        refused = sorted(_RESERVED_AUTHORIZATION_PARAMS & self.extra_params.keys())
+        refused = sorted(RESERVED_AUTHORIZATION_PARAMS & self.extra_params.keys())
         if refused:
             msg = f"extra_params must not set reserved authorization request parameters: {', '.join(refused)}"
             raise ValueError(msg)

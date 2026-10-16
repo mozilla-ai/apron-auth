@@ -7,7 +7,7 @@ from pydantic import SecretStr, ValidationError
 
 from apron_auth.errors import IssuerValidationError
 from apron_auth.models import (
-    _RESERVED_AUTHORIZATION_PARAMS,
+    RESERVED_AUTHORIZATION_PARAMS,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
@@ -162,7 +162,7 @@ class TestProviderConfig:
         assert config.token_endpoint_auth_method == "client_secret_basic"
         assert config.extra_params == {"access_type": "offline"}
 
-    @pytest.mark.parametrize("name", sorted(_RESERVED_AUTHORIZATION_PARAMS))
+    @pytest.mark.parametrize("name", sorted(RESERVED_AUTHORIZATION_PARAMS))
     def test_extra_params_cannot_set_a_reserved_parameter(self, name: str) -> None:
         """A parameter that binds the request to the client, or replaces it, is refused when the config is built."""
         with pytest.raises(ValidationError, match=f"reserved authorization request parameters: {name}"):

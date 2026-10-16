@@ -34,6 +34,7 @@ from apron_auth.models import (
     TenancyContext,
     TokenSet,
 )
+from apron_auth.pkce import generate_code_challenge
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -278,6 +279,50 @@ class TestGetAuthorizationUrl:
         params = parse_qs(urlparse(url).query)
         assert pending_state.nonce != "chosen-nonce"
         assert params["nonce"] == [pending_state.nonce]
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("client_id", "test-client"),
+            ("code_challenge_method", "S256"),
+            ("redirect_uri", "https://app.example.com/callback"),
+            ("response_type", "code"),
+        ],
+    )
+    async def test_client_parameters_not_overridden_by_extra_params(self, name: str, expected: str) -> None:
+        """The parameters the client sets win even for a config that was built without validation."""
+        config = _make_config().model_copy(update={"extra_params": {name: "chosen-value"}})
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params[name] == [expected]
+
+    async def test_session_binding_parameters_not_overridden_by_extra_params(self) -> None:
+        """The state and the PKCE challenge come from the pending state, not from the config."""
+        config = _make_config().model_copy(update={"extra_params": {"state": "chosen", "code_challenge": "chosen"}})
+        client = OAuthClient(config=config)
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert pending_state.code_verifier is not None
+        assert params["state"] == [pending_state.state]
+        assert params["code_challenge"] == [generate_code_challenge(pending_state.code_verifier)]
+
+    @pytest.mark.parametrize("name", ["request", "request_uri", "resource"])
+    async def test_reserved_parameters_the_client_does_not_set_are_dropped(self, name: str) -> None:
+        """A reserved parameter the client has no value for is dropped, not sent from the config."""
+        config = _make_config().model_copy(update={"extra_params": {name: "chosen-value"}})
+        client = OAuthClient(config=config)
+        url, _ = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        assert name not in parse_qs(urlparse(url).query)
+
+    async def test_reserved_parameters_are_dropped_from_the_authorize_url_query(self) -> None:
+        """A reserved parameter in the URL's own query is dropped, whether or not the client sets it."""
+        authorize_url = "https://provider.example.com/authorize?state=chosen-value&request_uri=chosen-value"
+        client = OAuthClient(config=_make_config(authorize_url=authorize_url))
+        url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        params = parse_qs(urlparse(url).query)
+        assert params["state"] == [pending_state.state]
+        assert "request_uri" not in params
 
     async def test_nonce_not_overridden_by_authorize_url_query(self) -> None:
         client = OAuthClient(
