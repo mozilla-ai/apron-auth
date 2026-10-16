@@ -1104,7 +1104,7 @@ class TestExchangeCodeNonceRevocation:
 
         assert isinstance(error, NonceValidationError)
         assert error.__context__ is None
-        assert "network error" in caplog.text
+        assert "could not be revoked" in caplog.text
 
     async def test_a_provider_without_revocation_logs_that_the_tokens_stay_valid(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
@@ -1115,19 +1115,14 @@ class TestExchangeCodeNonceRevocation:
         assert "stay valid" in caplog.text
 
     @pytest.mark.parametrize(
-        ("failure", "reason"),
-        [
-            (ConfigurationError("revocation needs client authentication"), "revocation needs client authentication"),
-            (RuntimeError("raw-SECRET-text"), "(Failed to revoke token)"),
-        ],
-        ids=["library-error", "unexpected-error"],
+        "failure_type", [ConfigurationError, RevocationError, RuntimeError], ids=["library", "revocation", "unexpected"]
     )
-    async def test_a_handler_failure_is_logged_in_domain_terms(
-        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, failure: Exception, reason: str
+    async def test_a_handler_failure_that_repeats_the_token_keeps_it_out_of_the_log(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, failure_type: type[Exception]
     ) -> None:
         class FailingHandler:
             async def revoke(self, token: str, config: ProviderConfig) -> bool:
-                raise failure
+                raise failure_type(f"provider refused token {token}")
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
         client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=FailingHandler())
@@ -1137,8 +1132,9 @@ class TestExchangeCodeNonceRevocation:
                 code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
             )
 
-        assert reason in caplog.text
-        assert "raw-SECRET-text" not in caplog.text
+        assert "could not be revoked" in caplog.text
+        assert "access-abc" not in caplog.text
+        assert "provider refused" not in caplog.text
 
     async def test_a_cancelled_revocation_still_raises_the_nonce_error(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture

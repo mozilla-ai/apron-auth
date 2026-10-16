@@ -349,8 +349,8 @@ class OAuthClient:
 
         Revocation is best effort.
         Both tokens are revoked at once, each bounded by the revocation handler's own timeout.
-        A failure, or a revocation that is cancelled on its own, is logged in domain terms.
-        If the caller is cancelled, the revocations are cancelled with it.
+        A failure, or a revocation that is canceled on its own, is logged by token kind and host, never by error text.
+        If the caller is canceled, the revocations are canceled with it.
 
         Args:
             response: The refused token-endpoint response.
@@ -375,7 +375,7 @@ class OAuthClient:
         for (label, _), result in zip(tokens, results, strict=True):
             if isinstance(result, asyncio.CancelledError):
                 logger.warning(
-                    "a %s from a refused token response could not be revoked at %s (interrupted)", label, host
+                    "the %s of a refused token response could not be revoked at %s (interrupted)", label, host
                 )
             elif isinstance(result, BaseException):
                 raise result
@@ -390,8 +390,9 @@ class OAuthClient:
         """
         try:
             await self.revoke_token(token)
-        except RevocationError as exc:
-            logger.warning("a %s from a refused token response could not be revoked at %s (%s)", label, host, exc)
+        except RevocationError:
+            # NOTE: A handler's error text can repeat the token, so the log line must not include it.
+            logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
         """Refresh an access token using a refresh token.
