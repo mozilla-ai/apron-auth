@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -102,6 +103,18 @@ class TestVerify:
 
         assert identity.audiences == ("https://other.example.com", AUDIENCE)
 
+    async def test_concurrent_first_calls_share_one_discovery(self, httpx_mock: HTTPXMock) -> None:
+        """Calls that arrive before the first discovery finishes wait for it, so each document is fetched once."""
+        discoverable(httpx_mock)
+        verifier = WorkloadTokenVerifier(ISSUER)
+        token = signed(claims())
+
+        identities = await asyncio.gather(*(verifier.verify(token, audience=AUDIENCE) for _ in range(5)))
+
+        assert len(identities) == 5
+        assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 1
+        assert len(httpx_mock.get_requests(url=JWKS_URL)) == 1
+
     async def test_no_audience_leaves_the_match_to_the_caller(self, httpx_mock: HTTPXMock) -> None:
         """``audience=None`` accepts any audience, and returns it for the caller to match."""
         discoverable(httpx_mock)
@@ -155,11 +168,11 @@ class TestRefusals:
 
     @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
     async def test_a_short_rsa_key(self, httpx_mock: HTTPXMock) -> None:
-        """A key shorter than 2048 bits is refused even when the issuer publishes it."""
+        """A key shorter than 2048 bits is never used, even when the issuer publishes it."""
         short_key = jwk.RSAKey.generate_key(1024, parameters={"kid": "rsa-short"}, auto_kid=False)
         discoverable(httpx_mock, short_key)
 
-        with pytest.raises(TokenVerificationError, match="shorter than 2048 bits"):
+        with pytest.raises(TokenVerificationError, match="^Workload token is signed with a key the issuer does not"):
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(), short_key), audience=AUDIENCE)
 
     async def test_an_oversized_token_is_refused_before_any_fetch(self) -> None:
@@ -224,7 +237,22 @@ class TestOutages:
 
 
 class TestConfiguration:
-    """Test that a verifier refuses URLs it could not safely fetch from."""
+    """Test that a verifier refuses URLs it could not safely fetch from, and audiences that would accept anything."""
+
+    @pytest.mark.parametrize(
+        "audience",
+        [
+            pytest.param([], id="empty list"),
+            pytest.param((), id="empty tuple"),
+            pytest.param("", id="empty string"),
+            pytest.param([AUDIENCE, ""], id="an empty member"),
+            pytest.param([AUDIENCE, 1], id="a member that is not a string"),
+        ],
+    )
+    async def test_an_audience_that_names_nothing(self, audience: Any) -> None:
+        """An empty audience would accept a token minted for any service, so it is refused before any fetch."""
+        with pytest.raises(ConfigurationError, match="or be None"):
+            await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=audience)
 
     @pytest.mark.parametrize(
         ("issuer", "jwks_url"),

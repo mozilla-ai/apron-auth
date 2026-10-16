@@ -15,11 +15,11 @@ from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from joserfc.errors import ExpiredTokenError, JoseError
-from joserfc.jwk import RSAKey
 from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._discovery import require_declared_issuer
+from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
     IdentityFetchError,
@@ -28,7 +28,8 @@ from apron_auth.errors import (
     TokenVerificationError,
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
-from apron_auth.providers.oidc import _fetch_document, _optional_url, _require_url, discovery_url
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
+from apron_auth.providers.oidc import discovery_url
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -39,8 +40,6 @@ if TYPE_CHECKING:
 _CLOCK_SKEW_SECONDS = 60
 # The longest token read, in characters. A platform's token is a few kilobytes even with a certificate chain.
 _MAX_TOKEN_LENGTH = 16384
-# The smallest RSA key accepted, in bits (NIST SP 800-131A).
-_MIN_RSA_KEY_BITS = 2048
 # The shortest interval, in seconds, between discovery attempts after a failed one.
 _REDISCOVER_INTERVAL_SECONDS = 60
 
@@ -73,6 +72,8 @@ class WorkloadTokenVerifier:
     Only the document's ``issuer`` and ``jwks_uri`` are read,
     so an issuer that publishes no authorization endpoint, as most workload issuers do, is discovered too.
     The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute.
+    The document is read once, so an issuer that moves its key set needs a new verifier.
+    An RSA key shorter than 2048 bits is never used.
 
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
     """
@@ -102,18 +103,17 @@ class WorkloadTokenVerifier:
         try:
             self._document_url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
             if jwks_url is not None:
-                _require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
+                require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
         self._transport_factory = transport_factory
         self._allow_insecure_http = allow_insecure_http
         self._clock = clock
-        self._signing_keys = (
-            IssuerSigningKeys(jwks_url, transport_factory=transport_factory, clock=clock) if jwks_url else None
-        )
+        self._signing_keys = self._key_set(jwks_url) if jwks_url else None
         self._discovery_failure: str | None = None
         self._discovery_failed_at: float | None = None
+        self._discovery_lock = LoopLock()
 
     @property
     def issuer(self) -> str:
@@ -129,7 +129,7 @@ class WorkloadTokenVerifier:
 
         Args:
             token: A compact signed token.
-            audience: The audience the token must name, or several of which it must name one.
+            audience: The audience the token must name, or a non-empty collection of which it must name one.
                 ``None`` checks only that it names some audience, for a caller that matches the audience itself,
                 which it must then do before trusting the token.
 
@@ -137,23 +137,25 @@ class WorkloadTokenVerifier:
             The verified identity.
 
         Raises:
+            ConfigurationError: If ``audience`` is an empty collection or holds anything but non-empty strings.
+                An empty one would accept every audience, so ``None`` must say that instead.
             TokenExpiredError: If the token verifies but has expired.
             TokenVerificationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
+        audience_rule: ClaimsOption = {"essential": True}
+        if audience is not None:
+            values = [audience] if isinstance(audience, str) else list(audience)
+            if not values or not all(isinstance(value, str) and value for value in values):
+                msg = "audience must name one or more audiences, or be None to leave the match to the caller"
+                raise ConfigurationError(msg)
+            audience_rule["values"] = values
         if len(token) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
             raise TokenVerificationError(msg)
         signing_keys = await self._keys()
-        verified = await signing_keys.verify(token)
-        if isinstance(verified.key, RSAKey) and verified.key.raw_value.key_size < _MIN_RSA_KEY_BITS:
-            msg = "Workload token is signed with an RSA key shorter than 2048 bits"
-            raise TokenVerificationError(msg)
-        claims = verified.claims
-        audience_rule: ClaimsOption = {"essential": True}
-        if audience is not None:
-            audience_rule["values"] = [audience] if isinstance(audience, str) else list(audience)
+        claims = (await signing_keys.verify(token)).claims
         registry = JWTClaimsRegistry(
             leeway=_CLOCK_SKEW_SECONDS,
             iss={"essential": True, "value": self._issuer},
@@ -184,27 +186,36 @@ class WorkloadTokenVerifier:
         """
         if self._signing_keys is not None:
             return self._signing_keys
-        if (
-            self._discovery_failure is not None
-            and self._discovery_failed_at is not None
-            and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
-        ):
-            raise IdentityFetchError(self._discovery_failure)
-        try:
-            document = await _fetch_document(self._document_url, self._transport_factory)
-            require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
-            jwks_url = _optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
-            if jwks_url is None:
-                msg = "OpenID provider configuration names no signing key set"
-                raise OidcDiscoveryError(msg)
-        except OidcDiscoveryError as exc:
-            self._discovery_failure = f"Failed to discover the issuer's signing keys: {exc}"
-            self._discovery_failed_at = self._clock()
-            raise IdentityFetchError(self._discovery_failure) from exc
-        self._discovery_failure = None
-        # Concurrent first calls may each discover, and the last to finish keeps its key set, which is equivalent.
-        self._signing_keys = IssuerSigningKeys(jwks_url, transport_factory=self._transport_factory, clock=self._clock)
-        return self._signing_keys
+        # Concurrent first calls wait for one discovery, so a burst at startup fetches the document once.
+        async with self._discovery_lock():
+            if self._signing_keys is not None:
+                return self._signing_keys
+            if (
+                self._discovery_failure is not None
+                and self._discovery_failed_at is not None
+                and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
+            ):
+                raise IdentityFetchError(self._discovery_failure)
+            try:
+                document = await fetch_document(self._document_url, self._transport_factory)
+                require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
+                jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
+                if jwks_url is None:
+                    msg = "OpenID provider configuration names no signing key set"
+                    raise OidcDiscoveryError(msg)
+            except OidcDiscoveryError as exc:
+                self._discovery_failure = f"Failed to discover the issuer's signing keys: {exc}"
+                self._discovery_failed_at = self._clock()
+                raise IdentityFetchError(self._discovery_failure) from exc
+            self._discovery_failure = None
+            self._signing_keys = self._key_set(jwks_url)
+            return self._signing_keys
+
+    def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
+        """Return the signing keys published at ``jwks_url``, naming the tokens they verify as workload tokens."""
+        return IssuerSigningKeys(
+            jwks_url, transport_factory=self._transport_factory, clock=self._clock, token_name="Workload token"
+        )
 
 
 def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:

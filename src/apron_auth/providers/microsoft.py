@@ -21,7 +21,7 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -146,42 +146,43 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
         The validated ID token.
 
     Raises:
-        IdentityFetchError: If any claim does not validate.
+        TokenExpiredError: If the token has expired.
+        TokenVerificationError: If any other claim does not validate.
     """
     tid = claims.get("tid")
     if not isinstance(tid, str) or not _GUID_RE.match(tid):
         msg = "Microsoft ID token has an invalid tid claim"
-        raise IdentityFetchError(msg)
+        raise TokenVerificationError(msg)
     issuer = _MICROSOFT_ISSUER_TEMPLATE.format(tid=tid)
     if claims.get("iss") != issuer:
         msg = "Microsoft ID token has an invalid iss claim"
-        raise IdentityFetchError(msg)
+        raise TokenVerificationError(msg)
     # The key set lists each key's issuer with a tenant placeholder, so one key cannot vouch for another issuer.
     if key_issuer is not None and (not isinstance(key_issuer, str) or key_issuer.replace("{tenantid}", tid) != issuer):
         msg = "Microsoft ID token signing key belongs to another issuer"
-        raise IdentityFetchError(msg)
+        raise TokenVerificationError(msg)
     if not _same_client(claims.get("aud"), client_id):
         msg = "Microsoft ID token has an invalid aud claim"
-        raise IdentityFetchError(msg)
+        raise TokenVerificationError(msg)
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject:
         msg = "Microsoft ID token has an invalid sub claim"
-        raise IdentityFetchError(msg)
+        raise TokenVerificationError(msg)
     lifetime = JWTClaimsRegistry(leeway=_CLOCK_SKEW_SECONDS, exp={"essential": True}, iat={"essential": True})
     try:
         lifetime.validate(claims)
     except ExpiredTokenError as exc:
-        raise IdentityFetchError("Microsoft ID token has expired") from exc
+        raise TokenExpiredError("Microsoft ID token has expired") from exc
     except MissingClaimError as exc:
         # The library joins several missing claim names with commas.
         missing = ", ".join(exc.claim.split(","))
         noun = "claims" if "," in exc.claim else "claim"
-        raise IdentityFetchError(f"Microsoft ID token is missing the {missing} {noun}") from exc
+        raise TokenVerificationError(f"Microsoft ID token is missing the {missing} {noun}") from exc
     except ClaimError as exc:
-        raise IdentityFetchError(f"Microsoft ID token has an invalid {exc.claim} claim") from exc
+        raise TokenVerificationError(f"Microsoft ID token has an invalid {exc.claim} claim") from exc
     except (JoseError, TypeError, ValueError) as exc:
         # A claim of the wrong JSON type can raise outside the library's own errors.
-        raise IdentityFetchError("Microsoft ID token claims did not validate") from exc
+        raise TokenVerificationError("Microsoft ID token claims did not validate") from exc
     return _IdToken(claims=claims, issuer=issuer, subject=subject, tenant_id=tid)
 
 
@@ -245,8 +246,9 @@ class MicrosoftIdentityHandler:
             and every other case yields ``tenancies=()``.
 
         Raises:
-            IdentityFetchError: If the ID token's signature or claims do not validate,
-                or Microsoft's signing keys cannot be fetched.
+            TokenExpiredError: If the ID token verifies but has expired.
+            TokenVerificationError: If the ID token's signature or claims do not validate.
+            IdentityFetchError: If Microsoft's signing keys cannot be fetched.
                 It is also raised if the userinfo request fails, its response cannot be parsed,
                 or it names no subject or a different one than the ID token.
                 Directory lookups never raise, and degrade to no tenancy instead.

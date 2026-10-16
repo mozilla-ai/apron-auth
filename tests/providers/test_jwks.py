@@ -405,6 +405,28 @@ class TestKeySelection:
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
             await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
 
+    @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
+    async def test_skips_an_rsa_key_shorter_than_2048_bits(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A short RSA key is skipped with a warning, so nothing it signs verifies."""
+        short_key = jwk.RSAKey.generate_key(1024, parameters={"kid": "rsa-short"}, auto_kid=False)
+        httpx_mock.add_response(url=JWKS_URL, json=published(short_key, RSA_KEY), is_reusable=True)
+        keys = IssuerSigningKeys(JWKS_URL)
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"):
+            with pytest.raises(TokenVerificationError, match="key the issuer does not publish"):
+                await keys.verify(signed(short_key))
+            verified = await keys.verify(signed(RSA_KEY))
+
+        assert verified.claims == {"sub": "u-1"}
+        assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
+
+    async def test_names_the_tokens_it_verifies(self, httpx_mock: HTTPXMock) -> None:
+        """A caller verifying tokens other than ID tokens sees its own name for them in a refusal."""
+        with pytest.raises(TokenVerificationError, match="^Workload token is not a signed token"):
+            await IssuerSigningKeys(JWKS_URL, token_name="Workload token").verify("not-a-token")
+
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, entries: list[Any]

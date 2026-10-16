@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-import weakref
 from enum import Enum, StrEnum, auto
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -19,6 +17,7 @@ from apron_auth._discovery import discovery_client
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
+from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
 
 if TYPE_CHECKING:
@@ -32,6 +31,8 @@ logger = logging.getLogger(__name__)
 _KEY_MAX_AGE_SECONDS = 3600
 # The shortest interval, in seconds, between key set fetches for an early refresh or after a failed fetch.
 _REFETCH_INTERVAL_SECONDS = 60
+# The smallest RSA key kept from a key set, in bits (NIST SP 800-131A).
+_MIN_RSA_KEY_BITS = 2048
 
 _SigningKey = ECKey | OKPKey | RSAKey
 
@@ -97,6 +98,7 @@ class IssuerSigningKeys:
     Early refetches happen at most once a minute, so unverifiable tokens cannot flood the issuer.
     A failed early refetch leaves a key set that is still within its hour in use.
     A stale key set whose refetch fails is not used, and the failure is reported again for a minute without a new fetch.
+    A published RSA key shorter than 2048 bits is skipped, so nothing it signs verifies.
     One instance may serve sign-ins on different event loops in turn.
 
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
@@ -109,6 +111,7 @@ class IssuerSigningKeys:
         transport_factory: TransportFactory | None = None,
         algorithms: tuple[SigningAlgorithm, ...] = tuple(SigningAlgorithm),
         clock: Callable[[], float] = time.monotonic,
+        token_name: str = "ID token",
     ) -> None:
         """Bind the key set to the URL it is published at.
 
@@ -119,6 +122,7 @@ class IssuerSigningKeys:
             transport_factory: Optional factory controlling the outbound connection for the key set fetch.
             algorithms: A tuple of the signing algorithms this issuer uses, which defaults to every accepted one.
             clock: The monotonic clock that ages the cached keys.
+            token_name: What the verified tokens are called in error messages.
 
         Raises:
             ConfigurationError: If ``algorithms`` names no accepted algorithm or is not a tuple of them.
@@ -138,8 +142,8 @@ class IssuerSigningKeys:
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
         self._last_failure: str | None = None
-        self._lock: asyncio.Lock | None = None
-        self._lock_loop: weakref.ref[asyncio.AbstractEventLoop] | None = None
+        self._token_name = token_name
+        self._loop_lock = LoopLock()
 
     async def verify(self, token: str) -> VerifiedToken:
         """Return the header and claims of an ID token whose signature an issuer key verifies.
@@ -160,23 +164,23 @@ class IssuerSigningKeys:
         try:
             compact = parse_compact(token)
         except ValueError as exc:
-            raise TokenVerificationError("ID token is not a signed token") from exc
+            raise TokenVerificationError(f"{self._token_name} is not a signed token") from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
-            msg = "ID token names a critical header parameter that is not supported"
+            msg = f"{self._token_name} names a critical header parameter that is not supported"
             raise TokenVerificationError(msg)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
-            msg = "ID token uses a signing algorithm that is not accepted"
+            msg = f"{self._token_name} uses a signing algorithm that is not accepted"
             raise TokenVerificationError(msg)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise TokenVerificationError("ID token header is not valid") from exc
+            raise TokenVerificationError(f"{self._token_name} header is not valid") from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -194,13 +198,13 @@ class IssuerSigningKeys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
-                msg = "ID token is signed with a key the issuer does not publish"
+                msg = f"{self._token_name} is signed with a key the issuer does not publish"
                 raise TokenVerificationError(msg)
-            msg = "ID token signature did not verify"
+            msg = f"{self._token_name} signature did not verify"
             raise TokenVerificationError(msg) from result.error
         claims = compact_claims(compact)
         if claims is None:
-            msg = "ID token claims are not a JSON object"
+            msg = f"{self._token_name} claims are not a JSON object"
             raise TokenVerificationError(msg)
         return VerifiedToken(header, claims, result)
 
@@ -309,16 +313,6 @@ class IssuerSigningKeys:
         """Return whether ``moment`` is set and less than ``seconds`` ago."""
         return moment is not None and self._clock() - moment < seconds
 
-    def _loop_lock(self) -> asyncio.Lock:
-        """Return a lock for the running event loop, replacing one made for an earlier loop.
-
-        Only the latest loop's lock is kept, so at most one finished loop stays in memory.
-        """
-        loop = asyncio.get_running_loop()
-        if self._lock is None or self._lock_loop is None or self._lock_loop() is not loop:
-            self._lock, self._lock_loop = asyncio.Lock(), weakref.ref(loop)
-        return self._lock
-
     async def _fetch(self) -> list[_SigningKey]:
         """Fetch the key set and import every key in it that can verify a signature."""
         try:
@@ -370,7 +364,8 @@ def _signing_key(entry: dict[str, Any]) -> _SigningKey | None:
         entry: One member of the key set's ``keys`` list.
 
     Returns:
-        The imported public key, or ``None`` for an entry that is malformed, of another type, or not for verifying.
+        The imported public key, or ``None`` for an entry that is malformed, of another type, not for verifying,
+            or an RSA key shorter than 2048 bits.
     """
     use = entry.get("use", "sig")
     operations = entry.get("key_ops", ["verify"])
@@ -386,6 +381,9 @@ def _signing_key(entry: dict[str, Any]) -> _SigningKey | None:
         logger.debug(
             "Skipped a published key that could not be read: kid=%r kty=%r", entry.get("kid"), entry.get("kty")
         )
+        return None
+    if isinstance(key, RSAKey) and key.raw_value.key_size < _MIN_RSA_KEY_BITS:
+        logger.warning("Skipped a published RSA key shorter than %d bits: kid=%r", _MIN_RSA_KEY_BITS, entry.get("kid"))
         return None
     # The key types were checked above, so this only narrows the type.
     return key if isinstance(key, _SigningKey) else None

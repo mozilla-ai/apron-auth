@@ -659,9 +659,11 @@ identity.subject  # the platform's stable identifier for the workload
 identity.email  # set only when the token marks it verified, as Google does for a service account
 ```
 
-The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Pass `jwks_url` to skip discovery. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. Only public-key algorithms are accepted, and an RSA key must be at least 2048 bits. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
+The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Pass `jwks_url` to skip discovery. The document is read once, so an issuer that moves its key set needs a new verifier. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. Only public-key algorithms are accepted, and a published RSA key shorter than 2048 bits is skipped, here and in every OpenID sign-in. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
 
-`audience=None` checks only that the token names some audience, for a server that matches the audience itself, for example against rules it stores. Such a server must then match it before trusting the token, because a token minted for another service would otherwise pass.
+`audience` is required. Pass the audience your server answers to, or several of which the token must name one; an empty collection is a `ConfigurationError`, because it would accept every audience. `audience=None` checks only that the token names some audience, for a server that matches the audience itself, for example against rules it stores. Such a server must then match it before trusting the token, because a token minted for another service would otherwise pass.
+
+A matching audience proves the token was minted for your server, not that the workload is one you trust: on a shared platform anyone can mint a token for any audience, so any Google Cloud service account or any GitHub repository can present one. Decide what the token may do from its subject and the claims that name its owner. Prefer a platform's immutable identifiers to names that can be reused, such as GitHub's `repository_id` and `repository_owner_id` over a `sub` built from the repository name, which a renamed or recreated repository takes over.
 
 The configuration document and key set URLs are fetched through `transport_factory`, as in [SSRF safety](#ssrf-safety). The issuer is the caller's, but the key set URL comes from the issuer's document.
 
@@ -730,8 +732,8 @@ All exceptions inherit from `OAuthError`.
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient.                                              |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
-| `TokenVerificationError`       | A signed token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`. |
-| `TokenExpiredError`            | A signed token verified but has expired. Subclass of `TokenVerificationError`.                                  |
+| `TokenVerificationError`       | An ID token or workload token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`, so catch it first. |
+| `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenVerificationError`.                   |
 
 ## Logging
 

@@ -19,6 +19,8 @@ from apron_auth.errors import (
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
+    TokenExpiredError,
+    TokenVerificationError,
 )
 from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
 from apron_auth.protocols import StandardRevocationHandler
@@ -1102,7 +1104,7 @@ class TestOidcIdentity:
 
     async def test_refuses_an_id_token_from_another_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """An ``iss`` other than the configured issuer is refused."""
-        with pytest.raises(IdentityFetchError, match=r"invalid iss claim"):
+        with pytest.raises(TokenVerificationError, match=r"invalid iss claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
                 config,
@@ -1142,8 +1144,8 @@ class TestOidcIdentity:
         assert identity.subject == "u-1"
 
     async def test_refuses_an_expired_id_token(self, handler: OidcIdentityHandler, config: ProviderConfig):
-        """A token expired well beyond the leeway is refused."""
-        with pytest.raises(IdentityFetchError, match=r"has expired"):
+        """A token expired well beyond the leeway is refused as expired."""
+        with pytest.raises(TokenExpiredError, match=r"has expired"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
                 config,
@@ -1715,7 +1717,7 @@ class TestOidcIdentity:
         """A non-string ``sub`` is a malformed ID token, not a userinfo disagreement."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
-        with pytest.raises(IdentityFetchError, match="ID token has an invalid sub claim"):
+        with pytest.raises(TokenVerificationError, match="ID token has an invalid sub claim"):
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
             )

@@ -37,7 +37,6 @@ import logging
 import re
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 import httpx
 from authlib.oidc.core import CodeIDToken
@@ -45,7 +44,7 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, JoseError
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, require_declared_issuer, str_list
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import (
@@ -53,6 +52,8 @@ from apron_auth.errors import (
     IdentityFetchError,
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
+    TokenExpiredError,
+    TokenVerificationError,
 )
 from apron_auth.models import (
     IdentityMaterial,
@@ -64,6 +65,7 @@ from apron_auth.models import (
 )
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -122,7 +124,7 @@ def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
         OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL or has a query, fragment or userinfo.
             It is also raised if ``issuer`` is not ``https`` and ``allow_insecure_http`` is unset.
     """
-    _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+    require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
     return get_well_known_url(issuer, external=True)
 
 
@@ -161,9 +163,9 @@ async def discover(
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
-        _require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
+        require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
         url = document_url
-    document = await _fetch_document(url, transport_factory)
+    document = await fetch_document(url, transport_factory)
 
     require_declared_issuer(document, issuer, "OpenID provider configuration", OidcDiscoveryError)
 
@@ -172,16 +174,16 @@ async def discover(
     if authorize_url is None or token_url is None:
         msg = "OpenID provider configuration is missing an endpoint"
         raise OidcDiscoveryError(msg)
-    authorize_url = _require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
-    token_url = _require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
-    jwks_url = _optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
+    authorize_url = require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
+    token_url = require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
+    jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
     if jwks_url is None:
         msg = "OpenID provider configuration names no signing key set"
         raise OidcDiscoveryError(msg)
 
-    userinfo_url = _optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
-    revocation_url = _optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
-    registration_url = _optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
+    userinfo_url = optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
+    revocation_url = optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
+    registration_url = optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
 
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -402,10 +404,10 @@ class OidcIdentityHandler:
                 that :func:`discover` would refuse.
         """
         try:
-            _require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+            require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
             if userinfo_url is not None:
-                _require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
-            _require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
+                require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
+            require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
@@ -431,8 +433,10 @@ class OidcIdentityHandler:
                 Either way, no request is sent.
             IdentityScopeNotGrantedError: If there is no usable ID token,
                 and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
-            IdentityFetchError: If the ID token's signature or claims do not validate,
-                its ``sub`` is not a non-empty string, or the issuer's signing keys cannot be fetched or read.
+            TokenExpiredError: If the ID token verifies but has expired.
+            TokenVerificationError: If the ID token's signature or claims do not validate,
+                or its ``sub`` is not a non-empty string.
+            IdentityFetchError: If the issuer's signing keys cannot be fetched or read.
                 It is also raised when userinfo fails and there is no validated ID token,
                 when userinfo names no subject or a different one than the ID token, or when neither yields a subject.
         """
@@ -469,7 +473,7 @@ class OidcIdentityHandler:
         if claims is not None and claims_subject is None:
             # Authlib only requires ``sub`` to be present, so a non-string would read as a userinfo mismatch.
             msg = "OpenID ID token has an invalid sub claim"
-            raise IdentityFetchError(msg)
+            raise TokenVerificationError(msg)
         subject = claims_subject or _claim_str(userinfo, "sub")
         if subject is None:
             msg = "OpenID sign-in returned no subject"
@@ -539,15 +543,16 @@ class OidcIdentityHandler:
         try:
             token.validate(leeway=_CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
-            raise IdentityFetchError(_claim_error_message(exc)) from exc
+            error = TokenExpiredError if getattr(exc, "error", None) == "expired_token" else TokenVerificationError
+            raise error(_claim_error_message(exc)) from exc
         except (JoseError, TypeError, ValueError) as exc:
-            # A malformed header or claim shape can raise ``TypeError``, which must surface as ``IdentityFetchError``.
+            # A malformed header or claim shape can raise ``TypeError``, which must surface as a refusal.
             msg = "OpenID ID token claims did not validate"
-            raise IdentityFetchError(msg) from exc
+            raise TokenVerificationError(msg) from exc
         # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != issuer:
             msg = "OpenID ID token has an invalid iss claim"
-            raise IdentityFetchError(msg)
+            raise TokenVerificationError(msg)
         return claims
 
     async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
@@ -795,56 +800,6 @@ def _select_auth_method(advertised: Sequence[str]) -> str:
     raise ConfigurationError(msg)
 
 
-def _require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False) -> str:
-    """Require ``value`` to be an absolute URL this module may talk to.
-
-    This is the one URL rule for the issuer, the document URL and every endpoint.
-    The value must be a string with a scheme, a host and no fragment.
-    It must use ``https`` unless ``allow_insecure_http`` is set.
-    An issuer also has no query and no userinfo (OpenID Connect Discovery 1.0 section 4.1).
-
-    Args:
-        value: The raw value to check.
-        field: What the value is, for the error and the warning.
-        allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules.
-
-    Returns:
-        ``value``, once it passes.
-
-    Raises:
-        OidcDiscoveryError: If ``value`` is not an acceptable URL.
-    """
-    if not isinstance(value, str) or not value:
-        msg = f"OpenID {field} is not an absolute URL"
-        raise OidcDiscoveryError(msg)
-    try:
-        parsed = urlparse(value)
-        hostname = parsed.hostname
-    except ValueError as exc:
-        msg = f"OpenID {field} is malformed"
-        raise OidcDiscoveryError(msg) from exc
-    if not parsed.scheme or not hostname:
-        msg = f"OpenID {field} is not an absolute URL"
-        raise OidcDiscoveryError(msg)
-    scheme = parsed.scheme.lower()
-    if scheme == "http" and allow_insecure_http:
-        logger.warning("OpenID %s is plain http; allowed by allow_insecure_http, use for local development only", field)
-    elif scheme != "https":
-        msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
-        raise OidcDiscoveryError(msg)
-    if "#" in value:
-        msg = f"OpenID {field} must not carry a fragment"
-        raise OidcDiscoveryError(msg)
-    if is_issuer and "?" in value:
-        msg = f"OpenID {field} must not carry a query"
-        raise OidcDiscoveryError(msg)
-    if is_issuer and "@" in parsed.netloc:
-        msg = f"OpenID {field} must not carry userinfo"
-        raise OidcDiscoveryError(msg)
-    return value
-
-
 def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: bool) -> None:
     """Require every URL in ``metadata`` to meet the rule :func:`discover` applies.
 
@@ -855,9 +810,9 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     Raises:
         OidcDiscoveryError: If any URL is not acceptable.
     """
-    _require_url(metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
-    _require_url(metadata.authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
-    _require_url(metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
+    require_url(metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+    require_url(metadata.authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
+    require_url(metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
     optional_urls = (
         ("registration endpoint", metadata.registration_url),
         ("revocation endpoint", metadata.revocation_url),
@@ -866,81 +821,7 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     )
     for field, url in optional_urls:
         if url is not None:
-            _require_url(url, field=field, allow_insecure_http=allow_insecure_http)
-
-
-def _optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
-    """Validate an optional endpoint when the document names one.
-
-    Args:
-        document: The configuration document.
-        key: The document member to read.
-        field: What the endpoint is, for errors.
-        allow_insecure_http: Passed through to :func:`_require_url`.
-
-    Returns:
-        The endpoint, or ``None`` when the document omits it or gives an empty string.
-
-    Raises:
-        OidcDiscoveryError: If the member is present and not empty, but not an acceptable URL.
-    """
-    value = document.get(key)
-    if value is None or value == "":
-        return None
-    return _require_url(value, field=field, allow_insecure_http=allow_insecure_http)
-
-
-async def _fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
-    """Fetch the configuration document at ``url``.
-
-    Redirects are not followed, so the request goes to ``url`` and nowhere else.
-
-    Args:
-        url: The document URL, already validated.
-        transport_factory: Optional factory controlling the outbound connection.
-
-    Returns:
-        The document as a JSON object.
-
-    Raises:
-        OidcDiscoveryError: If the transport factory refuses the connection, the request fails,
-            the response is not HTTP 200, or its body is not a JSON object.
-    """
-    try:
-        client = discovery_client(url, transport_factory)
-    except Exception as exc:
-        # Building the client calls the caller's transport factory, so any exception here means a refused connection.
-        msg = "could not fetch the OpenID provider configuration (outbound connection refused)"
-        raise OidcDiscoveryError(msg) from exc
-    async with client:
-        try:
-            response = await client.get(url)
-        except httpx.RequestError as exc:
-            msg = f"could not fetch the OpenID provider configuration ({describe_http_error(exc)})"
-            raise OidcDiscoveryError(msg) from exc
-        except httpx.InvalidURL as exc:
-            msg = "could not fetch the OpenID provider configuration (invalid URL)"
-            raise OidcDiscoveryError(msg) from exc
-        if response.status_code != 200:
-            if 300 <= response.status_code < 400:
-                # The target is provider-controlled text, so it is not logged.
-                logger.debug("OpenID provider configuration returned HTTP %s", response.status_code)
-                msg = (
-                    f"OpenID provider configuration returned HTTP {response.status_code}; redirects are not "
-                    "followed, so pass the canonical document URL as document_url"
-                )
-                raise OidcDiscoveryError(msg)
-            msg = f"OpenID provider configuration returned HTTP {response.status_code}"
-            raise OidcDiscoveryError(msg)
-        try:
-            document = decode_json_body(response)
-        except ValueError as exc:
-            msg = "OpenID provider configuration was not JSON"
-            raise OidcDiscoveryError(msg) from exc
-    if not isinstance(document, dict):
-        msg = "OpenID provider configuration was not a JSON object"
-        raise OidcDiscoveryError(msg)
-    return document
+            require_url(url, field=field, allow_insecure_http=allow_insecure_http)
 
 
 __all__ = [
