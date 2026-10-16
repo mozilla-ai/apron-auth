@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
         scope="oauth",
@@ -65,9 +66,13 @@ BASE_SCOPE_METADATA = [
     ),
 ]
 
+# The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _HUBSPOT_IDENTITY_HOST_SUFFIXES = ("api.hubapi.com", "app.hubspot.com")
+
+# The token introspection endpoint, which takes the access token as the last path segment.
 _HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX = "https://api.hubapi.com/oauth/v1/access-tokens/"
 
 
@@ -275,6 +280,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="hubspot",
     resolver=maybe_identity_handler,

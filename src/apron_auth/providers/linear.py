@@ -30,7 +30,13 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
+# The GraphQL endpoint that the identity query goes to.
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
+_LINEAR_IDENTITY_HOST_SUFFIXES = ("linear.app",)
+
+# The identity query, which reads the signed-in user and their organization.
 # ``organization`` is a top-level field on the GraphQL query root,
 # scoped to the workspace the access token operates within. ``urlKey``
 # is the workspace handle (resolves to ``linear.app/<urlKey>``); it is
@@ -38,7 +44,6 @@ _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 # canonical key. Linear keeps the last 3 urlKeys as redirects but the
 # urlKey itself should not be treated as a permanent identifier.
 _LINEAR_VIEWER_QUERY = "query { viewer { id name displayName email avatarUrl } organization { id name urlKey } }"
-_LINEAR_IDENTITY_HOST_SUFFIXES = ("linear.app",)
 
 
 class LinearIdentityHandler:
@@ -140,6 +145,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="linear",
     resolver=maybe_identity_handler,

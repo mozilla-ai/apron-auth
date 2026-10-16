@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The default age, in seconds, after which a stored pending state expires.
 DEFAULT_MAX_AGE = 600.0
 
 

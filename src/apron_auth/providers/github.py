@@ -29,14 +29,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_GITHUB_API_HEADERS = {
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
-_GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
-_GITHUB_IDENTITY_HOST_SUFFIXES = ("github.com",)
-_GITHUB_USER_URL = "https://api.github.com/user"
-
+# The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
     ScopeMetadata(
         scope="read:user",
@@ -54,6 +47,7 @@ BASE_SCOPE_METADATA = [
     ),
 ]
 
+# The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 # Maps a broad GitHub scope to the narrower scopes it implicitly grants.
@@ -86,6 +80,21 @@ IMPLICIT_SCOPES: dict[str, frozenset[str]] = {
     "write:public_key": frozenset({"read:public_key"}),
     "write:repo_hook": frozenset({"read:repo_hook"}),
 }
+
+# The headers every GitHub API request sends, which pin the API version.
+_GITHUB_API_HEADERS = {
+    "Accept": "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
+
+# The endpoint that lists the user's email addresses with their verified flags.
+_GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
+_GITHUB_IDENTITY_HOST_SUFFIXES = ("github.com",)
+
+# The endpoint that returns the signed-in user's profile.
+_GITHUB_USER_URL = "https://api.github.com/user"
 
 
 def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> tuple[str | None, bool | None]:
@@ -294,6 +303,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="github",
     resolver=maybe_identity_handler,

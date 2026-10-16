@@ -37,10 +37,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The endpoint that revokes a Notion access token.
 NOTION_REVOCATION_URL = "https://api.notion.com/v1/oauth/revoke"
-_NOTION_USERINFO_URL = "https://api.notion.com/v1/users/me"
-_NOTION_VERSION_HEADER_VALUE = "2022-06-28"
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _NOTION_IDENTITY_HOST_SUFFIXES = ("api.notion.com",)
+
+# The endpoint that returns the bot user of the access token, with its owner.
+_NOTION_USERINFO_URL = "https://api.notion.com/v1/users/me"
+
+# The Notion API version that the identity request names in its Notion-Version header.
+_NOTION_VERSION_HEADER_VALUE = "2022-06-28"
 
 
 class NotionIdentityHandler:
@@ -249,6 +256,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="notion",
     resolver=maybe_identity_handler,

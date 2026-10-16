@@ -27,7 +27,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The age, in seconds, after which the cached key set is fetched again.
 _KEY_MAX_AGE_SECONDS = 3600
+# The shortest interval, in seconds, between key set fetches for an early refresh or after a failed fetch.
 _REFETCH_INTERVAL_SECONDS = 60
 
 _SigningKey = ECKey | OKPKey | RSAKey

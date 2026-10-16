@@ -23,9 +23,14 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
-_TYPEFORM_USERINFO_URL = "https://api.typeform.com/me"
-_TYPEFORM_USERINFO_SCOPE = "accounts:read"
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _TYPEFORM_IDENTITY_HOST_SUFFIXES = ("api.typeform.com",)
+
+# The scope the userinfo endpoint requires.
+_TYPEFORM_USERINFO_SCOPE = "accounts:read"
+
+# The endpoint that returns the signed-in user's account.
+_TYPEFORM_USERINFO_URL = "https://api.typeform.com/me"
 
 
 class TypeformIdentityHandler:
@@ -112,6 +117,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="typeform",
     resolver=maybe_identity_handler,

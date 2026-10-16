@@ -33,21 +33,51 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The scopes the preset always requests, with the labels a consent screen shows.
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="offline_access",
+        label="Offline Access",
+        description="Maintain access to data you have given it access to",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="openid",
+        label="OpenID",
+        description="Sign you in",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="User.Read",
+        label="User Profile",
+        description="Sign you in and read your profile",
+        access_type="read",
+        required=True,
+    ),
+]
+
+# The scope strings that the preset adds to the caller's scopes.
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
+_CLOCK_SKEW_SECONDS = 60
+
+# Canonical 8-4-4-4-12 hex GUID. Entra tenant IDs are GUIDs; validating
+# the shape rejects a non-GUID ``tid`` before it is interpolated into the
+# expected issuer.
+_GUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+
 # The well-known tenant GUID Microsoft uses for personal MSA accounts.
 # Per Microsoft Identity Platform docs: a ``tid`` of this value means the
 # user signed in with a Microsoft account (Outlook.com, Xbox, etc.) that
 # has no organization tenant. Such a sign-in carries no workforce
 # tenancy, so it is treated as ``tenancies=()``.
 _MICROSOFT_CONSUMERS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
-_MICROSOFT_IDENTITY_HOST_SUFFIXES = ("login.microsoftonline.com",)
-_MICROSOFT_USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
-_MICROSOFT_ORGANIZATION_URL = "https://graph.microsoft.com/v1.0/organization"
-# One key set signs ID tokens for every tenant and personal accounts, except apps with custom signing keys.
-# It is pinned rather than discovered, so no metadata document can point verification at other keys.
-_MICROSOFT_KEYS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
 
-# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
-_CLOCK_SKEW_SECONDS = 60
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
+_MICROSOFT_IDENTITY_HOST_SUFFIXES = ("login.microsoftonline.com",)
 
 # The v2.0 issuer for the commercial cloud. ``{tid}`` is the tenant GUID;
 # binding ``iss`` to ``tid`` this way is the chain of trust that promotes
@@ -55,10 +85,15 @@ _CLOCK_SKEW_SECONDS = 60
 # (US Gov, China) use different issuer hosts and are not covered here.
 _MICROSOFT_ISSUER_TEMPLATE = "https://login.microsoftonline.com/{tid}/v2.0"
 
-# Canonical 8-4-4-4-12 hex GUID. Entra tenant ids are GUIDs; validating
-# the shape rejects a non-GUID ``tid`` before it is interpolated into the
-# expected issuer.
-_GUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z")
+# One key set signs ID tokens for every tenant and personal accounts, except apps with custom signing keys.
+# It is pinned rather than discovered, so no metadata document can point verification at other keys.
+_MICROSOFT_KEYS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+
+# The Microsoft Graph endpoint that returns the tenant's organization, with its verified domains.
+_MICROSOFT_ORGANIZATION_URL = "https://graph.microsoft.com/v1.0/organization"
+
+# The OpenID userinfo endpoint of Microsoft Graph.
+_MICROSOFT_USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
 
 
 class _IdToken(NamedTuple):
@@ -469,37 +504,11 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="microsoft",
     resolver=maybe_identity_handler,
 )
-
-
-BASE_SCOPE_METADATA = [
-    ScopeMetadata(
-        scope="offline_access",
-        label="Offline Access",
-        description="Maintain access to data you have given it access to",
-        access_type="read",
-        required=True,
-    ),
-    ScopeMetadata(
-        scope="openid",
-        label="OpenID",
-        description="Sign you in",
-        access_type="read",
-        required=True,
-    ),
-    ScopeMetadata(
-        scope="User.Read",
-        label="User Profile",
-        description="Sign you in and read your profile",
-        access_type="read",
-        required=True,
-    ),
-]
-
-BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(

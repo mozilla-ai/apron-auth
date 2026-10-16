@@ -40,9 +40,11 @@ UrlValidator = Callable[[str], None]
 
 logger = logging.getLogger(__name__)
 
-_WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
+# The well-known paths of the discovery documents: authorization server (RFC 8414),
+# OpenID provider (OpenID Connect Discovery 1.0) and protected resource (RFC 9728).
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
 _WELL_KNOWN_OIDC = "/.well-known/openid-configuration"
+_WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
 
 
 async def discover(

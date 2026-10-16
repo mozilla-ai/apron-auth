@@ -26,8 +26,32 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
 
-_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+# The scopes the preset always requests, with the labels a consent screen shows.
+BASE_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="openid",
+        label="OpenID",
+        description="Authenticate your Google identity",
+        access_type="read",
+        required=True,
+    ),
+    ScopeMetadata(
+        scope="https://www.googleapis.com/auth/userinfo.email",
+        label="Email Address",
+        description="View your email address for account identification",
+        access_type="read",
+        required=True,
+    ),
+]
+
+# The scope strings that the preset adds to the caller's scopes.
+BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
 _GOOGLE_IDENTITY_HOST_SUFFIXES = ("google.com", "googleapis.com")
+
+# The endpoint that returns the signed-in user's profile.
+_GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
 class GoogleIdentityHandler:
@@ -148,30 +172,11 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
     return None
 
 
+# The entry that lets the client infer this provider's identity handler.
 IDENTITY_RESOLVER = IdentityResolverRegistration(
     provider="google",
     resolver=maybe_identity_handler,
 )
-
-
-BASE_SCOPE_METADATA = [
-    ScopeMetadata(
-        scope="openid",
-        label="OpenID",
-        description="Authenticate your Google identity",
-        access_type="read",
-        required=True,
-    ),
-    ScopeMetadata(
-        scope="https://www.googleapis.com/auth/userinfo.email",
-        label="Email Address",
-        description="View your email address for account identification",
-        access_type="read",
-        required=True,
-    ),
-]
-
-BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 
 def preset(
