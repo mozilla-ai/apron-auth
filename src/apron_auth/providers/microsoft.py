@@ -21,6 +21,7 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import describe_http_error
 from apron_auth._json_body import decode_json_body
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -61,9 +62,6 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
-
-# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
-_CLOCK_SKEW_SECONDS = 60
 
 # Canonical 8-4-4-4-12 hex GUID. Entra tenant IDs are GUIDs; validating
 # the shape rejects a non-GUID ``tid`` before it is interpolated into the
@@ -167,7 +165,7 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
     if not isinstance(subject, str) or not subject:
         msg = "Microsoft ID token has an invalid sub claim"
         raise IdentityFetchError(msg)
-    lifetime = JWTClaimsRegistry(leeway=_CLOCK_SKEW_SECONDS, exp={"essential": True}, iat={"essential": True})
+    lifetime = JWTClaimsRegistry(leeway=CLOCK_SKEW_SECONDS, exp={"essential": True}, iat={"essential": True})
     try:
         lifetime.validate(claims)
     except ExpiredTokenError as exc:
@@ -528,7 +526,8 @@ def preset(
     admin-verified domains.
 
     Args:
-        client_id: The OAuth client identifier.
+        client_id: The OAuth client identifier. A GUID is stored in lowercase, which names the same
+            application and is how Entra names it in an ID token's audience.
         client_secret: The OAuth client secret.
         scopes: Additional scopes to request; merged with the required
             base scopes.
@@ -545,6 +544,10 @@ def preset(
         defaults.update(extra_params)
 
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+
+    # Entra names the client in an ID token's audience by its lowercase GUID, and a GUID is case-insensitive.
+    if _GUID_RE.match(client_id):
+        client_id = client_id.lower()
 
     config = ProviderConfig(
         client_id=client_id,
