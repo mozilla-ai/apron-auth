@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
@@ -32,7 +33,8 @@ from apron_auth import (
 def _id_token(nonce: str | None) -> str:
     """Return a compact token carrying ``nonce``, with a signature nothing here checks."""
     assert nonce, "an OpenID authorization request always carries a nonce"
-    segments = [{"alg": "RS256"}, {"sub": "u-1", "nonce": nonce}]
+    claims = {"sub": "u-1", "aud": "test-client", "exp": int(time.time()) + 300, "nonce": nonce}
+    segments = [{"alg": "RS256"}, claims]
     encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
     return ".".join([*encoded, "c2ln"])
 
