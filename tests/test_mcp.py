@@ -716,6 +716,13 @@ class TestDiscover:
         with pytest.raises(McpDiscoveryError, match="missing an endpoint"):
             await discover("https://mcp.example.com")
 
+    async def test_endpoint_with_an_unusable_port_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
+        """A server-supplied endpoint with a bad port is refused at discovery, not at the first request to it."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint="https://auth.example.com:99999/token"))
+        with pytest.raises(McpDiscoveryError, match="malformed URL"):
+            await discover("https://mcp.example.com")
+
     async def test_unfetchable_prm_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, status_code=500)
         with pytest.raises(McpDiscoveryError):
@@ -774,6 +781,16 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com", transport_factory=factory)
         assert meta.token_url == "https://auth.example.com/token"
         assert calls
+
+    async def test_url_the_client_refuses_is_a_discovery_error(self) -> None:
+        """A URL the HTTP client refuses is a malformed URL, not a skipped candidate."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            del request
+            raise httpx.InvalidURL("refused")
+
+        with pytest.raises(McpDiscoveryError, match="malformed URL"):
+            await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
 
 
 class TestIsBlockedHost:
@@ -910,9 +927,15 @@ class TestValidateUrl:
         with pytest.raises(McpDiscoveryError):
             _validate_url(url, None)
 
-    def test_rejects_malformed_url(self) -> None:
-        with pytest.raises(McpDiscoveryError):
-            _validate_url("https://[::1", None)
+    @pytest.mark.parametrize(
+        "url",
+        ["https://[::1", "https://mcp.example.com:99999/token", "https://mcp.example.com:port/token"],
+        ids=["unclosed bracket", "port out of range", "port not a number"],
+    )
+    def test_rejects_malformed_url(self, url: str) -> None:
+        """A URL that cannot be parsed, or whose port is out of range or not a number, is refused as malformed."""
+        with pytest.raises(McpDiscoveryError, match="malformed URL"):
+            _validate_url(url, None)
 
     def test_invokes_validator_when_url_is_acceptable(self) -> None:
         seen: list[str] = []
@@ -1042,6 +1065,16 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI, transport_factory=factory)
         assert reg.client_id == "x"
         assert calls == [_REGISTER_URL]
+
+    async def test_url_the_client_refuses_is_a_registration_error(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            del request
+            raise httpx.InvalidURL("refused")
+
+        with pytest.raises(McpRegistrationError, match="malformed URL"):
+            await register_client(
+                _REGISTER_URL, _REDIRECT_URI, transport_factory=lambda _: httpx.MockTransport(handler)
+            )
 
     @pytest.mark.parametrize("application_type", [ApplicationType.WEB, ApplicationType.NATIVE])
     async def test_explicit_application_type_included_in_payload(

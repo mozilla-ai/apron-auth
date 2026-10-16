@@ -21,7 +21,7 @@ import logging
 import socket
 from collections.abc import Callable, Sequence
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
 from pydantic import SecretStr
@@ -302,6 +302,9 @@ async def register_client(
     async with discovery_client(registration_url, transport_factory) as client:
         try:
             response = await client.post(registration_url, json=payload)
+        except httpx.InvalidURL as exc:
+            msg = "client registration request failed: malformed URL"
+            raise McpRegistrationError(msg) from exc
         except httpx.RequestError as exc:
             msg = f"client registration request failed: {type(exc).__name__}"
             raise McpRegistrationError(msg) from exc
@@ -364,10 +367,7 @@ def cimd_client_id(url: str) -> str:
             path segment.
     """
     try:
-        parsed = urlparse(url)
-        # Accessing .port forces its validation; an out-of-range or non-numeric
-        # port raises ValueError, which urlparse itself defers until this access.
-        _ = parsed.port
+        parsed = _parse_url(url)
     except ValueError as exc:
         msg = "CIMD client_id must be a valid URL"
         raise ValueError(msg) from exc
@@ -506,6 +506,18 @@ def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None
     return ipaddress.ip_address(packed)
 
 
+def _parse_url(url: str) -> ParseResult:
+    """Parse a URL and validate its port.
+
+    Raises:
+        ValueError: If the URL is malformed, or its port is out of range or not a number.
+    """
+    parsed = urlparse(url)
+    # The parser validates the port only when it is read.
+    _ = parsed.port
+    return parsed
+
+
 def _host_name(host: str) -> str:
     """Return the host without the trailing dot that names the same host."""
     return host.rstrip(".")
@@ -568,9 +580,10 @@ def _validate_url(
     unchanged; any other validator exception is wrapped in ``error_cls``.
     """
     try:
-        parsed = urlparse(url)
+        parsed = _parse_url(url)
     except ValueError as exc:
-        raise error_cls("MCP OAuth received a malformed URL") from exc
+        msg = "MCP OAuth received a malformed URL"
+        raise error_cls(msg) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg)
@@ -637,6 +650,10 @@ async def _fetch_first_metadata(
         async with discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
+            except httpx.InvalidURL as exc:
+                # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
+                msg = "MCP OAuth received a malformed URL"
+                raise McpDiscoveryError(msg) from exc
             except httpx.RequestError as exc:
                 logger.debug("MCP discovery: %s request failed (%s)", what, type(exc).__name__)
                 continue
