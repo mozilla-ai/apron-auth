@@ -291,9 +291,13 @@ async def register_client(
         try:
             data = decode_json_body(response)
         except ValueError:
-            msg = "client registration returned a non-JSON response"
-            raise McpRegistrationError(msg) from None
-
+            data = None
+            failure = "client registration returned a non-JSON response"
+        else:
+            failure = None
+    # NOTE: This raise stays outside the except block, so the error carries no context.
+    if failure is not None:
+        raise McpRegistrationError(failure)
     if not isinstance(data, dict):
         msg = "client registration returned an unexpected response"
         raise McpRegistrationError(msg)

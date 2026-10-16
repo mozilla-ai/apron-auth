@@ -865,8 +865,10 @@ class TestRegisterClient:
     async def test_deeply_nested_response_raises(self, httpx_mock: HTTPXMock) -> None:
         """A body that nests too deeply to decode is a non-JSON response, not a raw recursion error."""
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, content=b"[" * 100_000 + b"]" * 100_000)
-        with pytest.raises(McpRegistrationError, match="non-JSON"):
+        with pytest.raises(McpRegistrationError, match="non-JSON") as exc_info:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     @pytest.mark.parametrize("url", ["http://auth.example.com/register", "https://127.0.0.1/register"])
     async def test_unsafe_registration_url_rejected(self, url: str) -> None:
