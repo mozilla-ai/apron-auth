@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
+import logging
 import re
 import secrets
 import time
@@ -42,6 +44,8 @@ if TYPE_CHECKING:
 
     from apron_auth.models import IdentityProfile, ProviderConfig
     from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
+
+logger = logging.getLogger(__name__)
 
 
 class _TokenEndpointError(Exception):
@@ -83,6 +87,26 @@ def _redact(text: str, values: Iterable[str]) -> str:
         return text
     pattern = "|".join(re.escape(copy) for copy in sorted(copies, key=len, reverse=True))
     return re.sub(pattern, "[redacted]", text)
+
+
+def _check_id_token(id_token: object, nonce: str | None) -> None:
+    """Refuse a token response whose ID token does not carry the nonce its authorization request sent.
+
+    Args:
+        id_token: The ``id_token`` value from the token response, or ``None`` when it has none.
+        nonce: The nonce the authorization request sent, or ``None`` when it sent none.
+
+    Raises:
+        NonceValidationError: If a nonce was sent and the response carries no ID token,
+            or an ID token that does not carry that nonce.
+    """
+    if not nonce:
+        return
+    if id_token is None:
+        # OpenID Connect Core section 3.1.3.3 requires an ID token, and without one no nonce is checked.
+        msg = "Token response carries no ID token for the OpenID request"
+        raise NonceValidationError(msg)
+    _check_nonce(id_token, nonce)
 
 
 def _check_nonce(id_token: object, nonce: str) -> None:
@@ -285,6 +309,8 @@ class OAuthClient:
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
                 or an ID token that does not carry that nonce,
                 or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                The response's tokens are revoked first when it failed the check against the nonce the request sent.
+                At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 or the store holds no pending state for it because it is invalid, expired, or already consumed.
             TokenExchangeError: If the token endpoint rejects the exchange.
@@ -310,14 +336,63 @@ class OAuthClient:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
             raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
-        id_token = response.get("id_token")
-        if pending.nonce:
-            if id_token is None:
-                # OpenID Connect Core section 3.1.3.3 requires an ID token, and without one no nonce is checked.
-                msg = "Token response carries no ID token for the OpenID request"
-                raise NonceValidationError(msg)
-            _check_nonce(id_token, pending.nonce)
+        try:
+            _check_id_token(response.get("id_token"), pending.nonce)
+        except NonceValidationError:
+            # NOTE: A response that fails the check against a sent nonce may answer a request the client never made.
+            await self._revoke_refused_tokens(response)
+            raise
         return self._parse_token_response(response, context=pending.metadata)
+
+    async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
+        """Revoke the tokens of a refused token response, where the provider supports revocation.
+
+        Revocation is best effort.
+        Both tokens are revoked at once, each bounded by the revocation handler's own timeout.
+        A failure, or a revocation that is canceled on its own, is logged by token kind and host, never by error text.
+        If the caller is canceled, the revocations are canceled with it.
+
+        Args:
+            response: The refused token-endpoint response.
+        """
+        tokens = [
+            (label, token)
+            for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
+            if isinstance(token := response.get(field), str) and token
+        ]
+        if not tokens:
+            return
+        revocation_url = self._config.revocation_url
+        if not revocation_url:
+            logger.warning(
+                "tokens from a refused token response stay valid, because the provider has no revocation endpoint"
+            )
+            return
+        host = urlparse(revocation_url).hostname
+        results = await asyncio.gather(
+            *(self._revoke_one_refused_token(label, token, host) for label, token in tokens), return_exceptions=True
+        )
+        for (label, _), result in zip(tokens, results, strict=True):
+            if isinstance(result, asyncio.CancelledError):
+                logger.warning(
+                    "the %s of a refused token response could not be revoked at %s (interrupted)", label, host
+                )
+            elif isinstance(result, BaseException):
+                raise result
+
+    async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
+        """Revoke one token of a refused token response, and log a failure instead of raising it.
+
+        Args:
+            label: The token's name for the log line, such as ``refresh token``.
+            token: The token to revoke.
+            host: The revocation endpoint's host, for the log line.
+        """
+        try:
+            await self.revoke_token(token)
+        except RevocationError:
+            # NOTE: A handler's error text can repeat the token, so the log line must not include it.
+            logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
     async def refresh_token(self, refresh_token: str) -> TokenSet:
         """Refresh an access token using a refresh token.
