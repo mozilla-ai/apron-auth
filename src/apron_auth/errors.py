@@ -32,6 +32,7 @@ class IdentityFetchError(OAuthError):
     """Fetching user identity from the provider failed.
 
     The failure may be transient, so retrying may succeed.
+    A subclass marks a failure that retrying cannot fix.
     """
 
 

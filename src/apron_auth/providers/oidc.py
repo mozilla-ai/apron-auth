@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from authlib.oidc.core import CodeIDToken
 from authlib.oidc.discovery import get_well_known_url
-from joserfc.errors import ClaimError, JoseError
+from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, require_declared_issuer, str_list
@@ -543,7 +543,7 @@ class OidcIdentityHandler:
         try:
             token.validate(leeway=_CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
-            error = TokenExpiredError if getattr(exc, "error", None) == "expired_token" else TokenVerificationError
+            error = TokenExpiredError if isinstance(exc, ExpiredTokenError) else TokenVerificationError
             raise error(_claim_error_message(exc)) from exc
         except (JoseError, TypeError, ValueError) as exc:
             # A malformed header or claim shape can raise ``TypeError``, which must surface as a refusal.

@@ -181,11 +181,22 @@ class TestRefusals:
             await WorkloadTokenVerifier(ISSUER).verify("a" * 20000, audience=AUDIENCE)
 
     async def test_a_token_that_is_not_signed(self, httpx_mock: HTTPXMock) -> None:
-        """Text that is not a compact signed token is refused, not reported as an outage."""
-        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})
+        """Text that is not a compact signed token is refused before discovery, so not as an outage."""
+        with pytest.raises(TokenVerificationError, match="^Workload token is not a signed token"):
+            await WorkloadTokenVerifier(ISSUER).verify("not-a-token", audience=AUDIENCE)
+
+        assert not httpx_mock.get_requests()
+
+    async def test_a_token_that_is_not_signed_during_an_outage(self, httpx_mock: HTTPXMock) -> None:
+        """A malformed token is refused even while the issuer cannot be reached."""
+        clock = FakeClock()
+        verifier = WorkloadTokenVerifier(ISSUER, clock=clock)
+        httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
+        with pytest.raises(IdentityFetchError, match="HTTP 503"):
+            await verifier.verify(signed(claims()), audience=AUDIENCE)
 
         with pytest.raises(TokenVerificationError, match="not a signed token"):
-            await WorkloadTokenVerifier(ISSUER).verify("not-a-token", audience=AUDIENCE)
+            await verifier.verify("not-a-token", audience=AUDIENCE)
 
 
 class TestOutages:

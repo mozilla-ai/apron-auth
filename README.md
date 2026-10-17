@@ -100,7 +100,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `IdentityFetchError`, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce before it returns the tokens.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenVerificationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce before it returns the tokens.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -730,7 +730,7 @@ All exceptions inherit from `OAuthError`.
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
-| `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient.                                              |
+| `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient; its subclasses mark the failures that are not. |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
 | `TokenVerificationError`       | An ID token or workload token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`, so catch it first. |
 | `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenVerificationError`.                   |

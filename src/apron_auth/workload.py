@@ -19,6 +19,7 @@ from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._discovery import require_declared_issuer
+from apron_auth._jwt import parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
@@ -154,6 +155,12 @@ class WorkloadTokenVerifier:
         if len(token) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
             raise TokenVerificationError(msg)
+        # A token that is not one is refused before discovery, so it is never reported as an outage.
+        try:
+            parse_compact(token)
+        except ValueError as exc:
+            msg = "Workload token is not a signed token"
+            raise TokenVerificationError(msg) from exc
         signing_keys = await self._keys()
         claims = (await signing_keys.verify(token)).claims
         registry = JWTClaimsRegistry(
