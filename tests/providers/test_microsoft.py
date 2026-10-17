@@ -10,7 +10,7 @@ from joserfc import jwk, jws
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext, TokenSet
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
 
@@ -643,9 +643,17 @@ class TestMicrosoftIdTokenVerification:
     )
     async def test_refuses_an_id_token_with_bad_claims(self, claims: dict[str, object], message: str) -> None:
         """A signed token issued for another client, outside its lifetime, or without a subject is refused."""
-        with pytest.raises(IdentityFetchError, match=message):
+        with pytest.raises(TokenVerificationError, match=message):
             await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token(**claims)), _config()
+            )
+
+    async def test_refuses_an_expired_id_token_as_expired(self) -> None:
+        """An expired token raises its own refusal, so the caller can tell it from a forged one."""
+        with pytest.raises(TokenExpiredError):
+            await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token(exp=int(time.time()) - 3600)),
+                _config(),
             )
 
     @pytest.mark.parametrize(

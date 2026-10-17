@@ -14,7 +14,7 @@ from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError
+from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
@@ -220,7 +220,7 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         forged = signed(OTHER_RSA_KEY, kid="rsa-1")
 
-        with pytest.raises(IdentityFetchError, match="signature did not verify"):
+        with pytest.raises(TokenVerificationError, match="signature did not verify"):
             await IssuerSigningKeys(JWKS_URL).verify(forged)
 
     @pytest.mark.parametrize("alg", ["none", "HS256", "Ed25519", ["RS256"], {"alg": "RS256"}, 5])
@@ -284,7 +284,7 @@ class TestVerify:
             jku="https://attacker.example/keys",
         )
 
-        with pytest.raises(IdentityFetchError, match="signature did not verify"):
+        with pytest.raises(TokenVerificationError, match="signature did not verify"):
             await IssuerSigningKeys(JWKS_URL).verify(forged)
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
@@ -315,7 +315,7 @@ class TestVerify:
         clock.now += 120
 
         for _ in range(2):
-            with pytest.raises(IdentityFetchError, match="signature did not verify"):
+            with pytest.raises(TokenVerificationError, match="signature did not verify"):
                 await keys.verify(signed(OTHER_RSA_KEY, kid="rsa-1"))
             clock.now += 10
 
@@ -404,6 +404,28 @@ class TestKeySelection:
 
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
             await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
+
+    @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
+    async def test_skips_an_rsa_key_shorter_than_2048_bits(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A short RSA key is skipped with a warning, so nothing it signs verifies."""
+        short_key = jwk.RSAKey.generate_key(1024, parameters={"kid": "rsa-short"}, auto_kid=False)
+        httpx_mock.add_response(url=JWKS_URL, json=published(short_key, RSA_KEY), is_reusable=True)
+        keys = IssuerSigningKeys(JWKS_URL)
+
+        with caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"):
+            with pytest.raises(TokenVerificationError, match="key the issuer does not publish"):
+                await keys.verify(signed(short_key))
+            verified = await keys.verify(signed(RSA_KEY))
+
+        assert verified.claims == {"sub": "u-1"}
+        assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
+
+    async def test_names_the_tokens_it_verifies(self, httpx_mock: HTTPXMock) -> None:
+        """A caller verifying tokens other than ID tokens sees its own name for them in a refusal."""
+        with pytest.raises(TokenVerificationError, match="^Workload token is not a signed token"):
+            await IssuerSigningKeys(JWKS_URL, token_name="Workload token").verify("not-a-token")
 
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(
@@ -567,8 +589,13 @@ class TestFetchFailures:
         """A network failure names the condition, not the client library."""
         httpx_mock.add_exception(httpx.ConnectError("boom"), url=JWKS_URL)
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch the issuer's signing keys: network error"):
+        with pytest.raises(
+            IdentityFetchError, match="Failed to fetch the issuer's signing keys: network error"
+        ) as caught:
             await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
+
+        # An outage is not a refusal, so a caller can tell a bad token from an unreachable issuer.
+        assert not isinstance(caught.value, TokenVerificationError)
 
     async def test_a_failed_fetch_is_retried_after_a_minute(self, httpx_mock: HTTPXMock) -> None:
         """An outage is reported without refetching for a minute, and does not stick after that."""
