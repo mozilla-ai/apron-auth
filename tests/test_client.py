@@ -31,6 +31,7 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
@@ -906,6 +907,19 @@ class TestExchangeCode:
         assert tokens.metadata["team_id"] == "T123"
         assert tokens.metadata["authed_user"] == {"id": "U456"}
 
+    async def test_exchange_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(),
+        )
+        assert isinstance(tokens, FreshTokenSet)
+
     async def test_exchange_client_secret_post(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
@@ -1760,6 +1774,15 @@ class TestRefreshToken:
         assert tokens.access_token == "new-access"
         assert tokens.refresh_token == "new-refresh"
 
+    async def test_refresh_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "new-access", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_config())
+        tokens = await client.refresh_token(refresh_token="old-refresh")
+        assert isinstance(tokens, FreshTokenSet)
+
     async def test_refresh_sends_correct_grant_type(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
@@ -2171,6 +2194,19 @@ class TestRevokeToken:
 
 
 class TestFetchIdentity:
+    async def test_a_token_set_reloaded_from_storage_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        config = _make_config(
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        client = OAuthClient(config=config)
+        stored = TokenSet.model_validate({"access_token": "access-abc", "metadata": {"id_token": "id-jwt"}})
+
+        with pytest.raises(ConfigurationError, match="reloaded from storage"):
+            await client.fetch_identity(stored)
+
+        assert httpx_mock.get_requests() == []
+
     async def test_google_identity_inferred_from_config(self, httpx_mock):
         httpx_mock.add_response(
             url="https://www.googleapis.com/oauth2/v3/userinfo",
@@ -2188,7 +2224,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="google",
@@ -2230,7 +2266,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity.provider == "github"
         assert identity.subject == "42"
@@ -2251,7 +2287,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_custom_handler(self):
         class DummyIdentityHandler:
@@ -2266,7 +2302,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity.email == "custom@example.com"
 
@@ -2285,8 +2321,8 @@ class TestFetchIdentity:
         monkeypatch.setattr("apron_auth.client.infer_identity_handler", infer)
         client = OAuthClient(config=_make_config())
 
-        await client.fetch_identity(TokenSet(access_token="access-abc"))
-        await client.fetch_identity(TokenSet(access_token="access-abc"))
+        await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert len(built) == 1
 
@@ -2302,7 +2338,7 @@ class TestFetchIdentity:
 
         for _ in range(2):
             with pytest.raises(IdentityNotSupportedError):
-                await client.fetch_identity(TokenSet(access_token="access-abc"))
+                await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert len(calls) == 1
 
@@ -2319,7 +2355,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
-            await client.fetch_identity(TokenSet(access_token="bad-token"))
+            await client.fetch_identity(FreshTokenSet(access_token="bad-token"))
 
     async def test_fetch_identity_lookalike_google_host_not_inferred(self):
         config = _make_config(
@@ -2329,7 +2365,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_lookalike_github_host_not_inferred(self):
         config = _make_config(
@@ -2339,7 +2375,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_microsoft_identity_inferred_from_config(self, httpx_mock):
         httpx_mock.add_response(
@@ -2357,7 +2393,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="microsoft",
@@ -2382,7 +2418,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_atlassian_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -2405,7 +2441,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -2427,7 +2463,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_typeform_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -2443,7 +2479,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="typeform",
@@ -2466,7 +2502,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityScopeNotGrantedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc", scope="forms:read"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc", scope="forms:read"))
 
     async def test_fetch_identity_lookalike_typeform_host_not_inferred(self):
         config = _make_config(
@@ -2476,7 +2512,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_notion_fetch_identity_lookalike_notion_host_not_inferred(self):
         config = _make_config(
@@ -2487,7 +2523,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_notion_identity_inferred_from_config(self, httpx_mock):
         payload = {
@@ -2517,7 +2553,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="notion",
@@ -2555,7 +2591,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="salesforce",
@@ -2585,7 +2621,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity.provider == "salesforce"
         assert identity.email == "user@acme.com"
@@ -2598,7 +2634,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_linear_identity_inferred_from_config(self, httpx_mock):
         viewer = {
@@ -2618,7 +2654,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert identity == IdentityProfile(
             provider="linear",
@@ -2639,7 +2675,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
@@ -2653,6 +2689,6 @@ class TestFetchIdentity:
         client = OAuthClient(config=config, identity_handler=BoomHandler())
 
         with pytest.raises(IdentityFetchError, match="^Failed to fetch identity$") as exc_info:
-            await client.fetch_identity(TokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None

@@ -26,7 +26,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig, TokenSet
+from apron_auth.models import FreshTokenSet, IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
 
 CLIENT_SECRET = "client-SECRET-xyz"  # pragma: allowlist secret
 CODE = "code-SECRET-xyz"
@@ -285,7 +285,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=FailingHandler())
         with pytest.raises(IdentityFetchError) as exc_info:
-            await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == f"Failed to fetch identity: {kind}"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -297,7 +297,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=BrokenHandler())
         with pytest.raises(IdentityFetchError) as exc_info:
-            await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Failed to fetch identity"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -321,7 +321,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=MisconfiguredHandler())
         with pytest.raises(IdentityFetchError) as exc_info:
-            await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == "config names a different issuer"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -364,7 +364,7 @@ class TestHandlerDomainErrors:
 
         client = OAuthClient(_config(), identity_handler=ChainingHandler())
         with pytest.raises(CustomIdentityError) as exc_info:
-            await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Custom identity failed"
         assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))

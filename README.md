@@ -213,11 +213,17 @@ print(identity.email)
 print(identity.email_verified)
 ```
 
-`fetch_identity` takes the `TokenSet` from `exchange_code` (or
-`refresh_token`). It is narrowed to an `IdentityMaterial` — exposing
-only the access token and, for OIDC providers, the ID token — before
-being handed to the provider's identity handler, so handlers never
-receive the refresh token or caller context.
+`fetch_identity` takes the `FreshTokenSet` that `exchange_code` and
+`refresh_token` return, and nothing else. An identity handler may
+accept the ID token in it without a signature check, which is safe
+only for a token the token endpoint returned over TLS, so a `TokenSet`
+reloaded from storage is a type error and raises `ConfigurationError`.
+Persist the fields as before. A stored set comes back as a plain
+`TokenSet`, and `refresh_token` turns it into a fresh one. The fresh
+set is narrowed to an `IdentityMaterial` — exposing only the access
+token and, for OIDC providers, the ID token — before being handed to
+the provider's identity handler, so handlers never receive the refresh
+token or caller context.
 
 Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler. The generic OpenID preset and `mcp.to_provider_config` set it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
 OAuth protocol endpoints come from the provider config; identity API
@@ -739,7 +745,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
 | `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
-| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server or registration URL this library refuses. |
+| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server or registration URL this library refuses, or a `TokenSet` reloaded from storage passed to `fetch_identity`. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. A URL you passed raises `ConfigurationError` instead. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
@@ -757,6 +763,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
 - `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
 - `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
+- `exchange_code` and `refresh_token` return a `FreshTokenSet`, and `fetch_identity` accepts only that type. A `TokenSet` reloaded from storage raises `ConfigurationError`; call `refresh_token` and pass its result instead.
 - A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Literal
+from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, SecretStr, model_validator
 
-from apron_auth.errors import IssuerValidationError
+from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 AccessType = Literal["read", "write", "admin"]
@@ -468,10 +468,65 @@ class TokenSet(BaseModel, frozen=True):
     context: dict[str, Any] = {}
 
 
+class FreshTokenSet(TokenSet):
+    """A token set that a code exchange or a refresh returned in this process.
+
+    It is the only token set identity can be established from.
+    An identity handler may accept the ID token in it without a signature check,
+    which is safe only for a token the token endpoint returned over TLS.
+    Building one from stored data is refused, so a persisted token set reloads as a plain :class:`TokenSet`,
+    and a refresh produces a fresh one again.
+    """
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> NoReturn:
+        """Refuse to build a fresh token set from stored data.
+
+        Args:
+            obj: The stored data, which is not read.
+            **kwargs: Validation options, which are not read.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        raise cls._stored_data_refused()
+
+    @classmethod
+    def model_validate_json(cls, json_data: Any, **kwargs: Any) -> NoReturn:
+        """Refuse to build a fresh token set from stored JSON.
+
+        Args:
+            json_data: The stored JSON, which is not read.
+            **kwargs: Validation options, which are not read.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        raise cls._stored_data_refused()
+
+    @classmethod
+    def model_validate_strings(cls, obj: Any, **kwargs: Any) -> NoReturn:
+        """Refuse to build a fresh token set from stored strings.
+
+        Args:
+            obj: The stored strings, which are not read.
+            **kwargs: Validation options, which are not read.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        raise cls._stored_data_refused()
+
+    @staticmethod
+    def _stored_data_refused() -> ConfigurationError:
+        msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
+        return ConfigurationError(msg)
+
+
 class IdentityMaterial(BaseModel, frozen=True):
     """The material an identity handler establishes a user's identity from.
 
-    Constructed from a :class:`TokenSet` immediately before dispatching
+    Constructed from a :class:`FreshTokenSet` immediately before dispatching
     to a provider's identity handler, this type is the single boundary
     that decides what token material crosses into handler code. It
     deliberately exposes only the fields identity resolution needs — the
@@ -506,8 +561,8 @@ class IdentityMaterial(BaseModel, frozen=True):
     scope: str | None = None
 
     @classmethod
-    def from_token_set(cls, tokens: TokenSet) -> IdentityMaterial:
-        """Narrow a :class:`TokenSet` to the material identity handlers may use.
+    def from_token_set(cls, tokens: FreshTokenSet) -> IdentityMaterial:
+        """Narrow a :class:`FreshTokenSet` to the material identity handlers may use.
 
         The ID token is read from the token-endpoint response, where
         providers return it as the ``id_token`` field that lands on
@@ -515,7 +570,7 @@ class IdentityMaterial(BaseModel, frozen=True):
         on the ``TokenSet`` are intentionally not carried over.
 
         Args:
-            tokens: The token set to narrow.
+            tokens: The fresh token set to narrow.
 
         Returns:
             The identity material: the access token, the granted scopes,

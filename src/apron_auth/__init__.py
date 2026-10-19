@@ -31,6 +31,7 @@ from apron_auth.errors import (
 )
 from apron_auth.models import (
     ClientRegistration,
+    FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
@@ -55,6 +56,7 @@ __all__ = [
     "ClientRegistration",
     "ConfigurationError",
     "FailureKind",
+    "FreshTokenSet",
     "IdentityFetchError",
     "IdentityHandler",
     "IdentityMaterial",
