@@ -14,7 +14,13 @@ from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenValidationError, TokenValidationReason
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityFetchError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
@@ -609,12 +615,23 @@ class TestFetchFailures:
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
             await keys.verify(signed(RSA_KEY))
         clock.now += 30
-        with pytest.raises(IdentityFetchError, match="HTTP 503"):
+        with pytest.raises(IdentityFetchError, match="HTTP 503") as repeated:
             await keys.verify(signed(RSA_KEY))
         clock.now += 30
         verified = await keys.verify(signed(RSA_KEY))
 
         assert verified.claims == {"sub": "u-1"}
+        assert repeated.value.kind is FailureKind.SERVER_ERROR
+
+    async def test_a_cached_failure_holds_no_exception_object(self, httpx_mock: HTTPXMock) -> None:
+        """Between attempts only the message and the kind are kept, not a traceback that reaches the token."""
+        httpx_mock.add_response(url=JWKS_URL, status_code=503)
+        keys = IssuerSigningKeys(JWKS_URL, clock=FakeClock())
+
+        with pytest.raises(IdentityFetchError):
+            await keys.verify(signed(RSA_KEY))
+
+        assert not isinstance(keys._last_failure, BaseException)
 
     @pytest.mark.parametrize("body", [b"not json", b"[]", b'{"keys": "nope"}'])
     async def test_reports_a_document_that_is_not_a_key_set(self, httpx_mock: HTTPXMock, body: bytes) -> None:

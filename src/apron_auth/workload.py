@@ -112,7 +112,7 @@ class WorkloadTokenVerifier:
         self._allow_insecure_http = allow_insecure_http
         self._clock = clock
         self._signing_keys = self._key_set(jwks_url) if jwks_url else None
-        self._discovery_failure: IdentityFetchError | None = None
+        self._discovery_failure: tuple[str, FailureKind] | None = None
         self._discovery_failed_at: float | None = None
         self._discovery_lock = LoopLock()
 
@@ -202,7 +202,8 @@ class WorkloadTokenVerifier:
                 and self._discovery_failed_at is not None
                 and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
             ):
-                raise IdentityFetchError(str(self._discovery_failure), kind=self._discovery_failure.kind)
+                message, kind = self._discovery_failure
+                raise IdentityFetchError(message, kind=kind)
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
                 require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
@@ -212,9 +213,10 @@ class WorkloadTokenVerifier:
                     raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
             except OidcDiscoveryError as exc:
                 msg = f"Failed to discover the issuer's signing keys: {exc}"
-                self._discovery_failure = IdentityFetchError(msg, kind=exc.kind)
+                # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
+                self._discovery_failure = (msg, exc.kind)
                 self._discovery_failed_at = self._clock()
-                raise self._discovery_failure from exc
+                raise IdentityFetchError(msg, kind=exc.kind) from exc
             self._discovery_failure = None
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys

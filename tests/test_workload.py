@@ -250,6 +250,16 @@ class TestOutages:
         assert identity.subject == "repo:acme/app"
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
 
+    async def test_a_cached_discovery_failure_holds_no_exception_object(self, httpx_mock: HTTPXMock) -> None:
+        """Between attempts only the message and the kind are kept, not a traceback that reaches the token."""
+        verifier = WorkloadTokenVerifier(ISSUER, clock=FakeClock())
+        httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
+
+        with pytest.raises(IdentityFetchError):
+            await verifier.verify(signed(claims()), audience=AUDIENCE)
+
+        assert not isinstance(verifier._discovery_failure, BaseException)
+
     async def test_an_unreachable_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A key set that cannot be fetched is an outage, not a refusal."""
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})

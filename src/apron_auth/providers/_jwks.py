@@ -147,7 +147,7 @@ class IssuerSigningKeys:
         self._keys: list[_SigningKey] = []
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
-        self._last_failure: IdentityFetchError | None = None
+        self._last_failure: tuple[str, FailureKind] | None = None
         self._token_name = token_name
         self._loop_lock = LoopLock()
 
@@ -284,12 +284,13 @@ class IssuerSigningKeys:
             if self._is_younger_than(self._fetched_at, _KEY_MAX_AGE_SECONDS):
                 return
             if self._last_failure is not None and self._is_younger_than(self._attempted_at, _REFETCH_INTERVAL_SECONDS):
-                raise IdentityFetchError(str(self._last_failure), kind=self._last_failure.kind)
+                message, kind = self._last_failure
+                raise IdentityFetchError(message, kind=kind)
             try:
                 await self._fetch_and_store()
             except IdentityFetchError as exc:
-                # Only the domain message is kept, so the failed request's objects are not held until the next fetch.
-                self._last_failure = exc
+                # Only the message and the kind are kept, so the failed request is not held until the next fetch.
+                self._last_failure = (str(exc), exc.kind)
                 raise
 
     async def _refetch_early(self, checked_keys: list[_SigningKey]) -> None:
