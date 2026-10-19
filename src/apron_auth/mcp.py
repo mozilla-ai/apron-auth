@@ -98,6 +98,7 @@ async def discover(
             fetched from as its issuer. The first document fetched is
             authoritative, so a mismatched issuer ends discovery rather than
             trying the next candidate URL.
+        OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(server_url, url_validator, caller_supplied=True)
 
@@ -296,8 +297,10 @@ async def register_client(
 
     Raises:
         ConfigurationError: If ``registration_url`` is rejected.
-        McpRegistrationError: If the endpoint returns a non-success status, or the
-            response lacks a usable ``client_id``.
+        McpRegistrationError: If the request fails in transit, the endpoint returns
+            a non-success status, or its response is not a JSON object with a usable
+            ``client_id``.
+        OAuthError: As raised by ``url_validator``, unchanged.
         ValueError: If ``application_type`` is neither ``web`` nor ``native``.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
@@ -615,11 +618,13 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
         url: The URL to check.
         url_validator: Optional policy invoked on a URL that passed the checks.
         caller_supplied: The URL is an argument of this library's caller, or derives
-            from one, not a member of a fetched document.
+            from one, not a member of a fetched document. It has no default, so
+            every call site states the source.
 
     Raises:
         ConfigurationError: If a caller-supplied URL is rejected.
         McpDiscoveryError: If a document-supplied URL is rejected.
+        OAuthError: As raised by ``url_validator``, unchanged.
     """
     error_cls, kind = _url_fault(caller_supplied=caller_supplied)
     try:
