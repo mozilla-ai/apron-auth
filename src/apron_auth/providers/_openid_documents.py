@@ -82,21 +82,21 @@ def require_url(
     return value
 
 
-def require_openid_issuer(document: dict[str, Any], issuer: str) -> None:
-    """Require an OpenID provider's configuration document to declare ``issuer`` as its own.
+def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
+    """Require an OpenID provider's configuration document to declare ``expected`` as its issuer.
 
     OpenID Connect Discovery 1.0 section 4.3 requires the declared issuer to be identical to the one the document
     was fetched for, and it is compared exactly.
 
     Args:
         document: The decoded configuration document.
-        issuer: The issuer identifier the document must declare.
+        expected: The issuer identifier the document must declare.
 
     Raises:
         OidcDiscoveryError: If the document declares no issuer or a different one.
     """
     try:
-        require_declared_issuer(document, issuer)
+        require_declared_issuer(document, expected)
     except IssuerNotDeclaredError as exc:
         match exc.reason:
             case IssuerRefusalReason.ABSENT:
