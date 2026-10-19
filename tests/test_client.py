@@ -71,7 +71,10 @@ _NOW = 1_700_000_000.0
 
 
 def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the clock the client reads to ``_NOW``."""
+    """Pin the clock the client reads to ``_NOW``.
+
+    NOTE: The stub exposes only ``time.time``, so any other clock the client reads raises in the test.
+    """
     monkeypatch.setattr("apron_auth.client.time", SimpleNamespace(time=lambda: _NOW))
 
 
