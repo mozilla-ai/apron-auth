@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason
+from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
 from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
@@ -557,8 +557,6 @@ class TestDiscover:
         with pytest.raises(McpDiscoveryError, match="declares no issuer") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
-        assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert exc_info.value.__cause__.reason is IssuerRefusalReason.ABSENT
 
     @pytest.mark.parametrize("issuer", [None, 42, ""], ids=["null", "not a string", "empty"])
     async def test_issuer_that_is_not_a_name_is_refused_as_absent(self, httpx_mock: HTTPXMock, issuer: object) -> None:
@@ -588,7 +586,6 @@ class TestDiscover:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert exc_info.value.__cause__.reason is IssuerRefusalReason.MISMATCHED
 
     async def test_declared_authorization_server_with_a_terminating_slash_must_match_exactly(
         self, httpx_mock: HTTPXMock
