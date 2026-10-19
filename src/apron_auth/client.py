@@ -610,10 +610,11 @@ class OAuthClient:
         try:
             result = await handler.revoke(token, self._config)
         except RevocationError as exc:
-            # NOTE: A handler's own error can chain a request that carries the token.
+            # NOTE: A handler's own error can chain a request that carries the token, and its traceback holds the
+            # handler's frames, whose locals carry it too. All three links are dropped.
             exc.__cause__ = None
             exc.__context__ = None
-            raise
+            raise exc.with_traceback(None) from None
         except OAuthError as exc:
             failure_message, failure_kind = str(exc), exc.kind
         except httpx.HTTPError as exc:
@@ -673,10 +674,11 @@ class OAuthClient:
         try:
             return await handler.fetch_identity(material, self._config)
         except IdentityFetchError as exc:
-            # NOTE: A handler's own error can chain a request that carries the token.
+            # NOTE: A handler's own error can chain a request that carries the token, and its traceback holds the
+            # handler's frames, whose locals carry it too. All three links are dropped.
             exc.__cause__ = None
             exc.__context__ = None
-            raise
+            raise exc.with_traceback(None) from None
         except OAuthError as exc:
             failure_message, failure_kind = str(exc), exc.kind
         except httpx.HTTPError as exc:

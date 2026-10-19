@@ -74,11 +74,11 @@ def _linked_errors(error: BaseException) -> list[BaseException]:
 
 
 def _frame_names(error: BaseException) -> list[str]:
-    """Return the function names on an error's own traceback, outermost first."""
+    """Return the qualified function names on an error's own traceback, outermost first."""
     names = []
     tb = error.__traceback__
     while tb is not None:
-        names.append(tb.tb_frame.f_code.co_name)
+        names.append(tb.tb_frame.f_code.co_qualname)
         tb = tb.tb_next
     return names
 
@@ -87,7 +87,7 @@ def _assert_carries_no_secret(error: OAuthError, *secrets: str) -> None:
     # No chain at all: the internal token-endpoint error's traceback would hold the request frame.
     assert error.__cause__ is None
     assert error.__context__ is None
-    assert "_token_request" not in _frame_names(error)
+    assert not any(name.endswith("._token_request") for name in _frame_names(error))
     for linked in _linked_errors(error):
         try:
             request = getattr(linked, "request", None)
@@ -342,6 +342,8 @@ class TestHandlerDomainErrors:
             await client.revoke_token(ACCESS_TOKEN)
 
         assert str(exc_info.value) == "Custom revocation failed"
+        # The handler's frames hold the token, so they must not stay on the error's traceback.
+        assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
     async def test_identity_handler_error_loses_its_chain_and_keeps_its_type(self) -> None:
@@ -365,6 +367,7 @@ class TestHandlerDomainErrors:
             await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Custom identity failed"
+        assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
 
