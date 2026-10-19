@@ -359,10 +359,13 @@ class ProviderConfig(BaseModel, frozen=True):
         if self.provider is None:
             return self
         if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
-            msg = f"disconnect_fully_revokes must match provider {self.provider.display_name}"
+            msg = (
+                f"disconnect_fully_revokes must be {self.provider.disconnect_fully_revokes} "
+                f"for provider {self.provider.display_name}"
+            )
             raise ValueError(msg)
         if self.scope_separator != self.provider.scope_separator:
-            msg = f"scope_separator must match provider {self.provider.display_name}"
+            msg = f"scope_separator must be {self.provider.scope_separator!r} for provider {self.provider.display_name}"
             raise ValueError(msg)
         return self
 

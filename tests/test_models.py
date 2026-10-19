@@ -678,7 +678,7 @@ class TestProviderConfigProvider:
         assert config.provider is Provider.LINEAR
 
     def test_rejects_a_scope_separator_that_contradicts_the_member(self) -> None:
-        with pytest.raises(ValidationError, match="scope_separator must match provider"):
+        with pytest.raises(ValidationError, match="scope_separator must be ',' for provider Linear"):
             ProviderConfig(
                 provider=Provider.LINEAR,
                 client_id="cid",
@@ -688,7 +688,7 @@ class TestProviderConfigProvider:
             )
 
     def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
-        with pytest.raises(ValidationError, match="disconnect_fully_revokes must match provider"):
+        with pytest.raises(ValidationError, match="disconnect_fully_revokes must be True for provider GitHub"):
             ProviderConfig(
                 provider=Provider.GITHUB,
                 client_id="cid",
