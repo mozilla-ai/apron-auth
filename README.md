@@ -219,7 +219,8 @@ accept the ID token in it without a signature check, which is safe
 only for a token the token endpoint returned over TLS, so a `TokenSet`
 reloaded from storage is a type error and raises `ConfigurationError`.
 Persist the fields as before. A stored set comes back as a plain
-`TokenSet`, and `refresh_token` turns it into a fresh one. A model you
+`TokenSet`, and `refresh_token` turns it into a fresh one; when the
+provider issued no refresh token, run authorization again. A model you
 persist must hold a `TokenSet`, not a `FreshTokenSet`: reloading a
 `FreshTokenSet` field from storage raises `ConfigurationError`. The fresh
 set is narrowed to an `IdentityMaterial` — exposing only the access
@@ -765,7 +766,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
 - `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
 - `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
-- `exchange_code` and `refresh_token` return a `FreshTokenSet`, and `fetch_identity` accepts only that type. A `TokenSet` reloaded from storage raises `ConfigurationError`; call `refresh_token` and pass its result instead. A model you persist must hold a `TokenSet`, because a `FreshTokenSet` field cannot be reloaded.
+- `exchange_code` and `refresh_token` return a `FreshTokenSet`, and `fetch_identity` accepts only that type. A `TokenSet` reloaded from storage raises `ConfigurationError`; call `refresh_token` and pass its result, or run authorization again when the provider issued no refresh token. A model you persist must hold a `TokenSet`, because a `FreshTokenSet` field cannot be reloaded.
 - A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
