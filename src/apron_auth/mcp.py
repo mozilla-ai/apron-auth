@@ -644,8 +644,10 @@ async def _fetch_first_metadata(
     is logged at debug with a non-sensitive reason. Raises McpDiscoveryError
     describing ``what`` when no candidate succeeds.
     """
-    # The last candidate's failure decides the kind, so one unreachable host does not hide a later rejection.
+    # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
+    # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
     kind = FailureKind.REFUSED
+    retryable_kind: FailureKind | None = None
     for url in candidate_urls:
         _validate_url(url, url_validator)
         async with discovery_client(url, transport_factory) as client:
@@ -659,10 +661,12 @@ async def _fetch_first_metadata(
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
                 kind = transport.kind
+                retryable_kind = retryable_kind or (kind if kind.retryable else None)
                 continue
             if response.status_code != 200:
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
                 kind = status_failure(response.status_code).kind
+                retryable_kind = retryable_kind or (kind if kind.retryable else None)
                 continue
             try:
                 payload = decode_json_body(response)
@@ -675,4 +679,4 @@ async def _fetch_first_metadata(
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
             kind = FailureKind.REFUSED
     msg = f"could not fetch {what}"
-    raise McpDiscoveryError(msg, kind=kind)
+    raise McpDiscoveryError(msg, kind=retryable_kind or kind)

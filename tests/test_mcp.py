@@ -471,6 +471,24 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com")
         assert meta.authorize_url == "https://auth.example.com/authorize"
 
+    async def test_an_outage_on_one_candidate_makes_discovery_retryable(self, httpx_mock: HTTPXMock) -> None:
+        """A server error on the primary metadata URL is not hidden by the fallback's usual 404."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=503)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
+    async def test_not_found_on_every_candidate_is_a_rejection(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REJECTED
+
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(
