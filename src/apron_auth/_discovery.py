@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import httpx
 
-from apron_auth.errors import FailureKind, OAuthError
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
@@ -23,9 +23,32 @@ CONFIDENTIAL_AUTH_METHODS = (
 DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
-def require_declared_issuer(
-    document: Mapping[str, object], expected: str, what: str, error_cls: type[OAuthError]
-) -> None:
+class IssuerRefusalReason(Enum):
+    """Each member is one issuer condition a metadata document can fail."""
+
+    # The document names no issuer, or names one that is not a non-empty string.
+    ABSENT = auto()
+    # The document names an issuer other than the one it was fetched for.
+    MISMATCHED = auto()
+
+
+class IssuerNotDeclaredError(Exception):
+    """Internal refusal of a metadata document that does not declare the issuer it was fetched for.
+
+    NOTE: This is not one of the library's errors, so each caller must wrap it in the error for its own phase.
+    """
+
+    def __init__(self, reason: IssuerRefusalReason) -> None:
+        """Create the refusal.
+
+        Args:
+            reason: Which issuer condition the document failed.
+        """
+        super().__init__(reason.name)
+        self.reason = reason
+
+
+def require_declared_issuer(document: Mapping[str, object], expected: str) -> None:
     """Check that a metadata document declares ``expected`` as its issuer.
 
     RFC 8414 section 3.3 and OpenID Connect Discovery 1.0 section 4.3 both require the declared issuer
@@ -35,19 +58,15 @@ def require_declared_issuer(
     Args:
         document: The decoded metadata document.
         expected: The issuer identifier the document must declare.
-        what: The document's name for the error message, such as ``"OpenID provider configuration"``.
-        error_cls: The error raised for a document that fails the check.
 
     Raises:
-        OAuthError: An instance of ``error_cls``, if the document declares no issuer or a different one.
+        IssuerNotDeclaredError: If the document declares no issuer or a different one, naming which in ``reason``.
     """
     issuer = document.get("issuer")
     if not isinstance(issuer, str) or not issuer:
-        msg = f"{what} declares no issuer"
-        raise error_cls(msg, kind=FailureKind.REFUSED)
+        raise IssuerNotDeclaredError(IssuerRefusalReason.ABSENT)
     if issuer != expected:
-        msg = f"{what} declares a different issuer than the one it was fetched for"
-        raise error_cls(msg, kind=FailureKind.REFUSED)
+        raise IssuerNotDeclaredError(IssuerRefusalReason.MISMATCHED)
 
 
 def discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:

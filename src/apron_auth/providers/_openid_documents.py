@@ -1,14 +1,19 @@
-"""Fetch an OpenID provider's configuration document and check the URLs it publishes."""
+"""Fetch an OpenID provider's configuration document and check the issuer and the URLs it publishes."""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import urlparse
 
 import httpx
 
-from apron_auth._discovery import discovery_client
+from apron_auth._discovery import (
+    IssuerNotDeclaredError,
+    IssuerRefusalReason,
+    discovery_client,
+    require_declared_issuer,
+)
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, OidcDiscoveryError
@@ -75,6 +80,32 @@ def require_url(
         msg = f"OpenID {field} must not carry userinfo"
         raise OidcDiscoveryError(msg, kind=kind)
     return value
+
+
+def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
+    """Require an OpenID provider's configuration document to declare ``expected`` as its issuer.
+
+    OpenID Connect Discovery 1.0 section 4.3 requires the declared issuer to be identical to the one the document
+    was fetched for, and it is compared exactly.
+
+    Args:
+        document: The decoded configuration document.
+        expected: The issuer identifier the document must declare.
+
+    Raises:
+        OidcDiscoveryError: If the document declares no issuer or a different one.
+    """
+    try:
+        require_declared_issuer(document, expected)
+    except IssuerNotDeclaredError as exc:
+        match exc.reason:
+            case IssuerRefusalReason.ABSENT:
+                msg = "OpenID provider configuration declares no issuer"
+            case IssuerRefusalReason.MISMATCHED:
+                msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
+            case _:
+                assert_never(exc.reason)
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
 def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:

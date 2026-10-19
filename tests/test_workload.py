@@ -12,6 +12,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     TokenExpiredError,
     TokenValidationError,
@@ -226,10 +227,11 @@ class TestOutages:
         """A configuration document naming another issuer is not used."""
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": "https://other.example.com", "jwks_uri": JWKS_URL})
 
-        with pytest.raises(IdentityFetchError) as caught:
+        with pytest.raises(IdentityFetchError, match="declares a different issuer") as caught:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)
+        assert caught.value.kind is FailureKind.REFUSED
 
     async def test_a_document_without_a_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A configuration document that names no key set cannot verify anything."""

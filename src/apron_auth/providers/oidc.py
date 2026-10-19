@@ -44,7 +44,7 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, require_declared_issuer, str_list
+from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
@@ -68,7 +68,7 @@ from apron_auth.models import (
 )
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
-from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -137,7 +137,7 @@ async def discover(
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
 
-    A document that names an issuer other than ``issuer`` is refused (OpenID Connect Discovery 1.0, section 4.3).
+    A document that does not declare ``issuer`` as its own is refused (OpenID Connect Discovery 1.0, section 4.3).
     Every later ``iss`` check therefore compares against an issuer the caller chose.
 
     Args:
@@ -159,7 +159,7 @@ async def discover(
     Raises:
         OidcDiscoveryError: If the issuer is malformed, or a URL is not ``https`` and ``allow_insecure_http`` is unset.
             It is also raised if the document cannot be fetched or parsed, omits a required endpoint,
-            names no signing key set, or names an issuer other than ``issuer``.
+            names no signing key set, or does not declare ``issuer`` as its own.
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
@@ -167,7 +167,7 @@ async def discover(
         url = document_url
     document = await fetch_document(url, transport_factory)
 
-    require_declared_issuer(document, issuer, "OpenID provider configuration", OidcDiscoveryError)
+    require_openid_issuer(document, issuer)
 
     authorize_url = document.get("authorization_endpoint")
     token_url = document.get("token_endpoint")

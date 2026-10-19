@@ -20,13 +20,20 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, assert_never
 from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
+from apron_auth._discovery import (
+    CONFIDENTIAL_AUTH_METHODS,
+    IssuerNotDeclaredError,
+    IssuerRefusalReason,
+    discovery_client,
+    require_declared_issuer,
+    str_list,
+)
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
@@ -84,7 +91,7 @@ async def discover(
     Raises:
         McpDiscoveryError: If a URL is rejected, no metadata document can be
             fetched, a required field is absent, or the authorization server
-            metadata names an issuer other than the server it was fetched from.
+            metadata does not declare the server it was fetched from as its issuer.
             The first document fetched is authoritative, so a mismatched issuer
             ends discovery rather than trying the next candidate URL.
     """
@@ -116,7 +123,17 @@ async def discover(
         transport_factory,
         "authorization server metadata",
     )
-    require_declared_issuer(server_meta, auth_server, "authorization server metadata", McpDiscoveryError)
+    try:
+        require_declared_issuer(server_meta, auth_server)
+    except IssuerNotDeclaredError as exc:
+        match exc.reason:
+            case IssuerRefusalReason.ABSENT:
+                msg = "authorization server metadata declares no issuer"
+            case IssuerRefusalReason.MISMATCHED:
+                msg = "authorization server metadata declares a different issuer than the one it was fetched for"
+            case _:
+                assert_never(exc.reason)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
     authorize_url = server_meta.get("authorization_endpoint")
     token_url = server_meta.get("token_endpoint")
