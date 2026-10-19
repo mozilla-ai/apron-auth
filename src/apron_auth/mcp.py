@@ -597,11 +597,9 @@ def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]
     """Return the error class and kind for a URL this library will not fetch, by where the URL came from.
 
     A URL this library's caller passed, or one derived from it, cannot work as
-    passed. A URL a fetched document named is refused.
-
-    NOTE: Only discovery reads a URL out of a document, so the document's error is
-    the discovery error. A phase that reads one from a document of its own needs
-    its own branch here.
+    passed. A URL a fetched document named is refused, and the document's error is
+    the discovery error, because discovery is the phase that reads a URL out of a
+    document.
     """
     if caller_supplied:
         return ConfigurationError, FailureKind.CONFIGURATION
