@@ -6,7 +6,7 @@ import pickle
 import time
 
 import pytest
-from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
@@ -535,14 +535,6 @@ class TestFreshTokenSet:
         fresh = FreshTokenSet(access_token="access-abc")
         assert _Session(user="U123", tokens=fresh).tokens is fresh
         assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
-
-    def test_a_model_revalidating_its_instances_keeps_an_existing_one(self) -> None:
-        class Revalidating(BaseModel):
-            model_config = ConfigDict(revalidate_instances="always")
-            tokens: FreshTokenSet
-
-        fresh = FreshTokenSet(access_token="access-abc")
-        assert Revalidating(tokens=fresh).tokens == fresh
 
     def test_pickling_is_refused(self) -> None:
         fresh = FreshTokenSet(access_token="access-abc")

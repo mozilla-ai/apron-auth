@@ -475,11 +475,11 @@ class FreshTokenSet(TokenSet):
     An identity handler may accept the ID token in it without a signature check,
     which is safe only for a token the token endpoint returned over TLS.
     Deserializing one is refused, through this model's own entry points and as a field of another model,
-    and pickling one is refused, so a persisted token set reloads as a plain :class:`TokenSet`,
-    and a refresh produces a fresh one again.
+    so a persisted token set reloads as a plain :class:`TokenSet`, and a refresh produces a fresh one again.
+    Pickling one is refused, because freshness does not survive being stored.
 
     NOTE: Keyword construction is how this library issues one.
-    Building one by hand, copying one with replaced fields, or validating this type directly asserts freshness.
+    A caller who builds, copies or validates one directly must establish that freshness itself.
     """
 
     def __reduce__(self) -> NoReturn:
@@ -574,10 +574,7 @@ class IdentityMaterial(BaseModel, frozen=True):
     def from_token_set(cls, tokens: FreshTokenSet) -> IdentityMaterial:
         """Narrow a :class:`FreshTokenSet` to the material identity handlers may use.
 
-        The ID token is read from the token-endpoint response, where
-        providers return it as the ``id_token`` field that lands on
-        :attr:`TokenSet.metadata`. The refresh token and caller context
-        are intentionally not carried over.
+        The refresh token and caller context are intentionally not carried over.
 
         Args:
             tokens: The fresh token set to narrow.
