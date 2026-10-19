@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -710,6 +711,17 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config(), state_store=store)
         tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
         assert tokens.access_token == "access-abc"
+
+    async def test_exchange_refuses_a_pending_state_whose_age_is_not_a_number(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=math.nan)
+            )
+        assert httpx_mock.get_requests() == []
 
     async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch

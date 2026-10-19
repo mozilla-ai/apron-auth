@@ -435,14 +435,15 @@ class OAuthClient:
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 the store holds no pending state for it because it is invalid, expired, or already consumed,
-                or the pending state is older than ``max_pending_age_seconds``.
+                or the pending state is older than ``max_pending_age_seconds`` or its age cannot be measured.
             TokenExchangeError: If the token endpoint rejects the exchange.
                 It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
-        if time.time() - pending.created_at > self._config.max_pending_age_seconds:
-            msg = "The pending authorization request is older than the maximum age"
+        # NOTE: A NaN age compares false against every limit, so the age must prove itself within the limit.
+        if not time.time() - pending.created_at <= self._config.max_pending_age_seconds:
+            msg = "The pending authorization request is older than the maximum age, or its age cannot be measured"
             raise StateError(msg)
 
         if not pending.nonce and self._requests_openid():
