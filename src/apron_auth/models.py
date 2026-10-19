@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from enum import StrEnum
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
@@ -46,6 +47,54 @@ class ApplicationType:
     NATIVE = "native"
 
 
+class Provider(StrEnum):
+    """The OAuth providers with a built-in preset, each with the facts that differ between them.
+
+    A member's value is its module name under ``apron_auth.providers``.
+
+    Attributes:
+        display_name: The provider's name as it appears in messages and documentation.
+        host_suffixes: The hosts, matched on a label boundary, that both OAuth endpoints of a config
+            must be on for the config to be this provider's.
+        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
+            See :attr:`ProviderConfig.disconnect_fully_revokes`.
+        scope_separator: The string the provider's scope parameter is joined with.
+    """
+
+    display_name: str
+    host_suffixes: tuple[str, ...]
+    disconnect_fully_revokes: bool
+    scope_separator: str
+
+    def __new__(
+        cls,
+        value: str,
+        display_name: str,
+        host_suffixes: tuple[str, ...],
+        disconnect_fully_revokes: bool,
+        scope_separator: str,
+    ) -> Provider:
+        """Create a member from its module name and the facts that differ between providers."""
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member.display_name = display_name
+        member.host_suffixes = host_suffixes
+        member.disconnect_fully_revokes = disconnect_fully_revokes
+        member.scope_separator = scope_separator
+        return member
+
+    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ")
+    GITHUB = ("github", "GitHub", ("github.com",), True, " ")
+    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ")
+    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ")
+    LINEAR = ("linear", "Linear", ("linear.app",), False, ",")
+    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ")
+    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ")
+    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ")
+    SLACK = ("slack", "Slack", ("slack.com",), False, ",")
+    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ")
+
+
 class ScopeMetadata(BaseModel, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
 
@@ -83,6 +132,8 @@ class ProviderConfig(BaseModel, frozen=True):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Attributes:
+        provider: The built-in preset that built this config.
+            ``None`` for a hand-built config, and for a generic OpenID or MCP config.
         extra_params: Fixed parameters added to every authorization request.
             A reserved parameter is refused at construction, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
@@ -178,6 +229,7 @@ class ProviderConfig(BaseModel, frozen=True):
             Must be a positive finite number. Defaults to 600 (ten minutes).
     """
 
+    provider: Provider | None = None
     client_id: str
     client_secret: SecretStr | None = None
     authorize_url: str
@@ -674,10 +726,11 @@ class IdentityProfile(BaseModel, frozen=True):
     example).
 
     Attributes:
-        provider: Name of the OAuth provider that issued this profile
-            (e.g. ``"google"``, ``"github"``). Populated by each
-            provider's ``fetch_identity`` implementation. Used by
-            :meth:`identity_key` to produce a ``(provider, subject)``
+        provider: The OAuth provider that issued this profile.
+            A built-in handler sets its :class:`Provider` member.
+            A generic handler sets a string that names its provider, such as ``oidc:<issuer>``.
+            Both compare equal to their string form.
+            Used by :meth:`identity_key` to produce a ``(provider, subject)``
             tuple suitable for keying a consumer's user table without
             cross-provider collision.
         subject: Provider user identifier when available.
@@ -694,7 +747,7 @@ class IdentityProfile(BaseModel, frozen=True):
         raw: Full provider response payload(s) for advanced callers.
     """
 
-    provider: str | None = None
+    provider: Provider | str | None = None
     subject: str | None = None
     email: str | None = None
     email_verified: bool | None = None

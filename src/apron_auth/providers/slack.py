@@ -38,7 +38,7 @@ from pydantic import SecretStr
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
@@ -52,9 +52,6 @@ _SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
 
 # The suffix of a workspace host, such as acme.slack.com.
 _SLACK_HOST_SUFFIX = ".slack.com"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
 
 # The error code Slack returns when the token lacks a scope the method needs.
 _SLACK_MISSING_SCOPE_ERROR = "missing_scope"
@@ -272,7 +269,7 @@ class SlackIdentityHandler:
             )
 
         return IdentityProfile(
-            provider="slack",
+            provider=Provider.SLACK,
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
@@ -405,7 +402,7 @@ def _build_workspace_profile_from_auth_test(payload: dict[str, Any]) -> Identity
                 raw=payload,
             ),
         )
-    return IdentityProfile(provider="slack", tenancies=tenancies, raw=payload)
+    return IdentityProfile(provider=Provider.SLACK, tenancies=tenancies, raw=payload)
 
 
 def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> IdentityProfile:
@@ -440,7 +437,7 @@ def _build_workspace_profile_from_team_info(payload: dict[str, Any]) -> Identity
                 raw=team_payload,
             ),
         )
-    return IdentityProfile(provider="slack", tenancies=tenancies, raw=payload)
+    return IdentityProfile(provider=Provider.SLACK, tenancies=tenancies, raw=payload)
 
 
 class SlackRevocationHandler:
@@ -521,7 +518,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Slack identity handler when both OAuth hosts are Slack's, else
         ``None``.
     """
-    if not oauth_hosts_match(config, _SLACK_IDENTITY_HOST_SUFFIXES):
+    if not oauth_hosts_match(config, Provider.SLACK.host_suffixes):
         return None
     return SlackIdentityHandler()
 
@@ -574,7 +571,7 @@ def preset(
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
         raise ValueError(msg)
 
-    scope_separator = ","
+    scope_separator = Provider.SLACK.scope_separator
 
     merged_extra: dict[str, str] = dict(extra_params or {})
     if user_scopes:
@@ -587,6 +584,7 @@ def preset(
         required_scope_families.append(list(user_scopes))
 
     config = ProviderConfig(
+        provider=Provider.SLACK,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://slack.com/oauth/v2/authorize",
@@ -596,7 +594,7 @@ def preset(
         scopes=scopes,
         scope_separator=scope_separator,
         extra_params=merged_extra,
-        disconnect_fully_revokes=False,
+        disconnect_fully_revokes=Provider.SLACK.disconnect_fully_revokes,
         required_scope_families=required_scope_families,
     )
     return config, SlackRevocationHandler()

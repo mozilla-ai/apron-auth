@@ -18,7 +18,7 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import RevocationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
@@ -89,9 +89,6 @@ _GITHUB_API_HEADERS = {
 
 # The endpoint that lists the user's email addresses with their verified flags.
 _GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_GITHUB_IDENTITY_HOST_SUFFIXES = ("github.com",)
 
 # The endpoint that returns the signed-in user's profile.
 _GITHUB_USER_URL = "https://api.github.com/user"
@@ -173,7 +170,7 @@ class GitHubIdentityHandler:
         # apron-auth ever supports GitHub Apps as a distinct provider,
         # that installation should populate ``tenancies``.
         return IdentityProfile(
-            provider="github",
+            provider=Provider.GITHUB,
             subject=str(subject) if subject is not None else None,
             email=email,
             email_verified=email_verified,
@@ -298,7 +295,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A GitHub identity handler when the config's OAuth hosts are
         GitHub's, else ``None``.
     """
-    if oauth_hosts_match(config, _GITHUB_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.GITHUB.host_suffixes):
         return GitHubIdentityHandler()
     return None
 
@@ -337,6 +334,7 @@ def preset(
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
+        provider=Provider.GITHUB,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://github.com/login/oauth/authorize",
@@ -345,7 +343,7 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=extra_params or {},
-        disconnect_fully_revokes=True,
+        disconnect_fully_revokes=Provider.GITHUB.disconnect_fully_revokes,
         scope_metadata=BASE_SCOPE_METADATA,
         implicit_scopes=IMPLICIT_SCOPES,
     )

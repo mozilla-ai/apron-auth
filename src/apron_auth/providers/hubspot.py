@@ -39,6 +39,7 @@ from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
+    Provider,
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
@@ -68,9 +69,6 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_HUBSPOT_IDENTITY_HOST_SUFFIXES = ("api.hubapi.com", "app.hubspot.com")
 
 # The token introspection endpoint, which takes the access token as the last path segment.
 _HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX = "https://api.hubapi.com/oauth/v1/access-tokens/"
@@ -145,7 +143,7 @@ class HubSpotIdentityHandler:
             )
 
         return IdentityProfile(
-            provider="hubspot",
+            provider=Provider.HUBSPOT,
             subject=str(user_id) if user_id is not None else None,
             email=payload.get("user"),
             email_verified=None,
@@ -275,7 +273,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A HubSpot identity handler when both OAuth hosts are HubSpot's,
         else ``None``.
     """
-    if oauth_hosts_match(config, _HUBSPOT_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.HUBSPOT.host_suffixes):
         return HubSpotIdentityHandler()
     return None
 
@@ -320,6 +318,7 @@ def preset(
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
+        provider=Provider.HUBSPOT,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://app.hubspot.com/oauth/authorize",
@@ -328,6 +327,7 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+        disconnect_fully_revokes=Provider.HUBSPOT.disconnect_fully_revokes,
         extra_params=extra_params or {},
         scope_metadata=BASE_SCOPE_METADATA,
     )

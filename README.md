@@ -208,7 +208,7 @@ tokens = await client.exchange_code(
     pending_state=pending_state,
 )
 identity = await client.fetch_identity(tokens)
-print(identity.provider)        # "google", "github", etc.
+print(identity.provider)        # Provider.GOOGLE, Provider.GITHUB, etc.; equal to "google", "github"
 print(identity.email)
 print(identity.email_verified)
 ```
@@ -680,6 +680,8 @@ A matching audience proves the token was minted for your server, not that the wo
 The configuration document and key set URLs are fetched through `transport_factory`, as in [SSRF safety](#ssrf-safety). The issuer is the caller's, but the key set URL comes from the issuer's document.
 
 ## Provider presets
+
+Every preset sets `ProviderConfig.provider` to its `Provider` member, which carries the provider's `disconnect_fully_revokes` value and scope separator. A hand-built, generic OpenID, or MCP config leaves it `None`.
 
 | Provider   | Preset                   | Revocation             | `disconnect_fully_revokes` |
 |------------|--------------------------|------------------------|----------------------------|

@@ -13,7 +13,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
@@ -22,9 +22,6 @@ from apron_auth.scopes import parse_scope
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
 
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_TYPEFORM_IDENTITY_HOST_SUFFIXES = ("api.typeform.com",)
 
 # The scope the userinfo endpoint requires.
 _TYPEFORM_USERINFO_SCOPE = "accounts:read"
@@ -91,7 +88,7 @@ class TypeformIdentityHandler:
         # ``workspaces:write`` scopes — across every workspace the
         # user can see, so there is no normalized tenancy to populate.
         return IdentityProfile(
-            provider="typeform",
+            provider=Provider.TYPEFORM,
             subject=None,
             email=payload.get("email"),
             email_verified=None,
@@ -113,7 +110,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Typeform identity handler when the config's OAuth hosts are
         Typeform's, else ``None``.
     """
-    if oauth_hosts_match(config, _TYPEFORM_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.TYPEFORM.host_suffixes):
         return TypeformIdentityHandler()
     return None
 
@@ -149,6 +146,7 @@ def preset(
         exposes no revocation endpoint.
     """
     config = ProviderConfig(
+        provider=Provider.TYPEFORM,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://api.typeform.com/oauth/authorize",
@@ -156,6 +154,7 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=scopes,
         use_pkce=False,
+        disconnect_fully_revokes=Provider.TYPEFORM.disconnect_fully_revokes,
         extra_params=extra_params or {},
     )
     return config, None
