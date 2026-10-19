@@ -12,6 +12,7 @@ import pytest
 from joserfc import jwk, jws
 from pytest_httpx import HTTPXMock
 
+from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -179,8 +180,10 @@ class TestDiscover:
         """
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(issuer="https://attacker.example"))
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover(ISSUER)
+        assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
+        assert "different issuer" in str(exc_info.value.__cause__)
 
     async def test_refuses_a_document_that_differs_only_by_a_trailing_slash(self, httpx_mock: HTTPXMock):
         """Two issuers differing by a slash are two different strings downstream."""
@@ -195,8 +198,10 @@ class TestDiscover:
         del payload["issuer"]
         httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover(ISSUER)
+        assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
+        assert "declares no issuer" in str(exc_info.value.__cause__)
 
     @pytest.mark.parametrize("value", [None, ""])
     async def test_refuses_a_document_without_a_signing_key_set(self, httpx_mock: HTTPXMock, value: str | None) -> None:

@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
 from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
@@ -553,8 +554,10 @@ class TestDiscover:
         del payload["issuer"]
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover("https://mcp.example.com")
+        assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
+        assert "declares no issuer" in str(exc_info.value.__cause__)
 
     @pytest.mark.parametrize("issuer", [None, 42, ""], ids=["null", "not a string", "empty"])
     async def test_issuer_that_is_not_a_name_is_refused_as_absent(self, httpx_mock: HTTPXMock, issuer: object) -> None:
@@ -580,8 +583,10 @@ class TestDiscover:
         """The issuer must be identical to the identifier the metadata URL was built from, with no normalization."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover("https://mcp.example.com")
+        assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
+        assert "different issuer" in str(exc_info.value.__cause__)
 
     async def test_declared_authorization_server_with_a_terminating_slash_must_match_exactly(
         self, httpx_mock: HTTPXMock
