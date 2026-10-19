@@ -417,8 +417,8 @@ class OAuthClient:
 
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
         A client without one takes ``pending_state``.
-        Either way, a ``state`` that does not match the pending state, or a pending state older than the
-        configured maximum age, is refused before the code is redeemed.
+        Either way, a ``state`` that does not match the pending state,
+        or a pending state older than the configured maximum age, is refused before the code is redeemed.
         When the authorization request sent a nonce, the response must carry an ID token with that nonce,
         or no tokens are returned.
 
@@ -460,7 +460,9 @@ class OAuthClient:
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
                 the store holds no pending state for it because it is invalid, expired, or already consumed,
-                or the pending state is older than ``max_pending_age_seconds`` or carries no usable creation time.
+                or the pending state is older than ``max_pending_age_seconds``,
+                carries no usable creation time,
+                or was created further ahead of this client's clock than the allowed difference.
             TokenExchangeError: If the token endpoint rejects the exchange.
                 It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
