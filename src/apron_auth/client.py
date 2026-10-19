@@ -213,15 +213,15 @@ def _check_nonce(claims: Mapping[str, Any], nonce: str) -> None:
 
 
 def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
-    """Refuse a pending authorization request whose creation time this client cannot treat as current.
+    """Refuse a pending authorization request whose creation time is not current against the system clock.
 
     Args:
-        pending: The pending state resolved for the callback.
+        pending: The pending authorization request to check.
         max_age: The age, in seconds, past which a pending authorization request is refused.
 
     Raises:
-        StateError: If the creation time is not a finite number, lies further ahead of this clock than the
-            allowed difference, or is older than ``max_age``.
+        StateError: If the creation time is not a finite number, lies further ahead of the system clock
+            than the allowed clock difference, or is older than ``max_age``.
     """
     created_at = _finite_number(pending.created_at)
     if created_at is None:
