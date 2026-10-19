@@ -1,4 +1,4 @@
-"""Fetch an OpenID provider's configuration document and check the URLs it publishes."""
+"""Fetch an OpenID provider's configuration document and check the issuer and the URLs it publishes."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def require_url(
     return value
 
 
-def require_document_issuer(document: dict[str, Any], issuer: str) -> None:
+def require_openid_issuer(document: dict[str, Any], issuer: str) -> None:
     """Require an OpenID provider's configuration document to declare ``issuer`` as its own.
 
     OpenID Connect Discovery 1.0 section 4.3 requires the declared issuer to be identical to the one the document

@@ -30,7 +30,7 @@ from apron_auth.errors import (
     TokenValidationReason,
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
-from apron_auth.providers._openid_documents import fetch_document, optional_url, require_document_issuer, require_url
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
 
 if TYPE_CHECKING:
@@ -207,7 +207,7 @@ class WorkloadTokenVerifier:
                 raise IdentityFetchError(message, kind=kind)
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
-                require_document_issuer(document, self._issuer)
+                require_openid_issuer(document, self._issuer)
                 jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
                 if jwks_url is None:
                     msg = "OpenID provider configuration names no signing key set"

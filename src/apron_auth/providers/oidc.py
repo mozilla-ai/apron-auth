@@ -68,7 +68,7 @@ from apron_auth.models import (
 )
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
-from apron_auth.providers._openid_documents import fetch_document, optional_url, require_document_issuer, require_url
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -167,7 +167,7 @@ async def discover(
         url = document_url
     document = await fetch_document(url, transport_factory)
 
-    require_document_issuer(document, issuer)
+    require_openid_issuer(document, issuer)
 
     authorize_url = document.get("authorization_endpoint")
     token_url = document.get("token_endpoint")
