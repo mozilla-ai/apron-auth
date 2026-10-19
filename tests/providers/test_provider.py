@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 from types import ModuleType
 
 import pytest
 
+from apron_auth import providers as providers_pkg
 from apron_auth.models import IdentityProfile, Provider, ProviderConfig
 from apron_auth.providers import (
     atlassian,
@@ -50,6 +53,21 @@ MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str]] = {
 }
 
 
+# ``oidc`` presets any OpenID provider rather than one named provider, so it has no member.
+_GENERIC_MODULE_NAMES = frozenset({"oidc"})
+
+
+def _named_provider_module_names() -> list[str]:
+    names = []
+    for info in pkgutil.iter_modules(providers_pkg.__path__):
+        if info.name.startswith("_") or info.name in _GENERIC_MODULE_NAMES:
+            continue
+        module = importlib.import_module(f"{providers_pkg.__name__}.{info.name}")
+        if callable(getattr(module, "preset", None)):
+            names.append(info.name)
+    return sorted(names)
+
+
 def _preset_config(module: ModuleType) -> ProviderConfig:
     config, _ = module.preset(
         client_id="cid",
@@ -64,7 +82,17 @@ def test_members_are_ordered_a_to_z() -> None:
     assert names == sorted(names)
 
 
-def test_every_built_in_provider_module_has_a_member() -> None:
+def test_the_named_provider_modules_are_exactly_the_members() -> None:
+    discovered = set(_named_provider_module_names())
+    members = {provider.value for provider in Provider}
+    assert discovered == members, (
+        "A module under apron_auth.providers that presets one named provider needs a Provider "
+        f"member whose value is the module name. Modules with no member: {sorted(discovered - members)}. "
+        f"Members with no module: {sorted(members - discovered)}."
+    )
+
+
+def test_the_fact_tables_cover_every_member() -> None:
     assert set(MODULES) == set(Provider)
     assert set(MODULE_FACTS) == set(Provider)
 
