@@ -178,8 +178,6 @@ def preset(
         revocation_url="https://api.linear.app/oauth/revoke",
         redirect_uri=redirect_uri,
         scopes=scopes,
-        scope_separator=Provider.LINEAR.scope_separator,
-        disconnect_fully_revokes=Provider.LINEAR.disconnect_fully_revokes,
         extra_params=extra_params or {},
     )
     return config, StandardRevocationHandler()

@@ -154,8 +154,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=scopes,
         use_pkce=False,
-        scope_separator=Provider.TYPEFORM.scope_separator,
-        disconnect_fully_revokes=Provider.TYPEFORM.disconnect_fully_revokes,
         extra_params=extra_params or {},
     )
     return config, None

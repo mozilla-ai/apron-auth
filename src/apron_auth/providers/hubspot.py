@@ -327,8 +327,6 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
-        scope_separator=Provider.HUBSPOT.scope_separator,
-        disconnect_fully_revokes=Provider.HUBSPOT.disconnect_fully_revokes,
         extra_params=extra_params or {},
         scope_metadata=BASE_SCOPE_METADATA,
     )

@@ -348,6 +348,31 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="before")
+    @classmethod
+    def _take_provider_facts_from_member(cls, data: Any) -> Any:
+        """Fill the facts a provider member states, for a config that names one and leaves them out.
+
+        The member is the one statement of a provider's facts, so a config that names it need not
+        repeat them. A value given explicitly is left alone, and the check after this one refuses
+        one that contradicts the member.
+
+        Args:
+            data: The raw input, which is a mapping when the config is built from keywords or JSON.
+
+        Returns:
+            The input, with each stated fact filled in where it was left out.
+        """
+        if not isinstance(data, dict):
+            return data
+        try:
+            member = Provider(data["provider"])
+        except (KeyError, ValueError):
+            return data
+        for field in ("disconnect_fully_revokes", "scope_separator"):
+            data.setdefault(field, getattr(member, field))
+        return data
+
     @model_validator(mode="after")
     def _provider_facts_match_member(self) -> ProviderConfig:
         """Reject a config whose per-provider facts contradict its provider.

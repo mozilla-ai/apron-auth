@@ -4,10 +4,12 @@ import copy
 import math
 import pickle
 import time
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from apron_auth import providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
@@ -678,6 +680,7 @@ class TestProviderConfigProvider:
         assert config.provider is Provider.LINEAR
 
     def test_rejects_a_scope_separator_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
         with pytest.raises(ValidationError, match="scope_separator must be ',' for provider Linear, got ' '"):
             ProviderConfig(
                 provider=Provider.LINEAR,
@@ -685,9 +688,11 @@ class TestProviderConfigProvider:
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
                 authorize_url="https://linear.app/oauth/authorize",
                 token_url="https://api.linear.app/oauth/token",
+                scope_separator=" ",
             )
 
     def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
         with pytest.raises(
             ValidationError, match="disconnect_fully_revokes must be True for provider GitHub, got False"
         ):
@@ -697,6 +702,7 @@ class TestProviderConfigProvider:
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
                 authorize_url="https://github.com/login/oauth/authorize",
                 token_url="https://github.com/login/oauth/access_token",
+                disconnect_fully_revokes=False,
             )
 
 
@@ -1012,3 +1018,64 @@ class TestOAuthPendingState:
         )
         with pytest.raises(ValidationError):
             state.state = "other"
+
+
+class TestProviderFactsAreDerived:
+    """Test that a member states its facts once and a config does not restate them."""
+
+    def test_a_named_provider_takes_its_facts_from_the_member(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            provider=Provider.LINEAR,
+        )
+        assert config.scope_separator == Provider.LINEAR.scope_separator
+        assert config.disconnect_fully_revokes is Provider.LINEAR.disconnect_fully_revokes
+
+    def test_a_config_with_no_provider_keeps_the_field_defaults(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+        )
+        assert config.scope_separator == " "
+        assert config.disconnect_fully_revokes is False
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("scope_separator", " "), ("disconnect_fully_revokes", True)],
+    )
+    def test_a_value_that_contradicts_the_member_is_still_refused(self, field: str, value: object) -> None:
+        with pytest.raises(ValidationError, match="Linear"):
+            ProviderConfig(
+                client_id="c",
+                client_secret=SecretStr("s"),
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+                provider=Provider.LINEAR,
+                **{field: value},
+            )
+
+    def test_a_value_that_agrees_with_the_member_is_accepted(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            provider=Provider.LINEAR,
+            scope_separator=",",
+        )
+        assert config.scope_separator == ","
+
+    def test_no_preset_restates_a_fact_the_member_states(self) -> None:
+        """A preset names its member, so restating a fact would be a second statement of it."""
+        restated = [
+            f"{path.name}:{number}"
+            for path in (Path(providers.__file__).parent).glob("*.py")
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+            if ("scope_separator=Provider." in line or "disconnect_fully_revokes=Provider." in line)
+        ]
+        assert restated == []

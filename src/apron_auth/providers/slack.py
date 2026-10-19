@@ -593,9 +593,7 @@ def preset(
         revocation_url="https://slack.com/api/auth.revoke",
         redirect_uri=redirect_uri,
         scopes=scopes,
-        scope_separator=scope_separator,
         extra_params=merged_extra,
-        disconnect_fully_revokes=Provider.SLACK.disconnect_fully_revokes,
         required_scope_families=required_scope_families,
     )
     return config, SlackRevocationHandler()

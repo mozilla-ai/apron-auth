@@ -569,8 +569,6 @@ def preset(
         token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
-        scope_separator=Provider.MICROSOFT.scope_separator,
-        disconnect_fully_revokes=Provider.MICROSOFT.disconnect_fully_revokes,
         extra_params=defaults,
         scope_metadata=BASE_SCOPE_METADATA,
         can_assert_domain_ownership=True,

@@ -301,7 +301,5 @@ def preset(
         scopes=scopes,
         token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
         extra_params=defaults,
-        scope_separator=Provider.NOTION.scope_separator,
-        disconnect_fully_revokes=Provider.NOTION.disconnect_fully_revokes,
     )
     return config, NotionRevocationHandler()

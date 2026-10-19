@@ -238,8 +238,6 @@ def preset(
         revocation_url=f"https://{host}/services/oauth2/revoke",
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
-        scope_separator=Provider.SALESFORCE.scope_separator,
-        disconnect_fully_revokes=Provider.SALESFORCE.disconnect_fully_revokes,
         extra_params=extra_params or {},
         scope_metadata=BASE_SCOPE_METADATA,
     )

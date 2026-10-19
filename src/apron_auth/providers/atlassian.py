@@ -305,8 +305,6 @@ def preset(
         revocation_url="https://auth.atlassian.com/oauth/revoke",
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
-        scope_separator=Provider.ATLASSIAN.scope_separator,
-        disconnect_fully_revokes=Provider.ATLASSIAN.disconnect_fully_revokes,
         extra_params=defaults,
         scope_metadata=BASE_SCOPE_METADATA,
     )
