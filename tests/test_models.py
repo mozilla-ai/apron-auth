@@ -15,6 +15,7 @@ from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
+    Provider,
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
@@ -653,6 +654,48 @@ class TestProviderConfigCanAssertDomainOwnership:
             can_assert_domain_ownership=True,
         )
         assert config.can_assert_domain_ownership is True
+
+
+class TestProviderConfigProvider:
+    def test_defaults_to_none(self) -> None:
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.provider is None
+
+    def test_accepts_a_member_whose_facts_match(self) -> None:
+        config = ProviderConfig(
+            provider=Provider.LINEAR,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            scope_separator=",",
+        )
+        assert config.provider is Provider.LINEAR
+
+    def test_rejects_a_scope_separator_that_contradicts_the_member(self) -> None:
+        with pytest.raises(ValidationError, match="scope_separator must match provider"):
+            ProviderConfig(
+                provider=Provider.LINEAR,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+            )
+
+    def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
+        with pytest.raises(ValidationError, match="disconnect_fully_revokes must match provider"):
+            ProviderConfig(
+                provider=Provider.GITHUB,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://github.com/login/oauth/authorize",
+                token_url="https://github.com/login/oauth/access_token",
+            )
 
 
 class TestTenancyContextOwnsEmailDomain:

@@ -134,6 +134,8 @@ class ProviderConfig(BaseModel, frozen=True):
     Attributes:
         provider: The built-in preset that built this config.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
+            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
+            and a config that contradicts them is refused at construction.
         extra_params: Fixed parameters added to every authorization request.
             A reserved parameter is refused at construction, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
@@ -337,6 +339,30 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         if not urlparse(self.resource).scheme:
             msg = "resource must be an absolute URI when set"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _provider_facts_match_member(self) -> ProviderConfig:
+        """Reject a config whose per-provider facts contradict its provider.
+
+        The member is the single statement of a provider's facts, so a config that names
+        the member cannot carry a different value and have consumers read the two apart.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``provider`` is set and ``disconnect_fully_revokes`` or
+                ``scope_separator`` differs from the member's.
+        """
+        if self.provider is None:
+            return self
+        if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
+            msg = f"disconnect_fully_revokes must match provider {self.provider.display_name}"
+            raise ValueError(msg)
+        if self.scope_separator != self.provider.scope_separator:
+            msg = f"scope_separator must match provider {self.provider.display_name}"
             raise ValueError(msg)
         return self
 
