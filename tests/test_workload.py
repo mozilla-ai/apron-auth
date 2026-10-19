@@ -134,28 +134,34 @@ class TestRefusals:
     """Test that a token is refused, as a refusal rather than an outage, for each reason it cannot be trusted."""
 
     @pytest.mark.parametrize(
-        "payload",
+        ("payload", "reason"),
         [
-            pytest.param(claims(aud="https://other.example.com"), id="another audience"),
-            pytest.param(claims(iss="https://other.example.com"), id="another issuer"),
-            pytest.param(claims(iss=[ISSUER]), id="issuer as a list"),
-            pytest.param(claims(sub=None), id="no subject"),
-            pytest.param(claims(sub=""), id="empty subject"),
-            pytest.param(claims(aud=None), id="no audience"),
-            pytest.param(claims(iat=None), id="no issued-at"),
-            pytest.param(claims(exp=None), id="no expiry"),
-            pytest.param(claims(exp="soon"), id="expiry not a number"),
-            pytest.param(claims(nbf=int(time.time()) + 3600), id="not yet valid"),
-            pytest.param(claims(iat=int(time.time()) + 3600), id="issued in the future"),
+            pytest.param(
+                claims(aud="https://other.example.com"), TokenValidationReason.AUDIENCE, id="another audience"
+            ),
+            pytest.param(
+                claims(iss="https://other.example.com"), TokenValidationReason.UNKNOWN_ISSUER, id="another issuer"
+            ),
+            pytest.param(claims(iss=[ISSUER]), TokenValidationReason.UNKNOWN_ISSUER, id="issuer as a list"),
+            pytest.param(claims(sub=None), TokenValidationReason.CLAIMS, id="no subject"),
+            pytest.param(claims(sub=""), TokenValidationReason.CLAIMS, id="empty subject"),
+            pytest.param(claims(aud=None), TokenValidationReason.AUDIENCE, id="no audience"),
+            pytest.param(claims(iat=None), TokenValidationReason.CLAIMS, id="no issued-at"),
+            pytest.param(claims(exp=None), TokenValidationReason.CLAIMS, id="no expiry"),
+            pytest.param(claims(exp="soon"), TokenValidationReason.CLAIMS, id="expiry not a number"),
+            pytest.param(claims(nbf=int(time.time()) + 3600), TokenValidationReason.CLAIMS, id="not yet valid"),
+            pytest.param(claims(iat=int(time.time()) + 3600), TokenValidationReason.CLAIMS, id="issued in the future"),
         ],
     )
-    async def test_claims_that_do_not_validate(self, httpx_mock: HTTPXMock, payload: dict[str, Any]) -> None:
+    async def test_claims_that_do_not_validate(
+        self, httpx_mock: HTTPXMock, payload: dict[str, Any], reason: TokenValidationReason
+    ) -> None:
         """A signature that verifies does not save a token whose claims do not."""
         discoverable(httpx_mock)
 
         with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(payload), audience=AUDIENCE)
-        assert exc_info.value.reason is TokenValidationReason.CLAIMS
+        assert exc_info.value.reason is reason
 
     async def test_an_expired_token(self, httpx_mock: HTTPXMock) -> None:
         """An expired token raises its own refusal, so the caller can say to fetch a fresh one."""

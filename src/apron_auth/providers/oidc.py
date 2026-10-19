@@ -47,7 +47,7 @@ from pydantic import SecretStr
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, require_declared_issuer, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -545,7 +545,7 @@ class OidcIdentityHandler:
         except ClaimError as exc:
             if isinstance(exc, ExpiredTokenError):
                 raise TokenExpiredError(_claim_error_message(exc)) from exc
-            raise TokenValidationError(_claim_error_message(exc), reason=TokenValidationReason.CLAIMS) from exc
+            raise TokenValidationError(_claim_error_message(exc), reason=claim_refusal_reason(exc.claim)) from exc
         except (JoseError, TypeError, ValueError) as exc:
             # A malformed header or claim shape can raise ``TypeError``, which must surface as a refusal.
             msg = "OpenID ID token claims did not validate"
@@ -553,7 +553,7 @@ class OidcIdentityHandler:
         # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != issuer:
             msg = "OpenID ID token has an invalid iss claim"
-            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return claims
 
     async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:

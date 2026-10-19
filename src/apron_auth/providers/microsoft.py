@@ -21,7 +21,7 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
 from apron_auth.errors import (
     FailureKind,
     IdentityFetchError,
@@ -160,11 +160,11 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
     issuer = _MICROSOFT_ISSUER_TEMPLATE.format(tid=tid)
     if claims.get("iss") != issuer:
         msg = "Microsoft ID token has an invalid iss claim"
-        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
+        raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
     # The key set lists each key's issuer with a tenant placeholder, so one key cannot vouch for another issuer.
     if key_issuer is not None and (not isinstance(key_issuer, str) or key_issuer.replace("{tenantid}", tid) != issuer):
         msg = "Microsoft ID token signing key belongs to another issuer"
-        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
+        raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
     if not _same_client(claims.get("aud"), client_id):
         msg = "Microsoft ID token has an invalid aud claim"
         raise TokenValidationError(msg, reason=TokenValidationReason.AUDIENCE)
@@ -186,7 +186,7 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
         ) from exc
     except ClaimError as exc:
         raise TokenValidationError(
-            f"Microsoft ID token has an invalid {exc.claim} claim", reason=TokenValidationReason.CLAIMS
+            f"Microsoft ID token has an invalid {exc.claim} claim", reason=claim_refusal_reason(exc.claim)
         ) from exc
     except (JoseError, TypeError, ValueError) as exc:
         # A claim of the wrong JSON type can raise outside the library's own errors.

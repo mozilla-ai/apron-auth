@@ -1110,7 +1110,7 @@ class TestOidcIdentity:
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
                 config,
             )
-        assert exc_info.value.reason is TokenValidationReason.CLAIMS
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_ISSUER
 
     @pytest.mark.parametrize("iss", [[ISSUER], ["https://attacker.example", ISSUER]])
     async def test_refuses_an_id_token_naming_its_issuer_in_a_list(
@@ -1124,11 +1124,12 @@ class TestOidcIdentity:
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
         """An ``aud`` that does not name this client is refused."""
-        with pytest.raises(IdentityFetchError, match=r"invalid aud claim"):
+        with pytest.raises(TokenValidationError, match=r"invalid aud claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(aud="someone-else")),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.AUDIENCE
 
     async def test_accepts_an_audience_array_naming_this_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock

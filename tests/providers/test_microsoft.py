@@ -646,6 +646,7 @@ class TestMicrosoftIdTokenVerification:
         [
             ({"aud": "another-client"}, "invalid aud claim"),
             ({"aud": [_CLIENT_ID, "another-client"]}, "invalid aud claim"),
+            ({"iss": "https://login.microsoftonline.com/other-tenant/v2.0"}, "invalid iss claim"),
             ({"exp": int(time.time()) - 3600}, "has expired"),
             ({"nbf": int(time.time()) + 3600}, "invalid nbf claim"),
             ({"sub": ""}, "invalid sub claim"),
@@ -665,6 +666,8 @@ class TestMicrosoftIdTokenVerification:
             expected = TokenValidationReason.EXPIRED
         elif "aud" in message:
             expected = TokenValidationReason.AUDIENCE
+        elif "iss claim" in message:
+            expected = TokenValidationReason.UNKNOWN_ISSUER
         else:
             expected = TokenValidationReason.CLAIMS
         assert exc_info.value.reason is expected

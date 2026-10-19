@@ -19,7 +19,7 @@ from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._discovery import require_declared_issuer
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, parse_compact
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
@@ -178,11 +178,11 @@ class WorkloadTokenVerifier:
             raise TokenExpiredError(msg) from exc
         except (JoseError, TypeError, ValueError) as exc:
             msg = "Workload token claims did not validate"
-            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS) from exc
+            raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
         # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != self._issuer:
             msg = "Workload token claims did not validate"
-            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return _identity(self._issuer, claims)
 
     async def _keys(self) -> IssuerSigningKeys:
