@@ -96,12 +96,10 @@ class IdentityFetchError(OAuthError):
     """
 
 
-# IdentityNotSupportedError follows its base class instead of A-Z order, because Python needs the base defined first.
 class IdentityNotSupportedError(ConfigurationError):
     """No identity handler exists for this provider configuration."""
 
 
-# IdentityScopeNotGrantedError follows IdentityFetchError for the same reason.
 class IdentityScopeNotGrantedError(IdentityFetchError):
     """The token is known to lack a scope the provider's identity endpoint requires.
 
@@ -163,7 +161,8 @@ class TokenEndpointError(OAuthError):
         self.error_code = error_code
 
 
-# The token-endpoint and token-validation errors follow their base classes instead of A-Z order, as above.
+# NonceValidationError and TokenExpiredError follow their base classes instead of A-Z order, because Python needs
+# the base defined first. TokenValidationReason precedes the error whose constructor requires it.
 class TokenExchangeError(TokenEndpointError):
     """Authorization code exchange failed: the token endpoint refused the code, or this client refused its response."""
 
