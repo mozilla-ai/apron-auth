@@ -441,7 +441,8 @@ class OAuthClient:
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
-        # NOTE: A NaN age compares false against every limit, so the check requires the age to be within the limit.
+        # NOTE: The check requires the age to be within the limit, so an age that is not a number is refused.
+        # A creation time ahead of this clock makes the age negative, which passes as clock skew.
         if not time.time() - pending.created_at <= self._config.max_pending_age_seconds:
             msg = "The pending authorization request is older than the maximum age, or its age cannot be measured"
             raise StateError(msg)

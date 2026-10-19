@@ -711,6 +711,20 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
         assert tokens.access_token == "access-abc"
 
+    async def test_exchange_accepts_a_pending_state_created_ahead_of_the_clock(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW + 3600)
+        )
+        assert tokens.access_token == "access-abc"
+
     async def test_exchange_refuses_a_pending_state_whose_age_is_not_a_number(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
