@@ -817,6 +817,18 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert seen == ["https://mcp.example.com"]
 
+    async def test_url_validator_rejection_of_a_derived_candidate_is_a_configuration_fault(self) -> None:
+        """A well-known URL this library builds from the server URL belongs to the caller who passed it."""
+
+        def validator(url: str) -> None:
+            if url == _PRM_ROOT:
+                msg = "blocked by policy"
+                raise ValueError(msg)
+
+        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
+            await discover("https://mcp.example.com", url_validator=validator)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
     async def test_url_validator_rejection_of_a_declared_endpoint_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A document's endpoint the caller's policy rejects is a refusal, not a configuration fault."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
