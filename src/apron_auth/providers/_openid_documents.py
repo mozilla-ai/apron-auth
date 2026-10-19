@@ -51,6 +51,8 @@ def require_url(
     try:
         parsed = urlparse(value)
         hostname = parsed.hostname
+        # The port is parsed only when read, so a port that is not a number surfaces here and not at the fetch.
+        parsed.port  # noqa: B018
     except ValueError as exc:
         msg = f"OpenID {field} is malformed"
         raise OidcDiscoveryError(msg, kind=kind) from exc

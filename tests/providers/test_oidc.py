@@ -292,6 +292,19 @@ class TestDiscover:
         with pytest.raises(OidcDiscoveryError, match="document URL is malformed"):
             await discover(ISSUER, document_url="https://[::1")
 
+    async def test_refuses_a_document_url_with_a_bad_port_as_configuration(self):
+        """A port that cannot be read is a malformed URL, found before any fetch and charged to the caller."""
+        with pytest.raises(OidcDiscoveryError, match="document URL is malformed") as exc_info:
+            await discover(ISSUER, document_url="https://sso.example.com:port/config")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    async def test_refuses_an_endpoint_with_a_bad_port_as_the_providers_fault(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(token_endpoint="https://idp.example:port/token"))
+
+        with pytest.raises(OidcDiscoveryError, match="token endpoint is malformed") as exc_info:
+            await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
     async def test_reports_an_unreachable_document(self, httpx_mock: HTTPXMock):
         """A transport error surfaces as ``OidcDiscoveryError``, not a raw httpx error."""
         httpx_mock.add_exception(httpx.ConnectError("no route"), url=DOCUMENT_URL)
