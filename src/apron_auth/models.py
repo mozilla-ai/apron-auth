@@ -174,7 +174,7 @@ class ProviderConfig(BaseModel, frozen=True):
             for example a generic OpenID provider on a host that a built-in provider also serves.
             Defaults to ``True``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
-            at the code exchange. A pending state exactly this old is still accepted.
+            at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
     """
 
