@@ -19,6 +19,7 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
+from apron_auth.providers.identity import infer_identity_handler
 
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
@@ -93,6 +94,17 @@ def test_preset_config_carries_the_member_data(provider: Provider) -> None:
     config = _preset_config(MODULES[provider])
     assert config.disconnect_fully_revokes is provider.disconnect_fully_revokes
     assert config.scope_separator == provider.scope_separator
+
+
+def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> None:
+    config, _ = salesforce.preset(
+        client_id="cid",
+        client_secret="csecret",  # pragma: allowlist secret
+        scopes=["dummy"],
+        host="login.acme.example",
+    )
+    assert config.provider is Provider.SALESFORCE
+    assert infer_identity_handler(config) is None
 
 
 def test_hand_built_config_has_no_provider() -> None:

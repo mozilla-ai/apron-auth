@@ -56,6 +56,8 @@ class Provider(StrEnum):
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's OAuth endpoint hosts, matched on a label boundary.
             Both endpoints of a config must be on them for this provider's identity handler to be inferred.
+            NOTE: A config may name this member with endpoints outside them, such as a Salesforce org
+            on a custom login domain, so the suffixes gate inference rather than describe the config.
         disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
             See :attr:`ProviderConfig.disconnect_fully_revokes`.
         scope_separator: The string the provider's scope parameter is joined with.
