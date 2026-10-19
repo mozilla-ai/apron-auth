@@ -760,7 +760,7 @@ class TestExchangeCode:
     ) -> None:
         _freeze_client_clock(monkeypatch)
         client = OAuthClient(config=_make_config())
-        with pytest.raises(StateError):
+        with pytest.raises(StateError, match="older than the maximum age"):
             await client.exchange_code(
                 code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 601)
             )
