@@ -69,40 +69,22 @@ def _class_name(node: ast.expr) -> str | None:
     return None
 
 
-def _refusal_handler_spans(tree: ast.Module) -> list[range]:
-    """Return the line span of each ``try`` body whose handlers catch the issuer refusal."""
-    spans = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Try):
-            continue
-        caught = [
-            _class_name(value)
-            for handler in node.handlers
-            if handler.type is not None
-            for value in (handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type])
-        ]
-        if IssuerNotDeclaredError.__name__ in caught:
-            last = node.body[-1]
-            spans.append(range(node.body[0].lineno, (last.end_lineno or last.lineno) + 1))
-    return spans
-
-
-def _issuer_check_calls(tree: ast.Module) -> list[ast.Call]:
-    """Return every call to the issuer check in ``tree``."""
-    return [
-        node
+def _calls_the_check(tree: ast.Module) -> bool:
+    """Say whether ``tree`` calls the issuer check under the name it is defined under."""
+    return any(
+        isinstance(node, ast.Call) and _class_name(node.func) == require_declared_issuer.__name__
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and _class_name(node.func) == require_declared_issuer.__name__
-    ]
+    )
 
 
-def _unwrapped_issuer_checks(path: Path) -> list[str]:
-    """Return ``file:line`` for each issuer check in ``path`` that no handler for the refusal encloses."""
-    tree = ast.parse(path.read_text())
-    spans = _refusal_handler_spans(tree)
-    return [
-        f"{path.name}:{node.lineno}" for node in _issuer_check_calls(tree) if not any(node.lineno in s for s in spans)
-    ]
+def _imports_the_check(tree: ast.Module) -> bool:
+    """Say whether ``tree`` imports the issuer check, under its own name or another."""
+    return any(
+        alias.name == require_declared_issuer.__name__
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    )
 
 
 def _modules_where(predicate: Callable[[ast.Module], bool]) -> set[str]:
@@ -112,47 +94,16 @@ def _modules_where(predicate: Callable[[ast.Module], bool]) -> set[str]:
     }
 
 
-def _imports_the_check(tree: ast.Module) -> bool:
-    """Say whether ``tree`` imports the issuer check, under its own name or an alias."""
-    return any(
-        alias.name == require_declared_issuer.__name__
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    )
+class TestTheIssuerRefusalStaysInternal:
+    """The refusal is not one of the library's errors, so reaching it commits a module to translating it.
 
-
-class TestTheIssuerRefusalIsAlwaysWrapped:
-    """The refusal is internal, and only a handler for it keeps it out of the library's public errors.
-
-    NOTE: The guard reads the issuer check and the refusal by the names they are defined under, so a module
-    that renamed either on import would be invisible to it. The import allowlist below is what closes that.
+    Each module named below is held to that by its own tests, which pin the error, the message and the kind
+    it raises. These assertions keep the set of modules that can raise the refusal at those modules.
     """
 
-    @pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")), ids=lambda p: str(p.relative_to(SRC)))
-    def test_every_issuer_check_sits_in_a_handler_for_the_refusal(self, path: Path) -> None:
-        assert _unwrapped_issuer_checks(path) == []
-
-    def test_the_guard_sees_a_check_no_handler_covers(self, tmp_path: Path) -> None:
-        sample = tmp_path / "sample.py"
-        lines = [
-            "require_declared_issuer(document, expected)",
-            "try:",
-            "    require_declared_issuer(document, expected)",
-            "except IssuerNotDeclaredError:",
-            "    pass",
-            "try:",
-            "    require_declared_issuer(document, expected)",
-            "except ValueError:",
-            "    pass",
-        ]
-        sample.write_text("\n".join(lines) + "\n")
-        assert _unwrapped_issuer_checks(sample) == ["sample.py:1", "sample.py:7"]
-
-    def test_the_guard_reads_the_call_sites_it_claims_to_cover(self) -> None:
-        """Without this the guard above passes by finding nothing at all."""
+    def test_only_the_translating_modules_call_the_check(self) -> None:
         assert SRC.is_dir()
-        assert _modules_where(lambda tree: bool(_issuer_check_calls(tree))) == ISSUER_CHECK_CALLERS
+        assert _modules_where(_calls_the_check) == ISSUER_CHECK_CALLERS
 
     def test_no_other_module_reaches_the_check(self) -> None:
         assert _modules_where(_imports_the_check) == ISSUER_CHECK_CALLERS
