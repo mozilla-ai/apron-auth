@@ -755,6 +755,17 @@ class TestExchangeCode:
             )
         assert httpx_mock.get_requests() == []
 
+    async def test_exchange_refuses_an_over_age_openid_pending_state_before_the_nonce_check(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 601)
+            )
+        assert httpx_mock.get_requests() == []
+
     async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
