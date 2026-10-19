@@ -320,8 +320,9 @@ async def register_client(
             response = await client.post(registration_url, json=payload)
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
+            error_cls, error_kind = _url_fault(caller_supplied=True)
             msg = "MCP OAuth received a malformed URL"
-            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION) from exc
+            raise error_cls(msg, kind=error_kind) from exc
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
@@ -587,11 +588,15 @@ def _infer_application_type(redirect_uri: str) -> str | None:
     return None
 
 
-def _url_fault(caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]:
+def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]:
     """Return the error class and kind for a URL this library will not fetch, by where the URL came from.
 
     A URL this library's caller passed, or one derived from it, cannot work as
     passed. A URL a fetched document named is refused.
+
+    NOTE: Only discovery reads a URL out of a document, so the document's error is
+    the discovery error. A phase that reads one from a document of its own needs
+    its own branch here.
     """
     if caller_supplied:
         return ConfigurationError, FailureKind.CONFIGURATION
@@ -616,7 +621,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
         ConfigurationError: If a caller-supplied URL is rejected.
         McpDiscoveryError: If a document-supplied URL is rejected.
     """
-    error_cls, kind = _url_fault(caller_supplied)
+    error_cls, kind = _url_fault(caller_supplied=caller_supplied)
     try:
         parsed = _parse_url(url)
     except ValueError as exc:
@@ -717,7 +722,7 @@ async def _fetch_first_metadata(
                 response = await client.get(url)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
-                error_cls, error_kind = _url_fault(caller_supplied)
+                error_cls, error_kind = _url_fault(caller_supplied=caller_supplied)
                 msg = "MCP OAuth received a malformed URL"
                 raise error_cls(msg, kind=error_kind) from exc
             except httpx.RequestError as exc:
