@@ -742,6 +742,12 @@ class TestIdentityProfileProvider:
         rebuilt = IdentityProfile.model_validate(identity.model_dump(mode="json"))
         assert rebuilt.provider is Provider.GOOGLE
 
+    def test_a_dump_carries_the_member_in_python_mode_and_the_name_in_json_mode(self) -> None:
+        identity = IdentityProfile(provider=Provider.GOOGLE)
+        assert identity.model_dump()["provider"] is Provider.GOOGLE
+        assert identity.model_dump()["provider"] == "google"
+        assert identity.model_dump(mode="json")["provider"] == "google"
+
     def test_a_generic_provider_name_stays_a_string(self) -> None:
         identity = IdentityProfile(provider="oidc:https://issuer.example")
         assert identity.provider == "oidc:https://issuer.example"
