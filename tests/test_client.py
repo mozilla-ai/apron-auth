@@ -39,6 +39,9 @@ from apron_auth.models import (
 )
 from apron_auth.pkce import generate_code_challenge
 
+# The fixed wall-clock reading, in epoch seconds, that the pending state age tests pin the client to.
+_NOW = 1_700_000_000.0
+
 
 def _make_config(**overrides: object) -> ProviderConfig:
     defaults = {
@@ -65,10 +68,6 @@ def _pending_state(**overrides: object) -> OAuthPendingState:
     }
     defaults.update(overrides)
     return OAuthPendingState(**defaults)
-
-
-# A fixed wall-clock reading for the tests that measure a pending state's age.
-_NOW = 1_700_000_000.0
 
 
 def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
