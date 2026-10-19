@@ -32,6 +32,8 @@ RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 OTHER_RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-2"})
 EC_KEY = jwk.ECKey.generate_key("P-256", parameters={"kid": "ec-1"})
 OKP_KEY = jwk.OKPKey.generate_key("Ed25519", parameters={"kid": "okp-1"})
+# The words for a kind of token that the key set's own runtime strings must not use.
+TOKEN_KINDS = ("access token", "bearer token", "ID token", "identity token", "refresh token", "workload token")
 
 
 def published(*keys: Any) -> dict[str, Any]:
@@ -755,10 +757,6 @@ class TestEventLoops:
         assert sum(loop() is not None for loop in finished) <= 1
 
 
-# The kinds of token a caller verifies through this key set. Its own strings name none of them.
-_TOKEN_KINDS = ("access token", "bearer token", "ID token", "identity token", "refresh token", "workload token")
-
-
 class TestNeutralWording:
     """Test that the key set words its refusals for any signed token, so no caller passes a name for one.
 
@@ -766,12 +764,14 @@ class TestNeutralWording:
     """
 
     async def test_a_refusal_names_the_token_without_a_kind(self) -> None:
+        """A refused token is reported with the typed reason and a message that names no kind."""
         with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
             await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
     def test_no_runtime_string_names_a_kind(self) -> None:
-        tree = ast.parse(Path(_jwks.__file__).read_text())
+        """No string that reaches a caller or a log names a kind, including one a later refusal adds."""
+        tree = ast.parse(Path(_jwks.__file__).read_text(encoding="utf-8"))
         documented = {
             id(node.body[0].value)
             for node in ast.walk(tree)
@@ -779,6 +779,7 @@ class TestNeutralWording:
             and node.body
             and isinstance(node.body[0], ast.Expr)
             and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
         }
         strings = [
             node.value
@@ -790,7 +791,7 @@ class TestNeutralWording:
         named = [
             value
             for value in strings
-            for kind in _TOKEN_KINDS
+            for kind in TOKEN_KINDS
             if re.search(rf"\b{re.escape(kind)}\b", value, re.IGNORECASE)
         ]
         assert named == []

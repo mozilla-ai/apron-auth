@@ -108,8 +108,10 @@ class IssuerSigningKeys:
     One instance may serve verifications on different event loops in turn.
 
     Its refusals name the token without a kind, because one key set verifies the ID token of a sign-in
-    and the token a platform signed for a workload. A caller that verifies one kind words its own refusals.
+    and the token a platform signed for a workload.
 
+    NOTE: A caller that verifies one kind of token should word its own refusals and name that kind,
+    because this class cannot know which kind it was handed.
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
     """
 
