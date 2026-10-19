@@ -725,14 +725,17 @@ class TestExchangeCode:
         )
         assert tokens.access_token == "access-abc"
 
-    async def test_exchange_refuses_a_pending_state_whose_age_is_not_a_number(
-        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        "created_at", [math.inf, -math.inf, math.nan], ids=["infinite", "negative-infinite", "not-a-number"]
+    )
+    async def test_exchange_refuses_a_pending_state_whose_creation_time_is_not_finite(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch, created_at: float
     ) -> None:
         _freeze_client_clock(monkeypatch)
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=math.nan)
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=created_at)
             )
         assert httpx_mock.get_requests() == []
 
