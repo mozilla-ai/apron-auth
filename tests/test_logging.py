@@ -102,8 +102,8 @@ def _is_safe_use(name: ast.Name, parents: dict[ast.AST, ast.AST]) -> bool:
     parent = parents[name]
     grandparent = parents.get(parent)
     if isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name) and name in parent.args:
-        if parent.func.id == "describe_http_error":
-            return True
+        if parent.func.id == "http_failure":
+            return isinstance(grandparent, ast.Attribute) and grandparent.attr == "description"
         return parent.func.id == "type" and isinstance(grandparent, ast.Attribute) and grandparent.attr == "__name__"
     return (
         isinstance(parent, ast.Attribute)
@@ -164,7 +164,7 @@ def test_the_scan_finds_a_log_call_that_renders_an_exception(log_call: str) -> N
 @pytest.mark.parametrize(
     "log_call",
     [
-        'logger.warning("failed (%s)", describe_http_error(exc))',
+        'logger.warning("failed (%s)", http_failure(exc).description)',
         'logger.warning("failed (status %s)", exc.response.status_code)',
         'logger.debug("failed (%s)", type(exc).__name__)',
         'logger.warning("failed")',

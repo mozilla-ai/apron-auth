@@ -10,7 +10,7 @@ from joserfc import jwk, jws
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError, TokenValidationReason
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext, TokenSet
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
 
@@ -646,6 +646,7 @@ class TestMicrosoftIdTokenVerification:
         [
             ({"aud": "another-client"}, "invalid aud claim"),
             ({"aud": [_CLIENT_ID, "another-client"]}, "invalid aud claim"),
+            ({"iss": "https://login.microsoftonline.com/other-tenant/v2.0"}, "invalid iss claim"),
             ({"exp": int(time.time()) - 3600}, "has expired"),
             ({"nbf": int(time.time()) + 3600}, "invalid nbf claim"),
             ({"sub": ""}, "invalid sub claim"),
@@ -657,18 +658,28 @@ class TestMicrosoftIdTokenVerification:
     )
     async def test_refuses_an_id_token_with_bad_claims(self, claims: dict[str, object], message: str) -> None:
         """A signed token issued for another client, outside its lifetime, or without a subject is refused."""
-        with pytest.raises(TokenVerificationError, match=message):
+        with pytest.raises(TokenValidationError, match=message) as exc_info:
             await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token(**claims)), _config()
             )
+        if "expired" in message:
+            expected = TokenValidationReason.EXPIRED
+        elif "aud" in message:
+            expected = TokenValidationReason.AUDIENCE
+        elif "iss claim" in message:
+            expected = TokenValidationReason.UNKNOWN_ISSUER
+        else:
+            expected = TokenValidationReason.CLAIMS
+        assert exc_info.value.reason is expected
 
     async def test_refuses_an_expired_id_token_as_expired(self) -> None:
         """An expired token raises its own refusal, so the caller can tell it from a forged one."""
-        with pytest.raises(TokenExpiredError):
+        with pytest.raises(TokenExpiredError) as exc_info:
             await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token(exp=int(time.time()) - 3600)),
                 _config(),
             )
+        assert exc_info.value.reason is TokenValidationReason.EXPIRED
 
     @pytest.mark.parametrize(
         ("userinfo_sub", "message"), [("someone-else", "a different subject"), (None, "names no subject")]

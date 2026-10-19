@@ -7,9 +7,9 @@ from typing import Any
 
 import httpx
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import FailureKind, IdentityFetchError
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str) -> Any:
@@ -32,17 +32,18 @@ async def fetch_identity_json(request: Awaitable[httpx.Response], label: str) ->
         response.raise_for_status()
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except httpx.InvalidURL:
-        failure_message = f"Failed to fetch {label}: invalid URL"
+        failure_message, kind = f"Failed to fetch {label}: invalid URL", FailureKind.REFUSED
     except httpx.HTTPError as exc:
-        failure_message = f"Failed to fetch {label}: {describe_http_error(exc)}"
+        failure = http_failure(exc)
+        failure_message, kind = f"Failed to fetch {label}: {failure.description}", failure.kind
     except Exception:
         # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
-        failure_message = f"Failed to fetch {label}: request failed"
+        failure_message, kind = f"Failed to fetch {label}: request failed", FailureKind.UNEXPECTED
     else:
         try:
             return decode_json_body(response)
         except ValueError:
-            failure_message = f"Failed to parse {label} response"
+            failure_message, kind = f"Failed to parse {label} response", FailureKind.REFUSED
     # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
-    raise IdentityFetchError(failure_message)
+    raise IdentityFetchError(failure_message, kind=kind)

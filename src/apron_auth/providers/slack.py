@@ -35,9 +35,9 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
+from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -58,6 +58,11 @@ _SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
 
 # The error code Slack returns when the token lacks a scope the method needs.
 _SLACK_MISSING_SCOPE_ERROR = "missing_scope"
+
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for its own outages and rate limits.
+_SLACK_TRANSIENT_ERRORS = frozenset(
+    {"fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"}
+)
 
 # The userinfo claim that holds the workspace domain.
 _SLACK_TEAM_DOMAIN_CLAIM = "https://slack.com/team_domain"
@@ -138,6 +143,14 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     if not label or "." in label:
         return None
     return label
+
+
+def _slack_failure_kind(error: str) -> FailureKind:
+    """Return the kind of a Slack ``ok=false`` answer.
+
+    An outage or a rate limit may pass later. Every other code is a rejection.
+    """
+    return FailureKind.SERVER_ERROR if error in _SLACK_TRANSIENT_ERRORS else FailureKind.REJECTED
 
 
 class SlackIdentityHandler:
@@ -227,14 +240,15 @@ class SlackIdentityHandler:
             )
 
         if not isinstance(payload, dict):
-            raise IdentityFetchError("Slack identity response was not a JSON object")
+            msg = "Slack identity response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         # Slack returns 2xx with ``ok=false`` for auth/scope failures.
         if payload.get("ok") is False:
             error = payload.get("error") or "unknown_error"
             if error == _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
-            raise IdentityFetchError(f"Slack identity request failed: {error}")
+            raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
 
         email_verified = None
         if "email_verified" in payload:
@@ -320,13 +334,13 @@ class SlackIdentityHandler:
             error = team_info_payload.get("error") or "unknown_error"
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityFetchError(f"Slack team.info request failed: {error}")
+                raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
 
             auth_test_payload = await self._slack_post(client, _SLACK_AUTH_TEST_URL, access_token, "auth.test")
 
         if not auth_test_payload.get("ok"):
             error = auth_test_payload.get("error") or "unknown_error"
-            raise IdentityFetchError(f"Slack auth.test request failed: {error}")
+            raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)
 
@@ -359,7 +373,8 @@ class SlackIdentityHandler:
         )
 
         if not isinstance(payload, dict):
-            raise IdentityFetchError(f"Slack {endpoint_label} response was not a JSON object")
+            msg = f"Slack {endpoint_label} response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
 
@@ -465,26 +480,28 @@ class SlackRevocationHandler:
                 )
             # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
             except httpx.InvalidURL:
-                failure_message = "Failed to revoke Slack token: invalid URL"
+                failure_message, kind = "Failed to revoke Slack token: invalid URL", FailureKind.REFUSED
             except httpx.RequestError as exc:
-                failure_message = f"Failed to revoke Slack token: {describe_http_error(exc)}"
+                transport = http_failure(exc)
+                failure_message, kind = f"Failed to revoke Slack token: {transport.description}", transport.kind
             except Exception:
                 # Any other send failure can repeat the token's header, like the encoding error for a non-ASCII token.
-                failure_message = "Failed to revoke Slack token: request failed"
+                failure_message, kind = "Failed to revoke Slack token: request failed", FailureKind.UNEXPECTED
             else:
                 if not response.is_success:
                     return False
                 try:
                     data = decode_json_body(response)
                 except ValueError:
-                    failure_message = "Failed to parse Slack revocation response"
+                    failure_message, kind = "Failed to parse Slack revocation response", FailureKind.REFUSED
                 else:
                     if not isinstance(data, dict):
-                        raise RevocationError("Slack revocation response was not a JSON object")
+                        msg = "Slack revocation response was not a JSON object"
+                        raise RevocationError(msg, kind=FailureKind.REFUSED)
                     return data.get("ok") is True
         # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
         # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(failure_message, kind=kind)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

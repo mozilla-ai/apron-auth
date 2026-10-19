@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
@@ -103,7 +103,7 @@ class SalesforceIdentityHandler:
                 f"Salesforce host. The bearer token would otherwise be sent to a non-Salesforce "
                 f"endpoint derived from a mismatched ProviderConfig."
             )
-            raise IdentityFetchError(msg)
+            raise IdentityFetchError(msg, kind=FailureKind.CONFIGURATION)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"
 
         async with httpx.AsyncClient() as client:

@@ -27,8 +27,9 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
+from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import McpDiscoveryError, McpRegistrationError, OAuthError
+from apron_auth.errors import FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
     ClientRegistration,
@@ -101,13 +102,13 @@ async def discover(
         auth_server = next((item for item in auth_servers if isinstance(item, str) and item), None)
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
-        raise McpDiscoveryError(msg)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
     _validate_url(auth_server, url_validator)
     # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
     # The delimiters are checked, so an empty query or fragment counts.
     if "?" in auth_server or "#" in auth_server:
         msg = "protected resource metadata declares an authorization server with a query or a fragment"
-        raise McpDiscoveryError(msg)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
     server_meta = await _fetch_first_metadata(
         _asm_candidate_urls(auth_server),
@@ -121,7 +122,7 @@ async def discover(
     token_url = server_meta.get("token_endpoint")
     if not isinstance(authorize_url, str) or not isinstance(token_url, str):
         msg = "authorization server metadata is missing an endpoint"
-        raise McpDiscoveryError(msg)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
     registration = server_meta.get("registration_endpoint")
     revocation = server_meta.get("revocation_endpoint")
@@ -295,13 +296,15 @@ async def register_client(
             response = await client.post(registration_url, json=payload)
         except httpx.InvalidURL as exc:
             msg = "client registration request failed: malformed URL"
-            raise McpRegistrationError(msg) from exc
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED) from exc
         except httpx.RequestError as exc:
-            msg = f"client registration request failed: {type(exc).__name__}"
-            raise McpRegistrationError(msg) from exc
+            transport = http_failure(exc)
+            msg = f"client registration request failed: {transport.description}"
+            raise McpRegistrationError(msg, kind=transport.kind) from exc
         if response.status_code not in (200, 201):
-            msg = f"client registration failed: HTTP {response.status_code}"
-            raise McpRegistrationError(msg)
+            status = status_failure(response.status_code)
+            msg = f"client registration failed: {status.description}"
+            raise McpRegistrationError(msg, kind=status.kind)
         try:
             data = decode_json_body(response)
         except ValueError:
@@ -311,14 +314,14 @@ async def register_client(
             failure = None
     # NOTE: This raise stays outside the except block, so the error carries no context.
     if failure is not None:
-        raise McpRegistrationError(failure)
+        raise McpRegistrationError(failure, kind=FailureKind.REFUSED)
     if not isinstance(data, dict):
         msg = "client registration returned an unexpected response"
-        raise McpRegistrationError(msg)
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_id = data.get("client_id")
     if not isinstance(client_id, str) or not client_id:
         msg = "client registration response is missing client_id"
-        raise McpRegistrationError(msg)
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = data.get("client_secret")
     auth_method = data.get("token_endpoint_auth_method")
     return ClientRegistration(
@@ -429,7 +432,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
         # rejected at token exchange.
         if advertised and TokenEndpointAuthMethod.NONE not in advertised:
             msg = "MCP server does not accept a public client at its token endpoint"
-            raise McpDiscoveryError(msg)
+            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
         return TokenEndpointAuthMethod.NONE
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
@@ -437,7 +440,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
         if method in advertised:
             return method
     msg = "MCP server requires an unsupported client authentication method"
-    raise McpDiscoveryError(msg)
+    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> str:
@@ -466,15 +469,15 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
     if registered == TokenEndpointAuthMethod.NONE:
         if secret is not None:
             msg = "MCP server registered a public client (none) but issued a client secret"
-            raise McpDiscoveryError(msg)
+            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
         return TokenEndpointAuthMethod.NONE
     if registered in CONFIDENTIAL_AUTH_METHODS:
         if secret is None:
             msg = "MCP server registered a confidential auth method but issued no client secret"
-            raise McpDiscoveryError(msg)
+            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
         return registered
     msg = "MCP server registered an unsupported client authentication method"
-    raise McpDiscoveryError(msg)
+    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
@@ -575,17 +578,17 @@ def _validate_url(
         parsed = _parse_url(url)
     except ValueError as exc:
         msg = "MCP OAuth received a malformed URL"
-        raise error_cls(msg) from exc
+        raise error_cls(msg, kind=FailureKind.REFUSED) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
-        raise error_cls(msg)
+        raise error_cls(msg, kind=FailureKind.REFUSED)
     # Userinfo would be sent as credentials with the request, and could reach a log through the URL.
     if parsed.username is not None:
         msg = "MCP OAuth refused a URL that carries userinfo"
-        raise error_cls(msg)
+        raise error_cls(msg, kind=FailureKind.REFUSED)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
-        raise error_cls(msg)
+        raise error_cls(msg, kind=FailureKind.REFUSED)
     if url_validator is None:
         return
     try:
@@ -594,7 +597,7 @@ def _validate_url(
         raise
     except Exception as exc:
         # Any rejection from the caller's validator fails the operation.
-        raise error_cls(str(exc)) from exc
+        raise error_cls(str(exc), kind=FailureKind.REFUSED) from exc
 
 
 def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> list[str]:
@@ -641,6 +644,10 @@ async def _fetch_first_metadata(
     is logged at debug with a non-sensitive reason. Raises McpDiscoveryError
     describing ``what`` when no candidate succeeds.
     """
+    # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
+    # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
+    kind = FailureKind.REFUSED
+    retryable_kind: FailureKind | None = None
     for url in candidate_urls:
         _validate_url(url, url_validator)
         async with discovery_client(url, transport_factory) as client:
@@ -649,20 +656,27 @@ async def _fetch_first_metadata(
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
                 msg = "MCP OAuth received a malformed URL"
-                raise McpDiscoveryError(msg) from exc
+                raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
             except httpx.RequestError as exc:
-                logger.debug("MCP discovery: %s request failed (%s)", what, type(exc).__name__)
+                transport = http_failure(exc)
+                logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
+                kind = transport.kind
+                retryable_kind = retryable_kind or (kind if kind.retryable else None)
                 continue
             if response.status_code != 200:
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
+                kind = status_failure(response.status_code).kind
+                retryable_kind = retryable_kind or (kind if kind.retryable else None)
                 continue
             try:
                 payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
+                kind = FailureKind.REFUSED
                 continue
             if isinstance(payload, dict):
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
+            kind = FailureKind.REFUSED
     msg = f"could not fetch {what}"
-    raise McpDiscoveryError(msg)
+    raise McpDiscoveryError(msg, kind=retryable_kind or kind)

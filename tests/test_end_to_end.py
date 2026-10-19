@@ -17,7 +17,6 @@ from apron_auth import (
     OAuthClient,
     OAuthError,
     OAuthPendingState,
-    PermanentOAuthError,
     ProviderConfig,
     RevocationError,
     RevocationHandler,
@@ -200,7 +199,6 @@ class TestPublicApiExports:
         assert OAuthError is not None
         assert TokenExchangeError is not None
         assert TokenRefreshError is not None
-        assert PermanentOAuthError is not None
         assert RevocationError is not None
         assert StateError is not None
         assert ConfigurationError is not None

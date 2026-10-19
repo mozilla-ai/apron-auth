@@ -14,7 +14,13 @@ from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityFetchError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
@@ -220,7 +226,7 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         forged = signed(OTHER_RSA_KEY, kid="rsa-1")
 
-        with pytest.raises(TokenVerificationError, match="signature did not verify"):
+        with pytest.raises(TokenValidationError, match="signature did not verify"):
             await IssuerSigningKeys(JWKS_URL).verify(forged)
 
     @pytest.mark.parametrize("alg", ["none", "HS256", "Ed25519", ["RS256"], {"alg": "RS256"}, 5])
@@ -284,7 +290,7 @@ class TestVerify:
             jku="https://attacker.example/keys",
         )
 
-        with pytest.raises(TokenVerificationError, match="signature did not verify"):
+        with pytest.raises(TokenValidationError, match="signature did not verify"):
             await IssuerSigningKeys(JWKS_URL).verify(forged)
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
@@ -315,7 +321,7 @@ class TestVerify:
         clock.now += 120
 
         for _ in range(2):
-            with pytest.raises(TokenVerificationError, match="signature did not verify"):
+            with pytest.raises(TokenValidationError, match="signature did not verify"):
                 await keys.verify(signed(OTHER_RSA_KEY, kid="rsa-1"))
             clock.now += 10
 
@@ -390,6 +396,17 @@ class TestKeySelection:
 
         assert verified.claims == {"sub": "u-1"}
 
+    @pytest.mark.parametrize("member", ["use", "key_ops"])
+    async def test_a_null_use_or_key_ops_means_the_default(self, httpx_mock: HTTPXMock, member: str) -> None:
+        """A key set that writes ``null`` for an optional member is read as if the member were absent."""
+        document = published(RSA_KEY)
+        document["keys"][0][member] = None
+        httpx_mock.add_response(url=JWKS_URL, json=document)
+
+        verified = await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
+
+        assert verified.claims == {"sub": "u-1"}
+
     @pytest.mark.parametrize(
         ("member", "value"),
         [("key_ops", ["encrypt"]), ("key_ops", "verify"), ("key_ops", [1]), ("use", "enc"), ("use", "other")],
@@ -415,8 +432,9 @@ class TestKeySelection:
         keys = IssuerSigningKeys(JWKS_URL)
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"):
-            with pytest.raises(TokenVerificationError, match="key the issuer does not publish"):
+            with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
                 await keys.verify(signed(short_key))
+            assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
             verified = await keys.verify(signed(RSA_KEY))
 
         assert verified.claims == {"sub": "u-1"}
@@ -424,8 +442,9 @@ class TestKeySelection:
 
     async def test_names_the_tokens_it_verifies(self, httpx_mock: HTTPXMock) -> None:
         """A caller verifying tokens other than ID tokens sees its own name for them in a refusal."""
-        with pytest.raises(TokenVerificationError, match="^Workload token is not a signed token"):
+        with pytest.raises(TokenValidationError, match="^Workload token is not a signed token") as exc_info:
             await IssuerSigningKeys(JWKS_URL, token_name="Workload token").verify("not-a-token")
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(
@@ -595,7 +614,7 @@ class TestFetchFailures:
             await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
 
         # An outage is not a refusal, so a caller can tell a bad token from an unreachable issuer.
-        assert not isinstance(caught.value, TokenVerificationError)
+        assert not isinstance(caught.value, TokenValidationError)
 
     async def test_a_failed_fetch_is_retried_after_a_minute(self, httpx_mock: HTTPXMock) -> None:
         """An outage is reported without refetching for a minute, and does not stick after that."""
@@ -607,12 +626,23 @@ class TestFetchFailures:
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
             await keys.verify(signed(RSA_KEY))
         clock.now += 30
-        with pytest.raises(IdentityFetchError, match="HTTP 503"):
+        with pytest.raises(IdentityFetchError, match="HTTP 503") as repeated:
             await keys.verify(signed(RSA_KEY))
         clock.now += 30
         verified = await keys.verify(signed(RSA_KEY))
 
         assert verified.claims == {"sub": "u-1"}
+        assert repeated.value.kind is FailureKind.SERVER_ERROR
+
+    async def test_a_cached_failure_holds_no_exception_object(self, httpx_mock: HTTPXMock) -> None:
+        """Between attempts only the message and the kind are kept, not a traceback that reaches the token."""
+        httpx_mock.add_response(url=JWKS_URL, status_code=503)
+        keys = IssuerSigningKeys(JWKS_URL, clock=FakeClock())
+
+        with pytest.raises(IdentityFetchError):
+            await keys.verify(signed(RSA_KEY))
+
+        assert not isinstance(keys._last_failure, BaseException)
 
     @pytest.mark.parametrize("body", [b"not json", b"[]", b'{"keys": "nope"}'])
     async def test_reports_a_document_that_is_not_a_key_set(self, httpx_mock: HTTPXMock, body: bytes) -> None:
@@ -675,8 +705,10 @@ class TestFetchFailures:
         def refuse(url: str) -> httpx.AsyncBaseTransport:
             raise PermissionError(url)
 
-        with pytest.raises(IdentityFetchError, match="outbound connection refused"):
+        with pytest.raises(IdentityFetchError, match="outbound connection refused") as exc_info:
             await IssuerSigningKeys(JWKS_URL, transport_factory=refuse).verify(signed(RSA_KEY))
+        # A fault in the caller's factory is neither the issuer's doing nor an outage.
+        assert exc_info.value.kind is FailureKind.UNEXPECTED
 
 
 class TestEventLoops:

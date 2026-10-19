@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth.errors import RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -265,7 +265,7 @@ class GitHubRevocationHandler:
                 json={"access_token": token},
             )
         except httpx.RequestError as exc:
-            failure_message = f"Failed to revoke GitHub token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
         else:
             # 204: grant removed. 404: already gone — idempotent re-disconnect.
             if response.status_code in (204, 404):
@@ -285,7 +285,7 @@ class GitHubRevocationHandler:
             return False
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(f"Failed to revoke GitHub token: {failure.description}", kind=failure.kind)
 
 
 def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:

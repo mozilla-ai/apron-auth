@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
+from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
@@ -470,6 +470,24 @@ class TestDiscover:
         httpx_mock.add_response(url=_ASM_OIDC, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
         assert meta.authorize_url == "https://auth.example.com/authorize"
+
+    async def test_an_outage_on_one_candidate_makes_discovery_retryable(self, httpx_mock: HTTPXMock) -> None:
+        """A server error on the primary metadata URL is not hidden by the fallback's usual 404."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=503)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
+    async def test_not_found_on_every_candidate_is_a_rejection(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REJECTED
 
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -971,7 +989,7 @@ class TestValidateUrl:
         def validator(url: str) -> None:
             del url
             msg = "direct"
-            raise McpDiscoveryError(msg)
+            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
         with pytest.raises(McpDiscoveryError, match="direct") as exc_info:
             _validate_url("https://mcp.example.com", validator)

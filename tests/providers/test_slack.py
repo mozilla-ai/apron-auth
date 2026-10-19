@@ -5,7 +5,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
+from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -175,8 +175,24 @@ class TestSlackIdentityHandler:
         config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="invalid_auth"):
+        with pytest.raises(IdentityFetchError, match="invalid_auth") as exc_info:
             await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        assert exc_info.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
+        "error", ["fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"]
+    )
+    async def test_ok_false_with_a_transient_error_is_retryable(self, httpx_mock: HTTPXMock, error: str) -> None:
+        """Slack reports its own outages and rate limits as 200 with ok=false, so they stay retryable."""
+        from apron_auth.providers.slack import SlackIdentityHandler, preset
+
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
+        config, _ = preset(client_id="sid", client_secret="ssecret", scopes=["openid"])
+
+        with pytest.raises(IdentityFetchError, match=error) as exc_info:
+            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
 
     async def test_ok_false_missing_scope_raises_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, preset

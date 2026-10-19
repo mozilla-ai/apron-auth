@@ -19,10 +19,16 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClai
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
-from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
+from apron_auth.errors import (
+    FailureKind,
+    IdentityFetchError,
+    TokenExpiredError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -145,27 +151,27 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
 
     Raises:
         TokenExpiredError: If the token has expired.
-        TokenVerificationError: If any other claim does not validate.
+        TokenValidationError: If any other claim does not validate.
     """
     tid = claims.get("tid")
     if not isinstance(tid, str) or not _GUID_RE.match(tid):
         msg = "Microsoft ID token has an invalid tid claim"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     issuer = _MICROSOFT_ISSUER_TEMPLATE.format(tid=tid)
     if claims.get("iss") != issuer:
         msg = "Microsoft ID token has an invalid iss claim"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
     # The key set lists each key's issuer with a tenant placeholder, so one key cannot vouch for another issuer.
     if key_issuer is not None and (not isinstance(key_issuer, str) or key_issuer.replace("{tenantid}", tid) != issuer):
         msg = "Microsoft ID token signing key belongs to another issuer"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
     if not _same_client(claims.get("aud"), client_id):
         msg = "Microsoft ID token has an invalid aud claim"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.AUDIENCE)
     subject = claims.get("sub")
     if not isinstance(subject, str) or not subject:
         msg = "Microsoft ID token has an invalid sub claim"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     lifetime = JWTClaimsRegistry(leeway=CLOCK_SKEW_SECONDS, exp={"essential": True}, iat={"essential": True})
     try:
         lifetime.validate(claims)
@@ -175,12 +181,18 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
         # The library joins several missing claim names with commas.
         missing = ", ".join(exc.claim.split(","))
         noun = "claims" if "," in exc.claim else "claim"
-        raise TokenVerificationError(f"Microsoft ID token is missing the {missing} {noun}") from exc
+        raise TokenValidationError(
+            f"Microsoft ID token is missing the {missing} {noun}", reason=TokenValidationReason.CLAIMS
+        ) from exc
     except ClaimError as exc:
-        raise TokenVerificationError(f"Microsoft ID token has an invalid {exc.claim} claim") from exc
+        raise TokenValidationError(
+            f"Microsoft ID token has an invalid {exc.claim} claim", reason=claim_refusal_reason(exc.claim)
+        ) from exc
     except (JoseError, TypeError, ValueError) as exc:
         # A claim of the wrong JSON type can raise outside the library's own errors.
-        raise TokenVerificationError("Microsoft ID token claims did not validate") from exc
+        raise TokenValidationError(
+            "Microsoft ID token claims did not validate", reason=TokenValidationReason.CLAIMS
+        ) from exc
     return _IdToken(claims=claims, issuer=issuer, subject=subject, tenant_id=tid)
 
 
@@ -245,7 +257,7 @@ class MicrosoftIdentityHandler:
 
         Raises:
             TokenExpiredError: If the ID token verifies but has expired.
-            TokenVerificationError: If the ID token's signature or claims do not validate.
+            TokenValidationError: If the ID token's signature or claims do not validate.
             IdentityFetchError: If Microsoft's signing keys cannot be fetched.
                 It is also raised if the userinfo request fails, its response cannot be parsed,
                 or it names no subject or a different one than the ID token.
@@ -300,7 +312,8 @@ class MicrosoftIdentityHandler:
                 "Microsoft identity",
             )
         if not isinstance(payload, dict):
-            raise IdentityFetchError("Microsoft identity response was not a JSON object")
+            msg = "Microsoft identity response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
     async def _fetch_organization(self, access_token: str) -> dict[str, Any] | None:
@@ -342,7 +355,7 @@ class MicrosoftIdentityHandler:
             logger.warning(
                 "microsoft directory lookup could not resolve the tenant's verified domains "
                 "(%s); not asserting domain ownership",
-                describe_http_error(exc),
+                http_failure(exc).description,
             )
             return None
 
@@ -450,10 +463,10 @@ def _require_matching_subject(id_token: _IdToken, userinfo: dict[str, Any]) -> N
     userinfo_subject = userinfo.get("sub")
     if not isinstance(userinfo_subject, str) or not userinfo_subject:
         msg = "Microsoft userinfo response names no subject to match the ID token's"
-        raise IdentityFetchError(msg)
+        raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
     if userinfo_subject != id_token.subject:
         msg = "Microsoft userinfo response names a different subject than the ID token"
-        raise IdentityFetchError(msg)
+        raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
 
 def _userinfo_subject(userinfo: dict[str, Any]) -> str | None:

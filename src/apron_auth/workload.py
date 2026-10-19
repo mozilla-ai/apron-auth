@@ -19,14 +19,16 @@ from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._discovery import require_declared_issuer
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, parse_compact
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
@@ -102,7 +104,9 @@ class WorkloadTokenVerifier:
         try:
             self._document_url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
             if jwks_url is not None:
-                require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
+                require_url(
+                    jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http, caller_supplied=True
+                )
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
@@ -110,7 +114,7 @@ class WorkloadTokenVerifier:
         self._allow_insecure_http = allow_insecure_http
         self._clock = clock
         self._signing_keys = self._key_set(jwks_url) if jwks_url else None
-        self._discovery_failure: str | None = None
+        self._discovery_failure: tuple[str, FailureKind] | None = None
         self._discovery_failed_at: float | None = None
         self._discovery_lock = LoopLock()
 
@@ -139,7 +143,7 @@ class WorkloadTokenVerifier:
             ConfigurationError: If ``audience`` is an empty collection or holds anything but non-empty strings.
                 An empty one would accept every audience, so ``None`` must say that instead.
             TokenExpiredError: If the token verifies but has expired.
-            TokenVerificationError: If the token is refused for any other reason.
+            TokenValidationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
@@ -152,13 +156,13 @@ class WorkloadTokenVerifier:
             audience_rule["values"] = values
         if len(token) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         # A token that is not one is refused before discovery, so it is never reported as an outage.
         try:
             parse_compact(token)
         except ValueError as exc:
             msg = "Workload token is not a signed token"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
         signing_keys = await self._keys()
         claims = (await signing_keys.verify(token)).claims
         registry = JWTClaimsRegistry(
@@ -176,11 +180,11 @@ class WorkloadTokenVerifier:
             raise TokenExpiredError(msg) from exc
         except (JoseError, TypeError, ValueError) as exc:
             msg = "Workload token claims did not validate"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
         # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != self._issuer:
             msg = "Workload token claims did not validate"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return _identity(self._issuer, claims)
 
     async def _keys(self) -> IssuerSigningKeys:
@@ -200,18 +204,21 @@ class WorkloadTokenVerifier:
                 and self._discovery_failed_at is not None
                 and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
             ):
-                raise IdentityFetchError(self._discovery_failure)
+                message, kind = self._discovery_failure
+                raise IdentityFetchError(message, kind=kind)
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
                 require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
                 jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
                 if jwks_url is None:
                     msg = "OpenID provider configuration names no signing key set"
-                    raise OidcDiscoveryError(msg)
+                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
             except OidcDiscoveryError as exc:
-                self._discovery_failure = f"Failed to discover the issuer's signing keys: {exc}"
+                msg = f"Failed to discover the issuer's signing keys: {exc}"
+                # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
+                self._discovery_failure = (msg, exc.kind)
                 self._discovery_failed_at = self._clock()
-                raise IdentityFetchError(self._discovery_failure) from exc
+                raise IdentityFetchError(msg, kind=exc.kind) from exc
             self._discovery_failure = None
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys
@@ -227,7 +234,7 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
     """Lift the identity out of validated claims.
 
     Raises:
-        TokenVerificationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
+        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
     """
     subject = claims["sub"]
     audience = claims["aud"]
@@ -243,7 +250,7 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
         or not isinstance(expires_at, int | float)
     ):
         msg = "Workload token claims did not validate"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     email = claims.get("email")
     # Only the boolean ``true`` counts, so a string ``"true"`` does not verify an address.
     verified_email = email if claims.get("email_verified") is True and isinstance(email, str) and email else None

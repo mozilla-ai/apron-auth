@@ -16,12 +16,12 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.client import OAuthClient, _redact, _TokenEndpointError
+from apron_auth.client import OAuthClient, _redact
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     OAuthError,
-    PermanentOAuthError,
     RevocationError,
     TokenExchangeError,
     TokenRefreshError,
@@ -73,13 +73,21 @@ def _linked_errors(error: BaseException) -> list[BaseException]:
     return found
 
 
+def _frame_names(error: BaseException) -> list[str]:
+    """Return the qualified function names on an error's own traceback, outermost first."""
+    names = []
+    tb = error.__traceback__
+    while tb is not None:
+        names.append(tb.tb_frame.f_code.co_qualname)
+        tb = tb.tb_next
+    return names
+
+
 def _assert_carries_no_secret(error: OAuthError, *secrets: str) -> None:
-    cause = error.__cause__
-    assert error.__context__ is cause
-    if cause is not None:
-        assert isinstance(cause, _TokenEndpointError)
-        assert cause.__cause__ is None
-        assert cause.__context__ is None
+    # No chain at all: the internal token-endpoint error's traceback would hold the request frame.
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert not any(name.endswith("._token_request") for name in _frame_names(error))
     for linked in _linked_errors(error):
         try:
             request = getattr(linked, "request", None)
@@ -225,10 +233,11 @@ class TestTokenRequestErrors:
         httpx_mock.add_response(status_code=400, json={"error": "invalid_grant"})
         client = OAuthClient(_config())
 
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token("grant")
 
         assert exc_info.value.error_code == "invalid_[redacted]"
+        assert exc_info.value.kind is FailureKind.REJECTED
         assert "grant" not in str(exc_info.value).replace("invalid_[redacted]", "")
 
 
@@ -326,18 +335,20 @@ class TestHandlerDomainErrors:
                 try:
                     raise httpx.ConnectError(RAW_TEXT, request=request)
                 except httpx.ConnectError as exc:
-                    raise RevocationError("Custom revocation failed") from exc
+                    raise RevocationError("Custom revocation failed", kind=FailureKind.UNREACHABLE) from exc
 
         client = OAuthClient(_config(), revocation_handler=ChainingHandler())
         with pytest.raises(RevocationError) as exc_info:
             await client.revoke_token(ACCESS_TOKEN)
 
         assert str(exc_info.value) == "Custom revocation failed"
+        # The handler's frames hold the token, so they must not stay on the error's traceback.
+        assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
     async def test_identity_handler_error_loses_its_chain_and_keeps_its_type(self) -> None:
         class CustomIdentityError(IdentityFetchError):
-            pass
+            default_kind = FailureKind.UNREACHABLE
 
         class ChainingHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -356,6 +367,7 @@ class TestHandlerDomainErrors:
             await client.fetch_identity(TokenSet(access_token=ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Custom identity failed"
+        assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
 

@@ -14,11 +14,17 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth._loop_lock import LoopLock
-from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityFetchError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,10 +35,10 @@ logger = logging.getLogger(__name__)
 
 # The age, in seconds, after which the cached key set is fetched again.
 _KEY_MAX_AGE_SECONDS = 3600
-# The shortest interval, in seconds, between key set fetches for an early refresh or after a failed fetch.
-_REFETCH_INTERVAL_SECONDS = 60
 # The smallest RSA key kept from a key set, in bits (NIST SP 800-131A).
 _MIN_RSA_KEY_BITS = 2048
+# The shortest interval, in seconds, between key set fetches for an early refresh or after a failed fetch.
+_REFETCH_INTERVAL_SECONDS = 60
 
 _SigningKey = ECKey | OKPKey | RSAKey
 
@@ -141,7 +147,7 @@ class IssuerSigningKeys:
         self._keys: list[_SigningKey] = []
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
-        self._last_failure: str | None = None
+        self._last_failure: tuple[str, FailureKind] | None = None
         self._token_name = token_name
         self._loop_lock = LoopLock()
 
@@ -157,30 +163,34 @@ class IssuerSigningKeys:
             The token's protected header and claims, and the published key that verified it.
 
         Raises:
-            TokenVerificationError: If the token is not a signed token, names a critical header parameter,
+            TokenValidationError: If the token is not a signed token, names a critical header parameter,
                 names an algorithm outside the accepted list, names no published key, or fails the signature check.
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
             compact = parse_compact(token)
         except ValueError as exc:
-            raise TokenVerificationError(f"{self._token_name} is not a signed token") from exc
+            raise TokenValidationError(
+                f"{self._token_name} is not a signed token", reason=TokenValidationReason.MALFORMED
+            ) from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
             msg = f"{self._token_name} names a critical header parameter that is not supported"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
             msg = f"{self._token_name} uses a signing algorithm that is not accepted"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise TokenVerificationError(f"{self._token_name} header is not valid") from exc
+            raise TokenValidationError(
+                f"{self._token_name} header is not valid", reason=TokenValidationReason.MALFORMED
+            ) from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -199,13 +209,13 @@ class IssuerSigningKeys:
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
                 msg = f"{self._token_name} is signed with a key the issuer does not publish"
-                raise TokenVerificationError(msg)
+                raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
             msg = f"{self._token_name} signature did not verify"
-            raise TokenVerificationError(msg) from result.error
+            raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
         claims = compact_claims(compact)
         if claims is None:
             msg = f"{self._token_name} claims are not a JSON object"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         return VerifiedToken(header, claims, result)
 
     def _check_signature(
@@ -274,12 +284,13 @@ class IssuerSigningKeys:
             if self._is_younger_than(self._fetched_at, _KEY_MAX_AGE_SECONDS):
                 return
             if self._last_failure is not None and self._is_younger_than(self._attempted_at, _REFETCH_INTERVAL_SECONDS):
-                raise IdentityFetchError(self._last_failure)
+                message, kind = self._last_failure
+                raise IdentityFetchError(message, kind=kind)
             try:
                 await self._fetch_and_store()
             except IdentityFetchError as exc:
-                # Only the domain message is kept, so the failed request's objects are not held until the next fetch.
-                self._last_failure = str(exc)
+                # Only the message and the kind are kept, so the failed request is not held until the next fetch.
+                self._last_failure = (str(exc), exc.kind)
                 raise
 
     async def _refetch_early(self, checked_keys: list[_SigningKey]) -> None:
@@ -318,8 +329,10 @@ class IssuerSigningKeys:
         try:
             client = discovery_client(self._jwks_url, self._transport_factory)
         except Exception as exc:
-            # The factory is caller code, so any exception from it means the connection was refused.
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: outbound connection refused") from exc
+            # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
+            # issuer's and is not an outage, so it is never retried.
+            msg = "Failed to fetch the issuer's signing keys: outbound connection refused"
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             async with client:
                 response = await client.get(self._jwks_url)
@@ -331,24 +344,31 @@ class IssuerSigningKeys:
                     f"Failed to fetch the issuer's signing keys: HTTP {status}; redirects are not followed, "
                     "so set the key set URL to the canonical one"
                 )
-                raise IdentityFetchError(msg) from exc
-            raise IdentityFetchError(f"Failed to fetch the issuer's signing keys: {describe_http_error(exc)}") from exc
+                raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
+            status = http_failure(exc)
+            msg = f"Failed to fetch the issuer's signing keys: {status.description}"
+            raise IdentityFetchError(msg, kind=status.kind) from exc
         except httpx.RequestError as exc:
-            raise IdentityFetchError(f"Failed to fetch the issuer's signing keys: {describe_http_error(exc)}") from exc
+            transport = http_failure(exc)
+            msg = f"Failed to fetch the issuer's signing keys: {transport.description}"
+            raise IdentityFetchError(msg, kind=transport.kind) from exc
         except httpx.InvalidURL as exc:
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: invalid key set URL") from exc
+            msg = "Failed to fetch the issuer's signing keys: invalid key set URL"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
         except Exception as exc:
             # A caller's transport can raise anything, and it must still count as a failed fetch.
             # NOTE: A transport's exception can render the request it attempted, so it is chained, never logged.
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: request failed") from exc
+            msg = "Failed to fetch the issuer's signing keys: request failed"
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             document = decode_json_body(response)
         except ValueError as exc:
-            raise IdentityFetchError("The issuer's signing keys could not be read") from exc
+            msg = "The issuer's signing keys could not be read"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
         entries = document.get("keys") if isinstance(document, dict) else None
         if not isinstance(entries, list):
             msg = "The issuer's signing keys could not be read"
-            raise IdentityFetchError(msg)
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         keys = [key for entry in entries if isinstance(entry, dict) and (key := _signing_key(entry)) is not None]
         if not keys:
             logger.warning("The issuer's key set has no key that can verify a signature")
@@ -367,6 +387,8 @@ def _signing_key(entry: dict[str, Any]) -> _SigningKey | None:
         The imported public key, or ``None`` for an entry that is malformed, of another type, not for verifying,
             or an RSA key shorter than 2048 bits.
     """
+    # A member written as null is read as absent, so the default applies to it and the import never sees it.
+    entry = {name: value for name, value in entry.items() if value is not None}
     use = entry.get("use", "sig")
     operations = entry.get("key_ops", ["verify"])
     if use != "sig" or not isinstance(operations, list) or "verify" not in operations:

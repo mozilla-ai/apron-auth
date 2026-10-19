@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from apron_auth.errors import OAuthError
+from apron_auth.errors import FailureKind, OAuthError
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
@@ -44,10 +44,10 @@ def require_declared_issuer(
     issuer = document.get("issuer")
     if not isinstance(issuer, str) or not issuer:
         msg = f"{what} declares no issuer"
-        raise error_cls(msg)
+        raise error_cls(msg, kind=FailureKind.REFUSED)
     if issuer != expected:
         msg = f"{what} declares a different issuer than the one it was fetched for"
-        raise error_cls(msg)
+        raise error_cls(msg, kind=FailureKind.REFUSED)
 
 
 def discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:

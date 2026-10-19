@@ -10,7 +10,13 @@ from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.errors import (
+    ConfigurationError,
+    IdentityFetchError,
+    TokenExpiredError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 from apron_auth.workload import WorkloadTokenVerifier
 
 ISSUER = "https://token.actions.example.com"
@@ -128,43 +134,52 @@ class TestRefusals:
     """Test that a token is refused, as a refusal rather than an outage, for each reason it cannot be trusted."""
 
     @pytest.mark.parametrize(
-        "payload",
+        ("payload", "reason"),
         [
-            pytest.param(claims(aud="https://other.example.com"), id="another audience"),
-            pytest.param(claims(iss="https://other.example.com"), id="another issuer"),
-            pytest.param(claims(iss=[ISSUER]), id="issuer as a list"),
-            pytest.param(claims(sub=None), id="no subject"),
-            pytest.param(claims(sub=""), id="empty subject"),
-            pytest.param(claims(aud=None), id="no audience"),
-            pytest.param(claims(iat=None), id="no issued-at"),
-            pytest.param(claims(exp=None), id="no expiry"),
-            pytest.param(claims(exp="soon"), id="expiry not a number"),
-            pytest.param(claims(nbf=int(time.time()) + 3600), id="not yet valid"),
-            pytest.param(claims(iat=int(time.time()) + 3600), id="issued in the future"),
+            pytest.param(
+                claims(aud="https://other.example.com"), TokenValidationReason.AUDIENCE, id="another audience"
+            ),
+            pytest.param(
+                claims(iss="https://other.example.com"), TokenValidationReason.UNKNOWN_ISSUER, id="another issuer"
+            ),
+            pytest.param(claims(iss=[ISSUER]), TokenValidationReason.UNKNOWN_ISSUER, id="issuer as a list"),
+            pytest.param(claims(sub=None), TokenValidationReason.CLAIMS, id="no subject"),
+            pytest.param(claims(sub=""), TokenValidationReason.CLAIMS, id="empty subject"),
+            pytest.param(claims(aud=None), TokenValidationReason.AUDIENCE, id="no audience"),
+            pytest.param(claims(iat=None), TokenValidationReason.CLAIMS, id="no issued-at"),
+            pytest.param(claims(exp=None), TokenValidationReason.CLAIMS, id="no expiry"),
+            pytest.param(claims(exp="soon"), TokenValidationReason.CLAIMS, id="expiry not a number"),
+            pytest.param(claims(nbf=int(time.time()) + 3600), TokenValidationReason.CLAIMS, id="not yet valid"),
+            pytest.param(claims(iat=int(time.time()) + 3600), TokenValidationReason.CLAIMS, id="issued in the future"),
         ],
     )
-    async def test_claims_that_do_not_validate(self, httpx_mock: HTTPXMock, payload: dict[str, Any]) -> None:
+    async def test_claims_that_do_not_validate(
+        self, httpx_mock: HTTPXMock, payload: dict[str, Any], reason: TokenValidationReason
+    ) -> None:
         """A signature that verifies does not save a token whose claims do not."""
         discoverable(httpx_mock)
 
-        with pytest.raises(TokenVerificationError, match="claims did not validate"):
+        with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(payload), audience=AUDIENCE)
+        assert exc_info.value.reason is reason
 
     async def test_an_expired_token(self, httpx_mock: HTTPXMock) -> None:
         """An expired token raises its own refusal, so the caller can say to fetch a fresh one."""
         discoverable(httpx_mock)
         now = int(time.time())
 
-        with pytest.raises(TokenExpiredError):
+        with pytest.raises(TokenExpiredError) as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(iat=now - 900, exp=now - 600)), audience=AUDIENCE)
+        assert exc_info.value.reason is TokenValidationReason.EXPIRED
 
     async def test_a_token_signed_by_another_key(self, httpx_mock: HTTPXMock) -> None:
         """A key the issuer does not publish verifies nothing."""
         discoverable(httpx_mock)
         stranger = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 
-        with pytest.raises(TokenVerificationError, match="signature did not verify"):
+        with pytest.raises(TokenValidationError, match="signature did not verify") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(), stranger), audience=AUDIENCE)
+        assert exc_info.value.reason is TokenValidationReason.SIGNATURE
 
     @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
     async def test_a_short_rsa_key(self, httpx_mock: HTTPXMock) -> None:
@@ -172,18 +187,23 @@ class TestRefusals:
         short_key = jwk.RSAKey.generate_key(1024, parameters={"kid": "rsa-short"}, auto_kid=False)
         discoverable(httpx_mock, short_key)
 
-        with pytest.raises(TokenVerificationError, match="^Workload token is signed with a key the issuer does not"):
+        with pytest.raises(
+            TokenValidationError, match="^Workload token is signed with a key the issuer does not"
+        ) as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(), short_key), audience=AUDIENCE)
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
 
     async def test_an_oversized_token_is_refused_before_any_fetch(self) -> None:
         """A token longer than any issuer signs is refused without contacting the issuer."""
-        with pytest.raises(TokenVerificationError, match="longer than"):
+        with pytest.raises(TokenValidationError, match="longer than") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify("a" * 20000, audience=AUDIENCE)
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
     async def test_a_token_that_is_not_signed(self, httpx_mock: HTTPXMock) -> None:
         """Text that is not a compact signed token is refused before discovery, so not as an outage."""
-        with pytest.raises(TokenVerificationError, match="^Workload token is not a signed token"):
+        with pytest.raises(TokenValidationError, match="^Workload token is not a signed token") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify("not-a-token", audience=AUDIENCE)
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
         assert not httpx_mock.get_requests()
 
@@ -195,7 +215,7 @@ class TestRefusals:
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
             await verifier.verify(signed(claims()), audience=AUDIENCE)
 
-        with pytest.raises(TokenVerificationError, match="not a signed token"):
+        with pytest.raises(TokenValidationError, match="not a signed token"):
             await verifier.verify("not-a-token", audience=AUDIENCE)
 
 
@@ -209,7 +229,7 @@ class TestOutages:
         with pytest.raises(IdentityFetchError) as caught:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=AUDIENCE)
 
-        assert not isinstance(caught.value, TokenVerificationError)
+        assert not isinstance(caught.value, TokenValidationError)
 
     async def test_a_document_without_a_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A configuration document that names no key set cannot verify anything."""
@@ -236,6 +256,16 @@ class TestOutages:
         assert identity.subject == "repo:acme/app"
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
 
+    async def test_a_cached_discovery_failure_holds_no_exception_object(self, httpx_mock: HTTPXMock) -> None:
+        """Between attempts only the message and the kind are kept, not a traceback that reaches the token."""
+        verifier = WorkloadTokenVerifier(ISSUER, clock=FakeClock())
+        httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
+
+        with pytest.raises(IdentityFetchError):
+            await verifier.verify(signed(claims()), audience=AUDIENCE)
+
+        assert not isinstance(verifier._discovery_failure, BaseException)
+
     async def test_an_unreachable_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A key set that cannot be fetched is an outage, not a refusal."""
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})
@@ -244,7 +274,7 @@ class TestOutages:
         with pytest.raises(IdentityFetchError) as caught:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=AUDIENCE)
 
-        assert not isinstance(caught.value, TokenVerificationError)
+        assert not isinstance(caught.value, TokenValidationError)
 
 
 class TestConfiguration:

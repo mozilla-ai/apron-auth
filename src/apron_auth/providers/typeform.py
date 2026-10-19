@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError
+from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -82,7 +82,8 @@ class TypeformIdentityHandler:
             )
 
         if not isinstance(payload, dict):
-            raise IdentityFetchError("Typeform identity response was not a JSON object")
+            msg = "Typeform identity response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         # Typeform "workspaces" are intra-account containers, not
         # OAuth-scoping contexts. A token authenticates the user and

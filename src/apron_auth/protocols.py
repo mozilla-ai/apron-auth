@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure, status_failure
 from apron_auth.errors import RevocationError
 
 if TYPE_CHECKING:
@@ -75,6 +75,12 @@ class RevocationHandler(Protocol):
 
         Returns:
             ``True`` if revocation succeeded.
+
+        Raises:
+            RevocationError: If the request cannot be sent or the provider refuses it.
+                Implementations should pass ``kind``, because only they know whether the provider
+                was unreachable, answered a server error, or rejected the request.
+                An error raised without one is ``UNEXPECTED`` and never retried.
         """
         ...
 
@@ -96,6 +102,14 @@ class IdentityHandler(Protocol):
 
         Returns:
             The normalized identity profile.
+
+        Raises:
+            IdentityFetchError: If the identity cannot be fetched or the response does not validate.
+                Implementations should pass ``kind``, because only they know whether the provider
+                was unreachable, answered a server error, rejected the token, or sent an invalid response.
+                An error raised without one is ``UNEXPECTED`` and never retried.
+                ``IdentityScopeNotGrantedError`` reports a token that lacks a scope the endpoint needs.
+            ConfigurationError: If the configuration cannot be used for an identity request.
         """
         ...
 
@@ -186,7 +200,8 @@ class StandardRevocationHandler:
             ``True`` when the endpoint responds with success.
 
         Raises:
-            RevocationError: If the request fails to reach the endpoint.
+            RevocationError: If the request fails to reach the endpoint, or the endpoint answers an error status.
+                Its kind says whether the endpoint may accept the request later.
                 The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth()
@@ -206,9 +221,11 @@ class StandardRevocationHandler:
                 auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:
-            failure_message = f"Failed to revoke token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
         else:
-            return response.is_success
+            if response.is_success:
+                return True
+            failure = status_failure(response.status_code)
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(f"Failed to revoke token: {failure.description}", kind=failure.kind)

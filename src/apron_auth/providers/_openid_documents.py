@@ -9,9 +9,9 @@ from urllib.parse import urlparse
 import httpx
 
 from apron_auth._discovery import discovery_client
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import OidcDiscoveryError
+from apron_auth.errors import FailureKind, OidcDiscoveryError
 
 if TYPE_CHECKING:
     from apron_auth.protocols import TransportFactory
@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("apron_auth.providers.oidc")
 
 
-def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False) -> str:
+def require_url(
+    value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False, caller_supplied: bool = False
+) -> str:
     """Require ``value`` to be an absolute URL apron-auth may talk to.
 
     This is the one URL rule for the issuer, the document URL and every endpoint.
@@ -32,7 +34,8 @@ def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer:
         value: The raw value to check.
         field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules.
+        is_issuer: Apply the stricter issuer rules. An issuer is always caller-supplied.
+        caller_supplied: The value is an argument of this library's caller, not a member of a fetched document.
 
     Returns:
         ``value``, once it passes.
@@ -40,33 +43,37 @@ def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer:
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
+    # A caller's own URL is a configuration fault. A URL from the provider's document is refused.
+    kind = FailureKind.CONFIGURATION if is_issuer or caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     try:
         parsed = urlparse(value)
         hostname = parsed.hostname
+        # The port is parsed only when read, so a port that is not a number surfaces here and not at the fetch.
+        parsed.port  # noqa: B018
     except ValueError as exc:
         msg = f"OpenID {field} is malformed"
-        raise OidcDiscoveryError(msg) from exc
+        raise OidcDiscoveryError(msg, kind=kind) from exc
     if not parsed.scheme or not hostname:
         msg = f"OpenID {field} is not an absolute URL"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     scheme = parsed.scheme.lower()
     if scheme == "http" and allow_insecure_http:
         logger.warning("OpenID %s is plain http; allowed by allow_insecure_http, use for local development only", field)
     elif scheme != "https":
         msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     if "#" in value:
         msg = f"OpenID {field} must not carry a fragment"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     if is_issuer and "?" in value:
         msg = f"OpenID {field} must not carry a query"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     if is_issuer and "@" in parsed.netloc:
         msg = f"OpenID {field} must not carry userinfo"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=kind)
     return value
 
 
@@ -110,18 +117,20 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
     try:
         client = discovery_client(url, transport_factory)
     except Exception as exc:
-        # Building the client calls the caller's transport factory, so any exception here means a refused connection.
+        # Building the client calls the caller's transport factory. Whether it refused the connection by policy or
+        # failed, the fault is not the provider's and is not an outage, so it is never retried.
         msg = "could not fetch the OpenID provider configuration (outbound connection refused)"
-        raise OidcDiscoveryError(msg) from exc
+        raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from exc
     async with client:
         try:
             response = await client.get(url)
         except httpx.RequestError as exc:
-            msg = f"could not fetch the OpenID provider configuration ({describe_http_error(exc)})"
-            raise OidcDiscoveryError(msg) from exc
+            transport = http_failure(exc)
+            msg = f"could not fetch the OpenID provider configuration ({transport.description})"
+            raise OidcDiscoveryError(msg, kind=transport.kind) from exc
         except httpx.InvalidURL as exc:
             msg = "could not fetch the OpenID provider configuration (invalid URL)"
-            raise OidcDiscoveryError(msg) from exc
+            raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
         if response.status_code != 200:
             if 300 <= response.status_code < 400:
                 # The target is provider-controlled text, so it is not logged.
@@ -130,15 +139,16 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
                     f"OpenID provider configuration returned HTTP {response.status_code}; redirects are not "
                     "followed, so pass the canonical document URL as document_url"
                 )
-                raise OidcDiscoveryError(msg)
-            msg = f"OpenID provider configuration returned HTTP {response.status_code}"
-            raise OidcDiscoveryError(msg)
+                raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+            status = status_failure(response.status_code)
+            msg = f"OpenID provider configuration returned {status.description}"
+            raise OidcDiscoveryError(msg, kind=status.kind)
         try:
             document = decode_json_body(response)
         except ValueError as exc:
             msg = "OpenID provider configuration was not JSON"
-            raise OidcDiscoveryError(msg) from exc
+            raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
     if not isinstance(document, dict):
         msg = "OpenID provider configuration was not a JSON object"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
     return document

@@ -15,12 +15,14 @@ from pytest_httpx import HTTPXMock
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
 from apron_auth.protocols import StandardRevocationHandler
@@ -290,6 +292,19 @@ class TestDiscover:
         with pytest.raises(OidcDiscoveryError, match="document URL is malformed"):
             await discover(ISSUER, document_url="https://[::1")
 
+    async def test_refuses_a_document_url_with_a_bad_port_as_configuration(self):
+        """A port that cannot be read is a malformed URL, found before any fetch and charged to the caller."""
+        with pytest.raises(OidcDiscoveryError, match="document URL is malformed") as exc_info:
+            await discover(ISSUER, document_url="https://sso.example.com:port/config")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    async def test_refuses_an_endpoint_with_a_bad_port_as_the_providers_fault(self, httpx_mock: HTTPXMock):
+        httpx_mock.add_response(url=DOCUMENT_URL, json=document(token_endpoint="https://idp.example:port/token"))
+
+        with pytest.raises(OidcDiscoveryError, match="token endpoint is malformed") as exc_info:
+            await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
     async def test_reports_an_unreachable_document(self, httpx_mock: HTTPXMock):
         """A transport error surfaces as ``OidcDiscoveryError``, not a raw httpx error."""
         httpx_mock.add_exception(httpx.ConnectError("no route"), url=DOCUMENT_URL)
@@ -378,8 +393,9 @@ class TestHttpsRequirement:
 
     async def test_refuses_an_http_document_url_override(self):
         """An explicit document URL is held to the https rule too."""
-        with pytest.raises(OidcDiscoveryError, match="document URL must use https"):
+        with pytest.raises(OidcDiscoveryError, match="document URL must use https") as exc_info:
             await discover(ISSUER, document_url="http://sso.example.com/config")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     @pytest.mark.parametrize(
         ("field", "label"),
@@ -396,8 +412,9 @@ class TestHttpsRequirement:
         """A document advertising a clear-text endpoint is refused by default."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: "http://idp.example/endpoint"}))
 
-        with pytest.raises(OidcDiscoveryError, match=f"{label} must use https"):
+        with pytest.raises(OidcDiscoveryError, match=f"{label} must use https") as exc_info:
             await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_accepts_http_with_the_explicit_opt_in(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         """Local development can opt in, and the opt-in is audible in the logs."""
@@ -1104,11 +1121,12 @@ class TestOidcIdentity:
 
     async def test_refuses_an_id_token_from_another_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """An ``iss`` other than the configured issuer is refused."""
-        with pytest.raises(TokenVerificationError, match=r"invalid iss claim"):
+        with pytest.raises(TokenValidationError, match=r"invalid iss claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_ISSUER
 
     @pytest.mark.parametrize("iss", [[ISSUER], ["https://attacker.example", ISSUER]])
     async def test_refuses_an_id_token_naming_its_issuer_in_a_list(
@@ -1122,11 +1140,12 @@ class TestOidcIdentity:
         self, handler: OidcIdentityHandler, config: ProviderConfig
     ):
         """An ``aud`` that does not name this client is refused."""
-        with pytest.raises(IdentityFetchError, match=r"invalid aud claim"):
+        with pytest.raises(TokenValidationError, match=r"invalid aud claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(aud="someone-else")),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.AUDIENCE
 
     async def test_accepts_an_audience_array_naming_this_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1145,11 +1164,12 @@ class TestOidcIdentity:
 
     async def test_refuses_an_expired_id_token(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A token expired well beyond the leeway is refused as expired."""
-        with pytest.raises(TokenExpiredError, match=r"has expired"):
+        with pytest.raises(TokenExpiredError, match=r"has expired") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.EXPIRED
 
     async def test_tolerates_clock_skew_within_the_leeway(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1717,10 +1737,11 @@ class TestOidcIdentity:
         """A non-string ``sub`` is a malformed ID token, not a userinfo disagreement."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
-        with pytest.raises(TokenVerificationError, match="ID token has an invalid sub claim"):
+        with pytest.raises(TokenValidationError, match="ID token has an invalid sub claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
             )
+        assert exc_info.value.reason is TokenValidationReason.CLAIMS
 
     async def test_refuses_when_there_is_no_userinfo_endpoint_and_no_id_token(self, config: ProviderConfig):
         """With neither document, nothing names a subject."""

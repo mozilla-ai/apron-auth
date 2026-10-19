@@ -101,7 +101,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenVerificationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce, the audience, the expiry, and the issuer when one is configured, before it returns the tokens.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenValidationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce, the audience, the expiry, and the issuer when one is configured, before it returns the tokens.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -486,7 +486,7 @@ apron-auth does not enforce refresh cadence. The recommended shape is:
 - Issue your own short-lived application session (e.g. a JWT with a
   TTL of minutes, not hours).
 - On session refresh, call `client.refresh_token(...)` against the
-  provider; if refresh fails permanently (`PermanentOAuthError`),
+  provider; if refresh fails with an error that is not `retryable`,
   revoke the application session.
 - For long-running background tasks that hold a refresh token, run
   the same check periodically.
@@ -499,28 +499,30 @@ or the consumer maintaining an out-of-band revocation list.
 
 ### Token refresh
 
-Refreshing can fail permanently (the user revoked access, the client was deregistered) or transiently (network blip, rate limit). apron-auth tells you which.
+Refreshing can fail for good (the user revoked access, the client was deregistered) or for now (network blip, provider outage, rate limit). Every error says which through `retryable`, and `error_code` carries the provider's OAuth error code when it sent one.
 
 ```python
-from apron_auth import PermanentOAuthError
+from apron_auth import TokenRefreshError
 
 try:
     tokens = await client.refresh_token(tokens.refresh_token)
-except PermanentOAuthError:
-    # The token can't be recovered — delete it and re-authenticate the user.
-    pass
+except TokenRefreshError as exc:
+    if exc.retryable:
+        ...  # try again later
+    else:
+        ...  # the grant is dead or the client is misconfigured: delete the token and re-authenticate
 ```
 
-By default, `invalid_grant`, `unauthorized_client`, and `invalid_client` are treated as permanent. If your provider uses non-standard error codes for the same thing, you can extend the set:
+RFC 6749 defines every token-endpoint error code as a fault in the request as sent, so a code is not retryable unless it is `server_error` or `temporarily_unavailable`. If your provider uses a non-standard code for a temporary condition, add it:
 
 ```python
 client = OAuthClient(
     config,
-    permanent_error_codes={"token_revoked", "account_suspended"},
+    retryable_error_codes={"rate_limited"},
 )
 ```
 
-These merge with the defaults — you can inspect them via `OAuthClient.DEFAULT_PERMANENT_ERROR_CODES`.
+These merge with the defaults, which `OAuthClient.DEFAULT_RETRYABLE_ERROR_CODES` holds. A provider that rotates refresh tokens may have consumed the token before an outage was reported, so a retry that then fails with `invalid_grant` needs a new sign-in. The code exchange classifies the same codes the same way, so `TokenExchangeError` carries the same `kind` and `error_code`, but it is never `retryable`: an authorization code is single-use, and presenting it twice can revoke the tokens it issued.
 
 ### Token revocation
 
@@ -642,7 +644,7 @@ Discovery, registration, the token request, and token revocation all fetch URLs 
 A workload on Google Cloud, GitHub Actions or Kubernetes can fetch a token its platform signed, naming the workload and an audience it chose. A server that trusts the platform can accept that token in place of a secret the workload would otherwise hold, as the OAuth 2.0 JWT bearer grant does (RFC 7523). `apron_auth.workload` is the server side of that: it checks the token, and the server decides what the identity it names may do.
 
 ```python
-from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError
 from apron_auth.workload import WorkloadTokenVerifier
 
 verifier = WorkloadTokenVerifier("https://accounts.google.com", transport_factory=my_transport_factory)
@@ -651,7 +653,7 @@ try:
     identity = await verifier.verify(token, audience="https://gateway.example.com")
 except TokenExpiredError:
     ...  # tell the workload to fetch a fresh token
-except TokenVerificationError:
+except TokenValidationError:
     ...  # refuse the token; retrying it cannot succeed
 except IdentityFetchError:
     ...  # the issuer is unreachable; ask the workload to retry later
@@ -717,25 +719,48 @@ When Trello ships OAuth 2.0, a preset will be added here.
 
 ## Error hierarchy
 
-All exceptions inherit from `OAuthError`.
+All exceptions inherit from `OAuthError`. The class says which step failed. Every error also carries a `kind`, a `FailureKind` that says what went wrong in a form code can read, and `retryable`, which is `True` when the same request may succeed later without any change.
+
+| `kind`          | Meaning                                                                                  | `retryable` |
+|-----------------|------------------------------------------------------------------------------------------|-------------|
+| `CONFIGURATION` | Your configuration or an argument cannot work.                                           | no          |
+| `REFUSED`       | apron-auth refused what the other side sent: a token, a document or a response that does not validate. | no |
+| `REJECTED`      | The other side refused the request as sent: a client error status or an OAuth error code. | no          |
+| `SERVER_ERROR`  | The other side answered with a server error or a rate limit.                             | yes         |
+| `TIMEOUT`       | The request ran out of time.                                                             | yes         |
+| `UNEXPECTED`    | An error apron-auth does not classify, such as a fault in a handler you supplied.        | no          |
+| `UNREACHABLE`   | The other side could not be reached.                                                     | yes         |
 
 | Exception                      | When it's raised                                                                                                |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused.                         |
+| `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused. Carries `error_code`. Never `retryable`: a code is single-use, so start a new authorization. |
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |
-| `TokenRefreshError`            | Refresh failed, but it might work if you try again (transient).                                                 |
-| `PermanentOAuthError`          | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
-| `RevocationError`              | The provider rejected the revocation request.                                                                   |
+| `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
+| `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`).                                       |
+| `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL, or unreachable or malformed server metadata.   |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
-| `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient; its subclasses mark the failures that are not. |
-| `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
-| `TokenVerificationError`       | An ID token or workload token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`, so catch it first. |
-| `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenVerificationError`.                   |
+| `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal.                                     |
+| `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Subclass of `IdentityFetchError`.                          |
+| `TokenValidationError`         | An ID token or workload token was refused. `reason` says why: `audience`, `claims`, `expired`, `malformed`, `signature`, `unknown_issuer`, `unknown_key` or `unsupported`. Subclass of `IdentityFetchError`, so catch it first. |
+| `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenValidationError`.                     |
+
+`TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
+
+### Migrating from 0.18
+
+- `PermanentOAuthError` is gone. Catch `TokenRefreshError` and read `retryable`; a dead grant has `retryable == False` and `error_code == "invalid_grant"`.
+- `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
+- `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
+- `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
+- A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
+- `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
+- `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
+- Errors can be pickled and keep `kind`, `error_code` and `reason`.
 
 ## Logging
 

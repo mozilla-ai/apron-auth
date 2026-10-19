@@ -9,6 +9,8 @@ from joserfc import jws
 from joserfc.errors import JoseError
 from joserfc.jws import CompactSignature, JWSRegistry
 
+from apron_auth.errors import TokenValidationReason
+
 # The clock difference, in seconds, allowed between this client and an issuer when a token's times are checked.
 CLOCK_SKEW_SECONDS = 60
 
@@ -93,3 +95,19 @@ def unverified_claims(token: str) -> dict[str, Any]:
         msg = "The token's claims are not a JSON object"
         raise ValueError(msg)
     return claims
+
+
+def claim_refusal_reason(claim: object) -> TokenValidationReason:
+    """Return the reason a token is refused when the named claim does not validate.
+
+    Args:
+        claim: The claim name the validator reported, or ``None`` when it reported none.
+
+    Returns:
+        ``AUDIENCE`` for ``aud``, ``UNKNOWN_ISSUER`` for ``iss``, else ``CLAIMS``.
+    """
+    if claim == "aud":
+        return TokenValidationReason.AUDIENCE
+    if claim == "iss":
+        return TokenValidationReason.UNKNOWN_ISSUER
+    return TokenValidationReason.CLAIMS

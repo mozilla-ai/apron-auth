@@ -45,16 +45,18 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, require_declared_issuer, str_list
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.models import (
     IdentityMaterial,
@@ -161,7 +163,7 @@ async def discover(
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
-        require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
+        require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http, caller_supplied=True)
         url = document_url
     document = await fetch_document(url, transport_factory)
 
@@ -171,13 +173,13 @@ async def discover(
     token_url = document.get("token_endpoint")
     if authorize_url is None or token_url is None:
         msg = "OpenID provider configuration is missing an endpoint"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
     authorize_url = require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
     token_url = require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
     jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
     if jwks_url is None:
         msg = "OpenID provider configuration names no signing key set"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
 
     userinfo_url = optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
     revocation_url = optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
@@ -432,7 +434,7 @@ class OidcIdentityHandler:
             IdentityScopeNotGrantedError: If there is no usable ID token,
                 and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             TokenExpiredError: If the ID token verifies but has expired.
-            TokenVerificationError: If the ID token's signature or claims do not validate,
+            TokenValidationError: If the ID token's signature or claims do not validate,
                 or its ``sub`` is not a non-empty string.
             IdentityFetchError: If the issuer's signing keys cannot be fetched or read.
                 It is also raised when userinfo fails and there is no validated ID token,
@@ -471,20 +473,20 @@ class OidcIdentityHandler:
         if claims is not None and claims_subject is None:
             # Authlib only requires ``sub`` to be present, so a non-string would read as a userinfo mismatch.
             msg = "OpenID ID token has an invalid sub claim"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
         subject = claims_subject or _claim_str(userinfo, "sub")
         if subject is None:
             msg = "OpenID sign-in returned no subject"
-            raise IdentityFetchError(msg)
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         if claims is not None and userinfo_fetched:
             # Section 5.3.2: userinfo ``sub`` must match the ID token's, and an absent one does not.
             userinfo_subject = _claim_str(userinfo, "sub")
             if userinfo_subject is None:
                 msg = "OpenID userinfo response names no subject to match the ID token's"
-                raise IdentityFetchError(msg)
+                raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
             if userinfo_subject != claims_subject:
                 msg = "OpenID userinfo response names a different subject than the ID token"
-                raise IdentityFetchError(msg)
+                raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         email, email_verified = _email_fields(claims, userinfo)
         if not self._trust_email_verified:
@@ -541,16 +543,17 @@ class OidcIdentityHandler:
         try:
             token.validate(leeway=CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
-            error = TokenExpiredError if isinstance(exc, ExpiredTokenError) else TokenVerificationError
-            raise error(_claim_error_message(exc)) from exc
+            if isinstance(exc, ExpiredTokenError):
+                raise TokenExpiredError(_claim_error_message(exc)) from exc
+            raise TokenValidationError(_claim_error_message(exc), reason=claim_refusal_reason(exc.claim)) from exc
         except (JoseError, TypeError, ValueError) as exc:
             # A malformed header or claim shape can raise ``TypeError``, which must surface as a refusal.
             msg = "OpenID ID token claims did not validate"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS) from exc
         # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != issuer:
             msg = "OpenID ID token has an invalid iss claim"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return claims
 
     async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
@@ -573,8 +576,10 @@ class OidcIdentityHandler:
         try:
             transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
         except Exception as exc:
-            # The factory is caller code, so any exception from it means the connection was refused.
-            raise IdentityFetchError("Failed to fetch OpenID identity: outbound connection refused") from exc
+            # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
+            # provider's and is not an outage, so it is never retried.
+            msg = "Failed to fetch OpenID identity: outbound connection refused"
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         failure: IdentityFetchError | None = None
         try:
             async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
@@ -590,32 +595,38 @@ class OidcIdentityHandler:
             ):
                 failure = IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope")
             else:
-                failure = IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}")
+                status = http_failure(exc)
+                failure = IdentityFetchError(f"Failed to fetch OpenID identity: {status.description}", kind=status.kind)
         # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
         except httpx.InvalidURL:
-            failure = IdentityFetchError("Failed to fetch OpenID identity: invalid userinfo URL")
+            failure = IdentityFetchError(
+                "Failed to fetch OpenID identity: invalid userinfo URL", kind=FailureKind.REFUSED
+            )
         except httpx.RequestError as exc:
-            failure = IdentityFetchError(f"Failed to fetch OpenID identity: {describe_http_error(exc)}")
+            transport = http_failure(exc)
+            failure = IdentityFetchError(
+                f"Failed to fetch OpenID identity: {transport.description}", kind=transport.kind
+            )
         except Exception:
             # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
-            failure = IdentityFetchError("Failed to fetch OpenID identity: request failed")
+            failure = IdentityFetchError("Failed to fetch OpenID identity: request failed", kind=FailureKind.UNEXPECTED)
         else:
             media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
             if media_type == "application/jwt":
                 # Its signing algorithm is agreed at client registration, which this handler does not know.
                 msg = "OpenID provider returned a signed userinfo response, which is not supported"
-                raise IdentityFetchError(msg)
+                raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
             try:
                 payload = decode_json_body(response)
             except ValueError:
-                failure = IdentityFetchError("Failed to parse OpenID identity response")
+                failure = IdentityFetchError("Failed to parse OpenID identity response", kind=FailureKind.REFUSED)
         if failure is not None:
             # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.
             # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
             raise failure
         if not isinstance(payload, dict):
             msg = "OpenID identity response was not a JSON object"
-            raise IdentityFetchError(msg)
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
 
@@ -767,7 +778,7 @@ def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
         return []
     if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
         msg = f"OpenID provider configuration has a malformed {key}"
-        raise OidcDiscoveryError(msg)
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
     return value
 
 
