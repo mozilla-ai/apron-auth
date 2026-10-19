@@ -137,7 +137,7 @@ async def discover(
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
 
-    A document that names an issuer other than ``issuer`` is refused (OpenID Connect Discovery 1.0, section 4.3).
+    A document that does not declare ``issuer`` as its own is refused (OpenID Connect Discovery 1.0, section 4.3).
     Every later ``iss`` check therefore compares against an issuer the caller chose.
 
     Args:
@@ -159,7 +159,7 @@ async def discover(
     Raises:
         OidcDiscoveryError: If the issuer is malformed, or a URL is not ``https`` and ``allow_insecure_http`` is unset.
             It is also raised if the document cannot be fetched or parsed, omits a required endpoint,
-            names no signing key set, or names an issuer other than ``issuer``.
+            names no signing key set, or does not declare ``issuer`` as its own.
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:

@@ -90,7 +90,7 @@ async def discover(
     Raises:
         McpDiscoveryError: If a URL is rejected, no metadata document can be
             fetched, a required field is absent, or the authorization server
-            metadata names an issuer other than the server it was fetched from.
+            metadata does not declare the server it was fetched from as its issuer.
             The first document fetched is authoritative, so a mismatched issuer
             ends discovery rather than trying the next candidate URL.
     """
