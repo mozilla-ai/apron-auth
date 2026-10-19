@@ -36,7 +36,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
+from apron_auth.errors import ConfigurationError, FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
     ClientRegistration,
@@ -89,19 +89,24 @@ async def discover(
         The discovered metadata.
 
     Raises:
-        McpDiscoveryError: If a URL is rejected, no metadata document can be
-            fetched, a required field is absent, or the authorization server
-            metadata does not declare the server it was fetched from as its issuer.
-            The first document fetched is authoritative, so a mismatched issuer
-            ends discovery rather than trying the next candidate URL.
+        ConfigurationError: If a URL the caller passed is rejected: ``server_url``,
+            the ``resource_metadata_url`` hint, or a protected-resource metadata
+            URL derived from ``server_url``.
+        McpDiscoveryError: If a URL the metadata declares is rejected, no metadata
+            document can be fetched, a required field is absent, or the
+            authorization server metadata does not declare the server it was
+            fetched from as its issuer. The first document fetched is
+            authoritative, so a mismatched issuer ends discovery rather than
+            trying the next candidate URL.
     """
-    _validate_url(server_url, url_validator)
+    _validate_url(server_url, url_validator, caller_supplied=True)
 
     resource_meta = await _fetch_first_metadata(
         _prm_candidate_urls(resource_metadata_url, server_url),
         url_validator,
         transport_factory,
         "protected resource metadata",
+        caller_supplied=True,
     )
     auth_servers = resource_meta.get("authorization_servers")
     auth_server = None
@@ -110,7 +115,7 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-    _validate_url(auth_server, url_validator)
+    _validate_url(auth_server, url_validator, caller_supplied=False)
     # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
     # The delimiters are checked, so an empty query or fragment counts.
     if "?" in auth_server or "#" in auth_server:
@@ -122,6 +127,7 @@ async def discover(
         url_validator,
         transport_factory,
         "authorization server metadata",
+        caller_supplied=False,
     )
     try:
         require_declared_issuer(server_meta, auth_server)
@@ -147,7 +153,7 @@ async def discover(
     revocation_url = revocation if isinstance(revocation, str) else None
     for url in (authorize_url, token_url, registration_url, revocation_url):
         if url is not None:
-            _validate_url(url, url_validator)
+            _validate_url(url, url_validator, caller_supplied=False)
 
     resource = resource_meta.get("resource")
     return ServerMetadata(
@@ -289,11 +295,12 @@ async def register_client(
         persistence obligation.
 
     Raises:
+        ConfigurationError: If ``registration_url`` is rejected.
+        McpRegistrationError: If the endpoint returns a non-success status, or the
+            response lacks a usable ``client_id``.
         ValueError: If ``application_type`` is neither ``web`` nor ``native``.
-        McpRegistrationError: If the URL is rejected, the endpoint returns a
-            non-success status, or the response lacks a usable ``client_id``.
     """
-    _validate_url(registration_url, url_validator, McpRegistrationError)
+    _validate_url(registration_url, url_validator, caller_supplied=True)
     if application_type not in (None, ApplicationType.WEB, ApplicationType.NATIVE):
         msg = "application_type must be 'web' or 'native'"
         raise ValueError(msg)
@@ -579,33 +586,40 @@ def _infer_application_type(redirect_uri: str) -> str | None:
     return None
 
 
-def _validate_url(
-    url: str,
-    url_validator: UrlValidator | None,
-    error_cls: type[OAuthError] = McpDiscoveryError,
-) -> None:
+def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_supplied: bool) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
-    Raises ``error_cls`` when the URL is malformed, not HTTPS, carries userinfo, or
-    targets a host that is not globally reachable. An ``OAuthError`` from
-    ``url_validator`` propagates unchanged; any other validator exception is
-    wrapped in ``error_cls``. The validator sees only a URL that passed these checks.
+    A URL is rejected when it is malformed, not HTTPS, carries userinfo, or targets
+    a host that is not globally reachable. ``caller_supplied`` marks a URL this
+    library's caller passed, or one derived from it. Any other URL is a member of a
+    fetched document. An ``OAuthError`` from ``url_validator`` propagates unchanged,
+    and any other validator exception is wrapped in the class the source decides.
+    The validator sees only a URL that passed these checks.
+
+    Raises:
+        ConfigurationError: If a caller-supplied URL is rejected.
+        McpDiscoveryError: If a document-supplied URL is rejected.
     """
+    error_cls: type[OAuthError]
+    if caller_supplied:
+        error_cls, kind = ConfigurationError, FailureKind.CONFIGURATION
+    else:
+        error_cls, kind = McpDiscoveryError, FailureKind.REFUSED
     try:
         parsed = _parse_url(url)
     except ValueError as exc:
         msg = "MCP OAuth received a malformed URL"
-        raise error_cls(msg, kind=FailureKind.REFUSED) from exc
+        raise error_cls(msg, kind=kind) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
-        raise error_cls(msg, kind=FailureKind.REFUSED)
+        raise error_cls(msg, kind=kind)
     # Userinfo would be sent as credentials with the request, and could reach a log through the URL.
     if parsed.username is not None:
         msg = "MCP OAuth refused a URL that carries userinfo"
-        raise error_cls(msg, kind=FailureKind.REFUSED)
+        raise error_cls(msg, kind=kind)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
-        raise error_cls(msg, kind=FailureKind.REFUSED)
+        raise error_cls(msg, kind=kind)
     if url_validator is None:
         return
     try:
@@ -614,7 +628,7 @@ def _validate_url(
         raise
     except Exception as exc:
         # Any rejection from the caller's validator fails the operation.
-        raise error_cls(str(exc), kind=FailureKind.REFUSED) from exc
+        raise error_cls(str(exc), kind=kind) from exc
 
 
 def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> list[str]:
@@ -653,20 +667,24 @@ async def _fetch_first_metadata(
     url_validator: UrlValidator | None,
     transport_factory: TransportFactory | None,
     what: str,
+    *,
+    caller_supplied: bool,
 ) -> dict[str, Any]:
     """Fetch and return the first candidate URL that yields a JSON object.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
     skipping request errors, non-200 responses, and non-object bodies. Each skip
     is logged at debug with a non-sensitive reason. Raises McpDiscoveryError
-    describing ``what`` when no candidate succeeds.
+    describing ``what`` when no candidate succeeds. ``caller_supplied`` says
+    whether the candidates derive from an argument of this library's caller, which
+    decides how a rejected candidate fails.
     """
     # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
     # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
     kind = FailureKind.REFUSED
     retryable_kind: FailureKind | None = None
     for url in candidate_urls:
-        _validate_url(url, url_validator)
+        _validate_url(url, url_validator, caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
