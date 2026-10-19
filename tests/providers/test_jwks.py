@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import gc
 import json
 import logging
+import re
 import weakref
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -21,6 +24,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
+from apron_auth.providers import _jwks
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
@@ -28,6 +32,8 @@ RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 OTHER_RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-2"})
 EC_KEY = jwk.ECKey.generate_key("P-256", parameters={"kid": "ec-1"})
 OKP_KEY = jwk.OKPKey.generate_key("Ed25519", parameters={"kid": "okp-1"})
+# The words for a kind of token that the key set's own runtime strings must not use.
+TOKEN_KINDS = ("access token", "bearer token", "ID token", "identity token", "refresh token", "workload token")
 
 
 def published(*keys: Any) -> dict[str, Any]:
@@ -181,7 +187,7 @@ class TestVerify:
         """A header segment that decodes to another JSON value is not a signed token."""
         token = f"{_b64(json.dumps(header).encode())}.{_b64(b'{}')}.sig"
 
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_accepts_a_large_protected_header(self, httpx_mock: HTTPXMock) -> None:
@@ -196,7 +202,7 @@ class TestVerify:
         """A header that nests too deeply to decode is not a signed token."""
         token = f"{_b64(b'[' * 12000)}.{_b64(b'{}')}.sig"
 
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_refuses_a_deeply_nested_payload(self, httpx_mock: HTTPXMock) -> None:
@@ -210,7 +216,7 @@ class TestVerify:
 
     async def test_refuses_a_token_that_cannot_be_encoded(self) -> None:
         """A token holding a lone surrogate is refused, not raised as an encoding error."""
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify("\ud800.a.b")
 
     async def test_accepts_an_elliptic_curve_key(self, httpx_mock: HTTPXMock) -> None:
@@ -275,7 +281,7 @@ class TestVerify:
     @pytest.mark.parametrize("token", ["", "not-a-token", "a.b", "a.b.c"])
     async def test_refuses_a_token_that_is_not_a_signed_token(self, token: str) -> None:
         """Anything that does not parse as a compact signed token is refused."""
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_ignores_a_key_carried_in_the_token_header(self, httpx_mock: HTTPXMock) -> None:
@@ -440,12 +446,6 @@ class TestKeySelection:
         assert verified.claims == {"sub": "u-1"}
         assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
 
-    async def test_names_the_tokens_it_verifies(self, httpx_mock: HTTPXMock) -> None:
-        """A caller verifying tokens other than ID tokens sees its own name for them in a refusal."""
-        with pytest.raises(TokenValidationError, match="^Workload token is not a signed token") as exc_info:
-            await IssuerSigningKeys(JWKS_URL, token_name="Workload token").verify("not-a-token")
-        assert exc_info.value.reason is TokenValidationReason.MALFORMED
-
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, entries: list[Any]
@@ -463,7 +463,7 @@ class TestCaching:
     """Test when the key set is fetched again."""
 
     async def test_reuses_the_keys_within_an_hour(self, httpx_mock: HTTPXMock) -> None:
-        """Two sign-ins inside the cache window cause one fetch."""
+        """Two verifications inside the cache window cause one fetch."""
         clock = FakeClock()
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
@@ -499,8 +499,8 @@ class TestCaching:
 
         assert verified.claims == {"sub": "u-1"}
 
-    async def test_concurrent_sign_ins_with_a_rotated_key_all_verify(self) -> None:
-        """A sign-in that waited on another's refetch checks again against the keys it stored."""
+    async def test_concurrent_verifications_with_a_rotated_key_all_verify(self) -> None:
+        """A verification that waited on another's refetch checks again against the keys it stored."""
         clock = FakeClock()
         documents = [published(RSA_KEY), published(RSA_KEY, OTHER_RSA_KEY)]
         fetches: list[str] = []
@@ -590,8 +590,8 @@ class TestCaching:
 
         assert len(httpx_mock.get_requests()) == 1
 
-    async def test_concurrent_first_sign_ins_share_one_fetch(self, httpx_mock: HTTPXMock) -> None:
-        """Sign-ins that arrive before the first fetch finishes wait for it."""
+    async def test_concurrent_first_verifications_share_one_fetch(self, httpx_mock: HTTPXMock) -> None:
+        """Verifications that arrive before the first fetch finishes wait for it."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL)
 
@@ -712,10 +712,10 @@ class TestFetchFailures:
 
 
 class TestEventLoops:
-    """Test that one instance serves sign-ins on more than one event loop."""
+    """Test that one instance serves verifications on more than one event loop."""
 
     def test_contended_use_on_two_event_loops(self) -> None:
-        """A handler built once, then used by concurrent sign-ins on two loops, verifies on both."""
+        """A key set built once, then used by concurrent verifications on two loops, verifies on both."""
         clock = FakeClock()
         fetches: list[str] = []
 
@@ -726,12 +726,12 @@ class TestEventLoops:
 
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
 
-        async def sign_ins() -> int:
+        async def verifications() -> int:
             return len(await asyncio.gather(*(keys.verify(signed(RSA_KEY)) for _ in range(3))))
 
-        assert asyncio.run(sign_ins()) == 3
+        assert asyncio.run(verifications()) == 3
         clock.now += 3600
-        assert asyncio.run(sign_ins()) == 3
+        assert asyncio.run(verifications()) == 3
         assert fetches == [JWKS_URL, JWKS_URL]
 
     def test_keeps_no_finished_event_loop_alive(self) -> None:
@@ -745,13 +745,53 @@ class TestEventLoops:
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
         finished: list[weakref.ref[asyncio.AbstractEventLoop]] = []
 
-        async def sign_ins() -> None:
+        async def verifications() -> None:
             finished.append(weakref.ref(asyncio.get_running_loop()))
             await asyncio.gather(*(keys.verify(signed(RSA_KEY)) for _ in range(3)))
 
         for _ in range(3):
             clock.now += 3600
-            asyncio.run(sign_ins())
+            asyncio.run(verifications())
         gc.collect()
 
         assert sum(loop() is not None for loop in finished) <= 1
+
+
+class TestNeutralWording:
+    """Test that the key set words its refusals for any signed token, so no caller passes a name for one.
+
+    A docstring may name a kind to explain the rule. A string that reaches a caller or a log may not.
+    """
+
+    async def test_a_refusal_names_the_token_without_a_kind(self) -> None:
+        """A refused token is reported with the typed reason and a message that names no kind."""
+        with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
+            await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
+
+    def test_no_runtime_string_names_a_kind(self) -> None:
+        """No string that reaches a caller or a log names a kind, including one a later refusal adds."""
+        tree = ast.parse(Path(_jwks.__file__).read_text(encoding="utf-8"))
+        documented = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        }
+        strings = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in documented
+        ]
+        # A positive control: a guard that found no strings would pass while checking nothing.
+        assert len(strings) > 10
+        named = [
+            value
+            for value in strings
+            for kind in TOKEN_KINDS
+            if re.search(rf"\b{re.escape(kind)}\b", value, re.IGNORECASE)
+        ]
+        assert named == []

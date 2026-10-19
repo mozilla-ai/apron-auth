@@ -1,4 +1,4 @@
-"""Verify ID tokens against an issuer's published JSON Web Key Set (JWKS)."""
+"""Verify signed tokens against an issuer's published JSON Web Key Set (JWKS)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ _SigningKey = ECKey | OKPKey | RSAKey
 
 
 class SigningAlgorithm(StrEnum):
-    """Public-key signature algorithms an ID token may use, each with the key type and curves it needs.
+    """Public-key signature algorithms a signed token may use, each with the key type and curves it needs.
 
     A token can therefore name neither ``none`` nor a shared-secret MAC.
     An algorithm with no curves listed works with a key of any size of its type.
@@ -97,7 +97,7 @@ class VerifiedToken(NamedTuple):
 
 
 class IssuerSigningKeys:
-    """Hold one issuer's published signing keys and verify ID tokens against them.
+    """Hold one issuer's published signing keys and verify signed tokens against them.
 
     The keys are fetched on first use and kept for an hour.
     A token that no cached key verifies triggers an early refetch, so a rotated key is picked up.
@@ -105,8 +105,13 @@ class IssuerSigningKeys:
     A failed early refetch leaves a key set that is still within its hour in use.
     A stale key set whose refetch fails is not used, and the failure is reported again for a minute without a new fetch.
     A published RSA key shorter than 2048 bits is skipped, so nothing it signs verifies.
-    One instance may serve sign-ins on different event loops in turn.
+    One instance may serve verifications on different event loops in turn.
 
+    Its refusals name the token without a kind, because one key set verifies the ID token of a sign-in
+    and the token a platform signed for a workload.
+
+    NOTE: A caller that verifies one kind of token should word its own refusals and name that kind,
+    because this class cannot know which kind it was handed.
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
     """
 
@@ -117,7 +122,6 @@ class IssuerSigningKeys:
         transport_factory: TransportFactory | None = None,
         algorithms: tuple[SigningAlgorithm, ...] = tuple(SigningAlgorithm),
         clock: Callable[[], float] = time.monotonic,
-        token_name: str = "ID token",
     ) -> None:
         """Bind the key set to the URL it is published at.
 
@@ -128,7 +132,6 @@ class IssuerSigningKeys:
             transport_factory: Optional factory controlling the outbound connection for the key set fetch.
             algorithms: A tuple of the signing algorithms this issuer uses, which defaults to every accepted one.
             clock: The monotonic clock that ages the cached keys.
-            token_name: What the verified tokens are called in error messages.
 
         Raises:
             ConfigurationError: If ``algorithms`` names no accepted algorithm or is not a tuple of them.
@@ -148,11 +151,10 @@ class IssuerSigningKeys:
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
         self._last_failure: tuple[str, FailureKind] | None = None
-        self._token_name = token_name
         self._loop_lock = LoopLock()
 
     async def verify(self, token: str) -> VerifiedToken:
-        """Return the header and claims of an ID token whose signature an issuer key verifies.
+        """Return the header and claims of a token whose signature an issuer key verifies.
 
         Only the issuer's published keys are used, so a key or key URL in the token's header is ignored.
 
@@ -163,33 +165,34 @@ class IssuerSigningKeys:
             The token's protected header and claims, and the published key that verified it.
 
         Raises:
-            TokenValidationError: If the token is not a signed token, names a critical header parameter,
-                names an algorithm outside the accepted list, names no published key, or fails the signature check.
+            TokenValidationError: If the token is not a compact signed token, names a critical header parameter,
+                names an algorithm outside the accepted list, carries a header that algorithm rejects,
+                names no published key, fails the signature check, or carries claims that are not a JSON object.
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
             compact = parse_compact(token)
         except ValueError as exc:
             raise TokenValidationError(
-                f"{self._token_name} is not a signed token", reason=TokenValidationReason.MALFORMED
+                "The token is not a compact signed token", reason=TokenValidationReason.MALFORMED
             ) from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
-            msg = f"{self._token_name} names a critical header parameter that is not supported"
+            msg = "The token names a critical header parameter that is not supported"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
-            msg = f"{self._token_name} uses a signing algorithm that is not accepted"
+            msg = "The token uses a signing algorithm that is not accepted"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
             raise TokenValidationError(
-                f"{self._token_name} header is not valid", reason=TokenValidationReason.MALFORMED
+                "The token's header is not valid", reason=TokenValidationReason.MALFORMED
             ) from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
@@ -203,18 +206,18 @@ class IssuerSigningKeys:
                     "The issuer's key set could not be refreshed for an unverified token, "
                     "so the cached key set stays in use"
                 )
-            # The token is checked again against any key set stored since its first check, by any sign-in.
+            # A key set that a concurrent verification stored is checked too.
             if self._keys is not checked_keys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
-                msg = f"{self._token_name} is signed with a key the issuer does not publish"
+                msg = "The token is signed with a key the issuer does not publish"
                 raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
-            msg = f"{self._token_name} signature did not verify"
+            msg = "The token's signature did not verify"
             raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
         claims = compact_claims(compact)
         if claims is None:
-            msg = f"{self._token_name} claims are not a JSON object"
+            msg = "The token's claims are not a JSON object"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         return VerifiedToken(header, claims, result)
 
@@ -277,7 +280,7 @@ class IssuerSigningKeys:
             IdentityFetchError: If the key set cannot be fetched.
                 A failure within the last minute is reported again without a new fetch.
         """
-        # A fresh key set needs no lock, which keeps the lock off every ordinary sign-in.
+        # A fresh key set needs no lock, which keeps the lock off every ordinary verification.
         if self._is_younger_than(self._fetched_at, _KEY_MAX_AGE_SECONDS):
             return
         async with self._loop_lock():
@@ -300,7 +303,7 @@ class IssuerSigningKeys:
 
         Args:
             checked_keys: The key set the token was checked against.
-                No fetch is needed when another sign-in has replaced it since.
+                No fetch is needed when another caller has replaced it since.
 
         Raises:
             IdentityFetchError: If the key set cannot be fetched.

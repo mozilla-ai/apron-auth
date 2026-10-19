@@ -1234,10 +1234,10 @@ class TestOidcIdentity:
     @pytest.mark.parametrize(
         ("token", "message"),
         [
-            ("not-a-jwt", "not a signed token"),
+            ("not-a-jwt", "not a compact signed token"),
             (
                 f"{_b64(b'{}')}.{_b64(json.dumps({'sub': 'u-1'}).encode())}.sig",
-                "not a signed token",
+                "not a compact signed token",
             ),
             (f"{_b64(json.dumps({'alg': 'RS256'}).encode())}.{_b64(b'[1]')}.sig", "signature did not verify"),
         ],

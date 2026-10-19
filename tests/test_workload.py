@@ -189,7 +189,7 @@ class TestRefusals:
         discoverable(httpx_mock, short_key)
 
         with pytest.raises(
-            TokenValidationError, match="^Workload token is signed with a key the issuer does not"
+            TokenValidationError, match="^The token is signed with a key the issuer does not"
         ) as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(), short_key), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
@@ -202,7 +202,7 @@ class TestRefusals:
 
     async def test_a_token_that_is_not_signed(self, httpx_mock: HTTPXMock) -> None:
         """Text that is not a compact signed token is refused before discovery, so not as an outage."""
-        with pytest.raises(TokenValidationError, match="^Workload token is not a signed token") as exc_info:
+        with pytest.raises(TokenValidationError, match="^Workload token is not a compact signed token") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify("not-a-token", audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
@@ -216,7 +216,7 @@ class TestRefusals:
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
             await verifier.verify(signed(claims()), audience=AUDIENCE)
 
-        with pytest.raises(TokenValidationError, match="not a signed token"):
+        with pytest.raises(TokenValidationError, match="not a compact signed token"):
             await verifier.verify("not-a-token", audience=AUDIENCE)
 
 
