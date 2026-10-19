@@ -766,6 +766,19 @@ class TestExchangeCode:
             )
         assert httpx_mock.get_requests() == []
 
+    async def test_exchange_refuses_a_pending_state_whose_creation_time_is_too_large_to_measure(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        # NOTE: Construction without validation is the only way a creation time outside the float range arrives.
+        pending = OAuthPendingState.model_construct(
+            state="pending-state", redirect_uri="https://app.example.com/callback", created_at=-(10**400)
+        )
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=pending)
+        assert httpx_mock.get_requests() == []
+
     async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:

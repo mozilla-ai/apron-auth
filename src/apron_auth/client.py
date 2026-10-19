@@ -444,10 +444,10 @@ class OAuthClient:
         created_at = _finite_number(pending.created_at)
         now = time.time()
         # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
-        if created_at is None or created_at - CLOCK_SKEW_SECONDS > now:
+        if created_at is None or created_at > now + CLOCK_SKEW_SECONDS:
             msg = "The pending authorization request carries no usable creation time"
             raise StateError(msg)
-        if now - created_at > self._config.max_pending_age_seconds:
+        if created_at < now - self._config.max_pending_age_seconds:
             msg = "The pending authorization request is older than the maximum age"
             raise StateError(msg)
 
