@@ -44,18 +44,18 @@ SINGLE_KIND_CLASSES = {
 }
 
 
-def test_all_errors_inherit_from_oauth_error():
+def test_all_errors_inherit_from_oauth_error() -> None:
     for cls in (*MULTI_KIND_CLASSES, *SINGLE_KIND_CLASSES):
         assert issubclass(cls, OAuthError)
         assert issubclass(cls, Exception)
 
 
-def test_errors_are_distinct():
+def test_errors_are_distinct() -> None:
     classes = [OAuthError, *MULTI_KIND_CLASSES, *SINGLE_KIND_CLASSES]
     assert len(classes) == len(set(classes))
 
 
-def test_error_message_preserved():
+def test_error_message_preserved() -> None:
     err = TokenExchangeError("token endpoint returned 400", kind=FailureKind.REJECTED)
     assert str(err) == "token endpoint returned 400"
 

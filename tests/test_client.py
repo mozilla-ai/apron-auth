@@ -1656,7 +1656,7 @@ class TestRefreshToken:
         ("status", "code"),
         [(400, "invalid_grant"), (401, "unauthorized_client"), (401, "invalid_client"), (400, "invalid_scope")],
     )
-    async def test_refresh_rejection_cannot_be_retried(self, httpx_mock, status: int, code: str):
+    async def test_refresh_rejection_cannot_be_retried(self, httpx_mock: HTTPXMock, status: int, code: str) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=status, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
@@ -1666,7 +1666,7 @@ class TestRefreshToken:
         assert exc_info.value.retryable is False
 
     @pytest.mark.parametrize("code", ["server_error", "temporarily_unavailable"])
-    async def test_refresh_server_side_error_code_may_be_retried(self, httpx_mock, code: str):
+    async def test_refresh_server_side_error_code_may_be_retried(self, httpx_mock: HTTPXMock, code: str) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=500, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
@@ -1675,7 +1675,7 @@ class TestRefreshToken:
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
-    async def test_refresh_server_error_without_a_code_may_be_retried(self, httpx_mock):
+    async def test_refresh_server_error_without_a_code_may_be_retried(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, json={})
         config = _make_config()
         client = OAuthClient(config=config)
@@ -1683,7 +1683,7 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
 
-    async def test_refresh_network_error_may_be_retried(self, httpx_mock):
+    async def test_refresh_network_error_may_be_retried(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         config = _make_config()
         client = OAuthClient(config=config)
@@ -1692,7 +1692,7 @@ class TestRefreshToken:
         assert exc_info.value.kind is FailureKind.UNREACHABLE
         assert exc_info.value.retryable is True
 
-    async def test_refresh_timeout_may_be_retried(self, httpx_mock):
+    async def test_refresh_timeout_may_be_retried(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ReadTimeout("read timed out"))
         config = _make_config()
         client = OAuthClient(config=config)
@@ -1700,7 +1700,7 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.kind is FailureKind.TIMEOUT
 
-    async def test_refresh_custom_retryable_error_code(self, httpx_mock):
+    async def test_refresh_custom_retryable_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             status_code=400,
@@ -1712,7 +1712,7 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.retryable is True
 
-    async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock):
+    async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token", status_code=503, json={"error": "server_error"}
         )
@@ -1722,7 +1722,7 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.retryable is True
 
-    async def test_exchange_classifies_a_rejection_like_refresh(self, httpx_mock):
+    async def test_exchange_classifies_a_rejection_like_refresh(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token", status_code=400, json={"error": "invalid_grant"}
         )
@@ -1735,7 +1735,7 @@ class TestRefreshToken:
         assert exc_info.value.error_code == "invalid_grant"
         assert exc_info.value.retryable is False
 
-    async def test_exchange_classifies_an_outage_like_refresh(self, httpx_mock):
+    async def test_exchange_classifies_an_outage_like_refresh(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, json={})
         config = _make_config()
         client = OAuthClient(config=config)

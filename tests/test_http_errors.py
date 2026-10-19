@@ -10,7 +10,7 @@ _REQUEST = httpx.Request("GET", "https://api.example.com/me?token=secret-token")
 
 
 class TestHttpFailure:
-    def test_status_error_reports_status_code(self):
+    def test_status_error_reports_status_code(self) -> None:
         response = httpx.Response(503, request=_REQUEST)
         exc = httpx.HTTPStatusError("Server error", request=_REQUEST, response=response)
 
@@ -27,10 +27,10 @@ class TestHttpFailure:
             (httpx.TooManyRedirects("redirect loop", request=_REQUEST), (FailureKind.UNREACHABLE, "request failed")),
         ],
     )
-    def test_transport_error_reports_its_kind(self, exc: httpx.RequestError, expected: tuple[FailureKind, str]):
+    def test_transport_error_reports_its_kind(self, exc: httpx.RequestError, expected: tuple[FailureKind, str]) -> None:
         assert http_failure(exc) == HttpFailure(*expected)
 
-    def test_description_omits_url_and_client_text(self):
+    def test_description_omits_url_and_client_text(self) -> None:
         exc = httpx.ConnectError(f"Connection refused for url {_REQUEST.url}", request=_REQUEST)
 
         description = http_failure(exc).description
@@ -42,16 +42,16 @@ class TestHttpFailure:
 
 class TestStatusFailure:
     @pytest.mark.parametrize("status", [500, 502, 503, 504, 429])
-    def test_server_errors_and_rate_limits_may_pass_on_retry(self, status: int):
+    def test_server_errors_and_rate_limits_may_pass_on_retry(self, status: int) -> None:
         failure = status_failure(status)
 
         assert failure == HttpFailure(FailureKind.SERVER_ERROR, f"HTTP {status}")
         assert failure.kind.retryable is True
 
     @pytest.mark.parametrize("status", [400, 401, 403, 404, 409, 422])
-    def test_client_errors_are_rejections(self, status: int):
+    def test_client_errors_are_rejections(self, status: int) -> None:
         assert status_failure(status) == HttpFailure(FailureKind.REJECTED, f"HTTP {status}")
 
     @pytest.mark.parametrize("status", [301, 302, 307, 308])
-    def test_redirects_are_refused(self, status: int):
+    def test_redirects_are_refused(self, status: int) -> None:
         assert status_failure(status) == HttpFailure(FailureKind.REFUSED, f"HTTP {status}")
