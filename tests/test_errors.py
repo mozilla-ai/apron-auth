@@ -98,7 +98,8 @@ class TestKindOnErrors:
     def test_multi_kind_class_carries_the_given_kind(self, cls: type[OAuthError]) -> None:
         err = cls("boom", kind=FailureKind.TIMEOUT)
         assert err.kind is FailureKind.TIMEOUT
-        assert err.retryable is True
+        # The exchange is the one phase whose request is never repeated.
+        assert err.retryable is (cls is not TokenExchangeError)
 
     def test_a_given_kind_overrides_the_default(self) -> None:
         err = ConfigurationError("boom", kind=FailureKind.UNEXPECTED)
@@ -206,3 +207,14 @@ class TestClassificationIsReadOnly:
     def test_retryable_cannot_be_changed_on_a_member(self) -> None:
         with pytest.raises(AttributeError):
             FailureKind.TIMEOUT.retryable = False  # type: ignore[misc]
+
+
+class TestExchangeIsNeverRetryable:
+    @pytest.mark.parametrize("kind", list(FailureKind))
+    def test_an_exchange_error_is_not_retryable_whatever_its_kind(self, kind: FailureKind) -> None:
+        err = TokenExchangeError("boom", kind=kind)
+        assert err.kind is kind
+        assert err.retryable is False
+
+    def test_a_refresh_error_keeps_the_kind_rule(self) -> None:
+        assert TokenRefreshError("boom", kind=FailureKind.SERVER_ERROR).retryable is True

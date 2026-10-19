@@ -1755,7 +1755,8 @@ class TestRefreshToken:
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(code="some-code", state=pending.state, pending_state=pending)
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
-        assert exc_info.value.retryable is True
+        # The code may have been consumed, so the same exchange is never repeated.
+        assert exc_info.value.retryable is False
 
     async def test_refresh_invalid_grant_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(

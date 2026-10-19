@@ -175,7 +175,17 @@ class TokenEndpointError(OAuthError):
 # NonceValidationError and TokenExpiredError follow their base classes instead of A-Z order, because Python needs
 # the base defined first. TokenValidationReason precedes the error whose constructor requires it.
 class TokenExchangeError(TokenEndpointError):
-    """Authorization code exchange failed: the token endpoint refused the code, or this client refused its response."""
+    """Authorization code exchange failed: the token endpoint refused the code, or this client refused its response.
+
+    ``kind`` says what went wrong. ``retryable`` is always ``False``, because an authorization code is single-use:
+    a request that timed out may have consumed it, and RFC 6749 section 4.1.2 lets the server revoke every token
+    issued on a code that is presented twice. The recovery is a new authorization request.
+    """
+
+    @property
+    def retryable(self) -> bool:
+        """Always ``False``. The same exchange is never repeated; the caller starts a new authorization."""
+        return False
 
 
 class IdTokenValidationError(TokenExchangeError):
@@ -201,6 +211,9 @@ class TokenRefreshError(TokenEndpointError):
 
     ``retryable`` tells an outage or a rate limit from a dead grant or a client fault.
     Read ``error_code`` to tell a dead grant (``invalid_grant``) from a client or configuration problem.
+
+    NOTE: A provider that rotates refresh tokens may have consumed the token before an outage was reported.
+    A retry that then fails with ``invalid_grant`` needs a new sign-in, not another retry.
     """
 
 
