@@ -474,8 +474,12 @@ class FreshTokenSet(TokenSet):
     It is the only token set identity can be established from.
     An identity handler may accept the ID token in it without a signature check,
     which is safe only for a token the token endpoint returned over TLS.
-    Deserializing one from stored data is refused, on its own and as a field of another model,
+    Deserializing one is refused, through this model's own entry points and as a field of another model,
     so a persisted token set reloads as a plain :class:`TokenSet`, and a refresh produces a fresh one again.
+
+    NOTE: Keyword construction is how this library issues one.
+    A caller who constructs one by hand, or validates this type through pydantic's lower-level validation API,
+    asserts that freshness itself.
     """
 
     @model_validator(mode="before")
@@ -576,7 +580,7 @@ class IdentityMaterial(BaseModel, frozen=True):
         The ID token is read from the token-endpoint response, where
         providers return it as the ``id_token`` field that lands on
         :attr:`TokenSet.metadata`. The refresh token and caller context
-        on the ``TokenSet`` are intentionally not carried over.
+        are intentionally not carried over.
 
         Args:
             tokens: The fresh token set to narrow.
