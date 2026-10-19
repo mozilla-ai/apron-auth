@@ -693,8 +693,8 @@ class OAuthClient:
         """
         if not isinstance(tokens, FreshTokenSet):
             msg = (
-                "A token set reloaded from storage cannot be used for identity. "
-                "Pass the token set that the code exchange or refresh returned."
+                "Identity needs the token set that the code exchange or refresh returned. "
+                "A token set reloaded from storage cannot be used for identity."
             )
             raise ConfigurationError(msg)
         handler = self._identity_handler or self._inferred_identity_handler
