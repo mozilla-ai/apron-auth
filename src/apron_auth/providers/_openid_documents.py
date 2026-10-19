@@ -117,9 +117,10 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
     try:
         client = discovery_client(url, transport_factory)
     except Exception as exc:
-        # Building the client calls the caller's transport factory, so any exception here means a refused connection.
+        # Building the client calls the caller's transport factory. Whether it refused the connection by policy or
+        # failed, the fault is not the provider's and is not an outage, so it is never retried.
         msg = "could not fetch the OpenID provider configuration (outbound connection refused)"
-        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
+        raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from exc
     async with client:
         try:
             response = await client.get(url)

@@ -705,8 +705,10 @@ class TestFetchFailures:
         def refuse(url: str) -> httpx.AsyncBaseTransport:
             raise PermissionError(url)
 
-        with pytest.raises(IdentityFetchError, match="outbound connection refused"):
+        with pytest.raises(IdentityFetchError, match="outbound connection refused") as exc_info:
             await IssuerSigningKeys(JWKS_URL, transport_factory=refuse).verify(signed(RSA_KEY))
+        # A fault in the caller's factory is neither the issuer's doing nor an outage.
+        assert exc_info.value.kind is FailureKind.UNEXPECTED
 
 
 class TestEventLoops:

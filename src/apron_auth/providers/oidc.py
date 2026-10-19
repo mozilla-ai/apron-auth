@@ -576,9 +576,10 @@ class OidcIdentityHandler:
         try:
             transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
         except Exception as exc:
-            # The factory is caller code, so any exception from it means the connection was refused.
+            # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
+            # provider's and is not an outage, so it is never retried.
             msg = "Failed to fetch OpenID identity: outbound connection refused"
-            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         failure: IdentityFetchError | None = None
         try:
             async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
