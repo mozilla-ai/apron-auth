@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+import apron_auth
 from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason, require_declared_issuer, str_list
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+# The library modules allowed to run the issuer check, each wrapping the refusal in the error for its own phase.
+ISSUER_CHECK_CALLERS = {"mcp.py", "providers/_openid_documents.py"}
+# The library's source tree, walked to keep the issuer refusal inside it.
 SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 
 
@@ -79,21 +87,47 @@ def _refusal_handler_spans(tree: ast.Module) -> list[range]:
     return spans
 
 
+def _issuer_check_calls(tree: ast.Module) -> list[ast.Call]:
+    """Return every call to the issuer check in ``tree``."""
+    return [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _class_name(node.func) == require_declared_issuer.__name__
+    ]
+
+
 def _unwrapped_issuer_checks(path: Path) -> list[str]:
     """Return ``file:line`` for each issuer check in ``path`` that no handler for the refusal encloses."""
     tree = ast.parse(path.read_text())
     spans = _refusal_handler_spans(tree)
     return [
-        f"{path.name}:{node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and _class_name(node.func) == require_declared_issuer.__name__
-        and not any(node.lineno in span for span in spans)
+        f"{path.name}:{node.lineno}" for node in _issuer_check_calls(tree) if not any(node.lineno in s for s in spans)
     ]
 
 
+def _modules_where(predicate: Callable[[ast.Module], bool]) -> set[str]:
+    """Return the library modules whose syntax tree satisfies ``predicate``."""
+    return {
+        path.relative_to(SRC).as_posix() for path in sorted(SRC.rglob("*.py")) if predicate(ast.parse(path.read_text()))
+    }
+
+
+def _imports_the_check(tree: ast.Module) -> bool:
+    """Say whether ``tree`` imports the issuer check, under its own name or an alias."""
+    return any(
+        alias.name == require_declared_issuer.__name__
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    )
+
+
 class TestTheIssuerRefusalIsAlwaysWrapped:
-    """The refusal is internal, and only a handler for it keeps it out of the library's public errors."""
+    """The refusal is internal, and only a handler for it keeps it out of the library's public errors.
+
+    NOTE: The guard reads the issuer check and the refusal by the names they are defined under, so a module
+    that renamed either on import would be invisible to it. The import allowlist below is what closes that.
+    """
 
     @pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")), ids=lambda p: str(p.relative_to(SRC)))
     def test_every_issuer_check_sits_in_a_handler_for_the_refusal(self, path: Path) -> None:
@@ -114,3 +148,15 @@ class TestTheIssuerRefusalIsAlwaysWrapped:
         ]
         sample.write_text("\n".join(lines) + "\n")
         assert _unwrapped_issuer_checks(sample) == ["sample.py:1", "sample.py:7"]
+
+    def test_the_guard_reads_the_call_sites_it_claims_to_cover(self) -> None:
+        """Without this the guard above passes by finding nothing at all."""
+        assert SRC.is_dir()
+        assert _modules_where(lambda tree: bool(_issuer_check_calls(tree))) == ISSUER_CHECK_CALLERS
+
+    def test_no_other_module_reaches_the_check(self) -> None:
+        assert _modules_where(_imports_the_check) == ISSUER_CHECK_CALLERS
+
+    def test_the_refusal_is_not_published(self) -> None:
+        assert not hasattr(apron_auth, IssuerNotDeclaredError.__name__)
+        assert IssuerNotDeclaredError.__name__ not in apron_auth.__all__
