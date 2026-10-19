@@ -142,8 +142,10 @@ class ProviderConfig(BaseModel, frozen=True):
             has no such relationships.
         issuer: Expected issuer identifier (RFC 8414) of the authorization
             server, used to validate the authorization-response ``iss``
-            parameter (RFC 9207) before a code is redeemed. ``None`` when no
-            issuer is known, which disables issuer validation entirely —
+            parameter (RFC 9207) before a code is redeemed, and the ``iss``
+            claim of an ID token the code exchange returns. Both are compared
+            exactly, so a templated or scheme-less value does not belong here.
+            ``None`` when no issuer is known, which disables both checks —
             the default for presets that do not opt in.
         require_iss: Whether an authorization response that omits ``iss``
             must be rejected. Set ``True`` when the authorization server

@@ -87,7 +87,8 @@ The issuer is a trust anchor, not just an address: `discover` refuses a configur
 document that names a different one (OpenID Connect Discovery 1.0, section 4.3), and the
 discovered issuer carries onto the config. The authorization-response `iss` (RFC 9207) is
 validated before a code is redeemed only when the provider sends `iss` or advertises
-`authorization_response_iss_parameter_supported`.
+`authorization_response_iss_parameter_supported`. An ID token whose `iss` differs from the
+configured issuer is refused at the code exchange, and its tokens are revoked.
 
 Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/<tid>/v2.0`.
 The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
@@ -100,7 +101,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenVerificationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce before it returns the tokens.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenVerificationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce, the audience, the expiry, and the issuer when one is configured, before it returns the tokens.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -183,7 +184,7 @@ url, pending_state = await client.get_authorization_url(
 
 When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt, and refuse one older than your own time limit. With a `StateStore`, pass only `state` (see below).
 
-When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE.
+When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
 ```python
 tokens = await client.exchange_code(
@@ -721,7 +722,8 @@ All exceptions inherit from `OAuthError`.
 | Exception                      | When it's raised                                                                                                |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
 | `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused.                         |
-| `NonceValidationError`         | The response has no ID token, or it lacks the nonce or is unreadable, or the pending state lost it. Subclass of `TokenExchangeError`. |
+| `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
+| `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |
 | `TokenRefreshError`            | Refresh failed, but it might work if you try again (transient).                                                 |
 | `PermanentOAuthError`          | The token is gone — `invalid_grant`, `unauthorized_client`, or `invalid_client`. Delete it and re-authenticate. |
 | `RevocationError`              | The provider rejected the revocation request.                                                                   |

@@ -19,7 +19,7 @@ from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._discovery import require_declared_issuer
-from apron_auth._jwt import parse_compact
+from apron_auth._jwt import CLOCK_SKEW_SECONDS, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
@@ -37,8 +37,6 @@ if TYPE_CHECKING:
 
     from apron_auth.protocols import TransportFactory
 
-# Clock skew allowed on ``exp``, ``iat`` and ``nbf``.
-_CLOCK_SKEW_SECONDS = 60
 # The longest token read, in characters. A platform's token is a few kilobytes even with a certificate chain.
 _MAX_TOKEN_LENGTH = 16384
 # The shortest interval, in seconds, between discovery attempts after a failed one.
@@ -164,7 +162,7 @@ class WorkloadTokenVerifier:
         signing_keys = await self._keys()
         claims = (await signing_keys.verify(token)).claims
         registry = JWTClaimsRegistry(
-            leeway=_CLOCK_SKEW_SECONDS,
+            leeway=CLOCK_SKEW_SECONDS,
             iss={"essential": True, "value": self._issuer},
             sub={"essential": True},
             aud=audience_rule,

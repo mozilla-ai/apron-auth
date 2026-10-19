@@ -18,6 +18,7 @@ from apron_auth.errors import (
     IdentityFetchError,
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
+    IdTokenValidationError,
     IssuerValidationError,
     NonceValidationError,
     PermanentOAuthError,
@@ -69,6 +70,11 @@ def _id_token(claims: object) -> str:
     segments = [{"alg": "RS256"}, claims]
     encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
     return ".".join([*encoded, "c2ln"])
+
+
+def _openid_claims(**claims: object) -> dict[str, object]:
+    """Return ID token claims issued to the test client and still valid, with ``claims`` on top."""
+    return {"sub": "u-1", "aud": "test-client", "exp": int(time.time()) + 300, **claims}
 
 
 class TestGetAuthorizationUrl:
@@ -946,7 +952,7 @@ class TestExchangeCodeNonce:
         )
 
     async def test_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
-        tokens = await self._exchange(httpx_mock, {"id_token": _id_token({"sub": "u-1", "nonce": "sent-nonce"})})
+        tokens = await self._exchange(httpx_mock, {"id_token": _id_token(_openid_claims(nonce="sent-nonce"))})
         assert tokens.access_token == "access-abc"
 
     @pytest.mark.parametrize("response", [{}, {"id_token": None}], ids=["absent", "null"])
@@ -956,18 +962,33 @@ class TestExchangeCodeNonce:
         with pytest.raises(NonceValidationError, match="^Token response carries no ID token for the OpenID request$"):
             await self._exchange(httpx_mock, response)
 
-    async def test_id_token_is_not_checked_without_the_openid_scope(self, httpx_mock: HTTPXMock) -> None:
-        tokens = await self._exchange(httpx_mock, {"id_token": "not-a-token"}, nonce=None, scopes=("email",))
+    async def test_nonce_is_not_checked_without_the_openid_scope(self, httpx_mock: HTTPXMock) -> None:
+        """A request that sent no nonce accepts an ID token without one, but its other claims are still checked."""
+        tokens = await self._exchange(
+            httpx_mock, {"id_token": _id_token(_openid_claims())}, nonce=None, scopes=("email",)
+        )
         assert tokens.access_token == "access-abc"
 
+    @pytest.mark.parametrize(
+        "id_token",
+        ["not-a-token", _id_token(_openid_claims(aud="other-client"))],
+        ids=["unreadable", "other audience"],
+    )
+    async def test_id_token_claims_are_checked_without_the_openid_scope(
+        self, httpx_mock: HTTPXMock, id_token: str
+    ) -> None:
+        with pytest.raises(IdTokenValidationError) as exc_info:
+            await self._exchange(httpx_mock, {"id_token": id_token}, nonce=None, scopes=("email",))
+        assert not isinstance(exc_info.value, NonceValidationError)
+
     async def test_openid_pending_state_without_a_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        id_token = _id_token({"sub": "u-1", "nonce": "sent-nonce"})
+        id_token = _id_token(_openid_claims(nonce="sent-nonce"))
         with pytest.raises(NonceValidationError, match="pending state has no nonce"):
             await self._exchange(httpx_mock, {"id_token": id_token}, nonce=None)
         assert httpx_mock.get_requests() == []
 
     async def test_openid_pending_state_with_an_empty_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        id_token = _id_token({"sub": "u-1", "nonce": ""})
+        id_token = _id_token(_openid_claims(nonce=""))
         with pytest.raises(NonceValidationError, match="pending state has no nonce"):
             await self._exchange(httpx_mock, {"id_token": id_token}, nonce="")
         assert httpx_mock.get_requests() == []
@@ -981,33 +1002,35 @@ class TestExchangeCodeNonce:
         assert httpx_mock.get_requests() == []
 
     @pytest.mark.parametrize(
-        ("id_token", "message"),
+        ("overrides", "message"),
         [
-            (_id_token({"sub": "u-1", "nonce": "other-nonce"}), "ID token nonce does not match"),
-            (_id_token({"sub": "u-1", "nonce": "sént-nonce"}), "ID token nonce does not match"),
-            (_id_token({"sub": "u-1", "nonce": ["sent-nonce"]}), "ID token nonce does not match"),
-            (_id_token({"sub": "u-1"}), "ID token carries no nonce"),
-            (_id_token(["sent-nonce"]), "ID token could not be read"),
-            ("not-a-token", "ID token could not be read"),
+            ({"nonce": "other-nonce"}, "ID token nonce does not match"),
+            ({"nonce": "sént-nonce"}, "ID token nonce does not match"),
+            ({"nonce": ["sent-nonce"]}, "ID token nonce does not match"),
+            ({}, "ID token carries no nonce"),
         ],
-        ids=[
-            "mismatch",
-            "non-ascii",
-            "not-a-string",
-            "missing",
-            "claims-not-object",
-            "not-compact",
-        ],
+        ids=["mismatch", "non-ascii", "not-a-string", "missing"],
     )
     async def test_id_token_without_the_sent_nonce_is_refused(
-        self, httpx_mock: HTTPXMock, id_token: object, message: str
+        self, httpx_mock: HTTPXMock, overrides: dict[str, object], message: str
     ) -> None:
+        # The token is built when the test runs, so its expiry is measured from now and not from collection.
+        id_token = _id_token(_openid_claims(**overrides))
         with pytest.raises(NonceValidationError, match=message) as exc_info:
             await self._exchange(httpx_mock, {"id_token": id_token})
         assert isinstance(exc_info.value, TokenExchangeError)
 
+    @pytest.mark.parametrize(
+        "id_token", [_id_token(["sent-nonce"]), "not-a-token"], ids=["claims-not-object", "not-compact"]
+    )
+    async def test_unreadable_id_token_is_refused(self, httpx_mock: HTTPXMock, id_token: object) -> None:
+        """A token that cannot be read fails as an ID token, not as a nonce mismatch."""
+        with pytest.raises(IdTokenValidationError, match="ID token could not be read") as exc_info:
+            await self._exchange(httpx_mock, {"id_token": id_token})
+        assert not isinstance(exc_info.value, NonceValidationError)
+
     async def test_unreadable_id_token_error_has_no_cause(self, httpx_mock: HTTPXMock) -> None:
-        with pytest.raises(NonceValidationError) as exc_info:
+        with pytest.raises(IdTokenValidationError) as exc_info:
             await self._exchange(httpx_mock, {"id_token": "not-a-token"})
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
@@ -1016,11 +1039,11 @@ class TestExchangeCodeNonce:
     async def test_id_token_that_is_not_a_compact_token_is_refused(
         self, httpx_mock: HTTPXMock, id_token: object
     ) -> None:
-        with pytest.raises(NonceValidationError, match="ID token could not be read"):
+        with pytest.raises(IdTokenValidationError, match="ID token could not be read"):
             await self._exchange(httpx_mock, {"id_token": id_token})
 
     async def test_sent_nonce_is_checked_after_the_scopes_change(self, httpx_mock: HTTPXMock) -> None:
-        id_token = _id_token({"sub": "u-1", "nonce": "other-nonce"})
+        id_token = _id_token(_openid_claims(nonce="other-nonce"))
         with pytest.raises(NonceValidationError, match="ID token nonce does not match"):
             await self._exchange(httpx_mock, {"id_token": id_token}, scopes=("email",))
 
@@ -1038,7 +1061,11 @@ class TestExchangeCodeNonce:
         httpx_mock.add_response(
             is_optional=True,
             url="https://provider.example.com/token",
-            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "x"})},
+            json={
+                "access_token": "access-abc",
+                "token_type": "Bearer",
+                "id_token": _id_token(_openid_claims(nonce="x")),
+            },
         )
         client = OAuthClient(config=_make_config(**overrides))
         with pytest.raises(NonceValidationError, match="pending state has no nonce"):
@@ -1048,7 +1075,11 @@ class TestExchangeCodeNonce:
     async def test_stored_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
-            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "sent-nonce"})},
+            json={
+                "access_token": "access-abc",
+                "token_type": "Bearer",
+                "id_token": _id_token(_openid_claims(nonce="sent-nonce")),
+            },
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=_pending_state(nonce="sent-nonce"))
@@ -1059,7 +1090,11 @@ class TestExchangeCodeNonce:
     async def test_stored_nonce_is_checked(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
-            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "other"})},
+            json={
+                "access_token": "access-abc",
+                "token_type": "Bearer",
+                "id_token": _id_token(_openid_claims(nonce="other")),
+            },
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=_pending_state(nonce="sent-nonce"))
@@ -1071,7 +1106,11 @@ class TestExchangeCodeNonce:
         httpx_mock.add_response(
             is_optional=True,
             url="https://provider.example.com/token",
-            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token({"nonce": "x"})},
+            json={
+                "access_token": "access-abc",
+                "token_type": "Bearer",
+                "id_token": _id_token(_openid_claims(nonce="x")),
+            },
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=_pending_state(nonce=None))
@@ -1083,10 +1122,137 @@ class TestExchangeCodeNonce:
     async def test_refresh_checks_no_nonce(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
-            json={"access_token": "access-new", "token_type": "Bearer", "id_token": _id_token({"sub": "u-1"})},
+            json={"access_token": "access-new", "token_type": "Bearer", "id_token": _id_token(_openid_claims())},
         )
         tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-xyz")
         assert tokens.access_token == "access-new"
+
+
+class TestExchangeCodeIdTokenClaims:
+    async def _exchange(self, httpx_mock: HTTPXMock, claims: object, issuer: str | None = None) -> TokenSet:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": _id_token(claims)},
+        )
+        client = OAuthClient(config=_make_config(issuer=issuer))
+        return await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+        )
+
+    @staticmethod
+    def _claims(extra: dict[str, object]) -> dict[str, object]:
+        """Return claims for the sent nonce with ``extra`` on top, computing a relative expiry at call time."""
+        claims = dict(extra)
+        offset = claims.pop("exp_offset", None)
+        if isinstance(offset, int | float):
+            claims["exp"] = time.time() + offset
+        return _openid_claims(nonce="sent-nonce", **claims)
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {},
+            {"aud": ["test-client"]},
+            {"aud": ["test-client", "test-client"]},
+            {"aud": ["test-client", "other-client"], "azp": "test-client"},
+            {"azp": "test-client"},
+            {"exp_offset": -30},
+            {"exp_offset": 300.5},
+            {"exp": 10**400},
+        ],
+        ids=[
+            "string audience",
+            "single audience list",
+            "repeated audience",
+            "several audiences with this authorized party",
+            "authorized party",
+            "expiry within the clock skew",
+            "fractional expiry",
+            "expiry too large for a float",
+        ],
+    )
+    async def test_a_token_issued_to_this_client_is_accepted(
+        self, httpx_mock: HTTPXMock, extra: dict[str, object]
+    ) -> None:
+        tokens = await self._exchange(httpx_mock, self._claims(extra))
+        assert tokens.access_token == "access-abc"
+
+    @pytest.mark.parametrize(
+        ("extra", "message"),
+        [
+            ({"aud": "other-client"}, "audience does not include this client"),
+            ({"aud": ["other-client"]}, "audience does not include this client"),
+            ({"aud": 42}, "audience is not a name or a list of names"),
+            ({"aud": None}, "audience is not a name or a list of names"),
+            ({"aud": []}, "names no audience"),
+            ({"aud": ["test-client", 42], "azp": "test-client"}, "audience is not a name or a list of names"),
+            ({"aud": ["test-client", {}], "azp": "test-client"}, "audience is not a name or a list of names"),
+            ({"aud": [[]]}, "audience is not a name or a list of names"),
+            ({"aud": ["test-client", "other-client"]}, "several audiences without an authorized party"),
+            ({"aud": ["test-client", "other"], "azp": "other"}, "authorized party is not this client"),
+            ({"azp": "other-client"}, "authorized party is not this client"),
+            ({"exp_offset": -120}, "has expired"),
+            ({"exp": None}, "expired or carries no usable expiry"),
+            ({"exp": "later"}, "expired or carries no usable expiry"),
+            ({"exp": True}, "expired or carries no usable expiry"),
+            ({"exp": float("nan")}, "expired or carries no usable expiry"),
+            ({"exp": float("inf")}, "expired or carries no usable expiry"),
+        ],
+        ids=[
+            "other audience",
+            "other audience list",
+            "audience not a name",
+            "no audience",
+            "empty audience list",
+            "audience list with a member that is not a name",
+            "audience list with an object member",
+            "audience list with a list member",
+            "several audiences without an authorized party",
+            "other authorized party among several audiences",
+            "other authorized party",
+            "expired",
+            "no expiry",
+            "expiry not a number",
+            "expiry a boolean",
+            "expiry not a finite number",
+            "expiry infinite",
+        ],
+    )
+    async def test_a_token_not_issued_to_this_client_is_refused(
+        self, httpx_mock: HTTPXMock, extra: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(IdTokenValidationError, match=message):
+            await self._exchange(httpx_mock, self._claims(extra))
+
+    async def test_the_issuer_is_checked_when_the_config_names_one(self, httpx_mock: HTTPXMock) -> None:
+        claims = _openid_claims(nonce="sent-nonce", iss="https://issuer.example.com")
+        tokens = await self._exchange(httpx_mock, claims, issuer="https://issuer.example.com")
+        assert tokens.access_token == "access-abc"
+
+    @pytest.mark.parametrize(
+        "claims",
+        [
+            _openid_claims(nonce="sent-nonce", iss="https://other.example.com"),
+            _openid_claims(nonce="sent-nonce", iss="https://issuer.example.com/"),
+            _openid_claims(nonce="sent-nonce"),
+        ],
+        ids=["other issuer", "issuer with a terminating slash", "no issuer"],
+    )
+    async def test_another_issuer_is_refused_when_the_config_names_one(
+        self, httpx_mock: HTTPXMock, claims: object
+    ) -> None:
+        with pytest.raises(IdTokenValidationError, match="issuer does not match"):
+            await self._exchange(httpx_mock, claims, issuer="https://issuer.example.com")
+
+    async def test_the_issuer_is_not_checked_when_the_config_names_none(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchange(httpx_mock, _openid_claims(nonce="sent-nonce", iss="https://any.example.com"))
+        assert tokens.access_token == "access-abc"
+
+    async def test_the_audience_is_checked_before_the_nonce(self, httpx_mock: HTTPXMock) -> None:
+        """A token for another client is refused as such, even when its nonce is wrong too."""
+        with pytest.raises(IdTokenValidationError, match="audience") as excinfo:
+            await self._exchange(httpx_mock, _openid_claims(nonce="other-nonce", aud="other-client"))
+        assert not isinstance(excinfo.value, NonceValidationError)
 
 
 class TestExchangeCodeNonceRevocation:
@@ -1097,13 +1263,13 @@ class TestExchangeCodeNonceRevocation:
         httpx_mock: HTTPXMock,
         response: dict[str, object],
         revocation_url: str | None = REVOKE_URL,
-    ) -> NonceValidationError:
+    ) -> IdTokenValidationError:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer", **response},
         )
         client = OAuthClient(config=_make_config(revocation_url=revocation_url))
-        with pytest.raises(NonceValidationError) as exc_info:
+        with pytest.raises(IdTokenValidationError) as exc_info:
             await client.exchange_code(
                 code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
             )
@@ -1118,9 +1284,27 @@ class TestExchangeCodeNonceRevocation:
         httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
 
         await self._refused(
-            httpx_mock, {"refresh_token": "refresh-xyz", "id_token": _id_token({"sub": "u-1", "nonce": "other"})}
+            httpx_mock, {"refresh_token": "refresh-xyz", "id_token": _id_token(_openid_claims(nonce="other"))}
         )
 
+        assert sorted(self._revoked(httpx_mock)) == ["access-abc", "refresh-xyz"]
+
+    async def test_a_malformed_audience_revokes_both_tokens(self, httpx_mock: HTTPXMock) -> None:
+        """A member that cannot be hashed must still be refused as an ID token failure, so revocation runs."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        id_token = _id_token(_openid_claims(nonce="sent-nonce", aud=["test-client", {}]))
+
+        await self._refused(httpx_mock, {"refresh_token": "refresh-xyz", "id_token": id_token})
+
+        assert sorted(self._revoked(httpx_mock)) == ["access-abc", "refresh-xyz"]
+
+    async def test_a_token_for_another_client_revokes_both_tokens(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        id_token = _id_token(_openid_claims(nonce="sent-nonce", aud="other-client"))
+
+        error = await self._refused(httpx_mock, {"refresh_token": "refresh-xyz", "id_token": id_token})
+
+        assert not isinstance(error, NonceValidationError)
         assert sorted(self._revoked(httpx_mock)) == ["access-abc", "refresh-xyz"]
 
     async def test_a_response_without_an_id_token_revokes_the_access_token(self, httpx_mock: HTTPXMock) -> None:
@@ -1405,7 +1589,7 @@ class TestExchangeCodeNonceRevocation:
     async def test_a_verified_response_revokes_nothing(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
-            json={"access_token": "access-abc", "id_token": _id_token({"sub": "u-1", "nonce": "sent-nonce"})},
+            json={"access_token": "access-abc", "id_token": _id_token(_openid_claims(nonce="sent-nonce"))},
         )
         client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL))
 
