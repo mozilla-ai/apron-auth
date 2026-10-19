@@ -61,7 +61,7 @@ class TestRequireDeclaredIssuer:
 
 
 def _class_name(node: ast.expr) -> str | None:
-    """Return the name a class reference names, for a bare name or a qualified one."""
+    """Return the name a class reference uses, for a bare name or a qualified one."""
     if isinstance(node, ast.Name):
         return node.id
     if isinstance(node, ast.Attribute):
@@ -70,7 +70,7 @@ def _class_name(node: ast.expr) -> str | None:
 
 
 def _calls_the_check(tree: ast.Module) -> bool:
-    """Say whether ``tree`` calls the issuer check under the name it is defined under."""
+    """Say whether ``tree`` calls the issuer check by the name it is defined with."""
     return any(
         isinstance(node, ast.Call) and _class_name(node.func) == require_declared_issuer.__name__
         for node in ast.walk(tree)
@@ -97,8 +97,8 @@ def _modules_where(predicate: Callable[[ast.Module], bool]) -> set[str]:
 class TestTheIssuerRefusalStaysInternal:
     """The refusal is not one of the library's errors, so reaching it commits a module to translating it.
 
-    Each module named below is held to that by its own tests, which pin the error, the message and the kind
-    it raises. These assertions keep the set of modules that can raise the refusal at those modules.
+    Each module allowed to reach it has its own tests pinning the error, the message and the kind it raises.
+    These assertions keep every other module from raising it.
     """
 
     def test_only_the_translating_modules_call_the_check(self) -> None:
