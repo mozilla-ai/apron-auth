@@ -14,6 +14,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -711,7 +712,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
         assert tokens.access_token == "access-abc"
 
-    async def test_exchange_accepts_a_pending_state_created_ahead_of_the_clock(
+    async def test_exchange_accepts_a_pending_state_within_the_clock_difference_ahead(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _freeze_client_clock(monkeypatch)
@@ -721,9 +722,24 @@ class TestExchangeCode:
         )
         client = OAuthClient(config=_make_oauth_config())
         tokens = await client.exchange_code(
-            code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW + 3600)
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(created_at=_NOW + CLOCK_SKEW_SECONDS),
         )
         assert tokens.access_token == "access-abc"
+
+    async def test_exchange_refuses_a_pending_state_further_ahead_than_the_clock_difference(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123",
+                state="pending-state",
+                pending_state=_pending_state(created_at=_NOW + CLOCK_SKEW_SECONDS + 1),
+            )
+        assert httpx_mock.get_requests() == []
 
     @pytest.mark.parametrize(
         "created_at", [math.inf, -math.inf, math.nan], ids=["infinite", "negative-infinite", "not-a-number"]

@@ -441,11 +441,12 @@ class OAuthClient:
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
-        if not math.isfinite(pending.created_at):
+        age = time.time() - pending.created_at
+        # NOTE: A creation time ahead of this clock is allowed the clock difference a token's times are allowed.
+        if math.isnan(age) or age < -CLOCK_SKEW_SECONDS:
             msg = "The pending authorization request does not carry a usable creation time"
             raise StateError(msg)
-        # NOTE: A creation time ahead of this clock makes the age negative, which passes as clock skew.
-        if time.time() - pending.created_at > self._config.max_pending_age_seconds:
+        if age > self._config.max_pending_age_seconds:
             msg = "The pending authorization request is older than the maximum age"
             raise StateError(msg)
 
