@@ -42,6 +42,7 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, Provi
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler
@@ -99,7 +100,7 @@ def _has_openid_scope(config: ProviderConfig) -> bool:
     if "openid" in config.scopes:
         return True
     user_scope = config.extra_params.get("user_scope", "")
-    return any(scope.strip() == "openid" for scope in user_scope.split(","))
+    return "openid" in parse_scope(user_scope, config.scope_separator)
 
 
 def _parse_team_domain_from_url(url: str | None) -> str | None:

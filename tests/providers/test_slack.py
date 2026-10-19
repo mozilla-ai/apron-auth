@@ -309,6 +309,34 @@ class TestSlackMaybeIdentityHandler:
         assert isinstance(handler, SlackIdentityHandler)
 
 
+class TestSlackOpenidScopeDetection:
+    """Finding ``openid`` among the bot scopes or the ``user_scope`` parameter."""
+
+    def test_openid_in_the_user_scope_parameter_is_found(self) -> None:
+        from apron_auth.providers.slack import _has_openid_scope, preset
+
+        config, _ = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["openid", "profile"],
+        )
+        assert _has_openid_scope(config) is True
+
+    def test_the_user_scope_is_read_with_the_separator_the_config_declares(self) -> None:
+        from apron_auth.providers.slack import _has_openid_scope
+
+        config = ProviderConfig(
+            client_id="sid",
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url="https://slack.com/api/oauth.v2.access",
+            scopes=["channels:read"],
+            extra_params={"user_scope": "openid profile"},
+        )
+        assert _has_openid_scope(config) is True
+
+
 class TestSlackPreset:
     def test_raises_when_bot_and_user_scopes_are_empty(self):
         from apron_auth.providers.slack import preset
