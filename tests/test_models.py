@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import copy
 import math
+import pickle
 import time
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
-from apron_auth.errors import IssuerValidationError
+from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
+    FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
@@ -476,6 +479,78 @@ class TestTokenSet:
             token.access_token = "other"
 
 
+class _Session(BaseModel):
+    user: str
+    tokens: FreshTokenSet
+
+
+class _Sessions(BaseModel):
+    tokens: list[FreshTokenSet]
+
+
+class TestFreshTokenSet:
+    def test_keyword_construction_builds_a_token_set(self) -> None:
+        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+        assert isinstance(tokens, TokenSet)
+        assert tokens.access_token == "access-abc"
+        assert tokens.metadata == {"id_token": "id-jwt"}
+
+    def test_frozen(self) -> None:
+        tokens = FreshTokenSet(access_token="access-abc")
+        with pytest.raises(ValidationError):
+            tokens.access_token = "other"
+
+    def test_model_validate_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            FreshTokenSet.model_validate({"access_token": "access-abc"})
+
+    def test_model_validate_json_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            FreshTokenSet.model_validate_json('{"access_token": "access-abc"}')
+
+    def test_model_validate_strings_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            FreshTokenSet.model_validate_strings({"access_token": "access-abc"})
+
+    def test_the_fields_reload_as_a_plain_token_set(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", metadata={"id_token": "id-jwt"})
+        stored = TokenSet.model_validate(fresh.model_dump())
+        assert not isinstance(stored, FreshTokenSet)
+        assert stored.model_dump() == fresh.model_dump()
+
+    def test_a_model_holding_one_cannot_reload_it_from_a_dict(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Session.model_validate({"user": "U123", "tokens": {"access_token": "access-abc"}})
+
+    def test_a_model_holding_one_cannot_reload_it_from_json(self) -> None:
+        session = _Session(user="U123", tokens=FreshTokenSet(access_token="access-abc"))
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Session.model_validate_json(session.model_dump_json())
+
+    def test_a_model_holding_a_list_of_them_cannot_reload_it(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Sessions.model_validate({"tokens": [{"access_token": "access-abc"}]})
+
+    def test_a_model_can_hold_an_existing_one(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        assert _Session(user="U123", tokens=fresh).tokens is fresh
+        assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
+
+    def test_pickling_is_refused(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        with pytest.raises(ConfigurationError, match="cannot be stored"):
+            pickle.dumps(fresh)
+
+    def test_a_plain_token_set_still_pickles(self) -> None:
+        stored = pickle.loads(pickle.dumps(TokenSet(access_token="access-abc")))
+        assert stored == TokenSet(access_token="access-abc")
+
+    def test_copying_keeps_the_type(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        assert isinstance(copy.deepcopy(fresh), FreshTokenSet)
+        assert isinstance(fresh.model_copy(), FreshTokenSet)
+
+
 class TestIdentityMaterial:
     def test_minimal_defaults_id_token_to_none(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
@@ -488,25 +563,25 @@ class TestIdentityMaterial:
             material.access_token = "other"
 
     def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
-        tokens = TokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token == "access-abc"
         assert material.id_token == "id-jwt"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
-        tokens = TokenSet(access_token="access-abc", metadata={"team_id": "T123"})
+        tokens = FreshTokenSet(access_token="access-abc", metadata={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_non_string_id_token_is_none(self) -> None:
-        tokens = TokenSet(access_token="access-abc", metadata={"id_token": 12345})
+        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_omits_refresh_token_and_context(self) -> None:
         """The narrowing must not surface the refresh token or caller
         context — those fields are structurally absent from the type."""
-        tokens = TokenSet(
+        tokens = FreshTokenSet(
             access_token="access-abc",
             refresh_token="refresh-xyz",
             metadata={"id_token": "id-jwt"},
@@ -522,12 +597,12 @@ class TestIdentityMaterial:
         assert material.scope is None
 
     def test_from_token_set_carries_granted_scope(self) -> None:
-        tokens = TokenSet(access_token="access-abc", scope="accounts:read forms:read")
+        tokens = FreshTokenSet(access_token="access-abc", scope="accounts:read forms:read")
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope == "accounts:read forms:read"
 
     def test_from_token_set_absent_scope_is_none(self) -> None:
-        tokens = TokenSet(access_token="access-abc")
+        tokens = FreshTokenSet(access_token="access-abc")
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope is None
 

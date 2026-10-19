@@ -32,12 +32,12 @@ from apron_auth.mcp import (
 )
 from apron_auth.models import (
     ApplicationType,
+    FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
     ProviderConfig,
     ServerMetadata,
     TokenEndpointAuthMethod,
-    TokenSet,
 )
 from apron_auth.providers.identity import infer_identity_handler
 
@@ -293,7 +293,7 @@ class TestToProviderConfigIdentityInference:
         client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"))
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access"))
+            await client.fetch_identity(FreshTokenSet(access_token="access"))
 
         assert httpx_mock.get_requests() == []
 
@@ -314,7 +314,7 @@ class TestToProviderConfigIdentityInference:
         handler = McpIdentityHandler()
         client = OAuthClient(config, identity_handler=handler)
 
-        identity = await client.fetch_identity(TokenSet(access_token="access"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access"))
 
         assert identity.identity_key() == ("mcp", "u-1")
         assert [(material.access_token, used_config) for material, used_config in handler.calls] == [("access", config)]

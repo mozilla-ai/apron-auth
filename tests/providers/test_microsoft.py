@@ -11,7 +11,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError, TokenValidationReason
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext, TokenSet
+from apron_auth.models import FreshTokenSet, IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
 
 _USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
@@ -703,7 +703,7 @@ class TestMicrosoftIdTokenVerification:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO, is_reusable=True)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]), is_reusable=True)
         client = OAuthClient(_config())
-        tokens = TokenSet(access_token="access-abc", metadata={"id_token": _member_id_token()})
+        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": _member_id_token()})
 
         await client.fetch_identity(tokens)
         await client.fetch_identity(tokens)

@@ -35,7 +35,7 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, IdentityMaterial, OAuthPendingState, TokenSet
+from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, FreshTokenSet, IdentityMaterial, OAuthPendingState
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.identity import infer_identity_handler
@@ -412,7 +412,7 @@ class OAuthClient:
         *,
         pending_state: OAuthPendingState | None = None,
         iss: str | None = None,
-    ) -> TokenSet:
+    ) -> FreshTokenSet:
         """Exchange an authorization code for tokens.
 
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
@@ -439,7 +439,7 @@ class OAuthClient:
                 the provider has no expected issuer configured.
 
         Returns:
-            The exchanged token set.
+            The exchanged token set, which identity can be established from.
             Any caller context stored with the pending state is surfaced on :attr:`TokenSet.context`.
 
         Raises:
@@ -575,7 +575,7 @@ class OAuthClient:
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
-    async def refresh_token(self, refresh_token: str) -> TokenSet:
+    async def refresh_token(self, refresh_token: str) -> FreshTokenSet:
         """Refresh an access token using a refresh token.
 
         Args:
@@ -583,7 +583,7 @@ class OAuthClient:
                 token.
 
         Returns:
-            The refreshed token set.
+            The refreshed token set, which identity can be established from.
 
         Raises:
             TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached.
@@ -661,41 +661,42 @@ class OAuthClient:
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise RevocationError(failure_message, kind=failure_kind)
 
-    async def fetch_identity(self, tokens: TokenSet) -> IdentityProfile:
+    async def fetch_identity(self, tokens: FreshTokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.
 
-        Pass the :class:`TokenSet` returned by :meth:`exchange_code` (or
-        :meth:`refresh_token`). It is narrowed to an
-        :class:`IdentityMaterial` — exposing only the access token, the
-        granted scopes, and, for OIDC providers, the ID token — before
-        being handed to the identity handler, so handlers never receive
-        the refresh token or caller context.
+        Only the :class:`FreshTokenSet` that :meth:`exchange_code` or :meth:`refresh_token` returned is accepted.
+        An identity handler may accept the ID token in it without a signature check,
+        which is safe only for a token the token endpoint returned over TLS,
+        so a token set reloaded from storage is refused.
+        The fresh token set is narrowed to an :class:`IdentityMaterial` — exposing only the access token,
+        the granted scopes, and, for OIDC providers, the ID token — before being handed to the identity handler,
+        so handlers never receive the refresh token or caller context.
 
         Uses the configured identity handler when provided, otherwise tries
         to infer a built-in handler from the provider endpoints.
         A config may disallow that inference, which leaves the configured handler as the only source of identity.
 
-        NOTE: Callers must pass a token set straight from :meth:`exchange_code` or :meth:`refresh_token`.
-        They must never pass one reloaded from storage or built from untrusted input.
-        An identity handler may accept the ID token in it without a signature check,
-        which is safe only for a token the token endpoint returned over TLS.
-
         Args:
-            tokens: The token set from :meth:`exchange_code` or
-                :meth:`refresh_token` to establish identity from.
+            tokens: The fresh token set to establish identity from.
 
         Returns:
             The normalized identity profile.
 
         Raises:
+            ConfigurationError: If ``tokens`` is not a fresh token set,
+                or if built-in inference matches more than one provider for the configuration.
             IdentityNotSupportedError: If no identity handler is configured
                 and none can be inferred for the provider.
                 That includes a config that disallows inference.
-            ConfigurationError: If built-in inference matches more than one
-                provider for the configuration.
             IdentityFetchError: If the handler fails to fetch identity.
                 It chains nothing from the handler.
         """
+        if not isinstance(tokens, FreshTokenSet):
+            msg = (
+                "Identity needs the token set that the code exchange or refresh returned. "
+                "A token set reloaded from storage cannot be used for identity."
+            )
+            raise ConfigurationError(msg)
         handler = self._identity_handler or self._inferred_identity_handler
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
@@ -959,8 +960,8 @@ class OAuthClient:
             values.append(self._config.client_secret.get_secret_value())
         return _redact(text, values)
 
-    def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> TokenSet:
-        """Parse a token endpoint response into a TokenSet.
+    def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> FreshTokenSet:
+        """Parse a token endpoint response into a fresh token set.
 
         Args:
             data: A token-endpoint response.
@@ -980,7 +981,7 @@ class OAuthClient:
         if expires_at is None and expires_in is not None:
             expires_at = time.time() + int(expires_in)
 
-        return TokenSet(
+        return FreshTokenSet(
             access_token=data["access_token"],
             token_type=data.get("token_type", "Bearer"),
             refresh_token=data.get("refresh_token"),

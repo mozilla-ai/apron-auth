@@ -25,7 +25,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
+from apron_auth.models import FreshTokenSet, IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.identity import infer_identity_handler
 from apron_auth.providers.oidc import (
@@ -923,7 +923,7 @@ class TestHandlerInference:
         client = OAuthClient(config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(TokenSet(access_token="access"))
+            await client.fetch_identity(FreshTokenSet(access_token="access"))
 
         assert httpx_mock.get_requests() == []
 
@@ -935,7 +935,7 @@ class TestHandlerInference:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
         client = OAuthClient(config, identity_handler=identity_handler(claimed_metadata))
 
-        identity = await client.fetch_identity(TokenSet(access_token="access"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access"))
 
         assert identity.identity_key() == (f"oidc:{claimed_metadata.issuer}", "u-1")
 
