@@ -396,6 +396,17 @@ class TestKeySelection:
 
         assert verified.claims == {"sub": "u-1"}
 
+    @pytest.mark.parametrize("member", ["use", "key_ops"])
+    async def test_a_null_use_or_key_ops_means_the_default(self, httpx_mock: HTTPXMock, member: str) -> None:
+        """A key set that writes ``null`` for an optional member is read as if the member were absent."""
+        document = published(RSA_KEY)
+        document["keys"][0][member] = None
+        httpx_mock.add_response(url=JWKS_URL, json=document)
+
+        verified = await IssuerSigningKeys(JWKS_URL).verify(signed(RSA_KEY))
+
+        assert verified.claims == {"sub": "u-1"}
+
     @pytest.mark.parametrize(
         ("member", "value"),
         [("key_ops", ["encrypt"]), ("key_ops", "verify"), ("key_ops", [1]), ("use", "enc"), ("use", "other")],

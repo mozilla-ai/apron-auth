@@ -386,6 +386,8 @@ def _signing_key(entry: dict[str, Any]) -> _SigningKey | None:
         The imported public key, or ``None`` for an entry that is malformed, of another type, not for verifying,
             or an RSA key shorter than 2048 bits.
     """
+    # A member written as null is read as absent, so the default applies to it and the import never sees it.
+    entry = {name: value for name, value in entry.items() if value is not None}
     use = entry.get("use", "sig")
     operations = entry.get("key_ops", ["verify"])
     if use != "sig" or not isinstance(operations, list) or "verify" not in operations:
