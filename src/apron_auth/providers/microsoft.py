@@ -19,10 +19,10 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClai
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import CLOCK_SKEW_SECONDS
-from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.errors import FailureKind, IdentityFetchError, TokenExpiredError, TokenVerificationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -300,7 +300,8 @@ class MicrosoftIdentityHandler:
                 "Microsoft identity",
             )
         if not isinstance(payload, dict):
-            raise IdentityFetchError("Microsoft identity response was not a JSON object")
+            msg = "Microsoft identity response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
     async def _fetch_organization(self, access_token: str) -> dict[str, Any] | None:
@@ -342,7 +343,7 @@ class MicrosoftIdentityHandler:
             logger.warning(
                 "microsoft directory lookup could not resolve the tenant's verified domains "
                 "(%s); not asserting domain ownership",
-                describe_http_error(exc),
+                http_failure(exc).description,
             )
             return None
 
@@ -450,10 +451,10 @@ def _require_matching_subject(id_token: _IdToken, userinfo: dict[str, Any]) -> N
     userinfo_subject = userinfo.get("sub")
     if not isinstance(userinfo_subject, str) or not userinfo_subject:
         msg = "Microsoft userinfo response names no subject to match the ID token's"
-        raise IdentityFetchError(msg)
+        raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
     if userinfo_subject != id_token.subject:
         msg = "Microsoft userinfo response names a different subject than the ID token"
-        raise IdentityFetchError(msg)
+        raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
 
 def _userinfo_subject(userinfo: dict[str, Any]) -> str | None:

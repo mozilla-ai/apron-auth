@@ -19,9 +19,9 @@ from pytest_httpx import HTTPXMock
 from apron_auth.client import OAuthClient, _redact, _TokenEndpointError
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     OAuthError,
-    PermanentOAuthError,
     RevocationError,
     TokenExchangeError,
     TokenRefreshError,
@@ -225,10 +225,11 @@ class TestTokenRequestErrors:
         httpx_mock.add_response(status_code=400, json={"error": "invalid_grant"})
         client = OAuthClient(_config())
 
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token("grant")
 
         assert exc_info.value.error_code == "invalid_[redacted]"
+        assert exc_info.value.kind is FailureKind.REJECTED
         assert "grant" not in str(exc_info.value).replace("invalid_[redacted]", "")
 
 
@@ -326,7 +327,7 @@ class TestHandlerDomainErrors:
                 try:
                     raise httpx.ConnectError(RAW_TEXT, request=request)
                 except httpx.ConnectError as exc:
-                    raise RevocationError("Custom revocation failed") from exc
+                    raise RevocationError("Custom revocation failed", kind=FailureKind.UNREACHABLE) from exc
 
         client = OAuthClient(_config(), revocation_handler=ChainingHandler())
         with pytest.raises(RevocationError) as exc_info:
@@ -337,7 +338,7 @@ class TestHandlerDomainErrors:
 
     async def test_identity_handler_error_loses_its_chain_and_keeps_its_type(self) -> None:
         class CustomIdentityError(IdentityFetchError):
-            pass
+            default_kind = FailureKind.UNREACHABLE
 
         class ChainingHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:

@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
+from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
@@ -971,7 +971,7 @@ class TestValidateUrl:
         def validator(url: str) -> None:
             del url
             msg = "direct"
-            raise McpDiscoveryError(msg)
+            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
         with pytest.raises(McpDiscoveryError, match="direct") as exc_info:
             _validate_url("https://mcp.example.com", validator)

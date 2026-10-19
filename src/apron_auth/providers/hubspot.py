@@ -34,7 +34,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -214,7 +214,7 @@ class HubSpotRevocationHandler:
         try:
             response = await client.delete(url)
         except httpx.RequestError as exc:
-            failure_message = f"Failed to revoke HubSpot token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
         else:
             if response.status_code in (204, 404):
                 return True
@@ -225,7 +225,7 @@ class HubSpotRevocationHandler:
             return False
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(f"Failed to revoke HubSpot token: {failure.description}", kind=failure.kind)
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.

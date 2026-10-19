@@ -14,11 +14,11 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth._loop_lock import LoopLock
-from apron_auth.errors import ConfigurationError, IdentityFetchError, TokenVerificationError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, TokenVerificationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -141,7 +141,7 @@ class IssuerSigningKeys:
         self._keys: list[_SigningKey] = []
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
-        self._last_failure: str | None = None
+        self._last_failure: IdentityFetchError | None = None
         self._token_name = token_name
         self._loop_lock = LoopLock()
 
@@ -274,12 +274,12 @@ class IssuerSigningKeys:
             if self._is_younger_than(self._fetched_at, _KEY_MAX_AGE_SECONDS):
                 return
             if self._last_failure is not None and self._is_younger_than(self._attempted_at, _REFETCH_INTERVAL_SECONDS):
-                raise IdentityFetchError(self._last_failure)
+                raise IdentityFetchError(str(self._last_failure), kind=self._last_failure.kind)
             try:
                 await self._fetch_and_store()
             except IdentityFetchError as exc:
                 # Only the domain message is kept, so the failed request's objects are not held until the next fetch.
-                self._last_failure = str(exc)
+                self._last_failure = exc
                 raise
 
     async def _refetch_early(self, checked_keys: list[_SigningKey]) -> None:
@@ -319,7 +319,8 @@ class IssuerSigningKeys:
             client = discovery_client(self._jwks_url, self._transport_factory)
         except Exception as exc:
             # The factory is caller code, so any exception from it means the connection was refused.
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: outbound connection refused") from exc
+            msg = "Failed to fetch the issuer's signing keys: outbound connection refused"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
         try:
             async with client:
                 response = await client.get(self._jwks_url)
@@ -331,24 +332,31 @@ class IssuerSigningKeys:
                     f"Failed to fetch the issuer's signing keys: HTTP {status}; redirects are not followed, "
                     "so set the key set URL to the canonical one"
                 )
-                raise IdentityFetchError(msg) from exc
-            raise IdentityFetchError(f"Failed to fetch the issuer's signing keys: {describe_http_error(exc)}") from exc
+                raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
+            status = http_failure(exc)
+            msg = f"Failed to fetch the issuer's signing keys: {status.description}"
+            raise IdentityFetchError(msg, kind=status.kind) from exc
         except httpx.RequestError as exc:
-            raise IdentityFetchError(f"Failed to fetch the issuer's signing keys: {describe_http_error(exc)}") from exc
+            transport = http_failure(exc)
+            msg = f"Failed to fetch the issuer's signing keys: {transport.description}"
+            raise IdentityFetchError(msg, kind=transport.kind) from exc
         except httpx.InvalidURL as exc:
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: invalid key set URL") from exc
+            msg = "Failed to fetch the issuer's signing keys: invalid key set URL"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
         except Exception as exc:
             # A caller's transport can raise anything, and it must still count as a failed fetch.
             # NOTE: A transport's exception can render the request it attempted, so it is chained, never logged.
-            raise IdentityFetchError("Failed to fetch the issuer's signing keys: request failed") from exc
+            msg = "Failed to fetch the issuer's signing keys: request failed"
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             document = decode_json_body(response)
         except ValueError as exc:
-            raise IdentityFetchError("The issuer's signing keys could not be read") from exc
+            msg = "The issuer's signing keys could not be read"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc
         entries = document.get("keys") if isinstance(document, dict) else None
         if not isinstance(entries, list):
             msg = "The issuer's signing keys could not be read"
-            raise IdentityFetchError(msg)
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         keys = [key for entry in entries if isinstance(entry, dict) and (key := _signing_key(entry)) is not None]
         if not keys:
             logger.warning("The issuer's key set has no key that can verify a signature")

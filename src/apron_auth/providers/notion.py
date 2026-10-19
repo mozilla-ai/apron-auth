@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -201,7 +201,7 @@ class NotionRevocationHandler:
                 auth=auth,
             )
         except httpx.RequestError as exc:
-            failure_message = f"Failed to revoke Notion token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
         else:
             if response.status_code in (200, 400):
                 return True
@@ -212,7 +212,7 @@ class NotionRevocationHandler:
             return False
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(f"Failed to revoke Notion token: {failure.description}", kind=failure.kind)
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.

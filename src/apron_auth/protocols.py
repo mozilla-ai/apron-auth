@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth.errors import RevocationError
 
 if TYPE_CHECKING:
@@ -69,6 +69,7 @@ class RevocationHandler(Protocol):
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
 
+
         Args:
             token: The token to revoke.
             config: The provider configuration to revoke against.
@@ -89,6 +90,7 @@ class IdentityHandler(Protocol):
         NOTE: Implementations must keep credentials out of a raised error's message and attributes.
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
+
 
         Args:
             material: The token material to establish identity from.
@@ -206,9 +208,9 @@ class StandardRevocationHandler:
                 auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:
-            failure_message = f"Failed to revoke token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
         else:
             return response.is_success
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(f"Failed to revoke token: {failure.description}", kind=failure.kind)

@@ -23,6 +23,7 @@ from apron_auth._jwt import CLOCK_SKEW_SECONDS, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     OidcDiscoveryError,
     TokenExpiredError,
@@ -110,7 +111,7 @@ class WorkloadTokenVerifier:
         self._allow_insecure_http = allow_insecure_http
         self._clock = clock
         self._signing_keys = self._key_set(jwks_url) if jwks_url else None
-        self._discovery_failure: str | None = None
+        self._discovery_failure: IdentityFetchError | None = None
         self._discovery_failed_at: float | None = None
         self._discovery_lock = LoopLock()
 
@@ -200,18 +201,19 @@ class WorkloadTokenVerifier:
                 and self._discovery_failed_at is not None
                 and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
             ):
-                raise IdentityFetchError(self._discovery_failure)
+                raise IdentityFetchError(str(self._discovery_failure), kind=self._discovery_failure.kind)
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
                 require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
                 jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
                 if jwks_url is None:
                     msg = "OpenID provider configuration names no signing key set"
-                    raise OidcDiscoveryError(msg)
+                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
             except OidcDiscoveryError as exc:
-                self._discovery_failure = f"Failed to discover the issuer's signing keys: {exc}"
+                msg = f"Failed to discover the issuer's signing keys: {exc}"
+                self._discovery_failure = IdentityFetchError(msg, kind=exc.kind)
                 self._discovery_failed_at = self._clock()
-                raise IdentityFetchError(self._discovery_failure) from exc
+                raise self._discovery_failure from exc
             self._discovery_failure = None
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys

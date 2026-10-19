@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
@@ -227,7 +227,7 @@ class AtlassianIdentityHandler:
             logger.warning(
                 "atlassian user identity lookup failed (%s); "
                 "emitting a tenancy-only profile without person-level fields",
-                describe_http_error(exc),
+                http_failure(exc).description,
             )
             return {}
 

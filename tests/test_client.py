@@ -15,13 +15,13 @@ from pytest_httpx import HTTPXMock
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
     IdTokenValidationError,
     IssuerValidationError,
     NonceValidationError,
-    PermanentOAuthError,
     RevocationError,
     StateError,
     TokenExchangeError,
@@ -1652,78 +1652,98 @@ class TestRefreshToken:
         request = httpx_mock.get_request()
         assert b"resource" not in request.content
 
-    async def test_refresh_permanent_error_invalid_grant(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://provider.example.com/token",
-            status_code=400,
-            json={"error": "invalid_grant", "error_description": "Token revoked"},
-        )
+    @pytest.mark.parametrize(
+        ("status", "code"),
+        [(400, "invalid_grant"), (401, "unauthorized_client"), (401, "invalid_client"), (400, "invalid_scope")],
+    )
+    async def test_refresh_rejection_cannot_be_retried(self, httpx_mock, status: int, code: str):
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=status, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
-        with pytest.raises(PermanentOAuthError, match="invalid_grant"):
-            await client.refresh_token(refresh_token="revoked-refresh")
-
-    async def test_refresh_permanent_error_unauthorized_client(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://provider.example.com/token",
-            status_code=401,
-            json={"error": "unauthorized_client"},
-        )
-        config = _make_config()
-        client = OAuthClient(config=config)
-        with pytest.raises(PermanentOAuthError):
+        with pytest.raises(TokenRefreshError, match=code) as exc_info:
             await client.refresh_token(refresh_token="bad-refresh")
+        assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.retryable is False
 
-    async def test_refresh_permanent_error_invalid_client(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://provider.example.com/token",
-            status_code=401,
-            json={"error": "invalid_client"},
-        )
+    @pytest.mark.parametrize("code", ["server_error", "temporarily_unavailable"])
+    async def test_refresh_server_side_error_code_may_be_retried(self, httpx_mock, code: str):
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=500, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
-        with pytest.raises(PermanentOAuthError):
-            await client.refresh_token(refresh_token="bad-refresh")
-
-    async def test_refresh_transient_error(self, httpx_mock):
-        httpx_mock.add_response(
-            url="https://provider.example.com/token",
-            status_code=500,
-            json={"error": "server_error"},
-        )
-        config = _make_config()
-        client = OAuthClient(config=config)
-        with pytest.raises(TokenRefreshError):
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
 
-    async def test_refresh_network_error(self, httpx_mock):
+    async def test_refresh_server_error_without_a_code_may_be_retried(self, httpx_mock):
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, json={})
+        config = _make_config()
+        client = OAuthClient(config=config)
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+
+    async def test_refresh_network_error_may_be_retried(self, httpx_mock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         config = _make_config()
         client = OAuthClient(config=config)
-        with pytest.raises(TokenRefreshError):
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.UNREACHABLE
+        assert exc_info.value.retryable is True
 
-    async def test_refresh_custom_permanent_error_code(self, httpx_mock):
+    async def test_refresh_timeout_may_be_retried(self, httpx_mock):
+        httpx_mock.add_exception(httpx.ReadTimeout("read timed out"))
+        config = _make_config()
+        client = OAuthClient(config=config)
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.TIMEOUT
+
+    async def test_refresh_custom_retryable_error_code(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             status_code=400,
-            json={"error": "token_revoked", "error_description": "Token was revoked"},
+            json={"error": "try_later", "error_description": "Busy"},
         )
         config = _make_config()
-        client = OAuthClient(config=config, permanent_error_codes={"token_revoked"})
-        with pytest.raises(PermanentOAuthError, match="token_revoked"):
-            await client.refresh_token(refresh_token="revoked-refresh")
+        client = OAuthClient(config=config, retryable_error_codes={"try_later"})
+        with pytest.raises(TokenRefreshError, match="try_later") as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.retryable is True
 
     async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock):
         httpx_mock.add_response(
-            url="https://provider.example.com/token",
-            status_code=400,
-            json={"error": "invalid_grant", "error_description": "Token expired"},
+            url="https://provider.example.com/token", status_code=503, json={"error": "server_error"}
         )
         config = _make_config()
-        client = OAuthClient(config=config, permanent_error_codes={"custom_error"})
-        with pytest.raises(PermanentOAuthError, match="invalid_grant"):
-            await client.refresh_token(refresh_token="expired-refresh")
+        client = OAuthClient(config=config, retryable_error_codes={"try_later"})
+        with pytest.raises(TokenRefreshError, match="server_error") as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.retryable is True
+
+    async def test_exchange_classifies_a_rejection_like_refresh(self, httpx_mock):
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", status_code=400, json={"error": "invalid_grant"}
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(code="dead-code", state=pending.state, pending_state=pending)
+        assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.error_code == "invalid_grant"
+        assert exc_info.value.retryable is False
+
+    async def test_exchange_classifies_an_outage_like_refresh(self, httpx_mock):
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, json={})
+        config = _make_config()
+        client = OAuthClient(config=config)
+        _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(code="some-code", state=pending.state, pending_state=pending)
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
 
     async def test_refresh_invalid_grant_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -1732,7 +1752,7 @@ class TestRefreshToken:
             json={"error": "invalid_grant", "error_description": "Token revoked"},
         )
         client = OAuthClient(config=_make_config())
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="revoked-refresh")
         assert exc_info.value.error_code == "invalid_grant"
 
@@ -1743,7 +1763,7 @@ class TestRefreshToken:
             json={"error": "invalid_client"},
         )
         client = OAuthClient(config=_make_config())
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="bad-refresh")
         assert exc_info.value.error_code == "invalid_client"
 
@@ -1754,7 +1774,7 @@ class TestRefreshToken:
             json={"error": "unauthorized_client"},
         )
         client = OAuthClient(config=_make_config())
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="bad-refresh")
         assert exc_info.value.error_code == "unauthorized_client"
 
@@ -1869,7 +1889,7 @@ class TestRefreshToken:
             },
         )
         client = OAuthClient(config=_make_config())
-        with pytest.raises(PermanentOAuthError) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="revoked-refresh")
         assert exc_info.value.error_code == "invalid_grant"
         assert str(exc_info.value) == "invalid_grant"
@@ -1986,7 +2006,7 @@ class TestRevokeToken:
     async def test_revocation_error_not_double_wrapped(self):
         class ErrorHandler:
             async def revoke(self, token: str, config) -> bool:
-                raise RevocationError("handler error")
+                raise RevocationError("handler error", kind=FailureKind.REJECTED)
 
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config, revocation_handler=ErrorHandler())

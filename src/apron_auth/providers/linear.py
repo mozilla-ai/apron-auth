@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -81,19 +81,20 @@ class LinearIdentityHandler:
             )
 
         if not isinstance(payload, dict):
-            raise IdentityFetchError("Linear GraphQL response was not a JSON object")
+            msg = "Linear GraphQL response was not a JSON object"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         errors = payload.get("errors")
         if errors:
-            raise IdentityFetchError(f"Linear GraphQL returned errors: {errors}")
+            raise IdentityFetchError(f"Linear GraphQL returned errors: {errors}", kind=FailureKind.REJECTED)
 
         data = payload.get("data")
         if not isinstance(data, dict):
-            raise IdentityFetchError("Linear GraphQL response missing data")
+            raise IdentityFetchError("Linear GraphQL response missing data", kind=FailureKind.REFUSED)
 
         viewer = data.get("viewer")
         if not isinstance(viewer, dict):
-            raise IdentityFetchError("Linear GraphQL response missing data.viewer")
+            raise IdentityFetchError("Linear GraphQL response missing data.viewer", kind=FailureKind.REFUSED)
 
         # Gate the tenancy on ``organization.id`` — Linear's immutable
         # workspace anchor. ``name`` (display string) and ``urlKey``

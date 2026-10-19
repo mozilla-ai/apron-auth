@@ -17,20 +17,19 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
 
-from apron_auth._http_errors import describe_http_error
+from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import CLOCK_SKEW_SECONDS, unverified_claims
 from apron_auth.errors import (
-    INVALID_CLIENT,
-    INVALID_GRANT,
-    UNAUTHORIZED_CLIENT,
+    SERVER_ERROR,
+    TEMPORARILY_UNAVAILABLE,
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     IdentityNotSupportedError,
     IdTokenValidationError,
     NonceValidationError,
     OAuthError,
-    PermanentOAuthError,
     RevocationError,
     StateError,
     TokenExchangeError,
@@ -61,19 +60,19 @@ _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 class _TokenEndpointError(Exception):
     """Internal exception carrying the OAuth error code from the token endpoint."""
 
-    def __init__(self, message: str, error_code: str = "", *, permanent: bool = False) -> None:
+    def __init__(self, message: str, kind: FailureKind, error_code: str = "") -> None:
         """Create the error.
 
         Args:
             message: Human-readable description of the failure.
+            kind: What went wrong. For an OAuth error code it is decided before the code is redacted,
+                so redaction cannot change it.
             error_code: The OAuth error code from the token endpoint when
                 one is available, else an empty string.
-            permanent: Whether the endpoint's own error code is one the client treats as permanent.
-                It is decided before the code is redacted, so redaction cannot change it.
         """
         super().__init__(message)
+        self.kind = kind
         self.error_code = error_code
-        self.permanent = permanent
 
 
 def _redact(text: str, values: Iterable[str]) -> str:
@@ -280,7 +279,7 @@ class OAuthClient:
     because the identity handler it infers may keep caches that are not thread-safe.
     """
 
-    DEFAULT_PERMANENT_ERROR_CODES = frozenset({INVALID_GRANT, UNAUTHORIZED_CLIENT, INVALID_CLIENT})
+    DEFAULT_RETRYABLE_ERROR_CODES = frozenset({SERVER_ERROR, TEMPORARILY_UNAVAILABLE})
 
     def __init__(
         self,
@@ -288,7 +287,7 @@ class OAuthClient:
         state_store: StateStore | None = None,
         revocation_handler: RevocationHandler | None = None,
         identity_handler: IdentityHandler | None = None,
-        permanent_error_codes: set[str] | None = None,
+        retryable_error_codes: set[str] | None = None,
         transport_factory: TransportFactory | None = None,
     ) -> None:
         """Create an OAuth client.
@@ -298,9 +297,9 @@ class OAuthClient:
             state_store: Optional persistence for OAuth state across requests.
             revocation_handler: Optional provider-specific token revocation.
             identity_handler: Optional provider-specific identity fetcher.
-            permanent_error_codes: Additional OAuth error codes that should be
-                treated as irrecoverable during token refresh. These merge
-                with, rather than replace, DEFAULT_PERMANENT_ERROR_CODES.
+            retryable_error_codes: Additional OAuth error codes from the token endpoint that mean
+                the same request may succeed later. They merge with, rather than replace,
+                ``DEFAULT_RETRYABLE_ERROR_CODES``. Every other code is a rejection of the request as sent.
             transport_factory: Optional factory returning an httpx transport for
                 a URL, used for token-endpoint requests. Lets the caller control
                 the outbound connection (e.g. pin DNS to validated public IPs)
@@ -310,7 +309,7 @@ class OAuthClient:
         self._state_store = state_store
         self._revocation_handler = revocation_handler
         self._identity_handler = identity_handler
-        self._permanent_error_codes = self.DEFAULT_PERMANENT_ERROR_CODES | (permanent_error_codes or set())
+        self._retryable_error_codes = self.DEFAULT_RETRYABLE_ERROR_CODES | (retryable_error_codes or set())
         self._transport_factory = transport_factory
 
     async def get_authorization_url(
@@ -457,7 +456,7 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            raise TokenExchangeError(str(exc), error_code=exc.error_code) from exc
+            raise TokenExchangeError(str(exc), kind=exc.kind, error_code=exc.error_code) from exc
         try:
             _check_id_token(
                 response.get("id_token"), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
@@ -550,12 +549,9 @@ class OAuthClient:
             The refreshed token set.
 
         Raises:
-            PermanentOAuthError: If the endpoint reports an error whose code
-                is in the configured permanent set (such as ``invalid_grant``);
-                retrying the identical request will not succeed. Read
-                ``error_code`` to decide how to handle it.
-            TokenRefreshError: If the refresh fails transiently and a
-                retry may succeed.
+            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached.
+                Its ``retryable`` says whether the same request may succeed later, and ``error_code``
+                tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         data = {
@@ -567,9 +563,7 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            if exc.permanent:
-                raise PermanentOAuthError(str(exc), error_code=exc.error_code) from exc
-            raise TokenRefreshError(str(exc), error_code=exc.error_code) from exc
+            raise TokenRefreshError(str(exc), kind=exc.kind, error_code=exc.error_code) from exc
         return self._parse_token_response(response)
 
     async def revoke_token(self, token: str) -> bool:
@@ -607,19 +601,20 @@ class OAuthClient:
             exc.__context__ = None
             raise
         except OAuthError as exc:
-            failure_message = str(exc)
+            failure_message, failure_kind = str(exc), exc.kind
         except httpx.HTTPError as exc:
-            failure_message = f"Failed to revoke token: {describe_http_error(exc)}"
+            failure = http_failure(exc)
+            failure_message, failure_kind = f"Failed to revoke token: {failure.description}", failure.kind
         except Exception:
-            failure_message = "Failed to revoke token"
+            failure_message, failure_kind = "Failed to revoke token", FailureKind.UNEXPECTED
         else:
             if not result:
                 msg = "Token revocation failed"
-                raise RevocationError(msg)
+                raise RevocationError(msg, kind=FailureKind.REJECTED)
             return True
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message)
+        raise RevocationError(failure_message, kind=failure_kind)
 
     async def fetch_identity(self, tokens: TokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.
@@ -669,14 +664,15 @@ class OAuthClient:
             exc.__context__ = None
             raise
         except OAuthError as exc:
-            failure_message = str(exc)
+            failure_message, failure_kind = str(exc), exc.kind
         except httpx.HTTPError as exc:
-            failure_message = f"Failed to fetch identity: {describe_http_error(exc)}"
+            failure = http_failure(exc)
+            failure_message, failure_kind = f"Failed to fetch identity: {failure.description}", failure.kind
         except Exception:
-            failure_message = "Failed to fetch identity"
+            failure_message, failure_kind = "Failed to fetch identity", FailureKind.UNEXPECTED
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise IdentityFetchError(failure_message)
+        raise IdentityFetchError(failure_message, kind=failure_kind)
 
     @cached_property
     def _inferred_identity_handler(self) -> IdentityHandler | None:
@@ -834,26 +830,20 @@ class OAuthClient:
                 token = await client.fetch_token(self._config.token_url, **data)
             return dict(token)
         except AuthlibOAuthError as exc:
-            # Authlib raises OAuthError for 4xx responses that contain an
-            # OAuth error body ({"error": "...", "error_description": "..."}).
-            # The .error attribute carries the OAuth error code (e.g.
-            # "invalid_grant") which refresh_token uses to distinguish
-            # permanent from transient failures.
+            # A 4xx response with an OAuth error body. The code decides the kind before it is redacted.
             raw_error_code = exc.error if isinstance(exc.error, str) else ""
             error_code = self._redact_sent(raw_error_code, data)
             description = self._redact_sent(exc.description, data) if isinstance(exc.description, str) else ""
             prefix = error_code or "unspecified token endpoint error"
             msg = f"{prefix}: {description}" if description else prefix
-            failure = _TokenEndpointError(
-                msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
-            )
+            failure = _TokenEndpointError(msg, self._kind_for_error_code(raw_error_code), error_code=error_code)
         except httpx.HTTPStatusError as exc:
-            # Authlib calls raise_for_status() for 5xx responses, producing
-            # an httpx.HTTPStatusError. We attempt to extract the OAuth
-            # error code from the response body if present.
+            # An error status without an OAuth error body that the token client recognized.
+            # The body may still carry an OAuth error code, which then decides the kind.
             raw_error_code = ""
             error_code = ""
-            msg = f"HTTP {exc.response.status_code}"
+            status = status_failure(exc.response.status_code)
+            msg = status.description
             try:
                 body = decode_json_body(exc.response)
             except ValueError:
@@ -866,19 +856,33 @@ class OAuthClient:
                 description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
-            failure = _TokenEndpointError(
-                msg, error_code=error_code, permanent=raw_error_code in self._permanent_error_codes
-            )
+            kind = self._kind_for_error_code(raw_error_code) if raw_error_code else status.kind
+            failure = _TokenEndpointError(msg, kind, error_code=error_code)
         except httpx.RequestError as exc:
-            failure = _TokenEndpointError(describe_http_error(exc), error_code="")
+            transport = http_failure(exc)
+            failure = _TokenEndpointError(transport.description, transport.kind)
         # NOTE: The token client decodes a success body itself, so a deeply nested body surfaces here as RecursionError.
         except (json.JSONDecodeError, RecursionError):
-            failure = _TokenEndpointError("token response could not be read", error_code="")
+            failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
         except Exception:
-            failure = _TokenEndpointError("request failed", error_code="")
+            failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         # NOTE: The caught error can hold the request, which carries the client secret and the grant.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise failure
+
+    def _kind_for_error_code(self, error_code: str) -> FailureKind:
+        """Return the kind an OAuth error code from the token endpoint stands for.
+
+        RFC 6749 section 5.2 defines every token-endpoint code as a fault in the request as sent.
+        Only the codes in the retryable set, such as ``temporarily_unavailable``, may pass later.
+
+        Args:
+            error_code: The code as the endpoint sent it, before any redaction.
+
+        Returns:
+            ``SERVER_ERROR`` for a retryable code, else ``REJECTED``.
+        """
+        return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED
 
     def _redact_sent(self, text: str, data: dict[str, str]) -> str:
         """Return provider text with each secret that a token request sent replaced by a placeholder.
