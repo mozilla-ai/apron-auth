@@ -54,8 +54,8 @@ class Provider(StrEnum):
 
     Attributes:
         display_name: The provider's name as it appears in messages and documentation.
-        host_suffixes: The hosts, matched on a label boundary, that both OAuth endpoints of a config
-            must be on for the config to be this provider's.
+        host_suffixes: The provider's OAuth endpoint hosts, matched on a label boundary.
+            Both endpoints of a config must be on them for this provider's identity handler to be inferred.
         disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
             See :attr:`ProviderConfig.disconnect_fully_revokes`.
         scope_separator: The string the provider's scope parameter is joined with.
@@ -225,7 +225,7 @@ class ProviderConfig(BaseModel, frozen=True):
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
-        provider: The built-in preset that built this config.
+        provider: The built-in provider whose preset built this config.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
             and a config that contradicts them is refused at construction.
@@ -346,8 +346,9 @@ class ProviderConfig(BaseModel, frozen=True):
     def _provider_facts_match_member(self) -> ProviderConfig:
         """Reject a config whose per-provider facts contradict its provider.
 
-        The member is the single statement of a provider's facts, so a config that names
-        the member cannot carry a different value and have consumers read the two apart.
+        The member states a provider's facts once. A config that named a member and carried a
+        different value for one of them would give a consumer reading the config and a consumer
+        reading the member different answers.
 
         Returns:
             The validated config, unchanged.
@@ -756,10 +757,10 @@ class IdentityProfile(BaseModel, frozen=True):
 
     Attributes:
         provider: The OAuth provider that issued this profile.
-            A built-in handler sets its :class:`Provider` member, and a member's name validates back into the member,
-            so a profile rebuilt from storage holds the member too.
-            A generic handler sets a string that names its provider, such as ``oidc:<issuer>``.
-            Both compare equal to their string form.
+            A provider with a built-in preset is its :class:`Provider` member, and the member's value validates
+            back into the member, so a profile rebuilt from a dump holds the member too.
+            Any other provider is a string naming it, such as ``oidc:<issuer>``.
+            Either form compares equal to its string value.
             Used by :meth:`identity_key` to produce a ``(provider, subject)``
             tuple suitable for keying a consumer's user table without
             cross-provider collision.
