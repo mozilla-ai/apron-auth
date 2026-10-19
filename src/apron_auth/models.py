@@ -802,6 +802,7 @@ class IdentityProfile(BaseModel, frozen=True):
     def identity_key(self) -> tuple[str, str] | None:
         """Return ``(provider, subject)``, the recommended primary key for users.
 
+        Both parts are plain strings, whether :attr:`provider` holds a member or a string.
         Returns ``None`` if either field is missing or empty. Consumers
         should key their user/identity tables on this tuple rather than
         on ``email`` to avoid cross-provider account hijack via email
@@ -812,7 +813,7 @@ class IdentityProfile(BaseModel, frozen=True):
             field is missing or empty.
         """
         if self.provider and self.subject:
-            return (self.provider, self.subject)
+            return (str(self.provider), self.subject)
         return None
 
     def domain_owning_tenancies(self) -> tuple[TenancyContext, ...]:

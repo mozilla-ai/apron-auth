@@ -769,6 +769,12 @@ class TestIdentityProfileIdentityKey:
         identity = IdentityProfile(provider="github", subject="12345")
         assert identity.identity_key() == ("github", "12345")
 
+    def test_returns_a_plain_string_for_a_member(self) -> None:
+        identity = IdentityProfile(provider=Provider.GITHUB, subject="12345")
+        key = identity.identity_key()
+        assert key is not None
+        assert type(key[0]) is str
+
     def test_returns_none_when_provider_missing(self) -> None:
         identity = IdentityProfile(provider=None, subject="12345")
         assert identity.identity_key() is None
