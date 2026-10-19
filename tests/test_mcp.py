@@ -883,6 +883,17 @@ class TestDiscover:
             await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
         assert exc_info.value.kind is FailureKind.REFUSED
 
+    async def test_a_request_that_fails_in_transit_is_a_discovery_error(self) -> None:
+        """A request the client sent and could not complete is an outage, whatever the URL's source."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom", request=request)
+
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
+        assert exc_info.value.kind is FailureKind.UNREACHABLE
+        assert exc_info.value.retryable is True
+
     async def test_a_host_the_client_cannot_resolve_follows_the_url_source(self) -> None:
         """A host only the HTTP client rejects reaches the request boundary, where the caller still owns it."""
         with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
@@ -1191,6 +1202,19 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI, transport_factory=factory)
         assert reg.client_id == "x"
         assert calls == [_REGISTER_URL]
+
+    async def test_a_request_that_times_out_is_a_registration_error(self) -> None:
+        """A request the client sent and could not complete is an outage, not a fault in the URL."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("boom", request=request)
+
+        with pytest.raises(McpRegistrationError, match="timed out") as exc_info:
+            await register_client(
+                _REGISTER_URL, _REDIRECT_URI, transport_factory=lambda _: httpx.MockTransport(handler)
+            )
+        assert exc_info.value.kind is FailureKind.TIMEOUT
+        assert exc_info.value.retryable is True
 
     async def test_url_the_client_refuses_is_a_configuration_fault(self) -> None:
         """The registration URL is the caller's, so a refusal at the request boundary is still their fault."""
