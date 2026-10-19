@@ -11,7 +11,13 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
-from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityNotSupportedError,
+    McpDiscoveryError,
+    McpRegistrationError,
+)
 from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
@@ -634,8 +640,9 @@ class TestDiscover:
         """A hint from a challenge header is refused before any request and before the caller's policy sees it."""
         hint = "https://user:pw@mcp.example.com/prm"  # pragma: allowlist secret
         seen: list[str] = []
-        with pytest.raises(McpDiscoveryError, match="userinfo"):
+        with pytest.raises(ConfigurationError, match="userinfo") as exc_info:
             await discover("https://mcp.example.com", resource_metadata_url=hint, url_validator=seen.append)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
         assert hint not in seen
 
@@ -643,8 +650,9 @@ class TestDiscover:
         token_url = "https://user:pw@auth.example.com/token"  # pragma: allowlist secret
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint=token_url))
-        with pytest.raises(McpDiscoveryError, match="userinfo"):
+        with pytest.raises(McpDiscoveryError, match="userinfo") as exc_info:
             await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_issuer_is_checked_before_any_other_member_is_read(self, httpx_mock: HTTPXMock) -> None:
         """A document with the wrong issuer is untrusted as a whole, so its endpoints never reach the URL policy."""
@@ -767,24 +775,28 @@ class TestDiscover:
             await discover("https://mcp.example.com")
 
     async def test_non_https_server_url_rejected(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        """The server URL is the caller's own argument, so refusing it is a configuration fault."""
+        with pytest.raises(ConfigurationError) as exc_info:
             await discover("http://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     async def test_non_https_authorization_server_rejected(self, httpx_mock: HTTPXMock) -> None:
+        """The authorization server comes from a fetched document, so refusing it is a refusal."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["http://auth.internal"]})
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(McpDiscoveryError) as exc_info:
             await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_loopback_server_rejected(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             await discover("https://127.0.0.1")
 
     async def test_localhost_server_rejected(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             await discover("https://localhost")
 
     async def test_link_local_metadata_ip_rejected(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             await discover("https://169.254.169.254")
 
     async def test_private_ip_authorization_server_rejected(self, httpx_mock: HTTPXMock) -> None:
@@ -800,9 +812,49 @@ class TestDiscover:
             msg = "blocked by policy"
             raise ValueError(msg)
 
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
             await discover("https://mcp.example.com", url_validator=validator)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert seen == ["https://mcp.example.com"]
+
+    async def test_url_validator_rejection_of_a_derived_candidate_is_a_configuration_fault(self) -> None:
+        """A well-known URL this library builds from the server URL belongs to the caller who passed it."""
+
+        def validator(url: str) -> None:
+            if url == _PRM_ROOT:
+                msg = "blocked by policy"
+                raise ValueError(msg)
+
+        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
+            await discover("https://mcp.example.com", url_validator=validator)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    async def test_url_validator_rejection_of_a_declared_endpoint_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A document's endpoint the caller's policy rejects is a refusal, not a configuration fault."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+
+        def validator(url: str) -> None:
+            if url == "https://auth.example.com/token":
+                msg = "blocked by policy"
+                raise ValueError(msg)
+
+        with pytest.raises(McpDiscoveryError, match="blocked by policy") as exc_info:
+            await discover("https://mcp.example.com", url_validator=validator)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_url_validator_oauth_error_propagates_unchanged(self) -> None:
+        """The caller's own refusal reaches the caller as raised, carrying the kind it named."""
+
+        def validator(url: str) -> None:
+            del url
+            msg = "refused by the caller"
+            raise McpDiscoveryError(msg, kind=FailureKind.REJECTED)
+
+        with pytest.raises(McpDiscoveryError, match="refused by the caller") as exc_info:
+            await discover("https://mcp.example.com", url_validator=validator)
+        assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.__cause__ is None
 
     async def test_transport_factory_used_for_requests(self) -> None:
         calls: list[str] = []
@@ -820,15 +872,40 @@ class TestDiscover:
         assert meta.token_url == "https://auth.example.com/token"
         assert calls
 
-    async def test_url_the_client_refuses_is_a_discovery_error(self) -> None:
-        """A URL the HTTP client refuses is a malformed URL, not a skipped candidate."""
+    async def test_caller_supplied_url_the_client_refuses_is_a_configuration_fault(self) -> None:
+        """A URL the HTTP client refuses is a malformed URL, not a skipped candidate, and follows its source."""
 
         def handler(request: httpx.Request) -> httpx.Response:
             del request
             raise httpx.InvalidURL("refused")
 
-        with pytest.raises(McpDiscoveryError, match="malformed URL"):
+        with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
             await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    async def test_declared_url_the_client_refuses_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
+        """A host only the HTTP client rejects is refused when a document named it, not blamed on the caller."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://\x80\x80.example.com"]})
+        with pytest.raises(McpDiscoveryError, match="malformed URL") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_request_that_fails_in_transit_is_a_discovery_error(self) -> None:
+        """A request the client sent and could not complete is an outage, whatever the URL's source."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("boom", request=request)
+
+        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+            await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
+        assert exc_info.value.kind is FailureKind.UNREACHABLE
+        assert exc_info.value.retryable is True
+
+    async def test_a_host_the_client_cannot_resolve_follows_the_url_source(self) -> None:
+        """A host only the HTTP client rejects reaches the request boundary, where the caller still owns it."""
+        with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
+            await discover("https://\x80\x80.example.com")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
 
 class TestIsBlockedHost:
@@ -944,8 +1021,9 @@ class TestAsmCandidateUrls:
 
 
 class TestValidateUrl:
-    def test_https_public_host_passes(self) -> None:
-        _validate_url("https://mcp.example.com/x", None)
+    @pytest.mark.parametrize("caller_supplied", [True, False])
+    def test_https_public_host_passes(self, caller_supplied: bool) -> None:
+        _validate_url("https://mcp.example.com/x", None, caller_supplied=caller_supplied)
 
     @pytest.mark.parametrize(
         "url",
@@ -962,8 +1040,10 @@ class TestValidateUrl:
         ],
     )
     def test_rejects_unusable_url(self, url: str) -> None:
-        with pytest.raises(McpDiscoveryError):
-            _validate_url(url, None)
+        """A URL a document named is refused, because the other side sent something this library will not fetch."""
+        with pytest.raises(McpDiscoveryError) as exc_info:
+            _validate_url(url, None, caller_supplied=False)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     @pytest.mark.parametrize(
         "url",
@@ -972,12 +1052,25 @@ class TestValidateUrl:
     )
     def test_rejects_malformed_url(self, url: str) -> None:
         """A URL that cannot be parsed, or whose port is out of range or not a number, is refused as malformed."""
-        with pytest.raises(McpDiscoveryError, match="malformed URL"):
-            _validate_url(url, None)
+        with pytest.raises(McpDiscoveryError, match="malformed URL") as exc_info:
+            _validate_url(url, None, caller_supplied=False)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize(
+        "url",
+        ["http://mcp.example.com", "https://127.0.0.1", "https://[::1"],
+        ids=["not https", "non-public host", "malformed"],
+    )
+    def test_a_caller_supplied_url_is_a_configuration_fault(self, url: str) -> None:
+        """The same conditions on the caller's own argument need a fix in the caller, not a retry."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            _validate_url(url, None, caller_supplied=True)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert exc_info.value.retryable is False
 
     def test_invokes_validator_when_url_is_acceptable(self) -> None:
         seen: list[str] = []
-        _validate_url("https://mcp.example.com", seen.append)
+        _validate_url("https://mcp.example.com", seen.append, caller_supplied=False)
         assert seen == ["https://mcp.example.com"]
 
     def test_wraps_validator_rejection(self) -> None:
@@ -987,16 +1080,27 @@ class TestValidateUrl:
             raise ValueError(msg)
 
         with pytest.raises(McpDiscoveryError, match="blocked by policy"):
-            _validate_url("https://mcp.example.com", validator)
+            _validate_url("https://mcp.example.com", validator, caller_supplied=False)
 
-    def test_passes_through_validator_discovery_error(self) -> None:
+    def test_wraps_validator_rejection_of_a_caller_supplied_url_as_a_configuration_fault(self) -> None:
+        def validator(url: str) -> None:
+            del url
+            msg = "blocked by policy"
+            raise ValueError(msg)
+
+        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
+            _validate_url("https://mcp.example.com", validator, caller_supplied=True)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    @pytest.mark.parametrize("caller_supplied", [True, False])
+    def test_passes_through_validator_discovery_error(self, caller_supplied: bool) -> None:
         def validator(url: str) -> None:
             del url
             msg = "direct"
             raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
         with pytest.raises(McpDiscoveryError, match="direct") as exc_info:
-            _validate_url("https://mcp.example.com", validator)
+            _validate_url("https://mcp.example.com", validator, caller_supplied=caller_supplied)
         assert exc_info.value.__cause__ is None
 
 
@@ -1086,8 +1190,10 @@ class TestRegisterClient:
 
     @pytest.mark.parametrize("url", ["http://auth.example.com/register", "https://127.0.0.1/register"])
     async def test_unsafe_registration_url_rejected(self, url: str) -> None:
-        with pytest.raises(McpRegistrationError):
+        """The registration URL is the caller's own argument, so refusing it is a configuration fault."""
+        with pytest.raises(ConfigurationError) as exc_info:
             await register_client(url, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     async def test_transport_factory_used(self) -> None:
         calls: list[str] = []
@@ -1104,15 +1210,31 @@ class TestRegisterClient:
         assert reg.client_id == "x"
         assert calls == [_REGISTER_URL]
 
-    async def test_url_the_client_refuses_is_a_registration_error(self) -> None:
+    async def test_a_request_that_times_out_is_a_registration_error(self) -> None:
+        """A request the client sent and could not complete is an outage, not a fault in the URL."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectTimeout("boom", request=request)
+
+        with pytest.raises(McpRegistrationError, match="timed out") as exc_info:
+            await register_client(
+                _REGISTER_URL, _REDIRECT_URI, transport_factory=lambda _: httpx.MockTransport(handler)
+            )
+        assert exc_info.value.kind is FailureKind.TIMEOUT
+        assert exc_info.value.retryable is True
+
+    async def test_url_the_client_refuses_is_a_configuration_fault(self) -> None:
+        """The registration URL is the caller's, so a refusal at the request boundary is still their fault."""
+
         def handler(request: httpx.Request) -> httpx.Response:
             del request
             raise httpx.InvalidURL("refused")
 
-        with pytest.raises(McpRegistrationError, match="malformed URL"):
+        with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
             await register_client(
                 _REGISTER_URL, _REDIRECT_URI, transport_factory=lambda _: httpx.MockTransport(handler)
             )
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     @pytest.mark.parametrize("application_type", [ApplicationType.WEB, ApplicationType.NATIVE])
     async def test_explicit_application_type_included_in_payload(
@@ -1165,8 +1287,9 @@ class TestRegisterClient:
 
     async def test_registration_url_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         registration_url = "https://user:pw@auth.example.com/register"  # pragma: allowlist secret
-        with pytest.raises(McpRegistrationError, match="userinfo"):
+        with pytest.raises(ConfigurationError, match="userinfo") as exc_info:
             await register_client(registration_url, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
 
     async def test_explicit_application_type_overrides_loopback_inference(self, httpx_mock: HTTPXMock) -> None:
