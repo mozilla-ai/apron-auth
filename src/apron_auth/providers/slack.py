@@ -59,6 +59,11 @@ _SLACK_IDENTITY_HOST_SUFFIXES = ("slack.com",)
 # The error code Slack returns when the token lacks a scope the method needs.
 _SLACK_MISSING_SCOPE_ERROR = "missing_scope"
 
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for its own outages and rate limits.
+_SLACK_TRANSIENT_ERRORS = frozenset(
+    {"fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"}
+)
+
 # The userinfo claim that holds the workspace domain.
 _SLACK_TEAM_DOMAIN_CLAIM = "https://slack.com/team_domain"
 
@@ -138,6 +143,14 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     if not label or "." in label:
         return None
     return label
+
+
+def _slack_failure_kind(error: str) -> FailureKind:
+    """Return the kind of a Slack ``ok=false`` answer.
+
+    An outage or a rate limit may pass later. Every other code is a rejection.
+    """
+    return FailureKind.SERVER_ERROR if error in _SLACK_TRANSIENT_ERRORS else FailureKind.REJECTED
 
 
 class SlackIdentityHandler:
@@ -235,7 +248,7 @@ class SlackIdentityHandler:
             error = payload.get("error") or "unknown_error"
             if error == _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
-            raise IdentityFetchError(f"Slack identity request failed: {error}", kind=FailureKind.REJECTED)
+            raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
 
         email_verified = None
         if "email_verified" in payload:
@@ -321,13 +334,13 @@ class SlackIdentityHandler:
             error = team_info_payload.get("error") or "unknown_error"
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=FailureKind.REJECTED)
+                raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
 
             auth_test_payload = await self._slack_post(client, _SLACK_AUTH_TEST_URL, access_token, "auth.test")
 
         if not auth_test_payload.get("ok"):
             error = auth_test_payload.get("error") or "unknown_error"
-            raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=FailureKind.REJECTED)
+            raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)
 
