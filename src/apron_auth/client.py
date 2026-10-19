@@ -442,13 +442,16 @@ class OAuthClient:
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
         created_at = _finite_number(pending.created_at)
+        if created_at is None:
+            msg = "Pending authorization request carries no usable creation time"
+            raise StateError(msg)
         now = time.time()
         # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
-        if created_at is None or created_at > now + CLOCK_SKEW_SECONDS:
-            msg = "The pending authorization request carries no usable creation time"
+        if created_at > now + CLOCK_SKEW_SECONDS:
+            msg = "Pending authorization request was created ahead of this clock"
             raise StateError(msg)
         if created_at < now - self._config.max_pending_age_seconds:
-            msg = "The pending authorization request is older than the maximum age"
+            msg = "Pending authorization request is older than the maximum age"
             raise StateError(msg)
 
         if not pending.nonce and self._requests_openid():
