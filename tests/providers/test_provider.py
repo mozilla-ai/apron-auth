@@ -135,6 +135,18 @@ def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> N
     assert infer_identity_handler(config) is None
 
 
+@pytest.mark.parametrize("provider", list(Provider))
+def test_preset_follows_a_changed_member_fact(provider: Provider, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Patching the member proves the preset reads each fact from it rather than repeating the value.
+    monkeypatch.setattr(provider, "disconnect_fully_revokes", not provider.disconnect_fully_revokes)
+    monkeypatch.setattr(provider, "scope_separator", "|")
+
+    config = _preset_config(MODULES[provider])
+
+    assert config.disconnect_fully_revokes is provider.disconnect_fully_revokes
+    assert config.scope_separator == provider.scope_separator
+
+
 def test_hand_built_config_has_no_provider() -> None:
     config = ProviderConfig(
         client_id="cid",

@@ -343,6 +343,7 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=extra_params or {},
+        scope_separator=Provider.GITHUB.scope_separator,
         disconnect_fully_revokes=Provider.GITHUB.disconnect_fully_revokes,
         scope_metadata=BASE_SCOPE_METADATA,
         implicit_scopes=IMPLICIT_SCOPES,

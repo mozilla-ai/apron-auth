@@ -216,6 +216,7 @@ def preset(
         redirect_uri=redirect_uri,
         scopes=merged_scopes,
         extra_params=defaults,
+        scope_separator=Provider.GOOGLE.scope_separator,
         disconnect_fully_revokes=Provider.GOOGLE.disconnect_fully_revokes,
         scope_metadata=BASE_SCOPE_METADATA,
         can_assert_domain_ownership=True,
