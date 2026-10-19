@@ -779,6 +779,12 @@ class TestSlackWorkspaceBotIdentity:
 class TestSlackWorkspaceDomainParsing:
     """Domain extraction from an ``auth.test`` workspace URL host."""
 
+    def test_the_workspace_host_suffix_agrees_with_the_member(self) -> None:
+        from apron_auth.models import Provider
+        from apron_auth.providers.slack import _SLACK_HOST_SUFFIX
+
+        assert f".{Provider.SLACK.host_suffixes[0]}" == _SLACK_HOST_SUFFIX
+
     @pytest.mark.parametrize(
         ("url", "expected"),
         [
