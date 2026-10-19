@@ -26,7 +26,13 @@ from urllib.parse import ParseResult, urljoin, urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, discovery_client, require_declared_issuer, str_list
+from apron_auth._discovery import (
+    CONFIDENTIAL_AUTH_METHODS,
+    IssuerNotDeclaredError,
+    discovery_client,
+    require_declared_issuer,
+    str_list,
+)
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
@@ -116,7 +122,11 @@ async def discover(
         transport_factory,
         "authorization server metadata",
     )
-    require_declared_issuer(server_meta, auth_server, "authorization server metadata", McpDiscoveryError)
+    try:
+        require_declared_issuer(server_meta, auth_server)
+    except IssuerNotDeclaredError as exc:
+        msg = "authorization server metadata does not declare the issuer it was fetched for"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
     authorize_url = server_meta.get("authorization_endpoint")
     token_url = server_meta.get("token_endpoint")

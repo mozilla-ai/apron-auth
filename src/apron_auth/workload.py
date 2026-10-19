@@ -18,7 +18,6 @@ from joserfc.errors import ExpiredTokenError, JoseError
 from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
-from apron_auth._discovery import require_declared_issuer
 from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
@@ -31,7 +30,7 @@ from apron_auth.errors import (
     TokenValidationReason,
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
-from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
+from apron_auth.providers._openid_documents import fetch_document, optional_url, require_document_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
 
 if TYPE_CHECKING:
@@ -208,7 +207,7 @@ class WorkloadTokenVerifier:
                 raise IdentityFetchError(message, kind=kind)
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
-                require_declared_issuer(document, self._issuer, "OpenID provider configuration", OidcDiscoveryError)
+                require_document_issuer(document, self._issuer)
                 jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
                 if jwks_url is None:
                     msg = "OpenID provider configuration names no signing key set"

@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from apron_auth._discovery import discovery_client
+from apron_auth._discovery import IssuerNotDeclaredError, discovery_client, require_declared_issuer
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, OidcDiscoveryError
@@ -75,6 +75,26 @@ def require_url(
         msg = f"OpenID {field} must not carry userinfo"
         raise OidcDiscoveryError(msg, kind=kind)
     return value
+
+
+def require_document_issuer(document: dict[str, Any], issuer: str) -> None:
+    """Require an OpenID provider's configuration document to declare ``issuer`` as its own.
+
+    OpenID Connect Discovery 1.0 section 4.3 requires the declared issuer to be identical to the one the document
+    was fetched for, and it is compared exactly.
+
+    Args:
+        document: The decoded configuration document.
+        issuer: The issuer identifier the document must declare.
+
+    Raises:
+        OidcDiscoveryError: If the document declares no issuer or a different one.
+    """
+    try:
+        require_declared_issuer(document, issuer)
+    except IssuerNotDeclaredError as exc:
+        msg = "OpenID provider configuration does not declare the issuer it was fetched for"
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
 def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
