@@ -182,6 +182,7 @@ class TestDiscover:
 
         with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
         assert "different issuer" in str(exc_info.value.__cause__)
 
@@ -200,6 +201,7 @@ class TestDiscover:
 
         with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
         assert "declares no issuer" in str(exc_info.value.__cause__)
 

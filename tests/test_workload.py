@@ -12,6 +12,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     TokenExpiredError,
     TokenValidationError,
@@ -230,6 +231,7 @@ class TestOutages:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)
+        assert caught.value.kind is FailureKind.REFUSED
 
     async def test_a_document_without_a_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A configuration document that names no key set cannot verify anything."""

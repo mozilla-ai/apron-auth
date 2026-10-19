@@ -556,6 +556,7 @@ class TestDiscover:
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
         with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
         assert "declares no issuer" in str(exc_info.value.__cause__)
 
@@ -585,6 +586,7 @@ class TestDiscover:
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
         with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
             await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
         assert "different issuer" in str(exc_info.value.__cause__)
 
