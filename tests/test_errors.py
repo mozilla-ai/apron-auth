@@ -190,3 +190,19 @@ class TestTokenValidationError:
         import apron_auth.errors
 
         assert not hasattr(apron_auth.errors, "TokenVerificationError")
+
+
+class TestClassificationIsReadOnly:
+    def test_a_kind_cannot_be_changed_after_construction(self) -> None:
+        err = TokenExchangeError("boom", kind=FailureKind.REJECTED)
+        with pytest.raises(AttributeError):
+            err.kind = FailureKind.TIMEOUT  # type: ignore[misc]
+
+    def test_a_reason_cannot_be_changed_after_construction(self) -> None:
+        err = TokenValidationError("boom", reason=TokenValidationReason.SIGNATURE)
+        with pytest.raises(AttributeError):
+            err.reason = TokenValidationReason.CLAIMS  # type: ignore[misc]
+
+    def test_retryable_cannot_be_changed_on_a_member(self) -> None:
+        with pytest.raises(AttributeError):
+            FailureKind.TIMEOUT.retryable = False  # type: ignore[misc]

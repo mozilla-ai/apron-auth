@@ -27,14 +27,19 @@ class FailureKind(StrEnum):
     Every other kind needs a change: a new credential, a fixed configuration, or a fixed program.
     """
 
-    retryable: bool
+    _retryable: bool
 
     def __new__(cls, value: str, retryable: bool) -> FailureKind:
         """Create a member that carries whether its failures may pass on retry."""
         member = str.__new__(cls, value)
         member._value_ = value
-        member.retryable = retryable
+        member._retryable = retryable
         return member
+
+    @property
+    def retryable(self) -> bool:
+        """Whether a failure of this kind may pass on retry without any change."""
+        return self._retryable
 
     # This library's caller passed a configuration or an argument that cannot work.
     CONFIGURATION = ("configuration", False)
@@ -76,7 +81,12 @@ class OAuthError(Exception):
         if not isinstance(kind, FailureKind):
             msg = f"{type(self).__name__} needs a kind from FailureKind"
             raise TypeError(msg)
-        self.kind = kind
+        self._kind = kind
+
+    @property
+    def kind(self) -> FailureKind:
+        """What went wrong, fixed when the error is raised."""
+        return self._kind
 
     @property
     def retryable(self) -> bool:
@@ -229,7 +239,12 @@ class TokenValidationError(IdentityFetchError):
         if not isinstance(reason, TokenValidationReason):
             msg = f"{type(self).__name__} needs a reason from TokenValidationReason"
             raise TypeError(msg)
-        self.reason = reason
+        self._reason = reason
+
+    @property
+    def reason(self) -> TokenValidationReason:
+        """Why the token was refused, fixed when the error is raised."""
+        return self._reason
 
 
 class TokenExpiredError(TokenValidationError):
