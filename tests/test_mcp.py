@@ -883,16 +883,11 @@ class TestDiscover:
             await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
         assert exc_info.value.kind is FailureKind.CONFIGURATION
 
-    async def test_declared_url_the_client_refuses_is_a_discovery_error(self) -> None:
-        """The same refusal on an authorization server the metadata declares is a refusal, not a caller fault."""
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            if "oauth-protected-resource" in request.url.path:
-                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
-            raise httpx.InvalidURL("refused")
-
+    async def test_declared_url_the_client_refuses_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
+        """A host only the HTTP client rejects is refused when a document named it, not blamed on the caller."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://\x80\x80.example.com"]})
         with pytest.raises(McpDiscoveryError, match="malformed URL") as exc_info:
-            await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
+            await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_a_request_that_fails_in_transit_is_a_discovery_error(self) -> None:
