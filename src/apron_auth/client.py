@@ -392,7 +392,8 @@ class OAuthClient:
 
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
         A client without one takes ``pending_state``.
-        Either way, a ``state`` that does not match the pending state is refused before the code is redeemed.
+        Either way, a ``state`` that does not match the pending state, or a pending state older than the
+        configured maximum age, is refused before the code is redeemed.
         When the authorization request sent a nonce, the response must carry an ID token with that nonce,
         or no tokens are returned.
 
@@ -402,7 +403,7 @@ class OAuthClient:
         NOTE: Callers must keep their own pending state where the user cannot change it,
         because every check here trusts it.
         Callers must also discard it after one exchange attempt, even a failed one,
-        because only a ``StateStore`` refuses a pending state that is reused or too old.
+        because only a ``StateStore`` refuses a pending state that is reused.
 
         Args:
             code: The authorization code returned to the redirect URI.
@@ -433,12 +434,16 @@ class OAuthClient:
                 but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
-                or the store holds no pending state for it because it is invalid, expired, or already consumed.
+                the store holds no pending state for it because it is invalid, expired, or already consumed,
+                or the pending state is older than ``max_pending_age_seconds``.
             TokenExchangeError: If the token endpoint rejects the exchange.
                 It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
+        if time.time() - pending.created_at > self._config.max_pending_age_seconds:
+            msg = "The pending authorization request is older than the maximum age"
+            raise StateError(msg)
 
         if not pending.nonce and self._requests_openid():
             # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.

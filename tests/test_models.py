@@ -37,6 +37,26 @@ class TestProviderConfig:
         assert config.redirect_uri is None
         assert config.resource is None
 
+    def test_max_pending_age_defaults_to_ten_minutes(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.max_pending_age_seconds == 600
+
+    @pytest.mark.parametrize("max_age", [0, -1], ids=["zero", "negative"])
+    def test_max_pending_age_rejects_zero_and_negative(self, max_age: int) -> None:
+        with pytest.raises(ValidationError, match="max_pending_age_seconds must be positive"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                max_pending_age_seconds=max_age,
+            )
+
     @pytest.mark.parametrize(
         "resource",
         ["https://mcp.example.com/", "urn:example:resource"],

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
@@ -63,6 +64,15 @@ def _pending_state(**overrides: object) -> OAuthPendingState:
     }
     defaults.update(overrides)
     return OAuthPendingState(**defaults)
+
+
+# A fixed wall-clock reading for the tests that measure a pending state's age.
+_NOW = 1_700_000_000.0
+
+
+def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the clock the client reads to ``_NOW``."""
+    monkeypatch.setattr("apron_auth.client.time", SimpleNamespace(time=lambda: _NOW))
 
 
 def _id_token(claims: object) -> str:
@@ -645,6 +655,68 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(ConfigurationError):
             await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_pending_state_older_than_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 601)
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_stored_pending_state_older_than_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(created_at=_NOW - 601))
+        client = OAuthClient(config=_make_oauth_config(), state_store=store)
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+        store.consume.assert_awaited_once_with("pending-state")
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_accepts_a_pending_state_at_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 600)
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_accepts_a_stored_pending_state_at_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(created_at=_NOW - 600))
+        client = OAuthClient(config=_make_oauth_config(), state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config(max_pending_age_seconds=30))
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 31)
+            )
         assert httpx_mock.get_requests() == []
 
     async def test_exchange_no_key_collision(self, httpx_mock):
