@@ -1,4 +1,4 @@
-"""The ``Provider`` enum, its per-member data, and the presets that stamp it on their configs."""
+"""The ``Provider`` enum, its per-member data, and which presets label a config with a member."""
 
 from __future__ import annotations
 
