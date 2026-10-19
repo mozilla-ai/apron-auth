@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from enum import StrEnum
+from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
@@ -47,6 +47,7 @@ class ApplicationType:
     NATIVE = "native"
 
 
+@unique
 class Provider(StrEnum):
     """The OAuth providers this library knows by name, each with the facts that differ between them.
 
