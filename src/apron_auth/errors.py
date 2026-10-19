@@ -8,6 +8,7 @@ The ``kind`` says what went wrong in a way a caller can act on, and ``retryable`
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 # Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in
 # token-endpoint responses. ``error_code`` is a plain ``str`` because a provider
@@ -63,6 +64,14 @@ class FailureKind(StrEnum):
     UNREACHABLE = ("unreachable", True)
 
 
+def _rebuild(cls: type[OAuthError], args: tuple[object, ...], state: dict[str, Any]) -> OAuthError:
+    """Rebuild a pickled error without calling its constructor, whose keyword arguments are not in ``args``."""
+    error = cls.__new__(cls)
+    Exception.__init__(error, *args)
+    error.__dict__.update(state)
+    return error
+
+
 class OAuthError(Exception):
     """Base exception for all apron-auth errors.
 
@@ -87,6 +96,10 @@ class OAuthError(Exception):
     def kind(self) -> FailureKind:
         """What went wrong, fixed when the error is raised."""
         return self._kind
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        """Pickle by class, arguments and attributes, because the constructor arguments are not all in ``args``."""
+        return _rebuild, (type(self), self.args, self.__dict__)
 
     @property
     def retryable(self) -> bool:

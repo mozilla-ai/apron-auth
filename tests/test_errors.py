@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pickle
+
 import pytest
 
 from apron_auth.errors import (
@@ -218,3 +220,27 @@ class TestExchangeIsNeverRetryable:
 
     def test_a_refresh_error_keeps_the_kind_rule(self) -> None:
         assert TokenRefreshError("boom", kind=FailureKind.SERVER_ERROR).retryable is True
+
+
+class TestPickling:
+    """Errors cross process boundaries in worker pools, so their classification must survive a round trip."""
+
+    def test_a_token_endpoint_error_keeps_its_kind_and_code(self) -> None:
+        err = TokenRefreshError("invalid_grant: gone", kind=FailureKind.REJECTED, error_code="invalid_grant")
+        back = pickle.loads(pickle.dumps(err))
+        assert type(back) is TokenRefreshError
+        assert str(back) == "invalid_grant: gone"
+        assert back.kind is FailureKind.REJECTED
+        assert back.error_code == "invalid_grant"
+
+    def test_a_validation_error_keeps_its_reason(self) -> None:
+        err = TokenValidationError("bad signature", reason=TokenValidationReason.SIGNATURE)
+        back = pickle.loads(pickle.dumps(err))
+        assert type(back) is TokenValidationError
+        assert back.reason is TokenValidationReason.SIGNATURE
+        assert back.kind is FailureKind.REFUSED
+
+    def test_an_expired_error_round_trips(self) -> None:
+        back = pickle.loads(pickle.dumps(TokenExpiredError("old")))
+        assert type(back) is TokenExpiredError
+        assert back.reason is TokenValidationReason.EXPIRED
