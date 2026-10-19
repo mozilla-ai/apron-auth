@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import base64
 import gc
 import json
 import logging
 import weakref
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -21,6 +23,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
+from apron_auth.providers import _jwks
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 JWKS_URL = "https://sso.example.com/realms/acme/protocol/openid-connect/certs"
@@ -440,8 +443,8 @@ class TestKeySelection:
         assert verified.claims == {"sub": "u-1"}
         assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
 
-    async def test_names_no_particular_kind_of_token(self) -> None:
-        """Refusals are worded for any signed token, so one key set serves sign-in and workload verification."""
+    async def test_refuses_without_naming_a_kind_of_token(self) -> None:
+        """A refusal names the token without a kind, so one key set serves every caller."""
         with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
             await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
@@ -463,7 +466,7 @@ class TestCaching:
     """Test when the key set is fetched again."""
 
     async def test_reuses_the_keys_within_an_hour(self, httpx_mock: HTTPXMock) -> None:
-        """Two sign-ins inside the cache window cause one fetch."""
+        """Two verifications inside the cache window cause one fetch."""
         clock = FakeClock()
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
@@ -499,8 +502,8 @@ class TestCaching:
 
         assert verified.claims == {"sub": "u-1"}
 
-    async def test_concurrent_sign_ins_with_a_rotated_key_all_verify(self) -> None:
-        """A sign-in that waited on another's refetch checks again against the keys it stored."""
+    async def test_concurrent_verifications_with_a_rotated_key_all_verify(self) -> None:
+        """A verification that waited on another's refetch checks again against the keys it stored."""
         clock = FakeClock()
         documents = [published(RSA_KEY), published(RSA_KEY, OTHER_RSA_KEY)]
         fetches: list[str] = []
@@ -590,8 +593,8 @@ class TestCaching:
 
         assert len(httpx_mock.get_requests()) == 1
 
-    async def test_concurrent_first_sign_ins_share_one_fetch(self, httpx_mock: HTTPXMock) -> None:
-        """Sign-ins that arrive before the first fetch finishes wait for it."""
+    async def test_concurrent_first_verifications_share_one_fetch(self, httpx_mock: HTTPXMock) -> None:
+        """Verifications that arrive before the first fetch finishes wait for it."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL)
 
@@ -712,10 +715,10 @@ class TestFetchFailures:
 
 
 class TestEventLoops:
-    """Test that one instance serves sign-ins on more than one event loop."""
+    """Test that one instance serves verifications on more than one event loop."""
 
     def test_contended_use_on_two_event_loops(self) -> None:
-        """A handler built once, then used by concurrent sign-ins on two loops, verifies on both."""
+        """A key set built once, then used by concurrent verifications on two loops, verifies on both."""
         clock = FakeClock()
         fetches: list[str] = []
 
@@ -726,12 +729,12 @@ class TestEventLoops:
 
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
 
-        async def sign_ins() -> int:
+        async def verifications() -> int:
             return len(await asyncio.gather(*(keys.verify(signed(RSA_KEY)) for _ in range(3))))
 
-        assert asyncio.run(sign_ins()) == 3
+        assert asyncio.run(verifications()) == 3
         clock.now += 3600
-        assert asyncio.run(sign_ins()) == 3
+        assert asyncio.run(verifications()) == 3
         assert fetches == [JWKS_URL, JWKS_URL]
 
     def test_keeps_no_finished_event_loop_alive(self) -> None:
@@ -745,13 +748,26 @@ class TestEventLoops:
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
         finished: list[weakref.ref[asyncio.AbstractEventLoop]] = []
 
-        async def sign_ins() -> None:
+        async def verifications() -> None:
             finished.append(weakref.ref(asyncio.get_running_loop()))
             await asyncio.gather(*(keys.verify(signed(RSA_KEY)) for _ in range(3)))
 
         for _ in range(3):
             clock.now += 3600
-            asyncio.run(sign_ins())
+            asyncio.run(verifications())
         gc.collect()
 
         assert sum(loop() is not None for loop in finished) <= 1
+
+
+def test_no_string_in_the_module_names_a_kind_of_token() -> None:
+    """Every string the key set words is true for any signed token, so no caller passes a name for one."""
+    tree = ast.parse(Path(_jwks.__file__).read_text())
+    named = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and ("ID token" in node.value or "Workload token" in node.value)
+    ]
+    assert named == []
