@@ -731,6 +731,20 @@ class TestIdentityProfileProvider:
         assert identity.provider == "google"
         assert identity.subject == "g-1"
 
+    def test_a_built_in_provider_name_becomes_its_member(self) -> None:
+        identity = IdentityProfile(provider="google")
+        assert identity.provider is Provider.GOOGLE
+
+    def test_a_member_survives_a_round_trip_through_its_dump(self) -> None:
+        identity = IdentityProfile(provider=Provider.GOOGLE, subject="g-1")
+        rebuilt = IdentityProfile.model_validate(identity.model_dump(mode="json"))
+        assert rebuilt.provider is Provider.GOOGLE
+
+    def test_a_generic_provider_name_stays_a_string(self) -> None:
+        identity = IdentityProfile(provider="oidc:https://issuer.example")
+        assert identity.provider == "oidc:https://issuer.example"
+        assert type(identity.provider) is str
+
 
 class TestIdentityProfileVerifiedEmail:
     def test_returns_email_when_verified(self) -> None:

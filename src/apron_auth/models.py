@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, SecretStr, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
@@ -753,7 +753,8 @@ class IdentityProfile(BaseModel, frozen=True):
 
     Attributes:
         provider: The OAuth provider that issued this profile.
-            A built-in handler sets its :class:`Provider` member.
+            A built-in handler sets its :class:`Provider` member, and a member's name validates back into the member,
+            so a profile rebuilt from storage holds the member too.
             A generic handler sets a string that names its provider, such as ``oidc:<issuer>``.
             Both compare equal to their string form.
             Used by :meth:`identity_key` to produce a ``(provider, subject)``
@@ -773,7 +774,7 @@ class IdentityProfile(BaseModel, frozen=True):
         raw: Full provider response payload(s) for advanced callers.
     """
 
-    provider: Provider | str | None = None
+    provider: Provider | str | None = Field(default=None, union_mode="left_to_right")
     subject: str | None = None
     email: str | None = None
     email_verified: bool | None = None
