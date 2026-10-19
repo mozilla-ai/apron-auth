@@ -602,11 +602,15 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     """Validate an MCP OAuth URL before it is requested.
 
     A URL is rejected when it is malformed, not HTTPS, carries userinfo, or targets
-    a host that is not globally reachable. ``caller_supplied`` marks a URL this
-    library's caller passed, or one derived from it. Any other URL is a member of a
-    fetched document. An ``OAuthError`` from ``url_validator`` propagates unchanged,
-    and any other validator exception is wrapped in the class the source decides.
-    The validator sees only a URL that passed these checks.
+    a host that is not globally reachable. An ``OAuthError`` from ``url_validator``
+    propagates unchanged, and any other validator exception is wrapped in the class
+    the source decides. The validator sees only a URL that passed these checks.
+
+    Args:
+        url: The URL to check.
+        url_validator: Optional policy invoked on a URL that passed the checks.
+        caller_supplied: The URL is an argument of this library's caller, or derives
+            from one, not a member of a fetched document.
 
     Raises:
         ConfigurationError: If a caller-supplied URL is rejected.
@@ -683,6 +687,17 @@ async def _fetch_first_metadata(
     Tries each URL in order through a per-URL client from ``transport_factory``,
     skipping request errors, non-200 responses, and non-object bodies. Each skip
     is logged at debug with a non-sensitive reason.
+
+    Args:
+        candidate_urls: The URLs to try, in order.
+        url_validator: Optional policy invoked on each URL before it is requested.
+        transport_factory: Optional factory controlling the outbound connection.
+        what: The document this fetches, for the error and the debug lines.
+        caller_supplied: The candidates derive from an argument of this library's
+            caller, not from a fetched document.
+
+    Returns:
+        The first candidate's body that is a JSON object.
 
     Raises:
         ConfigurationError: If a candidate is rejected and ``caller_supplied`` says
