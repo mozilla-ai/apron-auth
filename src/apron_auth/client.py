@@ -212,6 +212,31 @@ def _check_nonce(claims: Mapping[str, Any], nonce: str) -> None:
         raise NonceValidationError(msg)
 
 
+def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
+    """Refuse a pending authorization request whose creation time this client cannot treat as current.
+
+    Args:
+        pending: The pending state resolved for the callback.
+        max_age: The age, in seconds, past which a pending authorization request is refused.
+
+    Raises:
+        StateError: If the creation time is not a finite number, lies further ahead of this clock than the
+            allowed difference, or is older than ``max_age``.
+    """
+    created_at = _finite_number(pending.created_at)
+    if created_at is None:
+        msg = "Pending authorization request carries no usable creation time"
+        raise StateError(msg)
+    now = time.time()
+    # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
+    if created_at > now + CLOCK_SKEW_SECONDS:
+        msg = "Pending authorization request was created ahead of this clock"
+        raise StateError(msg)
+    if created_at < now - max_age:
+        msg = "Pending authorization request is older than the maximum age"
+        raise StateError(msg)
+
+
 def _finite_number(value: object) -> int | float | None:
     """Return ``value`` when it is a finite number, else ``None``.
 
@@ -441,18 +466,7 @@ class OAuthClient:
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
-        created_at = _finite_number(pending.created_at)
-        if created_at is None:
-            msg = "Pending authorization request carries no usable creation time"
-            raise StateError(msg)
-        now = time.time()
-        # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
-        if created_at > now + CLOCK_SKEW_SECONDS:
-            msg = "Pending authorization request was created ahead of this clock"
-            raise StateError(msg)
-        if created_at < now - self._config.max_pending_age_seconds:
-            msg = "Pending authorization request is older than the maximum age"
-            raise StateError(msg)
+        _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
 
         if not pending.nonce and self._requests_openid():
             # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.
