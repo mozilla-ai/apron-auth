@@ -23,7 +23,10 @@ DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 class IssuerNotDeclaredError(Exception):
-    """A metadata document does not declare the issuer it was fetched for."""
+    """Internal refusal of a metadata document that does not declare the issuer it was fetched for.
+
+    NOTE: This is not one of the library's errors, so each caller must wrap it in the error for its own phase.
+    """
 
 
 def require_declared_issuer(document: Mapping[str, object], expected: str) -> None:
