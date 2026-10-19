@@ -620,8 +620,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
         url: The URL to check.
         url_validator: Optional policy invoked on a URL that passed the checks.
         caller_supplied: The URL is an argument of this library's caller, or derives
-            from one, not a member of a fetched document. It has no default, so
-            every call site states the source.
+            from one, not a member of a fetched document.
 
     Raises:
         ConfigurationError: If a caller-supplied URL is rejected.
