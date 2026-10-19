@@ -181,7 +181,7 @@ class TestVerify:
         """A header segment that decodes to another JSON value is not a signed token."""
         token = f"{_b64(json.dumps(header).encode())}.{_b64(b'{}')}.sig"
 
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_accepts_a_large_protected_header(self, httpx_mock: HTTPXMock) -> None:
@@ -196,7 +196,7 @@ class TestVerify:
         """A header that nests too deeply to decode is not a signed token."""
         token = f"{_b64(b'[' * 12000)}.{_b64(b'{}')}.sig"
 
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_refuses_a_deeply_nested_payload(self, httpx_mock: HTTPXMock) -> None:
@@ -210,7 +210,7 @@ class TestVerify:
 
     async def test_refuses_a_token_that_cannot_be_encoded(self) -> None:
         """A token holding a lone surrogate is refused, not raised as an encoding error."""
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify("\ud800.a.b")
 
     async def test_accepts_an_elliptic_curve_key(self, httpx_mock: HTTPXMock) -> None:
@@ -275,7 +275,7 @@ class TestVerify:
     @pytest.mark.parametrize("token", ["", "not-a-token", "a.b", "a.b.c"])
     async def test_refuses_a_token_that_is_not_a_signed_token(self, token: str) -> None:
         """Anything that does not parse as a compact signed token is refused."""
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await IssuerSigningKeys(JWKS_URL).verify(token)
 
     async def test_ignores_a_key_carried_in_the_token_header(self, httpx_mock: HTTPXMock) -> None:
@@ -442,7 +442,7 @@ class TestKeySelection:
 
     async def test_names_no_particular_kind_of_token(self) -> None:
         """Refusals are worded for any signed token, so one key set serves sign-in and workload verification."""
-        with pytest.raises(TokenValidationError, match="^The token is not a signed token") as exc_info:
+        with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
             await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 

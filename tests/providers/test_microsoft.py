@@ -742,7 +742,7 @@ class TestMicrosoftIdTokenVerification:
     )
     async def test_malformed_id_token_is_refused(self, httpx_mock: HTTPXMock, malformed: str) -> None:
         """A malformed ID token stops the sign-in before any Graph call, as it does for any OpenID provider."""
-        with pytest.raises(IdentityFetchError, match="not a signed token"):
+        with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await MicrosoftIdentityHandler().fetch_identity(
                 IdentityMaterial(access_token="access-abc", id_token=malformed), _config()
             )

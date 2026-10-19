@@ -160,15 +160,16 @@ class IssuerSigningKeys:
             The token's protected header and claims, and the published key that verified it.
 
         Raises:
-            TokenValidationError: If the token is not a signed token, names a critical header parameter,
-                names an algorithm outside the accepted list, names no published key, or fails the signature check.
+            TokenValidationError: If the token is not a compact signed token, names a critical header parameter,
+                names an algorithm outside the accepted list, carries a header that algorithm rejects,
+                names no published key, fails the signature check, or carries claims that are not a JSON object.
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
             compact = parse_compact(token)
         except ValueError as exc:
             raise TokenValidationError(
-                "The token is not a signed token", reason=TokenValidationReason.MALFORMED
+                "The token is not a compact signed token", reason=TokenValidationReason.MALFORMED
             ) from exc
         header = compact.headers()
         if "crit" in header:
@@ -200,7 +201,7 @@ class IssuerSigningKeys:
                     "The issuer's key set could not be refreshed for an unverified token, "
                     "so the cached key set stays in use"
                 )
-            # The token is checked again against any key set stored since its first check, by any caller.
+            # A key set that a concurrent verification stored is checked too.
             if self._keys is not checked_keys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
