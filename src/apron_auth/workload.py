@@ -104,7 +104,9 @@ class WorkloadTokenVerifier:
         try:
             self._document_url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
             if jwks_url is not None:
-                require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
+                require_url(
+                    jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http, caller_supplied=True
+                )
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer

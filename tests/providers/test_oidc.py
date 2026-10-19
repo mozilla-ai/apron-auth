@@ -15,6 +15,7 @@ from pytest_httpx import HTTPXMock
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
+    FailureKind,
     IdentityFetchError,
     IdentityNotSupportedError,
     IdentityScopeNotGrantedError,
@@ -379,8 +380,9 @@ class TestHttpsRequirement:
 
     async def test_refuses_an_http_document_url_override(self):
         """An explicit document URL is held to the https rule too."""
-        with pytest.raises(OidcDiscoveryError, match="document URL must use https"):
+        with pytest.raises(OidcDiscoveryError, match="document URL must use https") as exc_info:
             await discover(ISSUER, document_url="http://sso.example.com/config")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     @pytest.mark.parametrize(
         ("field", "label"),
@@ -397,8 +399,9 @@ class TestHttpsRequirement:
         """A document advertising a clear-text endpoint is refused by default."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: "http://idp.example/endpoint"}))
 
-        with pytest.raises(OidcDiscoveryError, match=f"{label} must use https"):
+        with pytest.raises(OidcDiscoveryError, match=f"{label} must use https") as exc_info:
             await discover(ISSUER)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_accepts_http_with_the_explicit_opt_in(self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture):
         """Local development can opt in, and the opt-in is audible in the logs."""

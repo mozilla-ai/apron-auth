@@ -163,7 +163,7 @@ async def discover(
     """
     url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
     if document_url is not None:
-        require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http)
+        require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http, caller_supplied=True)
         url = document_url
     document = await fetch_document(url, transport_factory)
 

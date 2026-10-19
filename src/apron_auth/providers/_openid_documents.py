@@ -20,7 +20,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger("apron_auth.providers.oidc")
 
 
-def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False) -> str:
+def require_url(
+    value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False, caller_supplied: bool = False
+) -> str:
     """Require ``value`` to be an absolute URL apron-auth may talk to.
 
     This is the one URL rule for the issuer, the document URL and every endpoint.
@@ -32,7 +34,8 @@ def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer:
         value: The raw value to check.
         field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules.
+        is_issuer: Apply the stricter issuer rules. An issuer is always caller-supplied.
+        caller_supplied: The value is an argument of this library's caller, not a member of a fetched document.
 
     Returns:
         ``value``, once it passes.
@@ -40,8 +43,8 @@ def require_url(value: Any, *, field: str, allow_insecure_http: bool, is_issuer:
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
-    # The issuer is the caller's own value. Every other URL comes from the provider's document.
-    kind = FailureKind.CONFIGURATION if is_issuer else FailureKind.REFUSED
+    # A caller's own URL is a configuration fault. A URL from the provider's document is refused.
+    kind = FailureKind.CONFIGURATION if is_issuer or caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
         raise OidcDiscoveryError(msg, kind=kind)
