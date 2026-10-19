@@ -1,4 +1,4 @@
-"""Verify ID tokens against an issuer's published JSON Web Key Set (JWKS)."""
+"""Verify signed tokens against an issuer's published JSON Web Key Set (JWKS)."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ _SigningKey = ECKey | OKPKey | RSAKey
 
 
 class SigningAlgorithm(StrEnum):
-    """Public-key signature algorithms an ID token may use, each with the key type and curves it needs.
+    """Public-key signature algorithms a signed token may use, each with the key type and curves it needs.
 
     A token can therefore name neither ``none`` nor a shared-secret MAC.
     An algorithm with no curves listed works with a key of any size of its type.
@@ -198,7 +198,7 @@ class IssuerSigningKeys:
                     "The issuer's key set could not be refreshed for an unverified token, "
                     "so the cached key set stays in use"
                 )
-            # The token is checked again against any key set stored since its first check, by any sign-in.
+            # The token is checked again against any key set stored since its first check, by any caller.
             if self._keys is not checked_keys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
@@ -272,7 +272,7 @@ class IssuerSigningKeys:
             IdentityFetchError: If the key set cannot be fetched.
                 A failure within the last minute is reported again without a new fetch.
         """
-        # A fresh key set needs no lock, which keeps the lock off every ordinary sign-in.
+        # A fresh key set needs no lock, which keeps the lock off every ordinary verification.
         if self._is_younger_than(self._fetched_at, _KEY_MAX_AGE_SECONDS):
             return
         async with self._loop_lock():
@@ -295,7 +295,7 @@ class IssuerSigningKeys:
 
         Args:
             checked_keys: The key set the token was checked against.
-                No fetch is needed when another sign-in has replaced it since.
+                No fetch is needed when another caller has replaced it since.
 
         Raises:
             IdentityFetchError: If the key set cannot be fetched.
