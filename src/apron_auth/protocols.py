@@ -78,8 +78,9 @@ class RevocationHandler(Protocol):
 
         Raises:
             RevocationError: If the request cannot be sent or the provider refuses it.
-                Implementations must pass ``kind``, because only they know whether the provider
+                Implementations should pass ``kind``, because only they know whether the provider
                 was unreachable, answered a server error, or rejected the request.
+                An error raised without one is ``UNEXPECTED`` and never retried.
         """
         ...
 
@@ -104,8 +105,9 @@ class IdentityHandler(Protocol):
 
         Raises:
             IdentityFetchError: If the identity cannot be fetched or the response does not validate.
-                Implementations must pass ``kind``, because only they know whether the provider
+                Implementations should pass ``kind``, because only they know whether the provider
                 was unreachable, answered a server error, rejected the token, or sent an invalid response.
+                An error raised without one is ``UNEXPECTED`` and never retried.
                 ``IdentityScopeNotGrantedError`` reports a token that lacks a scope the endpoint needs.
             ConfigurationError: If the configuration cannot be used for an identity request.
         """

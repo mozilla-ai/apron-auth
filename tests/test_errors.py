@@ -88,9 +88,11 @@ class TestKindOnErrors:
         assert err.retryable is expected.retryable
 
     @pytest.mark.parametrize("cls", MULTI_KIND_CLASSES)
-    def test_multi_kind_class_requires_a_kind(self, cls: type[OAuthError]) -> None:
-        with pytest.raises(TypeError, match="kind"):
-            cls("boom")
+    def test_multi_kind_class_without_a_kind_is_unexpected(self, cls: type[OAuthError]) -> None:
+        err = cls("boom")
+        assert err.kind is FailureKind.UNEXPECTED
+        assert err.retryable is False
+        assert str(err) == "boom"
 
     @pytest.mark.parametrize("cls", MULTI_KIND_CLASSES)
     def test_multi_kind_class_carries_the_given_kind(self, cls: type[OAuthError]) -> None:
@@ -102,9 +104,8 @@ class TestKindOnErrors:
         err = ConfigurationError("boom", kind=FailureKind.UNEXPECTED)
         assert err.kind is FailureKind.UNEXPECTED
 
-    def test_base_class_requires_a_kind(self) -> None:
-        with pytest.raises(TypeError, match="kind"):
-            OAuthError("boom")
+    def test_base_class_without_a_kind_is_unexpected(self) -> None:
+        assert OAuthError("boom").kind is FailureKind.UNEXPECTED
 
     def test_kind_must_be_a_member(self) -> None:
         with pytest.raises(TypeError, match="kind"):
@@ -126,9 +127,8 @@ class TestTokenEndpointErrors:
         assert not hasattr(ConfigurationError("boom"), "error_code")
         assert not hasattr(RevocationError("boom", kind=FailureKind.REJECTED), "error_code")
 
-    def test_token_endpoint_error_is_not_raised_directly(self) -> None:
-        with pytest.raises(TypeError, match="kind"):
-            TokenEndpointError("boom")
+    def test_token_endpoint_error_without_a_kind_is_unexpected(self) -> None:
+        assert TokenEndpointError("boom").kind is FailureKind.UNEXPECTED
 
 
 def test_well_known_error_code_constants() -> None:

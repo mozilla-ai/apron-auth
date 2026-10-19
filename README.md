@@ -757,7 +757,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
 - `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
 - `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
-- A `RevocationError` or `IdentityFetchError` your own handler raises must pass `kind`. A subclass may declare `default_kind` instead.
+- A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
 
 ## Logging
 

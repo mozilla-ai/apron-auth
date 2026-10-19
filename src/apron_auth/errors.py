@@ -63,7 +63,8 @@ class OAuthError(Exception):
 
     ``kind`` says what went wrong and ``retryable`` whether the same request may succeed later.
     A subclass that fails in one way only declares ``default_kind``, and a raise may leave ``kind`` out.
-    A subclass that fails in several ways declares none, and every raise must pass ``kind``.
+    A subclass that fails in several ways declares none, and a raise should pass ``kind``.
+    A raise that passes none gets ``UNEXPECTED``, which is never retryable.
     """
 
     default_kind: FailureKind | None = None
@@ -71,7 +72,7 @@ class OAuthError(Exception):
     def __init__(self, *args: object, kind: FailureKind | None = None) -> None:
         super().__init__(*args)
         if kind is None:
-            kind = type(self).default_kind
+            kind = type(self).default_kind or FailureKind.UNEXPECTED
         if not isinstance(kind, FailureKind):
             msg = f"{type(self).__name__} needs a kind from FailureKind"
             raise TypeError(msg)
