@@ -185,7 +185,9 @@ class IssuerSigningKeys:
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise TokenValidationError("The token header is not valid", reason=TokenValidationReason.MALFORMED) from exc
+            raise TokenValidationError(
+                "The token's header is not valid", reason=TokenValidationReason.MALFORMED
+            ) from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -205,11 +207,11 @@ class IssuerSigningKeys:
             if result.reason is _RefusalReason.NO_KEY:
                 msg = "The token is signed with a key the issuer does not publish"
                 raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
-            msg = "The token signature did not verify"
+            msg = "The token's signature did not verify"
             raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
         claims = compact_claims(compact)
         if claims is None:
-            msg = "The token claims are not a JSON object"
+            msg = "The token's claims are not a JSON object"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         return VerifiedToken(header, claims, result)
 
