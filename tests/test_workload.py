@@ -202,7 +202,7 @@ class TestRefusals:
 
     async def test_a_token_that_is_not_signed(self, httpx_mock: HTTPXMock) -> None:
         """Text that is not a compact signed token is refused before discovery, so not as an outage."""
-        with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
+        with pytest.raises(TokenValidationError, match="^Workload token is not a compact signed token") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify("not-a-token", audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 

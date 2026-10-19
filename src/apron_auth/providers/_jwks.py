@@ -107,6 +107,9 @@ class IssuerSigningKeys:
     A published RSA key shorter than 2048 bits is skipped, so nothing it signs verifies.
     One instance may serve verifications on different event loops in turn.
 
+    Its refusals name the token without a kind, because one key set verifies the ID token of a sign-in
+    and the token a platform signed for a workload. A caller that verifies one kind words its own refusals.
+
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
     """
 

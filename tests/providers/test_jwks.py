@@ -6,6 +6,7 @@ import base64
 import gc
 import json
 import logging
+import re
 import weakref
 from pathlib import Path
 from typing import Any
@@ -443,12 +444,6 @@ class TestKeySelection:
         assert verified.claims == {"sub": "u-1"}
         assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
 
-    async def test_refuses_without_naming_a_kind_of_token(self) -> None:
-        """A refusal names the token without a kind, so one key set serves every caller."""
-        with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
-            await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
-        assert exc_info.value.reason is TokenValidationReason.MALFORMED
-
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, entries: list[Any]
@@ -760,14 +755,42 @@ class TestEventLoops:
         assert sum(loop() is not None for loop in finished) <= 1
 
 
-def test_no_string_in_the_module_names_a_kind_of_token() -> None:
-    """Every string the key set words is true for any signed token, so no caller passes a name for one."""
-    tree = ast.parse(Path(_jwks.__file__).read_text())
-    named = [
-        node.value
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, str)
-        and ("ID token" in node.value or "Workload token" in node.value)
-    ]
-    assert named == []
+# The kinds of token a caller verifies through this key set. Its own strings name none of them.
+_TOKEN_KINDS = ("access token", "bearer token", "ID token", "identity token", "refresh token", "workload token")
+
+
+class TestNeutralWording:
+    """Test that the key set words its refusals for any signed token, so no caller passes a name for one.
+
+    A docstring may name a kind to explain the rule. A string that reaches a caller or a log may not.
+    """
+
+    async def test_a_refusal_names_the_token_without_a_kind(self) -> None:
+        with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
+            await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
+
+    def test_no_runtime_string_names_a_kind(self) -> None:
+        tree = ast.parse(Path(_jwks.__file__).read_text())
+        documented = {
+            id(node.body[0].value)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+        }
+        strings = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in documented
+        ]
+        # A positive control: a guard that found no strings would pass while checking nothing.
+        assert len(strings) > 10
+        named = [
+            value
+            for value in strings
+            for kind in _TOKEN_KINDS
+            if re.search(rf"\b{re.escape(kind)}\b", value, re.IGNORECASE)
+        ]
+        assert named == []

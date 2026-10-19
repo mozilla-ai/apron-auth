@@ -154,13 +154,13 @@ class WorkloadTokenVerifier:
                 raise ConfigurationError(msg)
             audience_rule["values"] = values
         if len(token) > _MAX_TOKEN_LENGTH:
-            msg = "The token is longer than any issuer signs"
+            msg = "Workload token is longer than any issuer signs"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         # A token that is not one is refused before discovery, so it is never reported as an outage.
         try:
             parse_compact(token)
         except ValueError as exc:
-            msg = "The token is not a compact signed token"
+            msg = "Workload token is not a compact signed token"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
         signing_keys = await self._keys()
         claims = (await signing_keys.verify(token)).claims
@@ -175,14 +175,14 @@ class WorkloadTokenVerifier:
         try:
             registry.validate(claims)
         except ExpiredTokenError as exc:
-            msg = "The token has expired"
+            msg = "Workload token has expired"
             raise TokenExpiredError(msg) from exc
         except (JoseError, TypeError, ValueError) as exc:
-            msg = "The token's claims did not validate"
+            msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
         # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != self._issuer:
-            msg = "The token's claims did not validate"
+            msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return _identity(self._issuer, claims)
 
@@ -246,7 +246,7 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
         or isinstance(expires_at, bool)
         or not isinstance(expires_at, int | float)
     ):
-        msg = "The token's claims did not validate"
+        msg = "Workload token claims did not validate"
         raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     email = claims.get("email")
     # Only the boolean ``true`` counts, so a string ``"true"`` does not verify an address.
