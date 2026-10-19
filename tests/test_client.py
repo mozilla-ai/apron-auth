@@ -1002,18 +1002,20 @@ class TestExchangeCodeNonce:
         assert httpx_mock.get_requests() == []
 
     @pytest.mark.parametrize(
-        ("id_token", "message"),
+        ("overrides", "message"),
         [
-            (_id_token(_openid_claims(nonce="other-nonce")), "ID token nonce does not match"),
-            (_id_token(_openid_claims(nonce="sént-nonce")), "ID token nonce does not match"),
-            (_id_token(_openid_claims(nonce=["sent-nonce"])), "ID token nonce does not match"),
-            (_id_token(_openid_claims()), "ID token carries no nonce"),
+            ({"nonce": "other-nonce"}, "ID token nonce does not match"),
+            ({"nonce": "sént-nonce"}, "ID token nonce does not match"),
+            ({"nonce": ["sent-nonce"]}, "ID token nonce does not match"),
+            ({}, "ID token carries no nonce"),
         ],
         ids=["mismatch", "non-ascii", "not-a-string", "missing"],
     )
     async def test_id_token_without_the_sent_nonce_is_refused(
-        self, httpx_mock: HTTPXMock, id_token: object, message: str
+        self, httpx_mock: HTTPXMock, overrides: dict[str, object], message: str
     ) -> None:
+        # The token is built when the test runs, so its expiry is measured from now and not from collection.
+        id_token = _id_token(_openid_claims(**overrides))
         with pytest.raises(NonceValidationError, match=message) as exc_info:
             await self._exchange(httpx_mock, {"id_token": id_token})
         assert isinstance(exc_info.value, TokenExchangeError)
