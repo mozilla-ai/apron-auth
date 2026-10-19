@@ -33,8 +33,8 @@ MODULES: dict[Provider, ModuleType] = {
     Provider.TYPEFORM: typeform,
 }
 
-# The facts each provider module hardcoded before they moved onto the member:
-# display name, identity host suffixes, disconnect_fully_revokes, scope separator.
+# The known-good facts per provider, pinned independently of the enum: display name,
+# identity host suffixes, disconnect_fully_revokes, scope separator.
 MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str]] = {
     Provider.ATLASSIAN: ("Atlassian", ("auth.atlassian.com",), False, " "),
     Provider.GITHUB: ("GitHub", ("github.com",), True, " "),
@@ -74,7 +74,7 @@ def test_member_value_is_the_module_name(provider: Provider) -> None:
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_member_data_matches_what_the_module_hardcoded(provider: Provider) -> None:
+def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
     display_name, host_suffixes, disconnect_fully_revokes, scope_separator = MODULE_FACTS[provider]
     assert provider.display_name == display_name
     assert provider.host_suffixes == host_suffixes
