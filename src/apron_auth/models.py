@@ -479,7 +479,7 @@ class FreshTokenSet(TokenSet):
     and a refresh produces a fresh one again.
 
     NOTE: Keyword construction is how this library issues one.
-    A caller who builds one by hand, or validates this type directly, asserts that freshness itself.
+    Building one by hand, copying one with replaced fields, or validating this type directly asserts freshness.
     """
 
     def __reduce__(self) -> NoReturn:
