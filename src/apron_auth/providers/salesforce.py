@@ -93,6 +93,7 @@ class SalesforceIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         host = urlparse(config.authorize_url).hostname or ""
+        # NOTE: The access token goes to a userinfo URL on this host, so the host suffixes bound where it is sent.
         if not matches_suffix(host, Provider.SALESFORCE.host_suffixes):
             msg = (
                 f"Salesforce identity fetch refused: authorize_url host {host!r} is not a "
