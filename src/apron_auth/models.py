@@ -48,16 +48,16 @@ class ApplicationType:
 
 
 class Provider(StrEnum):
-    """The OAuth providers with a built-in preset, each with the facts that differ between them.
+    """The OAuth providers this library knows by name, each with the facts that differ between them.
 
-    A member's value is its module name under ``apron_auth.providers``.
+    A member's value is its module name under ``apron_auth.providers``, and a member is declared as
+    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator)``.
 
     Attributes:
         display_name: The provider's name as it appears in messages and documentation.
-        host_suffixes: The provider's OAuth endpoint hosts, matched on a label boundary.
-            Both endpoints of a config must be on them for this provider's identity handler to be inferred.
-            NOTE: A config may name this member with endpoints outside them, such as a Salesforce org
-            on a custom login domain, so the suffixes gate inference rather than describe the config.
+        host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
+            NOTE: A config that names this member may have endpoints outside them, such as a
+            Salesforce org on a custom login domain.
         disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
             See :attr:`ProviderConfig.disconnect_fully_revokes`.
         scope_separator: The string the provider's scope parameter is joined with.
