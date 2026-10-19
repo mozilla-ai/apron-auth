@@ -189,7 +189,7 @@ class TestRefusals:
         discoverable(httpx_mock, short_key)
 
         with pytest.raises(
-            TokenValidationError, match="^Workload token is signed with a key the issuer does not"
+            TokenValidationError, match="^The token is signed with a key the issuer does not"
         ) as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims(), short_key), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY

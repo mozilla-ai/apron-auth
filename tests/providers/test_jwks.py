@@ -440,11 +440,16 @@ class TestKeySelection:
         assert verified.claims == {"sub": "u-1"}
         assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
 
-    async def test_names_the_tokens_it_verifies(self, httpx_mock: HTTPXMock) -> None:
-        """A caller verifying tokens other than ID tokens sees its own name for them in a refusal."""
-        with pytest.raises(TokenValidationError, match="^Workload token is not a signed token") as exc_info:
-            await IssuerSigningKeys(JWKS_URL, token_name="Workload token").verify("not-a-token")
+    async def test_names_no_particular_kind_of_token(self, httpx_mock: HTTPXMock) -> None:
+        """Refusals are worded for any signed token, so one key set serves sign-in and workload verification."""
+        with pytest.raises(TokenValidationError, match="^The token is not a signed token") as exc_info:
+            await IssuerSigningKeys(JWKS_URL).verify("not-a-token")
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
+
+    def test_takes_no_name_for_the_tokens_it_verifies(self) -> None:
+        """The key set words its own refusals, so no caller passes a name for them."""
+        with pytest.raises(TypeError, match="token_name"):
+            IssuerSigningKeys(JWKS_URL, token_name="Workload token")  # type: ignore[call-arg]
 
     @pytest.mark.parametrize("entries", [[{"kty": "weird", "kid": "w-1"}], []])
     async def test_warns_when_no_published_key_can_verify(

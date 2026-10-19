@@ -97,7 +97,7 @@ class VerifiedToken(NamedTuple):
 
 
 class IssuerSigningKeys:
-    """Hold one issuer's published signing keys and verify ID tokens against them.
+    """Hold one issuer's published signing keys and verify signed tokens against them.
 
     The keys are fetched on first use and kept for an hour.
     A token that no cached key verifies triggers an early refetch, so a rotated key is picked up.
@@ -105,7 +105,7 @@ class IssuerSigningKeys:
     A failed early refetch leaves a key set that is still within its hour in use.
     A stale key set whose refetch fails is not used, and the failure is reported again for a minute without a new fetch.
     A published RSA key shorter than 2048 bits is skipped, so nothing it signs verifies.
-    One instance may serve sign-ins on different event loops in turn.
+    One instance may serve verifications on different event loops in turn.
 
     NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
     """
@@ -117,7 +117,6 @@ class IssuerSigningKeys:
         transport_factory: TransportFactory | None = None,
         algorithms: tuple[SigningAlgorithm, ...] = tuple(SigningAlgorithm),
         clock: Callable[[], float] = time.monotonic,
-        token_name: str = "ID token",
     ) -> None:
         """Bind the key set to the URL it is published at.
 
@@ -128,7 +127,6 @@ class IssuerSigningKeys:
             transport_factory: Optional factory controlling the outbound connection for the key set fetch.
             algorithms: A tuple of the signing algorithms this issuer uses, which defaults to every accepted one.
             clock: The monotonic clock that ages the cached keys.
-            token_name: What the verified tokens are called in error messages.
 
         Raises:
             ConfigurationError: If ``algorithms`` names no accepted algorithm or is not a tuple of them.
@@ -148,11 +146,10 @@ class IssuerSigningKeys:
         self._fetched_at: float | None = None
         self._attempted_at: float | None = None
         self._last_failure: tuple[str, FailureKind] | None = None
-        self._token_name = token_name
         self._loop_lock = LoopLock()
 
     async def verify(self, token: str) -> VerifiedToken:
-        """Return the header and claims of an ID token whose signature an issuer key verifies.
+        """Return the header and claims of a token whose signature an issuer key verifies.
 
         Only the issuer's published keys are used, so a key or key URL in the token's header is ignored.
 
@@ -171,26 +168,24 @@ class IssuerSigningKeys:
             compact = parse_compact(token)
         except ValueError as exc:
             raise TokenValidationError(
-                f"{self._token_name} is not a signed token", reason=TokenValidationReason.MALFORMED
+                "The token is not a signed token", reason=TokenValidationReason.MALFORMED
             ) from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
-            msg = f"{self._token_name} names a critical header parameter that is not supported"
+            msg = "The token names a critical header parameter that is not supported"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
-            msg = f"{self._token_name} uses a signing algorithm that is not accepted"
+            msg = "The token uses a signing algorithm that is not accepted"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise TokenValidationError(
-                f"{self._token_name} header is not valid", reason=TokenValidationReason.MALFORMED
-            ) from exc
+            raise TokenValidationError("The token header is not valid", reason=TokenValidationReason.MALFORMED) from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -208,13 +203,13 @@ class IssuerSigningKeys:
                 result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
-                msg = f"{self._token_name} is signed with a key the issuer does not publish"
+                msg = "The token is signed with a key the issuer does not publish"
                 raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
-            msg = f"{self._token_name} signature did not verify"
+            msg = "The token signature did not verify"
             raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
         claims = compact_claims(compact)
         if claims is None:
-            msg = f"{self._token_name} claims are not a JSON object"
+            msg = "The token claims are not a JSON object"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         return VerifiedToken(header, claims, result)
 

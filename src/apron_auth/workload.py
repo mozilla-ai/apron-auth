@@ -223,10 +223,8 @@ class WorkloadTokenVerifier:
             return self._signing_keys
 
     def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
-        """Return the signing keys published at ``jwks_url``, naming the tokens they verify as workload tokens."""
-        return IssuerSigningKeys(
-            jwks_url, transport_factory=self._transport_factory, clock=self._clock, token_name="Workload token"
-        )
+        """Return the signing keys published at ``jwks_url``."""
+        return IssuerSigningKeys(jwks_url, transport_factory=self._transport_factory, clock=self._clock)
 
 
 def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
