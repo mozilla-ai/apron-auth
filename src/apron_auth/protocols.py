@@ -69,6 +69,10 @@ class RevocationHandler(Protocol):
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
 
+        Raises:
+            RevocationError: If the request cannot be sent or the provider refuses it.
+                Implementations must pass ``kind``, because only they know whether the provider
+                was unreachable, answered a server error, or rejected the request.
 
         Args:
             token: The token to revoke.
@@ -91,6 +95,12 @@ class IdentityHandler(Protocol):
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
 
+        Raises:
+            IdentityFetchError: If the identity cannot be fetched or the response does not validate.
+                Implementations must pass ``kind``, because only they know whether the provider
+                was unreachable, answered a server error, rejected the token, or sent an invalid response.
+                ``IdentityScopeNotGrantedError`` reports a token that lacks a scope the endpoint needs.
+            ConfigurationError: If the configuration cannot be used for an identity request.
 
         Args:
             material: The token material to establish identity from.
