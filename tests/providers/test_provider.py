@@ -9,7 +9,8 @@ from types import ModuleType
 import pytest
 
 from apron_auth import providers as providers_pkg
-from apron_auth.models import Provider, ProviderConfig
+from apron_auth.mcp import to_provider_config
+from apron_auth.models import Provider, ProviderConfig, ServerMetadata
 from apron_auth.providers import (
     atlassian,
     github,
@@ -18,6 +19,7 @@ from apron_auth.providers import (
     linear,
     microsoft,
     notion,
+    oidc,
     salesforce,
     slack,
     typeform,
@@ -56,6 +58,13 @@ MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str]] = {
 # ``oidc`` presets any OpenID provider rather than one named provider, so it has no member.
 _GENERIC_MODULE_NAMES = frozenset({"oidc"})
 
+_GENERIC_METADATA = ServerMetadata(
+    authorize_url="https://issuer.example/authorize",
+    token_url="https://issuer.example/token",
+    jwks_url="https://issuer.example/jwks",
+    issuer="https://issuer.example",
+)
+
 
 def _named_provider_module_names() -> list[str]:
     names = []
@@ -79,7 +88,10 @@ def _preset_config(module: ModuleType) -> ProviderConfig:
 
 def test_members_are_ordered_a_to_z() -> None:
     names = [provider.name for provider in Provider]
-    assert names == sorted(names)
+    assert names == sorted(names), (
+        "Declare a new member in its alphabetical position rather than appending it, so a reader "
+        "knows where to look and the order does not decay."
+    )
 
 
 def test_the_named_provider_modules_are_exactly_the_members() -> None:
@@ -125,14 +137,21 @@ def test_preset_config_carries_the_member_data(provider: Provider) -> None:
 
 
 def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> None:
-    config, _ = salesforce.preset(
+    on_suffix, _ = salesforce.preset(
+        client_id="cid",
+        client_secret="csecret",  # pragma: allowlist secret
+        scopes=["dummy"],
+    )
+    off_suffix, _ = salesforce.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
         host="login.acme.example",
     )
-    assert config.provider is Provider.SALESFORCE
-    assert infer_identity_handler(config) is None
+
+    assert on_suffix.provider is off_suffix.provider is Provider.SALESFORCE
+    assert infer_identity_handler(on_suffix) is not None
+    assert infer_identity_handler(off_suffix) is None
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -154,4 +173,19 @@ def test_hand_built_config_has_no_provider() -> None:
         authorize_url="https://example.com/authorize",
         token_url="https://example.com/token",
     )
+    assert config.provider is None
+
+
+def test_a_generic_openid_config_has_no_provider() -> None:
+    config, _ = oidc.preset(
+        client_id="cid",
+        client_secret="csecret",  # pragma: allowlist secret
+        scopes=["openid"],
+        metadata=_GENERIC_METADATA,
+    )
+    assert config.provider is None
+
+
+def test_an_mcp_config_has_no_provider() -> None:
+    config = to_provider_config(_GENERIC_METADATA, client_id="cid", client_secret="csecret")
     assert config.provider is None
