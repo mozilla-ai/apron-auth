@@ -227,7 +227,7 @@ class TestOutages:
         """A configuration document naming another issuer is not used."""
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": "https://other.example.com", "jwks_uri": JWKS_URL})
 
-        with pytest.raises(IdentityFetchError, match="does not declare the issuer") as caught:
+        with pytest.raises(IdentityFetchError, match="declares a different issuer") as caught:
             await WorkloadTokenVerifier(ISSUER).verify(signed(claims()), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)

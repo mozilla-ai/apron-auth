@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth._discovery import IssuerNotDeclaredError
+from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason
 from apron_auth.client import OAuthClient
 from apron_auth.errors import FailureKind, IdentityNotSupportedError, McpDiscoveryError, McpRegistrationError
 from apron_auth.mcp import (
@@ -554,17 +554,17 @@ class TestDiscover:
         del payload["issuer"]
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="declares no issuer") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert "declares no issuer" in str(exc_info.value.__cause__)
+        assert exc_info.value.__cause__.reason is IssuerRefusalReason.ABSENT
 
     @pytest.mark.parametrize("issuer", [None, 42, ""], ids=["null", "not a string", "empty"])
     async def test_issuer_that_is_not_a_name_is_refused_as_absent(self, httpx_mock: HTTPXMock, issuer: object) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="declares no issuer"):
             await discover("https://mcp.example.com")
 
     @pytest.mark.parametrize(
@@ -584,11 +584,11 @@ class TestDiscover:
         """The issuer must be identical to the identifier the metadata URL was built from, with no normalization."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="declares a different issuer") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert "different issuer" in str(exc_info.value.__cause__)
+        assert exc_info.value.__cause__.reason is IssuerRefusalReason.MISMATCHED
 
     async def test_declared_authorization_server_with_a_terminating_slash_must_match_exactly(
         self, httpx_mock: HTTPXMock
@@ -657,7 +657,7 @@ class TestDiscover:
             url=_ASM_ROOT,
             json=_asm_payload(issuer="https://evil.example.com", authorization_endpoint="https://evil.example.com/a"),
         )
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="declares a different issuer"):
             await discover("https://mcp.example.com", url_validator=seen.append)
         assert "https://evil.example.com/a" not in seen
 
@@ -678,7 +678,7 @@ class TestDiscover:
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com"),
         )
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="declares a different issuer"):
             await discover("https://mcp.example.com")
 
     async def test_identifier_with_a_terminating_slash_is_fetched_without_it(self, httpx_mock: HTTPXMock) -> None:
@@ -697,7 +697,7 @@ class TestDiscover:
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com/tenant"),
         )
-        with pytest.raises(McpDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(McpDiscoveryError, match="declares a different issuer"):
             await discover("https://mcp.example.com")
 
     async def test_supports_cimd_captured(self, httpx_mock: HTTPXMock) -> None:

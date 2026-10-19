@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import httpx
@@ -22,11 +23,29 @@ CONFIDENTIAL_AUTH_METHODS = (
 DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
+class IssuerRefusalReason(StrEnum):
+    """Which issuer condition a metadata document failed, for a caller choosing the words for its own phase."""
+
+    # The document names no issuer, or names one that is not a non-empty string.
+    ABSENT = "absent"
+    # The document names an issuer other than the one it was fetched for.
+    MISMATCHED = "mismatched"
+
+
 class IssuerNotDeclaredError(Exception):
     """Internal refusal of a metadata document that does not declare the issuer it was fetched for.
 
     NOTE: This is not one of the library's errors, so each caller must wrap it in the error for its own phase.
     """
+
+    def __init__(self, reason: IssuerRefusalReason) -> None:
+        """Create the refusal.
+
+        Args:
+            reason: Which issuer condition the document failed.
+        """
+        super().__init__(reason.value)
+        self.reason = reason
 
 
 def require_declared_issuer(document: Mapping[str, object], expected: str) -> None:
@@ -41,15 +60,13 @@ def require_declared_issuer(document: Mapping[str, object], expected: str) -> No
         expected: The issuer identifier the document must declare.
 
     Raises:
-        IssuerNotDeclaredError: If the document declares no issuer or a different one.
+        IssuerNotDeclaredError: If the document declares no issuer or a different one, naming which in ``reason``.
     """
     issuer = document.get("issuer")
     if not isinstance(issuer, str) or not issuer:
-        msg = "metadata declares no issuer"
-        raise IssuerNotDeclaredError(msg)
+        raise IssuerNotDeclaredError(IssuerRefusalReason.ABSENT)
     if issuer != expected:
-        msg = "metadata declares a different issuer than the one it was fetched for"
-        raise IssuerNotDeclaredError(msg)
+        raise IssuerNotDeclaredError(IssuerRefusalReason.MISMATCHED)
 
 
 def discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:

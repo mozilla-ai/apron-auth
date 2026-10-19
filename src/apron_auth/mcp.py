@@ -29,6 +29,7 @@ from pydantic import SecretStr
 from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
     IssuerNotDeclaredError,
+    IssuerRefusalReason,
     discovery_client,
     require_declared_issuer,
     str_list,
@@ -125,7 +126,10 @@ async def discover(
     try:
         require_declared_issuer(server_meta, auth_server)
     except IssuerNotDeclaredError as exc:
-        msg = "authorization server metadata does not declare the issuer it was fetched for"
+        if exc.reason is IssuerRefusalReason.ABSENT:
+            msg = "authorization server metadata declares no issuer"
+        else:
+            msg = "authorization server metadata declares a different issuer than the one it was fetched for"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
     authorize_url = server_meta.get("authorization_endpoint")

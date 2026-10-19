@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from apron_auth._discovery import IssuerNotDeclaredError, require_declared_issuer, str_list
+from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason, require_declared_issuer, str_list
 
 
 class TestStrList:
@@ -31,8 +31,9 @@ class TestRequireDeclaredIssuer:
         ids=["absent", "null", "not a string", "empty"],
     )
     def test_refuses_a_document_that_declares_no_issuer(self, document: dict[str, object]) -> None:
-        with pytest.raises(IssuerNotDeclaredError, match="declares no issuer"):
+        with pytest.raises(IssuerNotDeclaredError) as exc_info:
             require_declared_issuer(document, "https://auth.example.com")
+        assert exc_info.value.reason is IssuerRefusalReason.ABSENT
 
     @pytest.mark.parametrize(
         "issuer",
@@ -41,5 +42,6 @@ class TestRequireDeclaredIssuer:
     )
     def test_refuses_a_document_that_declares_a_different_issuer(self, issuer: str) -> None:
         """The declared issuer is compared exactly, with no normalization."""
-        with pytest.raises(IssuerNotDeclaredError, match="different issuer"):
+        with pytest.raises(IssuerNotDeclaredError) as exc_info:
             require_declared_issuer({"issuer": issuer}, "https://auth.example.com")
+        assert exc_info.value.reason is IssuerRefusalReason.MISMATCHED

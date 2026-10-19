@@ -8,7 +8,12 @@ from urllib.parse import urlparse
 
 import httpx
 
-from apron_auth._discovery import IssuerNotDeclaredError, discovery_client, require_declared_issuer
+from apron_auth._discovery import (
+    IssuerNotDeclaredError,
+    IssuerRefusalReason,
+    discovery_client,
+    require_declared_issuer,
+)
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, OidcDiscoveryError
@@ -93,7 +98,10 @@ def require_openid_issuer(document: dict[str, Any], issuer: str) -> None:
     try:
         require_declared_issuer(document, issuer)
     except IssuerNotDeclaredError as exc:
-        msg = "OpenID provider configuration does not declare the issuer it was fetched for"
+        if exc.reason is IssuerRefusalReason.ABSENT:
+            msg = "OpenID provider configuration declares no issuer"
+        else:
+            msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 

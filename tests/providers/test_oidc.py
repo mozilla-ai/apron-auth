@@ -12,7 +12,7 @@ import pytest
 from joserfc import jwk, jws
 from pytest_httpx import HTTPXMock
 
-from apron_auth._discovery import IssuerNotDeclaredError
+from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -180,17 +180,17 @@ class TestDiscover:
         """
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(issuer="https://attacker.example"))
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
+        with pytest.raises(OidcDiscoveryError, match="declares a different issuer") as exc_info:
             await discover(ISSUER)
         assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert "different issuer" in str(exc_info.value.__cause__)
+        assert exc_info.value.__cause__.reason is IssuerRefusalReason.MISMATCHED
 
     async def test_refuses_a_document_that_differs_only_by_a_trailing_slash(self, httpx_mock: HTTPXMock):
         """Two issuers differing by a slash are two different strings downstream."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(issuer=f"{ISSUER}/"))
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(OidcDiscoveryError, match="declares a different issuer"):
             await discover(ISSUER)
 
     async def test_refuses_a_document_declaring_no_issuer(self, httpx_mock: HTTPXMock):
@@ -199,11 +199,11 @@ class TestDiscover:
         del payload["issuer"]
         httpx_mock.add_response(url=DOCUMENT_URL, json=payload)
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer") as exc_info:
+        with pytest.raises(OidcDiscoveryError, match="declares no issuer") as exc_info:
             await discover(ISSUER)
         assert exc_info.value.kind is FailureKind.REFUSED
         assert isinstance(exc_info.value.__cause__, IssuerNotDeclaredError)
-        assert "declares no issuer" in str(exc_info.value.__cause__)
+        assert exc_info.value.__cause__.reason is IssuerRefusalReason.ABSENT
 
     @pytest.mark.parametrize("value", [None, ""])
     async def test_refuses_a_document_without_a_signing_key_set(self, httpx_mock: HTTPXMock, value: str | None) -> None:
@@ -282,7 +282,7 @@ class TestDiscover:
         override = "https://sso.example.com/nonstandard-config"
         httpx_mock.add_response(url=override, json=document(issuer="https://attacker.example"))
 
-        with pytest.raises(OidcDiscoveryError, match="does not declare the issuer"):
+        with pytest.raises(OidcDiscoveryError, match="declares a different issuer"):
             await discover(ISSUER, document_url=override)
 
     async def test_reports_a_malformed_issuer(self):
