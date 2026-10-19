@@ -208,7 +208,7 @@ tokens = await client.exchange_code(
     pending_state=pending_state,
 )
 identity = await client.fetch_identity(tokens)
-print(identity.provider)        # Provider.GOOGLE, Provider.GITHUB, etc.; equal to "google", "github"
+print(identity.provider)        # google, github, etc. (a Provider member for a built-in provider)
 print(identity.email)
 print(identity.email_verified)
 ```
