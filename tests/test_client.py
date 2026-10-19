@@ -1848,10 +1848,9 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert str(exc_info.value) == "token response could not be read"
-        endpoint_error = exc_info.value.__cause__
-        assert endpoint_error is not None
-        assert endpoint_error.__cause__ is None
-        assert endpoint_error.__context__ is None
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     async def test_refresh_non_string_error_value_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(

@@ -16,7 +16,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.client import OAuthClient, _redact, _TokenEndpointError
+from apron_auth.client import OAuthClient, _redact
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -73,13 +73,21 @@ def _linked_errors(error: BaseException) -> list[BaseException]:
     return found
 
 
+def _frame_names(error: BaseException) -> list[str]:
+    """Return the function names on an error's own traceback, outermost first."""
+    names = []
+    tb = error.__traceback__
+    while tb is not None:
+        names.append(tb.tb_frame.f_code.co_name)
+        tb = tb.tb_next
+    return names
+
+
 def _assert_carries_no_secret(error: OAuthError, *secrets: str) -> None:
-    cause = error.__cause__
-    assert error.__context__ is cause
-    if cause is not None:
-        assert isinstance(cause, _TokenEndpointError)
-        assert cause.__cause__ is None
-        assert cause.__context__ is None
+    # No chain at all: the internal token-endpoint error's traceback would hold the request frame.
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert "_token_request" not in _frame_names(error)
     for linked in _linked_errors(error):
         try:
             request = getattr(linked, "request", None)

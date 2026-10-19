@@ -456,7 +456,14 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            raise TokenExchangeError(str(exc), kind=exc.kind, error_code=exc.error_code) from exc
+            failure = (str(exc), exc.kind, exc.error_code)
+        else:
+            failure = None
+        if failure is not None:
+            # NOTE: This raise stays outside the except block and chains nothing, because the internal error's
+            # traceback holds the request frame, whose locals carry the grant and the client secret.
+            message, kind, error_code = failure
+            raise TokenExchangeError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
                 response.get("id_token"), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
@@ -563,7 +570,14 @@ class OAuthClient:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            raise TokenRefreshError(str(exc), kind=exc.kind, error_code=exc.error_code) from exc
+            failure = (str(exc), exc.kind, exc.error_code)
+        else:
+            failure = None
+        if failure is not None:
+            # NOTE: This raise stays outside the except block and chains nothing, because the internal error's
+            # traceback holds the request frame, whose locals carry the refresh token and the client secret.
+            message, kind, error_code = failure
+            raise TokenRefreshError(message, kind=kind, error_code=error_code)
         return self._parse_token_response(response)
 
     async def revoke_token(self, token: str) -> bool:
