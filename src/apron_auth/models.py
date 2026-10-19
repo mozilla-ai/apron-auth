@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -174,7 +175,7 @@ class ProviderConfig(BaseModel, frozen=True):
             Defaults to ``True``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old is still accepted.
-            Must be positive. Defaults to 600 (ten minutes).
+            Must be a positive finite number. Defaults to 600 (ten minutes).
     """
 
     client_id: str
@@ -245,17 +246,17 @@ class ProviderConfig(BaseModel, frozen=True):
         return self
 
     @model_validator(mode="after")
-    def _max_pending_age_is_positive(self) -> ProviderConfig:
-        """Reject a maximum pending age that would refuse every pending state.
+    def _max_pending_age_is_positive_and_finite(self) -> ProviderConfig:
+        """Reject a maximum pending age that would refuse every pending state or none.
 
         Returns:
             The validated config, unchanged.
 
         Raises:
-            ValueError: If ``max_pending_age_seconds`` is zero or negative.
+            ValueError: If ``max_pending_age_seconds`` is zero, negative, infinite, or not a number.
         """
-        if self.max_pending_age_seconds <= 0:
-            msg = "max_pending_age_seconds must be positive"
+        if not math.isfinite(self.max_pending_age_seconds) or self.max_pending_age_seconds <= 0:
+            msg = "max_pending_age_seconds must be a positive finite number"
             raise ValueError(msg)
         return self
 

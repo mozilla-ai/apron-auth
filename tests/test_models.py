@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 
 import pytest
@@ -46,9 +47,11 @@ class TestProviderConfig:
         )
         assert config.max_pending_age_seconds == 600
 
-    @pytest.mark.parametrize("max_age", [0, -1], ids=["zero", "negative"])
-    def test_max_pending_age_rejects_zero_and_negative(self, max_age: int) -> None:
-        with pytest.raises(ValidationError, match="max_pending_age_seconds must be positive"):
+    @pytest.mark.parametrize(
+        "max_age", [0, -1, math.inf, math.nan], ids=["zero", "negative", "infinite", "not-a-number"]
+    )
+    def test_max_pending_age_rejects_a_value_that_is_not_positive_and_finite(self, max_age: float) -> None:
+        with pytest.raises(ValidationError, match="max_pending_age_seconds must be a positive finite number"):
             ProviderConfig(
                 client_id="test-client",
                 client_secret=SecretStr("test-secret"),
