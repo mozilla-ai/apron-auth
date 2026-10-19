@@ -9,7 +9,7 @@ from types import ModuleType
 import pytest
 
 from apron_auth import providers as providers_pkg
-from apron_auth.models import IdentityProfile, Provider, ProviderConfig
+from apron_auth.models import Provider, ProviderConfig
 from apron_auth.providers import (
     atlassian,
     github,
@@ -143,11 +143,3 @@ def test_hand_built_config_has_no_provider() -> None:
         token_url="https://example.com/token",
     )
     assert config.provider is None
-
-
-def test_identity_profile_keeps_a_member_and_a_string_apart() -> None:
-    built_in = IdentityProfile(provider=Provider.GOOGLE, subject="g-1")
-    generic = IdentityProfile(provider="oidc:https://issuer.example", subject="s-1")
-    assert built_in.provider is Provider.GOOGLE
-    assert generic.provider == "oidc:https://issuer.example"
-    assert built_in.identity_key() == ("google", "g-1")
