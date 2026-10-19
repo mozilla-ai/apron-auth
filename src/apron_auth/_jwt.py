@@ -11,7 +11,7 @@ from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth.errors import TokenValidationReason
 
-# The clock difference, in seconds, allowed between this client and an issuer when a token's times are checked.
+# The clock difference, in seconds, allowed between this client and another host wherever a time is checked.
 CLOCK_SKEW_SECONDS = 60
 
 # A certificate chain (``x5c``) in the header and an 8192-bit RSA signature both exceed the library's default limits.
