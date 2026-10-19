@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import urlparse
 
 import httpx
@@ -98,10 +98,13 @@ def require_openid_issuer(document: dict[str, Any], issuer: str) -> None:
     try:
         require_declared_issuer(document, issuer)
     except IssuerNotDeclaredError as exc:
-        if exc.reason is IssuerRefusalReason.ABSENT:
-            msg = "OpenID provider configuration declares no issuer"
-        else:
-            msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
+        match exc.reason:
+            case IssuerRefusalReason.ABSENT:
+                msg = "OpenID provider configuration declares no issuer"
+            case IssuerRefusalReason.MISMATCHED:
+                msg = "OpenID provider configuration declares a different issuer than the one it was fetched for"
+            case _:
+                assert_never(exc.reason)
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 

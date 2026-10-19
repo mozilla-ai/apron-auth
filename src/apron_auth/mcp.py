@@ -20,7 +20,7 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, assert_never
 from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
@@ -126,10 +126,13 @@ async def discover(
     try:
         require_declared_issuer(server_meta, auth_server)
     except IssuerNotDeclaredError as exc:
-        if exc.reason is IssuerRefusalReason.ABSENT:
-            msg = "authorization server metadata declares no issuer"
-        else:
-            msg = "authorization server metadata declares a different issuer than the one it was fetched for"
+        match exc.reason:
+            case IssuerRefusalReason.ABSENT:
+                msg = "authorization server metadata declares no issuer"
+            case IssuerRefusalReason.MISMATCHED:
+                msg = "authorization server metadata declares a different issuer than the one it was fetched for"
+            case _:
+                assert_never(exc.reason)
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
     authorize_url = server_meta.get("authorization_endpoint")
