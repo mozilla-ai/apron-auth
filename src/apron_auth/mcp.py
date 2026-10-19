@@ -50,6 +50,9 @@ UrlValidator = Callable[[str], None]
 
 logger = logging.getLogger(__name__)
 
+# The one wording for a URL this library cannot read or send, wherever the fault is caught.
+_MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
+
 # The well-known paths of the discovery documents: authorization server (RFC 8414),
 # OpenID provider (OpenID Connect Discovery 1.0) and protected resource (RFC 9728).
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
@@ -324,8 +327,7 @@ async def register_client(
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
-            msg = "MCP OAuth received a malformed URL"
-            raise error_cls(msg, kind=error_kind) from exc
+            raise error_cls(_MALFORMED_URL_MESSAGE, kind=error_kind) from exc
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
@@ -630,8 +632,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     try:
         parsed = _parse_url(url)
     except ValueError as exc:
-        msg = "MCP OAuth received a malformed URL"
-        raise error_cls(msg, kind=kind) from exc
+        raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg, kind=kind)
@@ -728,8 +729,7 @@ async def _fetch_first_metadata(
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
                 error_cls, error_kind = _url_fault(caller_supplied=caller_supplied)
-                msg = "MCP OAuth received a malformed URL"
-                raise error_cls(msg, kind=error_kind) from exc
+                raise error_cls(_MALFORMED_URL_MESSAGE, kind=error_kind) from exc
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
