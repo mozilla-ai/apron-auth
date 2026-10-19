@@ -475,12 +475,21 @@ class FreshTokenSet(TokenSet):
     An identity handler may accept the ID token in it without a signature check,
     which is safe only for a token the token endpoint returned over TLS.
     Deserializing one is refused, through this model's own entry points and as a field of another model,
-    so a persisted token set reloads as a plain :class:`TokenSet`, and a refresh produces a fresh one again.
+    and pickling one is refused, so a persisted token set reloads as a plain :class:`TokenSet`,
+    and a refresh produces a fresh one again.
 
     NOTE: Keyword construction is how this library issues one.
-    A caller who constructs one by hand, or validates this type through pydantic's lower-level validation API,
-    asserts that freshness itself.
+    A caller who builds one by hand, or validates this type directly, asserts that freshness itself.
     """
+
+    def __reduce__(self) -> NoReturn:
+        """Refuse to pickle a fresh token set.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        msg = "A fresh token set cannot be stored. Persist its fields, and refresh when identity is needed again."
+        raise ConfigurationError(msg)
 
     @model_validator(mode="before")
     @classmethod
@@ -488,50 +497,38 @@ class FreshTokenSet(TokenSet):
         # NOTE: Pydantic sets field_name only when another model validates this one as a field.
         # That is how a persisted model reloads it. Keyword construction has no field name.
         if info.field_name is not None:
-            raise cls._stored_data_refused()
+            raise cls._stored_data_refusal()
         return data
 
     @classmethod
     def model_validate(cls, obj: Any, **kwargs: Any) -> NoReturn:
         """Refuse to build a fresh token set from stored data.
 
-        Args:
-            obj: The stored data, which is not read.
-            **kwargs: Validation options, which are not read.
-
         Raises:
             ConfigurationError: Always.
         """
-        raise cls._stored_data_refused()
+        raise cls._stored_data_refusal()
 
     @classmethod
     def model_validate_json(cls, json_data: Any, **kwargs: Any) -> NoReturn:
         """Refuse to build a fresh token set from stored JSON.
 
-        Args:
-            json_data: The stored JSON, which is not read.
-            **kwargs: Validation options, which are not read.
-
         Raises:
             ConfigurationError: Always.
         """
-        raise cls._stored_data_refused()
+        raise cls._stored_data_refusal()
 
     @classmethod
     def model_validate_strings(cls, obj: Any, **kwargs: Any) -> NoReturn:
         """Refuse to build a fresh token set from stored strings.
 
-        Args:
-            obj: The stored strings, which are not read.
-            **kwargs: Validation options, which are not read.
-
         Raises:
             ConfigurationError: Always.
         """
-        raise cls._stored_data_refused()
+        raise cls._stored_data_refusal()
 
     @staticmethod
-    def _stored_data_refused() -> ConfigurationError:
+    def _stored_data_refusal() -> ConfigurationError:
         msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
         return ConfigurationError(msg)
 

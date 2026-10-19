@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import copy
 import math
+import pickle
 import time
 
 import pytest
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
@@ -477,6 +479,15 @@ class TestTokenSet:
             token.access_token = "other"
 
 
+class _Session(BaseModel):
+    user: str
+    tokens: FreshTokenSet
+
+
+class _Sessions(BaseModel):
+    tokens: list[FreshTokenSet]
+
+
 class TestFreshTokenSet:
     def test_keyword_construction_builds_a_token_set(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
@@ -525,14 +536,27 @@ class TestFreshTokenSet:
         assert _Session(user="U123", tokens=fresh).tokens is fresh
         assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
 
+    def test_a_model_revalidating_its_instances_keeps_an_existing_one(self) -> None:
+        class Revalidating(BaseModel):
+            model_config = ConfigDict(revalidate_instances="always")
+            tokens: FreshTokenSet
 
-class _Session(BaseModel):
-    user: str
-    tokens: FreshTokenSet
+        fresh = FreshTokenSet(access_token="access-abc")
+        assert Revalidating(tokens=fresh).tokens == fresh
 
+    def test_pickling_is_refused(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        with pytest.raises(ConfigurationError, match="cannot be stored"):
+            pickle.dumps(fresh)
 
-class _Sessions(BaseModel):
-    tokens: list[FreshTokenSet]
+    def test_a_plain_token_set_still_pickles(self) -> None:
+        stored = pickle.loads(pickle.dumps(TokenSet(access_token="access-abc")))
+        assert stored == TokenSet(access_token="access-abc")
+
+    def test_copying_keeps_the_type(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        assert isinstance(copy.deepcopy(fresh), FreshTokenSet)
+        assert isinstance(fresh.model_copy(), FreshTokenSet)
 
 
 class TestIdentityMaterial:
