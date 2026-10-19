@@ -18,7 +18,10 @@ from apron_auth.errors import (
     StateError,
     TokenEndpointError,
     TokenExchangeError,
+    TokenExpiredError,
     TokenRefreshError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 
 MULTI_KIND_CLASSES = (
@@ -160,3 +163,30 @@ def test_permanent_oauth_error_is_gone() -> None:
 
     assert not hasattr(apron_auth.errors, "PermanentOAuthError")
     assert "PermanentOAuthError" not in apron_auth.__all__
+
+
+class TestTokenValidationError:
+    def test_reasons_are_in_alphabetical_order(self) -> None:
+        names = [member.name for member in TokenValidationReason]
+        assert names == sorted(names)
+
+    def test_a_refusal_needs_a_reason(self) -> None:
+        with pytest.raises(TypeError, match="reason"):
+            TokenValidationError("boom")  # type: ignore[call-arg]
+
+    def test_a_refusal_is_a_refused_identity_fetch(self) -> None:
+        err = TokenValidationError("boom", reason=TokenValidationReason.SIGNATURE)
+        assert isinstance(err, IdentityFetchError)
+        assert err.kind is FailureKind.REFUSED
+        assert err.retryable is False
+        assert err.reason is TokenValidationReason.SIGNATURE
+
+    def test_expired_carries_its_own_reason(self) -> None:
+        err = TokenExpiredError("boom")
+        assert isinstance(err, TokenValidationError)
+        assert err.reason is TokenValidationReason.EXPIRED
+
+    def test_the_old_name_is_gone(self) -> None:
+        import apron_auth.errors
+
+        assert not hasattr(apron_auth.errors, "TokenVerificationError")

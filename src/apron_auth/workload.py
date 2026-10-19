@@ -27,7 +27,8 @@ from apron_auth.errors import (
     IdentityFetchError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_url
@@ -140,7 +141,7 @@ class WorkloadTokenVerifier:
             ConfigurationError: If ``audience`` is an empty collection or holds anything but non-empty strings.
                 An empty one would accept every audience, so ``None`` must say that instead.
             TokenExpiredError: If the token verifies but has expired.
-            TokenVerificationError: If the token is refused for any other reason.
+            TokenValidationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
@@ -153,13 +154,13 @@ class WorkloadTokenVerifier:
             audience_rule["values"] = values
         if len(token) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         # A token that is not one is refused before discovery, so it is never reported as an outage.
         try:
             parse_compact(token)
         except ValueError as exc:
             msg = "Workload token is not a signed token"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
         signing_keys = await self._keys()
         claims = (await signing_keys.verify(token)).claims
         registry = JWTClaimsRegistry(
@@ -177,11 +178,11 @@ class WorkloadTokenVerifier:
             raise TokenExpiredError(msg) from exc
         except (JoseError, TypeError, ValueError) as exc:
             msg = "Workload token claims did not validate"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS) from exc
         # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != self._issuer:
             msg = "Workload token claims did not validate"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
         return _identity(self._issuer, claims)
 
     async def _keys(self) -> IssuerSigningKeys:
@@ -229,7 +230,7 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
     """Lift the identity out of validated claims.
 
     Raises:
-        TokenVerificationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
+        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
     """
     subject = claims["sub"]
     audience = claims["aud"]
@@ -245,7 +246,7 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
         or not isinstance(expires_at, int | float)
     ):
         msg = "Workload token claims did not validate"
-        raise TokenVerificationError(msg)
+        raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     email = claims.get("email")
     # Only the boolean ``true`` counts, so a string ``"true"`` does not verify an address.
     verified_email = email if claims.get("email_verified") is True and isinstance(email, str) and email else None

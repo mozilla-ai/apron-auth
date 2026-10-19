@@ -18,7 +18,13 @@ from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth._loop_lock import LoopLock
-from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, TokenVerificationError
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityFetchError,
+    TokenValidationError,
+    TokenValidationReason,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -157,30 +163,34 @@ class IssuerSigningKeys:
             The token's protected header and claims, and the published key that verified it.
 
         Raises:
-            TokenVerificationError: If the token is not a signed token, names a critical header parameter,
+            TokenValidationError: If the token is not a signed token, names a critical header parameter,
                 names an algorithm outside the accepted list, names no published key, or fails the signature check.
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
             compact = parse_compact(token)
         except ValueError as exc:
-            raise TokenVerificationError(f"{self._token_name} is not a signed token") from exc
+            raise TokenValidationError(
+                f"{self._token_name} is not a signed token", reason=TokenValidationReason.MALFORMED
+            ) from exc
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
             msg = f"{self._token_name} names a critical header parameter that is not supported"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm: SigningAlgorithm | None = SigningAlgorithm(header.get("alg"))
         except (TypeError, ValueError):
             algorithm = None
         if algorithm is None or algorithm not in self._algorithms:
             msg = f"{self._token_name} uses a signing algorithm that is not accepted"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm.registry.check_header(header)
         except JoseError as exc:
-            raise TokenVerificationError(f"{self._token_name} header is not valid") from exc
+            raise TokenValidationError(
+                f"{self._token_name} header is not valid", reason=TokenValidationReason.MALFORMED
+            ) from exc
         await self._refresh_if_stale()
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -199,13 +209,13 @@ class IssuerSigningKeys:
         if isinstance(result, _Refusal):
             if result.reason is _RefusalReason.NO_KEY:
                 msg = f"{self._token_name} is signed with a key the issuer does not publish"
-                raise TokenVerificationError(msg)
+                raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
             msg = f"{self._token_name} signature did not verify"
-            raise TokenVerificationError(msg) from result.error
+            raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
         claims = compact_claims(compact)
         if claims is None:
             msg = f"{self._token_name} claims are not a JSON object"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         return VerifiedToken(header, claims, result)
 
     def _check_signature(

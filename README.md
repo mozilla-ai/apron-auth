@@ -101,7 +101,7 @@ metadata's issuer, and it raises `ConfigurationError` for a config that names an
 before any request. This keeps one issuer's access token away from another issuer's userinfo
 endpoint.
 
-ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenVerificationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce, the audience, the expiry, and the issuer when one is configured, before it returns the tokens.
+ID token signatures are checked against the issuer's published key set (`jwks_uri`, which discovery requires), with public-key algorithms only. A token that does not verify raises `TokenValidationError`, or `TokenExpiredError` once it has expired, and identity never falls back to userinfo for it. The claims are then validated: `iss`, `sub`, `aud`, `exp`, `iat`, `azp`, and `at_hash` (against the access token). The handler then refuses a userinfo response whose `sub` is missing or disagrees with the ID token's. Pass the handler only tokens from a token-endpoint response, never a stored or front-channel token: the handler itself checks no `nonce`, so a validly signed token replayed from elsewhere would pass. `exchange_code` checks the nonce, the audience, the expiry, and the issuer when one is configured, before it returns the tokens.
 
 Userinfo is enrichment when an ID token validated: if the call fails (Entra and Keycloak
 answer 401/403 when the access token's audience is a resource API), a WARNING is logged and
@@ -642,7 +642,7 @@ Discovery, registration, the token request, and token revocation all fetch URLs 
 A workload on Google Cloud, GitHub Actions or Kubernetes can fetch a token its platform signed, naming the workload and an audience it chose. A server that trusts the platform can accept that token in place of a secret the workload would otherwise hold, as the OAuth 2.0 JWT bearer grant does (RFC 7523). `apron_auth.workload` is the server side of that: it checks the token, and the server decides what the identity it names may do.
 
 ```python
-from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenVerificationError
+from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError
 from apron_auth.workload import WorkloadTokenVerifier
 
 verifier = WorkloadTokenVerifier("https://accounts.google.com", transport_factory=my_transport_factory)
@@ -651,7 +651,7 @@ try:
     identity = await verifier.verify(token, audience="https://gateway.example.com")
 except TokenExpiredError:
     ...  # tell the workload to fetch a fresh token
-except TokenVerificationError:
+except TokenValidationError:
     ...  # refuse the token; retrying it cannot succeed
 except IdentityFetchError:
     ...  # the issuer is unreachable; ask the workload to retry later
@@ -734,8 +734,8 @@ All exceptions inherit from `OAuthError`.
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. The failure may be transient; its subclasses mark the failures that are not. |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Retrying will not help. Subclass of `IdentityFetchError`.  |
-| `TokenVerificationError`       | An ID token or workload token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`, so catch it first. |
-| `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenVerificationError`.                   |
+| `TokenValidationError`       | An ID token or workload token was refused: malformed, signed by no published key, or with claims that do not validate. Retrying will not help. Subclass of `IdentityFetchError`, so catch it first. |
+| `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenValidationError`.                   |
 
 ## Logging
 

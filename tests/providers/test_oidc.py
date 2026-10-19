@@ -20,7 +20,8 @@ from apron_auth.errors import (
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.models import IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod, TokenSet
 from apron_auth.protocols import StandardRevocationHandler
@@ -1104,11 +1105,12 @@ class TestOidcIdentity:
 
     async def test_refuses_an_id_token_from_another_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """An ``iss`` other than the configured issuer is refused."""
-        with pytest.raises(TokenVerificationError, match=r"invalid iss claim"):
+        with pytest.raises(TokenValidationError, match=r"invalid iss claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.CLAIMS
 
     @pytest.mark.parametrize("iss", [[ISSUER], ["https://attacker.example", ISSUER]])
     async def test_refuses_an_id_token_naming_its_issuer_in_a_list(
@@ -1145,11 +1147,12 @@ class TestOidcIdentity:
 
     async def test_refuses_an_expired_id_token(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A token expired well beyond the leeway is refused as expired."""
-        with pytest.raises(TokenExpiredError, match=r"has expired"):
+        with pytest.raises(TokenExpiredError, match=r"has expired") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
                 config,
             )
+        assert exc_info.value.reason is TokenValidationReason.EXPIRED
 
     async def test_tolerates_clock_skew_within_the_leeway(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1717,10 +1720,11 @@ class TestOidcIdentity:
         """A non-string ``sub`` is a malformed ID token, not a userinfo disagreement."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
-        with pytest.raises(TokenVerificationError, match="ID token has an invalid sub claim"):
+        with pytest.raises(TokenValidationError, match="ID token has an invalid sub claim") as exc_info:
             await handler.fetch_identity(
                 IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
             )
+        assert exc_info.value.reason is TokenValidationReason.CLAIMS
 
     async def test_refuses_when_there_is_no_userinfo_endpoint_and_no_id_token(self, config: ProviderConfig):
         """With neither document, nothing names a subject."""

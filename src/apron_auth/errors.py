@@ -163,7 +163,7 @@ class TokenEndpointError(OAuthError):
         self.error_code = error_code
 
 
-# The token-endpoint errors follow their base class instead of A-Z order, as above.
+# The token-endpoint and token-validation errors follow their base classes instead of A-Z order, as above.
 class TokenExchangeError(TokenEndpointError):
     """Authorization code exchange failed: the token endpoint refused the code, or this client refused its response."""
 
@@ -194,15 +194,46 @@ class TokenRefreshError(TokenEndpointError):
     """
 
 
-class TokenVerificationError(IdentityFetchError):
+class TokenValidationReason(StrEnum):
+    """Why a signed token was refused, for a caller that counts or branches on refusals without reading text."""
+
+    # The token names an audience other than the one the recipient answers to.
+    AUDIENCE = "audience"
+    # A claim is missing, has the wrong type, or does not validate.
+    CLAIMS = "claims"
+    # The token verified but its expiry has passed.
+    EXPIRED = "expired"
+    # The token is not a signed token, or its header or claims cannot be read.
+    MALFORMED = "malformed"
+    # No published key verifies the signature.
+    SIGNATURE = "signature"
+    # The token names an issuer the recipient does not trust.
+    UNKNOWN_ISSUER = "unknown_issuer"
+    # The token names a key the issuer does not publish.
+    UNKNOWN_KEY = "unknown_key"
+    # The token uses an algorithm or a header parameter this library does not accept.
+    UNSUPPORTED = "unsupported"
+
+
+class TokenValidationError(IdentityFetchError):
     """A signed token was refused: it is malformed, no published key verifies it, or its claims do not validate.
 
-    Retrying the same token cannot succeed.
+    Retrying the same token cannot succeed, so ``kind`` is always ``REFUSED``, and ``reason`` says why.
     A failure to fetch the issuer's signing keys is not a refusal, and raises the base class instead.
     """
 
     default_kind = FailureKind.REFUSED
 
+    def __init__(self, *args: object, reason: TokenValidationReason) -> None:
+        super().__init__(*args)
+        if not isinstance(reason, TokenValidationReason):
+            msg = f"{type(self).__name__} needs a reason from TokenValidationReason"
+            raise TypeError(msg)
+        self.reason = reason
 
-class TokenExpiredError(TokenVerificationError):
+
+class TokenExpiredError(TokenValidationError):
     """A signed token verified but has expired, so the caller must obtain a fresh one."""
+
+    def __init__(self, *args: object) -> None:
+        super().__init__(*args, reason=TokenValidationReason.EXPIRED)

@@ -55,7 +55,8 @@ from apron_auth.errors import (
     IdentityScopeNotGrantedError,
     OidcDiscoveryError,
     TokenExpiredError,
-    TokenVerificationError,
+    TokenValidationError,
+    TokenValidationReason,
 )
 from apron_auth.models import (
     IdentityMaterial,
@@ -433,7 +434,7 @@ class OidcIdentityHandler:
             IdentityScopeNotGrantedError: If there is no usable ID token,
                 and the userinfo endpoint answers 403 ``insufficient_scope`` (RFC 6750).
             TokenExpiredError: If the ID token verifies but has expired.
-            TokenVerificationError: If the ID token's signature or claims do not validate,
+            TokenValidationError: If the ID token's signature or claims do not validate,
                 or its ``sub`` is not a non-empty string.
             IdentityFetchError: If the issuer's signing keys cannot be fetched or read.
                 It is also raised when userinfo fails and there is no validated ID token,
@@ -472,7 +473,7 @@ class OidcIdentityHandler:
         if claims is not None and claims_subject is None:
             # Authlib only requires ``sub`` to be present, so a non-string would read as a userinfo mismatch.
             msg = "OpenID ID token has an invalid sub claim"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
         subject = claims_subject or _claim_str(userinfo, "sub")
         if subject is None:
             msg = "OpenID sign-in returned no subject"
@@ -542,16 +543,17 @@ class OidcIdentityHandler:
         try:
             token.validate(leeway=CLOCK_SKEW_SECONDS)
         except ClaimError as exc:
-            error = TokenExpiredError if isinstance(exc, ExpiredTokenError) else TokenVerificationError
-            raise error(_claim_error_message(exc)) from exc
+            if isinstance(exc, ExpiredTokenError):
+                raise TokenExpiredError(_claim_error_message(exc)) from exc
+            raise TokenValidationError(_claim_error_message(exc), reason=TokenValidationReason.CLAIMS) from exc
         except (JoseError, TypeError, ValueError) as exc:
             # A malformed header or claim shape can raise ``TypeError``, which must surface as a refusal.
             msg = "OpenID ID token claims did not validate"
-            raise TokenVerificationError(msg) from exc
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS) from exc
         # OpenID Connect Core 1.0 section 2 makes ``iss`` one string, but the validator accepts a list holding it.
         if claims.get("iss") != issuer:
             msg = "OpenID ID token has an invalid iss claim"
-            raise TokenVerificationError(msg)
+            raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
         return claims
 
     async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
