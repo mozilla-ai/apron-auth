@@ -8,7 +8,9 @@ import httpx
 
 from apron_auth.errors import FailureKind
 
-# The lowest status code that reports a server-side failure.
+# The lowest status code of each band this module tells apart.
+_FIRST_CLIENT_ERROR_STATUS = 400
+_FIRST_REDIRECT_STATUS = 300
 _FIRST_SERVER_ERROR_STATUS = 500
 # The client error status that reports a rate limit (RFC 6585).
 _RATE_LIMITED_STATUS = 429
@@ -57,6 +59,6 @@ def status_failure(status: int) -> HttpFailure:
     description = f"HTTP {status}"
     if status >= _FIRST_SERVER_ERROR_STATUS or status == _RATE_LIMITED_STATUS:
         return HttpFailure(FailureKind.SERVER_ERROR, description)
-    if 300 <= status < 400:
+    if _FIRST_REDIRECT_STATUS <= status < _FIRST_CLIENT_ERROR_STATUS:
         return HttpFailure(FailureKind.REFUSED, description)
     return HttpFailure(FailureKind.REJECTED, description)
