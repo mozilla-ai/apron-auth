@@ -132,10 +132,6 @@ class ProviderConfig(BaseModel, frozen=True):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Attributes:
-        provider: The built-in preset that built this config.
-            ``None`` for a hand-built config, and for a generic OpenID or MCP config.
-            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
-            and a config that contradicts them is refused at construction.
         extra_params: Fixed parameters added to every authorization request.
             A reserved parameter is refused at construction, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
@@ -229,9 +225,12 @@ class ProviderConfig(BaseModel, frozen=True):
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
+        provider: The built-in preset that built this config.
+            ``None`` for a hand-built config, and for a generic OpenID or MCP config.
+            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
+            and a config that contradicts them is refused at construction.
     """
 
-    provider: Provider | None = None
     client_id: str
     client_secret: SecretStr | None = None
     authorize_url: str
@@ -253,6 +252,7 @@ class ProviderConfig(BaseModel, frozen=True):
     resource: str | None = None
     allow_identity_inference: bool = True
     max_pending_age_seconds: float = 600.0
+    provider: Provider | None = None
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
