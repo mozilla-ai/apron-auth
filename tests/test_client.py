@@ -1675,6 +1675,18 @@ class TestRefreshToken:
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
+    @pytest.mark.parametrize(("status", "code"), [(503, "overloaded"), (429, "rate_limited")])
+    async def test_refresh_server_error_with_an_unknown_code_stays_retryable(
+        self, httpx_mock: HTTPXMock, status: int, code: str
+    ) -> None:
+        httpx_mock.add_response(url="https://provider.example.com/token", status_code=status, json={"error": code})
+        config = _make_config()
+        client = OAuthClient(config=config)
+        with pytest.raises(TokenRefreshError, match=code) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
     async def test_refresh_server_error_without_a_code_may_be_retried(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, json={})
         config = _make_config()

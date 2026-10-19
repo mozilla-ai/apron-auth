@@ -818,6 +818,12 @@ class OAuthClient:
         from authlib.integrations.base_client.errors import OAuthError as AuthlibOAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
+        # The token client reports a 4xx with an OAuth error body without its status, so the status is recorded here.
+        statuses: list[int] = []
+
+        async def record_status(response: httpx.Response) -> None:
+            statuses.append(response.status_code)
+
         try:
             client_secret = self._config.client_secret
             transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
@@ -826,17 +832,19 @@ class OAuthClient:
                 client_secret=client_secret.get_secret_value() if client_secret is not None else None,
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
                 transport=transport,
+                event_hooks={"response": [record_status]},
             ) as client:
                 token = await client.fetch_token(self._config.token_url, **data)
             return dict(token)
         except AuthlibOAuthError as exc:
-            # A 4xx response with an OAuth error body. The code decides the kind before it is redacted.
+            # A response with an OAuth error body. The kind is decided before the code is redacted.
             raw_error_code = exc.error if isinstance(exc.error, str) else ""
             error_code = self._redact_sent(raw_error_code, data)
             description = self._redact_sent(exc.description, data) if isinstance(exc.description, str) else ""
             prefix = error_code or "unspecified token endpoint error"
             msg = f"{prefix}: {description}" if description else prefix
-            failure = _TokenEndpointError(msg, self._kind_for_error_code(raw_error_code), error_code=error_code)
+            kind = self._kind_for_token_response(statuses[-1] if statuses else None, raw_error_code)
+            failure = _TokenEndpointError(msg, kind, error_code=error_code)
         except httpx.HTTPStatusError as exc:
             # An error status without an OAuth error body that the token client recognized.
             # The body may still carry an OAuth error code, which then decides the kind.
@@ -856,7 +864,7 @@ class OAuthClient:
                 description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
                 prefix = error_code or msg
                 msg = f"{prefix}: {description}" if description else prefix
-            kind = self._kind_for_error_code(raw_error_code) if raw_error_code else status.kind
+            kind = self._kind_for_token_response(exc.response.status_code, raw_error_code)
             failure = _TokenEndpointError(msg, kind, error_code=error_code)
         except httpx.RequestError as exc:
             transport = http_failure(exc)
@@ -870,18 +878,24 @@ class OAuthClient:
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise failure
 
-    def _kind_for_error_code(self, error_code: str) -> FailureKind:
-        """Return the kind an OAuth error code from the token endpoint stands for.
+    def _kind_for_token_response(self, status: int | None, error_code: str) -> FailureKind:
+        """Return the kind of a failed token-endpoint response.
 
-        RFC 6749 section 5.2 defines every token-endpoint code as a fault in the request as sent.
-        Only the codes in the retryable set, such as ``temporarily_unavailable``, may pass later.
+        A server error or a rate limit status is retryable whatever code the body carries.
+        Otherwise the code decides. RFC 6749 section 5.2 defines every token-endpoint code as a fault
+        in the request as sent, so only a code in the retryable set, such as ``temporarily_unavailable``,
+        may pass later.
 
         Args:
-            error_code: The code as the endpoint sent it, before any redaction.
+            status: The response status, or ``None`` when it is not known.
+            error_code: The code as the endpoint sent it, before any redaction, or an empty string.
 
         Returns:
-            ``SERVER_ERROR`` for a retryable code, else ``REJECTED``.
+            The kind.
         """
+        status_kind = status_failure(status).kind if status is not None else None
+        if status_kind is FailureKind.SERVER_ERROR or not error_code:
+            return status_kind or FailureKind.REJECTED
         return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED
 
     def _redact_sent(self, text: str, data: dict[str, str]) -> str:
