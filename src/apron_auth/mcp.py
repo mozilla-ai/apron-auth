@@ -319,8 +319,9 @@ async def register_client(
         try:
             response = await client.post(registration_url, json=payload)
         except httpx.InvalidURL as exc:
-            msg = "client registration request failed: malformed URL"
-            raise McpRegistrationError(msg, kind=FailureKind.REFUSED) from exc
+            # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
+            msg = "MCP OAuth received a malformed URL"
+            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION) from exc
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
@@ -586,6 +587,17 @@ def _infer_application_type(redirect_uri: str) -> str | None:
     return None
 
 
+def _url_fault(caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]:
+    """Return the error class and kind for a URL this library will not fetch, by where the URL came from.
+
+    A URL this library's caller passed, or one derived from it, cannot work as
+    passed. A URL a fetched document named is refused.
+    """
+    if caller_supplied:
+        return ConfigurationError, FailureKind.CONFIGURATION
+    return McpDiscoveryError, FailureKind.REFUSED
+
+
 def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_supplied: bool) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
@@ -600,11 +612,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
         ConfigurationError: If a caller-supplied URL is rejected.
         McpDiscoveryError: If a document-supplied URL is rejected.
     """
-    error_cls: type[OAuthError]
-    if caller_supplied:
-        error_cls, kind = ConfigurationError, FailureKind.CONFIGURATION
-    else:
-        error_cls, kind = McpDiscoveryError, FailureKind.REFUSED
+    error_cls, kind = _url_fault(caller_supplied)
     try:
         parsed = _parse_url(url)
     except ValueError as exc:
@@ -674,10 +682,14 @@ async def _fetch_first_metadata(
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
     skipping request errors, non-200 responses, and non-object bodies. Each skip
-    is logged at debug with a non-sensitive reason. Raises McpDiscoveryError
-    describing ``what`` when no candidate succeeds. ``caller_supplied`` says
-    whether the candidates derive from an argument of this library's caller, which
-    decides how a rejected candidate fails.
+    is logged at debug with a non-sensitive reason.
+
+    Raises:
+        ConfigurationError: If a candidate is rejected and ``caller_supplied`` says
+            the candidates derive from an argument of this library's caller.
+        McpDiscoveryError: If a candidate is rejected and the candidates derive from
+            a fetched document, or if no candidate succeeds. The error names
+            ``what``.
     """
     # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
     # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
@@ -690,8 +702,9 @@ async def _fetch_first_metadata(
                 response = await client.get(url)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
+                error_cls, error_kind = _url_fault(caller_supplied)
                 msg = "MCP OAuth received a malformed URL"
-                raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
+                raise error_cls(msg, kind=error_kind) from exc
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)

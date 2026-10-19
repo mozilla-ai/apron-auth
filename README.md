@@ -760,7 +760,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
-- `mcp.discover` and `mcp.register_client` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, or the registration endpoint. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `mcp.discover` and `mcp.register_client` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, or the registration endpoint — including one the HTTP client cannot send. A URL the server's metadata declares still raises `McpDiscoveryError`.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
 
 ## Logging
