@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from enum import StrEnum
+from enum import Enum, auto
 from typing import TYPE_CHECKING
 
 import httpx
@@ -23,13 +23,13 @@ CONFIDENTIAL_AUTH_METHODS = (
 DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
-class IssuerRefusalReason(StrEnum):
-    """Which issuer condition a metadata document failed, for a caller choosing the words for its own phase."""
+class IssuerRefusalReason(Enum):
+    """Each member is one issuer condition a metadata document can fail."""
 
     # The document names no issuer, or names one that is not a non-empty string.
-    ABSENT = "absent"
+    ABSENT = auto()
     # The document names an issuer other than the one it was fetched for.
-    MISMATCHED = "mismatched"
+    MISMATCHED = auto()
 
 
 class IssuerNotDeclaredError(Exception):
@@ -44,7 +44,7 @@ class IssuerNotDeclaredError(Exception):
         Args:
             reason: Which issuer condition the document failed.
         """
-        super().__init__(reason.value)
+        super().__init__(reason.name)
         self.reason = reason
 
 
