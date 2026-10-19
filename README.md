@@ -758,6 +758,9 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
 - `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
 - A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
+- `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
+- `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
+- Errors can be pickled and keep `kind`, `error_code` and `reason`.
 
 ## Logging
 
