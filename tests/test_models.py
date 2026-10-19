@@ -4,7 +4,7 @@ import math
 import time
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
@@ -506,6 +506,33 @@ class TestFreshTokenSet:
         stored = TokenSet.model_validate(fresh.model_dump())
         assert not isinstance(stored, FreshTokenSet)
         assert stored.model_dump() == fresh.model_dump()
+
+    def test_a_model_holding_one_cannot_reload_it_from_a_dict(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Session.model_validate({"user": "U123", "tokens": {"access_token": "access-abc"}})
+
+    def test_a_model_holding_one_cannot_reload_it_from_json(self) -> None:
+        session = _Session(user="U123", tokens=FreshTokenSet(access_token="access-abc"))
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Session.model_validate_json(session.model_dump_json())
+
+    def test_a_model_holding_a_list_of_them_cannot_reload_it(self) -> None:
+        with pytest.raises(ConfigurationError, match="stored data"):
+            _Sessions.model_validate({"tokens": [{"access_token": "access-abc"}]})
+
+    def test_a_model_can_hold_an_existing_one(self) -> None:
+        fresh = FreshTokenSet(access_token="access-abc")
+        assert _Session(user="U123", tokens=fresh).tokens is fresh
+        assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
+
+
+class _Session(BaseModel):
+    user: str
+    tokens: FreshTokenSet
+
+
+class _Sessions(BaseModel):
+    tokens: list[FreshTokenSet]
 
 
 class TestIdentityMaterial:

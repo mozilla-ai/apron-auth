@@ -6,7 +6,7 @@ import math
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, SecretStr, model_validator
+from pydantic import BaseModel, SecretStr, ValidationInfo, model_validator
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
@@ -474,9 +474,18 @@ class FreshTokenSet(TokenSet):
     It is the only token set identity can be established from.
     An identity handler may accept the ID token in it without a signature check,
     which is safe only for a token the token endpoint returned over TLS.
-    Building one from stored data is refused, so a persisted token set reloads as a plain :class:`TokenSet`,
-    and a refresh produces a fresh one again.
+    Deserializing one from stored data is refused, on its own and as a field of another model,
+    so a persisted token set reloads as a plain :class:`TokenSet`, and a refresh produces a fresh one again.
     """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_reload_as_a_field(cls, data: Any, info: ValidationInfo) -> Any:
+        # NOTE: Pydantic sets field_name only when another model validates this one as a field.
+        # That is how a persisted model reloads it. Keyword construction has no field name.
+        if info.field_name is not None:
+            raise cls._stored_data_refused()
+        return data
 
     @classmethod
     def model_validate(cls, obj: Any, **kwargs: Any) -> NoReturn:
