@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import math
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
@@ -12,6 +14,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -36,6 +39,9 @@ from apron_auth.models import (
     TokenSet,
 )
 from apron_auth.pkce import generate_code_challenge
+
+# The fixed wall-clock reading, in epoch seconds, that the pending state age tests pin the client to.
+_NOW = 1_700_000_000.0
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -63,6 +69,14 @@ def _pending_state(**overrides: object) -> OAuthPendingState:
     }
     defaults.update(overrides)
     return OAuthPendingState(**defaults)
+
+
+def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the clock the client reads to ``_NOW``.
+
+    NOTE: The stub exposes only ``time.time``, so any other clock the client reads raises in the test.
+    """
+    monkeypatch.setattr("apron_auth.client.time", SimpleNamespace(time=lambda: _NOW))
 
 
 def _id_token(claims: object) -> str:
@@ -645,6 +659,135 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(ConfigurationError):
             await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_pending_state_older_than_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 601)
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_stored_pending_state_older_than_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(created_at=_NOW - 601))
+        client = OAuthClient(config=_make_oauth_config(), state_store=store)
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="pending-state")
+        store.consume.assert_awaited_once_with("pending-state")
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_accepts_a_pending_state_at_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 600)
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_accepts_a_stored_pending_state_at_the_maximum_age(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(created_at=_NOW - 600))
+        client = OAuthClient(config=_make_oauth_config(), state_store=store)
+        tokens = await client.exchange_code(code="auth-code-123", state="pending-state")
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_accepts_a_pending_state_within_the_clock_difference_ahead(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(created_at=_NOW + CLOCK_SKEW_SECONDS),
+        )
+        assert tokens.access_token == "access-abc"
+
+    async def test_exchange_refuses_a_pending_state_further_ahead_than_the_clock_difference(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError, match="ahead of this clock"):
+            await client.exchange_code(
+                code="auth-code-123",
+                state="pending-state",
+                pending_state=_pending_state(created_at=_NOW + CLOCK_SKEW_SECONDS + 1),
+            )
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize(
+        "created_at", [math.inf, -math.inf, math.nan], ids=["infinite", "negative-infinite", "not-a-number"]
+    )
+    async def test_exchange_refuses_a_pending_state_whose_creation_time_is_not_finite(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch, created_at: float
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        with pytest.raises(StateError, match="no usable creation time"):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=created_at)
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_an_over_age_openid_pending_state_before_the_nonce_check(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_config())
+        with pytest.raises(StateError, match="older than the maximum age"):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 601)
+            )
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_pending_state_whose_creation_time_is_too_large_to_measure(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config())
+        # NOTE: Construction without validation is the only way a creation time outside the float range arrives.
+        pending = OAuthPendingState.model_construct(
+            state="pending-state", redirect_uri="https://app.example.com/callback", created_at=-(10**400)
+        )
+        with pytest.raises(StateError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=pending)
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        client = OAuthClient(config=_make_oauth_config(max_pending_age_seconds=30))
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(created_at=_NOW - 31)
+            )
         assert httpx_mock.get_requests() == []
 
     async def test_exchange_no_key_collision(self, httpx_mock):

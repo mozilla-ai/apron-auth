@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -172,6 +173,9 @@ class ProviderConfig(BaseModel, frozen=True):
             Set ``False`` when the hosts do not decide which identity contract applies,
             for example a generic OpenID provider on a host that a built-in provider also serves.
             Defaults to ``True``.
+        max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
+            at the code exchange. A pending state exactly this old still passes that check.
+            Must be a positive finite number. Defaults to 600 (ten minutes).
     """
 
     client_id: str
@@ -194,6 +198,7 @@ class ProviderConfig(BaseModel, frozen=True):
     require_iss: bool = False
     resource: str | None = None
     allow_identity_inference: bool = True
+    max_pending_age_seconds: float = 600.0
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
@@ -237,6 +242,21 @@ class ProviderConfig(BaseModel, frozen=True):
         refused = sorted(RESERVED_AUTHORIZATION_PARAMS & self.extra_params.keys())
         if refused:
             msg = f"extra_params must not set reserved authorization request parameters: {', '.join(refused)}"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _max_pending_age_is_positive_and_finite(self) -> ProviderConfig:
+        """Reject a maximum pending age that would refuse every pending state or none.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``max_pending_age_seconds`` is zero, negative, infinite, or not a number.
+        """
+        if not math.isfinite(self.max_pending_age_seconds) or self.max_pending_age_seconds <= 0:
+            msg = "max_pending_age_seconds must be a positive finite number"
             raise ValueError(msg)
         return self
 

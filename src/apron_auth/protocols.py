@@ -26,15 +26,12 @@ DNS resolution to validated public addresses and prevent SSRF via rebinding.
 class StateStore(Protocol):
     """Caller provides persistence for OAuth state.
 
-    NOTE: Implementations must return every field of a saved pending state, including ``nonce``.
+    NOTE: Implementations must return every field of a saved pending state, including ``created_at`` and ``nonce``.
 
-    Implementations are responsible for expiring stale entries.
-    Each OAuthPendingState carries a created_at timestamp that
-    implementations should use to enforce a maximum age (typically
-    under 10 minutes for OAuth authorization flows).
+    Enforcing a maximum age is not part of this contract.
+    An implementation may still expire stale entries to bound its storage.
 
-    See MemoryStateStore for a reference implementation with
-    automatic expiry.
+    See MemoryStateStore for a reference implementation with automatic expiry.
     """
 
     async def save(self, state: OAuthPendingState) -> None:

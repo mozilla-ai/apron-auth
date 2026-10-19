@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 
 import pytest
@@ -36,6 +37,28 @@ class TestProviderConfig:
         assert config.revocation_url is None
         assert config.redirect_uri is None
         assert config.resource is None
+
+    def test_max_pending_age_defaults_to_ten_minutes(self) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.max_pending_age_seconds == 600
+
+    @pytest.mark.parametrize(
+        "max_age", [0, -1, math.inf, math.nan], ids=["zero", "negative", "infinite", "not-a-number"]
+    )
+    def test_max_pending_age_rejects_a_value_that_is_not_positive_and_finite(self, max_age: float) -> None:
+        with pytest.raises(ValidationError, match="max_pending_age_seconds must be a positive finite number"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                max_pending_age_seconds=max_age,
+            )
 
     @pytest.mark.parametrize(
         "resource",

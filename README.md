@@ -182,7 +182,7 @@ url, pending_state = await client.get_authorization_url(
 
 ### Code exchange
 
-When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt, and refuse one older than your own time limit. With a `StateStore`, pass only `state` (see below).
+When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only `state` (see below).
 
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
@@ -533,7 +533,7 @@ await client.revoke_token(tokens.access_token)
 
 ### State management
 
-If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol.
+If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one at its `max_age`, ten minutes by default, so with it the shorter of the two limits applies.
 
 ```python
 from apron_auth import StateStore, OAuthPendingState
@@ -544,7 +544,7 @@ class MyStateStore:
         ...
 
     async def consume(self, state_key: str) -> OAuthPendingState | None:
-        # Look up and invalidate in one step. Return None if it's missing or expired.
+        # Look up and invalidate in one step. Return None if it's missing, or if your store expired it.
         ...
 
 client = OAuthClient(config, state_store=MyStateStore())
@@ -761,6 +761,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
 - `mcp.discover` and `mcp.register_client` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, or the registration endpoint — including one the HTTP client cannot send. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
 
 ## Logging

@@ -212,6 +212,31 @@ def _check_nonce(claims: Mapping[str, Any], nonce: str) -> None:
         raise NonceValidationError(msg)
 
 
+def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
+    """Refuse a pending authorization request whose creation time is not current against the system clock.
+
+    Args:
+        pending: The pending authorization request to check.
+        max_age: The age, in seconds, past which a pending authorization request is refused.
+
+    Raises:
+        StateError: If the creation time is not a finite number, lies further ahead of the system clock
+            than the allowed clock difference, or is older than ``max_age``.
+    """
+    created_at = _finite_number(pending.created_at)
+    if created_at is None:
+        msg = "Pending authorization request carries no usable creation time"
+        raise StateError(msg)
+    now = time.time()
+    # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
+    if created_at > now + CLOCK_SKEW_SECONDS:
+        msg = "Pending authorization request was created ahead of this clock"
+        raise StateError(msg)
+    if created_at < now - max_age:
+        msg = "Pending authorization request is older than the maximum age"
+        raise StateError(msg)
+
+
 def _finite_number(value: object) -> int | float | None:
     """Return ``value`` when it is a finite number, else ``None``.
 
@@ -392,7 +417,8 @@ class OAuthClient:
 
         A client with a ``StateStore`` consumes the pending state for ``state`` from it.
         A client without one takes ``pending_state``.
-        Either way, a ``state`` that does not match the pending state is refused before the code is redeemed.
+        Either way, a ``state`` that does not match the pending state,
+        or a pending state older than the configured maximum age, is refused before the code is redeemed.
         When the authorization request sent a nonce, the response must carry an ID token with that nonce,
         or no tokens are returned.
 
@@ -402,7 +428,7 @@ class OAuthClient:
         NOTE: Callers must keep their own pending state where the user cannot change it,
         because every check here trusts it.
         Callers must also discard it after one exchange attempt, even a failed one,
-        because only a ``StateStore`` refuses a pending state that is reused or too old.
+        because only a ``StateStore`` refuses a pending state that is reused.
 
         Args:
             code: The authorization code returned to the redirect URI.
@@ -433,12 +459,16 @@ class OAuthClient:
                 but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
-                or the store holds no pending state for it because it is invalid, expired, or already consumed.
+                the store holds no pending state for it because it is invalid, expired, or already consumed,
+                or the pending state is older than ``max_pending_age_seconds``,
+                carries no usable creation time,
+                or was created further ahead of this client's clock than the allowed difference.
             TokenExchangeError: If the token endpoint rejects the exchange.
                 It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
+        _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
 
         if not pending.nonce and self._requests_openid():
             # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.
