@@ -134,7 +134,7 @@ class TestMemoryStateStore:
         assert await store.consume(fresh.state) == fresh
 
 
-class TestCreationTimeThatCannotBeMeasured:
+class TestACreationTimeNoClockProduced:
     """Test that a creation time no clock produced expires the entry instead of raising."""
 
     @pytest.mark.parametrize(
