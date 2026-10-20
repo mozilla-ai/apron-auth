@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import math
 from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
+
+if TYPE_CHECKING:
+    from apron_auth.protocols import IdentityHandler
 
 AccessType = Literal["read", "write", "admin"]
 
@@ -30,6 +34,9 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
         "state",
     }
 )
+
+# The package whose module names the provider members are named after.
+_PROVIDER_PACKAGE = "apron_auth.providers"
 
 
 class TokenEndpointAuthMethod:
@@ -52,7 +59,8 @@ class Provider(StrEnum):
     """The OAuth providers this library knows by name, each with the facts that differ between them.
 
     A member's value is its module name under ``apron_auth.providers``, and a member is declared as
-    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator)``.
+    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator,
+    identity_handler_class_name)``.
 
     Attributes:
         display_name: The provider's name as it appears in messages and documentation.
@@ -63,12 +71,15 @@ class Provider(StrEnum):
             :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
             provider's module docstring records how the value was verified.
         scope_separator: The string the provider's scope parameter is joined with.
+        identity_handler_class_name: The name of the class in the member's module that fetches identity,
+            which :meth:`identity_handler` builds.
     """
 
     display_name: str
     host_suffixes: tuple[str, ...]
     disconnect_fully_revokes: bool
     scope_separator: str
+    identity_handler_class_name: str
 
     def __new__(
         cls,
@@ -77,6 +88,7 @@ class Provider(StrEnum):
         host_suffixes: tuple[str, ...],
         disconnect_fully_revokes: bool,
         scope_separator: str,
+        identity_handler_class_name: str,
     ) -> Provider:
         """Create a member from its module name and the facts that differ between providers."""
         member = str.__new__(cls, value)
@@ -85,18 +97,30 @@ class Provider(StrEnum):
         member.host_suffixes = host_suffixes
         member.disconnect_fully_revokes = disconnect_fully_revokes
         member.scope_separator = scope_separator
+        member.identity_handler_class_name = identity_handler_class_name
         return member
 
-    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ")
-    GITHUB = ("github", "GitHub", ("github.com",), True, " ")
-    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ")
-    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ")
-    LINEAR = ("linear", "Linear", ("linear.app",), False, ",")
-    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ")
-    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ")
-    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ")
-    SLACK = ("slack", "Slack", ("slack.com",), False, ",")
-    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ")
+    def identity_handler(self) -> IdentityHandler:
+        """Build this provider's identity handler.
+
+        Returns:
+            A new handler that fetches identity from this provider.
+        """
+        # NOTE: The import happens here because every provider module imports this one.
+        module = import_module(f"{_PROVIDER_PACKAGE}.{self.value}")
+        handler: IdentityHandler = getattr(module, self.identity_handler_class_name)()
+        return handler
+
+    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ", "AtlassianIdentityHandler")
+    GITHUB = ("github", "GitHub", ("github.com",), True, " ", "GitHubIdentityHandler")
+    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ", "GoogleIdentityHandler")
+    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ", "HubSpotIdentityHandler")
+    LINEAR = ("linear", "Linear", ("linear.app",), False, ",", "LinearIdentityHandler")
+    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ", "MicrosoftIdentityHandler")
+    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ", "NotionIdentityHandler")
+    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ", "SalesforceIdentityHandler")
+    SLACK = ("slack", "Slack", ("slack.com",), False, ",", "SlackIdentityHandler")
+    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ", "TypeformIdentityHandler")
 
 
 class ScopeMetadata(BaseModel, frozen=True):

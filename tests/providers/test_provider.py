@@ -11,6 +11,7 @@ import pytest
 from apron_auth import providers as providers_pkg
 from apron_auth.mcp import to_provider_config
 from apron_auth.models import Provider, ProviderConfig, ServerMetadata
+from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -40,18 +41,18 @@ MODULES: dict[Provider, ModuleType] = {
 }
 
 # The known-good facts per provider, pinned independently of the enum: display name,
-# identity host suffixes, disconnect_fully_revokes, scope separator.
-MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str]] = {
-    Provider.ATLASSIAN: ("Atlassian", ("auth.atlassian.com",), False, " "),
-    Provider.GITHUB: ("GitHub", ("github.com",), True, " "),
-    Provider.GOOGLE: ("Google", ("google.com", "googleapis.com"), True, " "),
-    Provider.HUBSPOT: ("HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " "),
-    Provider.LINEAR: ("Linear", ("linear.app",), False, ","),
-    Provider.MICROSOFT: ("Microsoft", ("login.microsoftonline.com",), False, " "),
-    Provider.NOTION: ("Notion", ("api.notion.com",), False, " "),
-    Provider.SALESFORCE: ("Salesforce", ("salesforce.com",), False, " "),
-    Provider.SLACK: ("Slack", ("slack.com",), False, ","),
-    Provider.TYPEFORM: ("Typeform", ("api.typeform.com",), False, " "),
+# identity host suffixes, disconnect_fully_revokes, scope separator, identity handler class name.
+MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str, str]] = {
+    Provider.ATLASSIAN: ("Atlassian", ("auth.atlassian.com",), False, " ", "AtlassianIdentityHandler"),
+    Provider.GITHUB: ("GitHub", ("github.com",), True, " ", "GitHubIdentityHandler"),
+    Provider.GOOGLE: ("Google", ("google.com", "googleapis.com"), True, " ", "GoogleIdentityHandler"),
+    Provider.HUBSPOT: ("HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ", "HubSpotIdentityHandler"),
+    Provider.LINEAR: ("Linear", ("linear.app",), False, ",", "LinearIdentityHandler"),
+    Provider.MICROSOFT: ("Microsoft", ("login.microsoftonline.com",), False, " ", "MicrosoftIdentityHandler"),
+    Provider.NOTION: ("Notion", ("api.notion.com",), False, " ", "NotionIdentityHandler"),
+    Provider.SALESFORCE: ("Salesforce", ("salesforce.com",), False, " ", "SalesforceIdentityHandler"),
+    Provider.SLACK: ("Slack", ("slack.com",), False, ",", "SlackIdentityHandler"),
+    Provider.TYPEFORM: ("Typeform", ("api.typeform.com",), False, " ", "TypeformIdentityHandler"),
 }
 
 
@@ -116,11 +117,24 @@ def test_member_value_is_the_module_name(provider: Provider) -> None:
 
 @pytest.mark.parametrize("provider", list(Provider))
 def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
-    display_name, host_suffixes, disconnect_fully_revokes, scope_separator = MODULE_FACTS[provider]
+    display_name, host_suffixes, disconnect_fully_revokes, scope_separator, handler_class_name = MODULE_FACTS[provider]
     assert provider.display_name == display_name
     assert provider.host_suffixes == host_suffixes
     assert provider.disconnect_fully_revokes is disconnect_fully_revokes
     assert provider.scope_separator == scope_separator
+    assert provider.identity_handler_class_name == handler_class_name
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+def test_member_builds_the_identity_handler_it_names(provider: Provider) -> None:
+    handler = provider.identity_handler()
+    assert isinstance(handler, getattr(MODULES[provider], provider.identity_handler_class_name))
+    assert isinstance(handler, IdentityHandler)
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+def test_member_builds_a_handler_per_call(provider: Provider) -> None:
+    assert provider.identity_handler() is not provider.identity_handler()
 
 
 @pytest.mark.parametrize("provider", list(Provider))
