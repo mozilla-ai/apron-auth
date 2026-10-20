@@ -50,8 +50,6 @@ def join_scopes(scopes: list[str], separator: str = " ") -> str:
 def parse_scope(scope: str | list[str], separator: str = " ") -> list[str]:
     """Parse scopes from a string or list into a list.
 
-    Handles space-separated, comma-separated, and pre-split list inputs.
-
     Args:
         scope: A delimited scope string, or an already-split list of scopes.
         separator: The delimiter to split a string ``scope`` on.
