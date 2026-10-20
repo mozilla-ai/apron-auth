@@ -377,39 +377,7 @@ async def register_client(
     if not isinstance(data, dict):
         msg = "client registration returned an unexpected response"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    client_id = data.get("client_id")
-    if not isinstance(client_id, str) or not client_id:
-        msg = "client registration response is missing client_id"
-        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    client_secret = data.get("client_secret")
-    if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
-        msg = (
-            "client registration states a client secret this library cannot use, "
-            "so the issued credentials were discarded"
-        )
-        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    secret = SecretStr(client_secret) if client_secret is not None else None
-    stated_method = data.get("token_endpoint_auth_method")
-    registered_method = None
-    if stated_method is not None:
-        registered_method = _stated_auth_method(stated_method)
-        if registered_method is None:
-            msg = (
-                "client registration states a client authentication method this library cannot perform, "
-                "so the issued credentials were discarded"
-            )
-            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-        if not _secret_agrees(registered_method, secret):
-            msg = (
-                "client registration states a client authentication method that contradicts the secret it "
-                "issued, so the issued credentials were discarded"
-            )
-            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    return ClientRegistration(
-        client_id=client_id,
-        client_secret=secret,
-        token_endpoint_auth_method=registered_method,
-    )
+    return _issued_registration(data)
 
 
 def cimd_client_id(url: str) -> str:
@@ -465,6 +433,58 @@ def cimd_client_id(url: str) -> str:
         msg = "CIMD client_id must not contain a . or .. path segment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
+
+
+def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
+    """Return the client registration a decoded registration response issued.
+
+    A credential the response states must be one this library can present, so a refusal here discards the
+    credentials the authorization server issued and leaves its registration standing.
+
+    Args:
+        document: The decoded registration response.
+
+    Returns:
+        The registration the response issued.
+
+    Raises:
+        McpRegistrationError: If the response is missing its client identifier, states a client secret this
+            library cannot use, states a token-endpoint authentication method it cannot perform, or states a
+            method that contradicts the secret.
+    """
+    client_id = document.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        msg = "client registration response is missing client_id"
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    client_secret = document.get("client_secret")
+    if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
+        msg = (
+            "client registration states a client secret this library cannot use, "
+            "so the issued credentials were discarded"
+        )
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    secret = SecretStr(client_secret) if client_secret is not None else None
+    stated_method = document.get("token_endpoint_auth_method")
+    registered_method = None
+    if stated_method is not None:
+        registered_method = _stated_auth_method(stated_method)
+        if registered_method is None:
+            msg = (
+                "client registration states a client authentication method this library cannot perform, "
+                "so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+        if not _secret_agrees(registered_method, secret):
+            msg = (
+                "client registration states a client authentication method that contradicts the secret it "
+                "issued, so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    return ClientRegistration(
+        client_id=client_id,
+        client_secret=secret,
+        token_endpoint_auth_method=registered_method,
+    )
 
 
 def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) -> bool:
