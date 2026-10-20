@@ -681,27 +681,24 @@ class ServerMetadata(BaseModel, frozen=True):
 
 
 class ClientRegistration(BaseModel, frozen=True):
-    """Client credentials issued by RFC 7591 dynamic client registration.
+    """A client's credentials at one authorization server.
 
-    The issued ``client_id`` and ``client_secret`` are bound to the
-    authorization server that minted them and are not valid at any other
-    authorization server.
+    RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
+    Client ID Metadata Document (CIMD) states its own.
 
-    NOTE: a caller that persists these credentials must store them keyed by
-    the minting issuer (the ``issuer`` of the ``ServerMetadata`` whose
-    ``registration_url`` produced them) and must not present them to a
-    different authorization server; this library is stateless and holds no
-    credentials, so it cannot enforce the binding on the caller's behalf.
+    NOTE: Credentials an authorization server issued are not valid at any other authorization server.
+    A caller that persists them must store them keyed by the minting issuer (the ``issuer`` of the
+    ``ServerMetadata`` whose ``registration_url`` produced them) and must not present them to a different
+    authorization server. This library is stateless and holds no credentials, so it cannot enforce the
+    binding on the caller's behalf.
 
     Attributes:
-        client_id: The client identifier issued by the registration
-            endpoint.
-        client_secret: The issued client secret for a confidential client;
-            ``None`` for a public client.
-        token_endpoint_auth_method: The token-endpoint authentication method
-            the server registered for this client. It is authoritative for
-            this client and may differ from the server's advertised set, and
-            is ``None`` when the registration response states no method.
+        client_id: The client identifier, issued by a registration endpoint, registered out of band, or a
+            CIMD client identifier URL.
+        client_secret: The client secret for a confidential client; ``None`` for a public client.
+        token_endpoint_auth_method: The token-endpoint authentication method the server registered for this
+            client. It is authoritative for this client and may differ from the server's advertised set,
+            and is ``None`` when no method was registered.
     """
 
     client_id: str
