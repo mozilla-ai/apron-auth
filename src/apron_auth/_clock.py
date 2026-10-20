@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from enum import Enum, auto
 
@@ -9,6 +10,9 @@ from apron_auth._numbers import finite_number
 
 # The clock difference, in seconds, allowed between this client and another host wherever a time is checked.
 CLOCK_SKEW_SECONDS = 60
+
+# The widest maximum age, in seconds, that can be subtracted from a clock reading.
+_WIDEST_MAX_AGE = sys.float_info.max
 
 
 class PendingAgeRefusalReason(Enum):
@@ -28,8 +32,8 @@ def pending_age_refusal(created_at: object, *, max_age: float) -> PendingAgeRefu
     A creation time exactly ``max_age`` old is current, and one exactly the allowed clock difference
     ahead of this clock is current, so each limit refuses only what lies past it.
 
-    NOTE: Callers must pass a positive ``max_age`` that a clock reading can be offset by, because this
-    reports against the limit it is given rather than refusing it.
+    NOTE: Callers must pass a ``max_age`` that ``usable_max_age`` accepts, because this reports
+    against the limit it is given rather than refusing it.
 
     Args:
         created_at: The creation time, in epoch seconds, as it arrived.
@@ -47,3 +51,18 @@ def pending_age_refusal(created_at: object, *, max_age: float) -> PendingAgeRefu
     if stamp < now - max_age:
         return PendingAgeRefusalReason.TOO_OLD
     return None
+
+
+def usable_max_age(value: object) -> float | None:
+    """Return ``value`` as a maximum age an age can be compared against, or ``None`` when it cannot be.
+
+    Args:
+        value: The maximum age, in seconds, as it arrived.
+
+    Returns:
+        The maximum age, or ``None`` when it is not a positive number a clock reading can be offset by.
+    """
+    limit = finite_number(value)
+    if limit is None or limit <= 0 or limit > _WIDEST_MAX_AGE:
+        return None
+    return float(limit)

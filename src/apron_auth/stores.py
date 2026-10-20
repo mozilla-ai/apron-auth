@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-import sys
 from typing import TYPE_CHECKING
 
-from apron_auth._clock import pending_age_refusal
-from apron_auth._numbers import finite_number
+from apron_auth._clock import pending_age_refusal, usable_max_age
 from apron_auth.errors import ConfigurationError
 
 if TYPE_CHECKING:
@@ -17,9 +15,6 @@ logger = logging.getLogger(__name__)
 
 # The default age, in seconds, after which a stored pending state expires.
 DEFAULT_MAX_AGE = 600.0
-
-# The widest maximum age, in seconds, that can be subtracted from a clock reading.
-_WIDEST_MAX_AGE = sys.float_info.max
 
 
 class MemoryStateStore:
@@ -55,12 +50,12 @@ class MemoryStateStore:
         Raises:
             ConfigurationError: If ``max_age`` is not a positive finite number.
         """
-        limit = finite_number(max_age)
-        if limit is None or limit <= 0 or limit > _WIDEST_MAX_AGE:
+        limit = usable_max_age(max_age)
+        if limit is None:
             msg = "max_age must be a positive finite number"
             raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
-        self._max_age = float(limit)
+        self._max_age = limit
 
     async def save(self, state: OAuthPendingState) -> None:
         """Store pending state and prune any expired entries.
