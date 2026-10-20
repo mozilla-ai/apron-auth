@@ -1453,6 +1453,16 @@ class TestCimdClientId:
         with pytest.raises(ConfigurationError, match="fragment"):
             cimd_client_id("https://app.example.com/client.json#section")
 
+    def test_empty_fragment_delimiter_rejected(self) -> None:
+        """A bare delimiter still carries a fragment, as the rule for a declared issuer also reads it."""
+        with pytest.raises(ConfigurationError, match="fragment"):
+            cimd_client_id("https://app.example.com/client.json#")
+
+    def test_an_encoded_number_sign_in_the_path_is_accepted(self) -> None:
+        """An encoded number sign is part of the document's path, not a delimiter."""
+        url = "https://app.example.com/client%23one.json"
+        assert cimd_client_id(url) == url
+
     def test_dot_path_segment_rejected(self) -> None:
         with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/./client.json")

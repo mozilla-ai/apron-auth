@@ -420,7 +420,8 @@ def cimd_client_id(url: str) -> str:
     if parsed.username is not None or parsed.password is not None:
         msg = "CIMD client_id must not contain a username or password"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
-    if parsed.fragment:
+    # The delimiter is checked, so an empty fragment counts, as it does for a declared issuer.
+    if "#" in url:
         msg = "CIMD client_id must not contain a fragment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if not parsed.path.strip("/"):
