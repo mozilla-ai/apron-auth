@@ -16,6 +16,9 @@ from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scope
 
 AccessType = Literal["read", "write", "admin"]
 
+# The facts a config takes from the provider it names, rather than repeating them.
+FACTS_TAKEN_FROM_PROVIDER = ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator")
+
 # The authorization request parameters that bind the request to the client, plus the request object parameters
 # that would replace them all. extra_params must not set them.
 RESERVED_AUTHORIZATION_PARAMS = frozenset(
@@ -376,9 +379,8 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             Must be a positive finite number. Defaults to 600 (ten minutes).
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
-            When set, :attr:`can_assert_domain_ownership`, :attr:`disconnect_fully_revokes` and
-            :attr:`scope_separator` must equal the member's, and a config that contradicts them is
-            refused at construction.
+            When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
+            config that contradicts one is refused at construction.
             NOTE: The label is not an attestation. Construction checks nothing else about a config
             against the member, so a caller must not read this as proof of where the endpoints lead.
             NOTE: Only construction takes and checks a member's facts. A config whose provider is set
@@ -519,8 +521,8 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         except (KeyError, ValueError):
             return data
         data = dict(data)
-        for field in ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator"):
-            data.setdefault(field, getattr(member, field))
+        for fact in FACTS_TAKEN_FROM_PROVIDER:
+            data.setdefault(fact, getattr(member, fact))
         return data
 
     @model_validator(mode="after")
@@ -534,29 +536,17 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             The validated config, unchanged.
 
         Raises:
-            ValueError: If ``provider`` is set and ``can_assert_domain_ownership``,
-                ``disconnect_fully_revokes`` or ``scope_separator`` differs from the member's.
+            ValueError: If ``provider`` is set and a fact the config takes from it differs from the
+                member's.
         """
         if self.provider is None:
             return self
-        if self.can_assert_domain_ownership is not self.provider.can_assert_domain_ownership:
-            msg = (
-                f"can_assert_domain_ownership must be {self.provider.can_assert_domain_ownership} "
-                f"for provider {self.provider.display_name}, got {self.can_assert_domain_ownership}"
-            )
-            raise ValueError(msg)
-        if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
-            msg = (
-                f"disconnect_fully_revokes must be {self.provider.disconnect_fully_revokes} "
-                f"for provider {self.provider.display_name}, got {self.disconnect_fully_revokes}"
-            )
-            raise ValueError(msg)
-        if self.scope_separator != self.provider.scope_separator:
-            msg = (
-                f"scope_separator must be {self.provider.scope_separator!r} "
-                f"for provider {self.provider.display_name}, got {self.scope_separator!r}"
-            )
-            raise ValueError(msg)
+        for fact in FACTS_TAKEN_FROM_PROVIDER:
+            stated = getattr(self.provider, fact)
+            carried = getattr(self, fact)
+            if carried != stated:
+                msg = f"{fact} must be {stated!r} for provider {self.provider.display_name}, got {carried!r}"
+                raise ValueError(msg)
         return self
 
     def basic_auth(self) -> tuple[str, str] | None:
