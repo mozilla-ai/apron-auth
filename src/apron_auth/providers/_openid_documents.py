@@ -78,7 +78,8 @@ def require_url(
     if "#" in value:
         msg = f"OpenID {field} must not carry a fragment"
         raise OidcDiscoveryError(msg, kind=kind)
-    match authority_credential(value):
+    credential = authority_credential(value)
+    match credential:
         case AuthorityCredential.ABSENT:
             pass
         case AuthorityCredential.MALFORMED:
@@ -87,6 +88,8 @@ def require_url(
         case AuthorityCredential.PRESENT:
             msg = f"OpenID {field} must not carry userinfo"
             raise OidcDiscoveryError(msg, kind=kind)
+        case _:
+            assert_never(credential)
     if is_issuer and "?" in value:
         msg = f"OpenID {field} must not carry a query"
         raise OidcDiscoveryError(msg, kind=kind)

@@ -347,15 +347,25 @@ class OAuthClient:
             A tuple of the authorization URL and the pending state.
 
         Raises:
-            ConfigurationError: If no redirect URI is available, or the one in force carries userinfo.
+            ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
+                or cannot be read.
         """
         effective_redirect_uri = redirect_uri or self._config.redirect_uri
         if not effective_redirect_uri:
             msg = "redirect_uri must be provided either in the method call or in ProviderConfig"
             raise ConfigurationError(msg)
-        if authority_credential(effective_redirect_uri) is not AuthorityCredential.ABSENT:
-            msg = "redirect_uri must not carry userinfo"
-            raise ConfigurationError(msg)
+        credential = authority_credential(effective_redirect_uri)
+        match credential:
+            case AuthorityCredential.ABSENT:
+                pass
+            case AuthorityCredential.MALFORMED:
+                msg = "redirect_uri is malformed"
+                raise ConfigurationError(msg)
+            case AuthorityCredential.PRESENT:
+                msg = "redirect_uri must not carry userinfo"
+                raise ConfigurationError(msg)
+            case _:
+                assert_never(credential)
 
         state = secrets.token_urlsafe(32)
         code_verifier = None

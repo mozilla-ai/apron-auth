@@ -188,6 +188,8 @@ async def discover(
             _validate_url(url, url_validator, caller_supplied=False)
 
     resource = resource_meta.get("resource")
+    if isinstance(resource, str):
+        _require_no_authority_credential(resource, caller_supplied=False)
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
@@ -327,7 +329,8 @@ async def register_client(
         persistence obligation.
 
     Raises:
-        ConfigurationError: If ``registration_url`` is rejected.
+        ConfigurationError: If ``registration_url`` is rejected, or ``redirect_uri`` carries
+            a credential in its authority.
         McpRegistrationError: If the request fails in transit, the endpoint returns
             a non-success status, its response is not a JSON object with a usable
             ``client_id``, or the response states a client secret this library
@@ -339,6 +342,7 @@ async def register_client(
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
+    _require_no_authority_credential(redirect_uri, caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -419,9 +423,15 @@ def cimd_client_id(url: str) -> str:
     if not parsed.hostname:
         msg = "CIMD client_id must be an https URL with a host"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
-    if authority_credential(url) is not AuthorityCredential.ABSENT:
-        msg = "CIMD client_id must not contain a username or password"
-        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+    credential = authority_credential(url)
+    match credential:
+        case AuthorityCredential.ABSENT:
+            pass
+        case AuthorityCredential.MALFORMED | AuthorityCredential.PRESENT:
+            msg = "CIMD client_id must not contain a username or password"
+            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+        case _:
+            assert_never(credential)
     # The delimiter is checked, so an empty fragment counts, as it does for a declared issuer.
     if "#" in url:
         msg = "CIMD client_id must not contain a fragment"
@@ -675,6 +685,32 @@ def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     return None
 
 
+def _require_no_authority_credential(url: str, *, caller_supplied: bool) -> None:
+    """Refuse a URL whose authority carries a credential, by the fault class its source decides.
+
+    Args:
+        url: The URL to check.
+        caller_supplied: The URL is an argument of this library's caller, or derives
+            from one, not a member of a fetched document.
+
+    Raises:
+        ConfigurationError: If a caller-supplied URL carries a credential or cannot be read.
+        McpDiscoveryError: If a document-supplied URL carries a credential or cannot be read.
+    """
+    error_cls, kind = _url_fault(caller_supplied=caller_supplied)
+    credential = authority_credential(url)
+    match credential:
+        case AuthorityCredential.ABSENT:
+            return
+        case AuthorityCredential.MALFORMED:
+            raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind)
+        case AuthorityCredential.PRESENT:
+            msg = "MCP OAuth refused a URL that carries userinfo"
+            raise error_cls(msg, kind=kind)
+        case _:
+            assert_never(credential)
+
+
 def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]:
     """Return the error class and kind for a URL this library will not fetch, by where the URL came from.
 
@@ -715,14 +751,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg, kind=kind)
-    match authority_credential(url):
-        case AuthorityCredential.ABSENT:
-            pass
-        case AuthorityCredential.MALFORMED:
-            raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind)
-        case AuthorityCredential.PRESENT:
-            msg = "MCP OAuth refused a URL that carries userinfo"
-            raise error_cls(msg, kind=kind)
+    _require_no_authority_credential(url, caller_supplied=caller_supplied)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
         raise error_cls(msg, kind=kind)

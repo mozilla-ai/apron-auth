@@ -194,8 +194,8 @@ class NotionRevocationHandler:
             response = await client.post(
                 revocation_url,
                 json={"token": token},
-                # Pass None (not USE_CLIENT_DEFAULT) for a public client so an injected client's default
-                # auth is never sent to the server-supplied revocation URL.
+                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an injected client's own
+                # auth flow is not applied to the server-supplied revocation URL.
                 auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:

@@ -2781,3 +2781,16 @@ class TestAuthorizationUrlRedirectCredential:
             await OAuthClient(config).get_authorization_url(
                 redirect_uri="https://operator:sesame@app.example.com/cb"  # pragma: allowlist secret
             )
+
+    async def test_reports_a_malformed_override_as_malformed(self) -> None:
+        """A URL with no credential at all must not be reported as carrying one."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="https://app.example.com/cb",
+        )
+
+        with pytest.raises(ConfigurationError, match="redirect_uri is malformed"):
+            await OAuthClient(config).get_authorization_url(redirect_uri="https://[::1/cb")

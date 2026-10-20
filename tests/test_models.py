@@ -14,6 +14,7 @@ from apron_auth import providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
+    URL_FIELDS,
     ApplicationType,
     ClientRegistration,
     FreshTokenSet,
@@ -442,8 +443,8 @@ class TestProviderConfigUnknownFields:
             )
 
 
-class TestProviderConfigEndpointCredentials:
-    @pytest.mark.parametrize("field", ["authorize_url", "redirect_uri", "revocation_url", "token_url"])
+class TestProviderConfigUrlCredentials:
+    @pytest.mark.parametrize("field", list(URL_FIELDS))
     @pytest.mark.parametrize(
         "authority",
         [

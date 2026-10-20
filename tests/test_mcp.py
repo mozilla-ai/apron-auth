@@ -656,6 +656,19 @@ class TestDiscover:
         assert httpx_mock.get_requests() == []
         assert hint not in seen
 
+    async def test_declared_resource_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """The declared resource is a document's value, so it is refused as the provider's fault."""
+        resource = "https://user:pw@mcp.example.com/api"  # pragma: allowlist secret
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"], "resource": resource}
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+
+        with pytest.raises(McpDiscoveryError, match="userinfo") as exc_info:
+            await discover("https://mcp.example.com")
+
+        assert exc_info.value.kind is FailureKind.REFUSED
+
     async def test_discovered_endpoint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         token_url = "https://user:pw@auth.example.com/token"  # pragma: allowlist secret
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -1401,6 +1414,16 @@ class TestRegisterClient:
         registration_url = "https://user:pw@auth.example.com/register"  # pragma: allowlist secret
         with pytest.raises(ConfigurationError, match="userinfo") as exc_info:
             await register_client(registration_url, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
+
+    async def test_redirect_uri_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """The redirect URI is registered at the server, so a credential in it would be stored there."""
+        redirect_uri = "https://user:pw@app.example.com/cb"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="userinfo") as exc_info:
+            await register_client(_REGISTER_URL, redirect_uri)
+
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
 

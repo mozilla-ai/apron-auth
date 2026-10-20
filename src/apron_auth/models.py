@@ -38,7 +38,8 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
-# Every URL field, none of which may carry a credential in its authority, because each one leaves this library.
+# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
+# handed to a browser, or recorded wherever the config is.
 URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
 
 
@@ -314,7 +315,8 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
     one cannot be dropped silently and leave the config weaker than the caller asked for.
 
-    No URL field carries userinfo, because every one of them leaves this library.
+    No URL field carries userinfo, because each one is sent to the provider, handed to a browser,
+    or recorded wherever the config is.
 
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
@@ -531,7 +533,12 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         if "#" in self.resource:
             msg = "resource must not contain a fragment"
             raise ValueError(msg)
-        if not urlparse(self.resource).scheme:
+        try:
+            scheme = urlparse(self.resource).scheme
+        except ValueError as exc:
+            msg = "resource is malformed"
+            raise ValueError(msg) from exc
+        if not scheme:
             msg = "resource must be an absolute URI when set"
             raise ValueError(msg)
         return self

@@ -204,8 +204,8 @@ class StandardRevocationHandler:
             response = await client.post(
                 revocation_url,
                 data=data,
-                # Pass None (not USE_CLIENT_DEFAULT) for a public client so an
-                # injected client's default auth is never sent to the
+                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an
+                # injected client's own auth flow is not applied to the
                 # server-supplied revocation URL. httpx accepts None at runtime;
                 # its AuthTypes stub omits it, hence the narrow ignore.
                 auth=auth,  # ty: ignore[invalid-argument-type]
