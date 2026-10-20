@@ -381,6 +381,8 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             refused at construction.
             NOTE: The label is not an attestation. Construction checks nothing else about a config
             against the member, so a caller must not read this as proof of where the endpoints lead.
+            NOTE: Only construction takes and checks a member's facts. A config whose provider is set
+            through :meth:`~pydantic.BaseModel.model_copy` keeps the facts it already carried.
     """
 
     client_id: str
