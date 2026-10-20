@@ -46,6 +46,9 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
+_DICT_KEY_MARKER = "[key]"
+
 # Every URL field. None may carry a credential in its authority, because each is sent to the provider,
 # handed to a browser, or recorded wherever the config is.
 URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
@@ -318,7 +321,10 @@ class ScopeMetadata(BaseModel, frozen=True):
 
 
 def _refusal_text(error: ValidationError) -> str:
-    """Return a model's refusals as one line, naming each field it refused without repeating its value.
+    """Return a model's refusals as one line, dropping the value the framework attached to each.
+
+    NOTE: A refusal written by this model's own validators is passed through as it stands, so a
+    validator that interpolates a value into its message still carries that value here.
 
     Args:
         error: The refusal raised while validating the model.
@@ -329,7 +335,7 @@ def _refusal_text(error: ValidationError) -> str:
     refusals: list[str] = []
     for entry in error.errors(include_url=False, include_input=False, include_context=False):
         reason = entry["msg"].removeprefix("Value error, ")
-        field = ".".join(str(part) for part in entry["loc"])
+        field = ".".join(str(part) for part in entry["loc"] if part != _DICT_KEY_MARKER)
         refusals.append(f"{field}: {reason}" if field else reason)
     return "; ".join(refusals)
 
@@ -344,6 +350,10 @@ def _refuse_without_repeating_the_value(
 
     NOTE: Attach this as a model's last validator, so it wraps the others. One attached to a base
     class does not wrap a subclass's own validators, whose refusals would then escape unscrubbed.
+
+    NOTE: A model validated as a field of another model refuses with this error rather than one the
+    outer model can collect, so the refusal names the field inside this model and not the path to
+    it, and any other refusal the outer model would have reported is lost.
 
     Args:
         cls: The model being validated.

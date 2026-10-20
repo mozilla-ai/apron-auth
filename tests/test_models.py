@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import pickle
 import time
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType
 
@@ -482,6 +484,12 @@ class TestProviderConfigUrlCredentials:
         assert str(exc_info.value) == "token_url must not carry userinfo"
 
 
+class _Settings(BaseModel):
+    """A caller's model holding a config, so a nested refusal can be observed."""
+
+    config: ProviderConfig
+
+
 class TestARefusalRepeatsNoValue:
     """A framework refusal carries the constructor's raw input, which for these models holds a credential."""
 
@@ -513,6 +521,57 @@ class TestARefusalRepeatsNoValue:
         assert token not in rendered
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda data: ProviderConfig(**data), id="keyword construction"),
+            pytest.param(ProviderConfig.model_validate, id="model_validate"),
+            pytest.param(lambda data: ProviderConfig.model_validate_json(json.dumps(data)), id="from json"),
+            pytest.param(ProviderConfig.model_validate_strings, id="from strings"),
+            pytest.param(lambda data: _Settings(config=data), id="nested as a field"),
+        ],
+    )
+    def test_every_entry_point_scrubs_the_refusal(self, build: Callable[[dict[str, str]], object]) -> None:
+        """An entry point that refuses without scrubbing would leak while the others look uniform."""
+        secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
+        data = {
+            "client_id": "cid",
+            "client_secret": secret,
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://operator:" + "sesame@provider.example.com/token",
+        }
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            build(data)
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in rendered
+        assert "operator" not in rendered
+
+    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
+        """The parser states no field, and its own wording names an internal rather than the condition."""
+        with pytest.raises(ConfigurationError, match="resource is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                resource="https://[::1/resource",
+            )
+
+    def test_a_refusal_names_no_marker_the_framework_uses_for_a_mapping_key(self) -> None:
+        """A path the framework builds for a mapping key names no field of this model."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                extra_params={7: "x"},
+            )
+
+        assert "[key]" not in str(exc_info.value)
 
     def test_a_pending_state_refusal_repeats_no_secret(self) -> None:
         verifier = "THE_" + "REAL_VERIFIER"

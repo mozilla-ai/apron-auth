@@ -189,7 +189,7 @@ async def discover(
 
     resource = resource_meta.get("resource")
     if isinstance(resource, str):
-        _require_no_authority_credential(resource, caller_supplied=False)
+        _require_no_authority_credential(resource, field="resource", caller_supplied=False)
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
@@ -257,7 +257,9 @@ def to_provider_config(
     Raises:
         ConfigurationError: If a URL the metadata states carries a credential in its
             authority, or the effective ``resource`` — supplied or discovered — is
-            not a valid absolute URI without a fragment.
+            not a valid absolute URI without a fragment. Metadata reaching here is
+            treated as the caller's, because ``discover`` screens what it reads out
+            of a document before it builds the metadata.
         McpDiscoveryError: If the registration's method disagrees with its
             secret, or the server advertises no method the client can satisfy.
     """
@@ -342,7 +344,7 @@ async def register_client(
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
-    _require_no_authority_credential(redirect_uri, caller_supplied=True)
+    _require_no_authority_credential(redirect_uri, field="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -427,7 +429,10 @@ def cimd_client_id(url: str) -> str:
     match credential:
         case AuthorityCredential.ABSENT:
             pass
-        case AuthorityCredential.MALFORMED | AuthorityCredential.PRESENT:
+        case AuthorityCredential.MALFORMED:
+            msg = "CIMD client_id must be a valid URL"
+            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+        case AuthorityCredential.PRESENT:
             msg = "CIMD client_id must not contain a username or password"
             raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         case _:
@@ -685,11 +690,12 @@ def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     return None
 
 
-def _require_no_authority_credential(url: str, *, caller_supplied: bool) -> None:
+def _require_no_authority_credential(url: str, *, field: str, caller_supplied: bool) -> None:
     """Refuse a URL whose authority carries a credential, by the fault class its source decides.
 
     Args:
         url: The URL to check.
+        field: What the URL is, for the refusal.
         caller_supplied: The URL is an argument of this library's caller, or derives
             from one, not a member of a fetched document.
 
@@ -705,7 +711,7 @@ def _require_no_authority_credential(url: str, *, caller_supplied: bool) -> None
         case AuthorityCredential.MALFORMED:
             raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind)
         case AuthorityCredential.PRESENT:
-            msg = "MCP OAuth refused a URL that carries userinfo"
+            msg = f"MCP OAuth refused a {field} that carries userinfo"
             raise error_cls(msg, kind=kind)
         case _:
             assert_never(credential)
@@ -751,7 +757,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg, kind=kind)
-    _require_no_authority_credential(url, caller_supplied=caller_supplied)
+    _require_no_authority_credential(url, field="URL", caller_supplied=caller_supplied)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
         raise error_cls(msg, kind=kind)

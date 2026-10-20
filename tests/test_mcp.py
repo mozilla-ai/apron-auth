@@ -1417,6 +1417,14 @@ class TestRegisterClient:
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
 
+    async def test_a_redirect_uri_the_client_cannot_read_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A URL with no credential at all must not be reported as carrying one."""
+        with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
+            await register_client(_REGISTER_URL, "https://[::1/cb")
+
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
+
     async def test_redirect_uri_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """The redirect URI is registered at the server, so a credential in it would be stored there."""
         redirect_uri = "https://user:pw@app.example.com/cb"  # pragma: allowlist secret
