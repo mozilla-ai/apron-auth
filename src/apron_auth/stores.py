@@ -42,6 +42,8 @@ class MemoryStateStore:
 
     Expiry is decided against the system clock.
     A state exactly ``max_age`` old is still current, and one past it is not.
+    A creation time that cannot be measured, or that lies further ahead of the clock
+    than the allowed difference, is expired too.
     """
 
     def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
