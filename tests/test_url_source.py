@@ -2,9 +2,9 @@
 
 A value this library's caller passed is a configuration fault,
 and one read out of a fetched document is a refusal of what the other side sent.
-Each call to a URL rule therefore names its value's source. A guard reads the repository's own
-trees syntactically and holds every call it can resolve by name to that convention, which is
-weaker than the rule itself: it cannot tell whether the source a call names is the right one.
+Each call to a URL rule therefore names its value's source. The signature is what enforces that,
+and a guard over the library states the convention in one place. The guard is the weaker of the
+two, because it reads a call by name and cannot tell whether the source a call names is right.
 """
 
 from __future__ import annotations
@@ -23,12 +23,14 @@ from apron_auth.providers._openid_documents import require_url
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-REPO = Path(__file__).resolve().parents[1]
-# Every module the guard walks, one parametrized case each. The test tree is included because the
-# type checker covers the library only, so a call there would otherwise fail at runtime or not at all.
-MODULES = sorted(path for tree in ("src", "tests") for path in (REPO / tree).rglob("*.py"))
-# The URL rules whose refusal follows the source, named so a rename cannot leave the guard passing.
-URL_RULES = {rule.__name__ for rule in (_validate_url, require_url)}
+# The URL rules whose refusal follows the source, kept as a pair so each is held to both tests.
+RULES = (_validate_url, require_url)
+# The library's source tree. The guard walks it alone, so a test may still call a rule without a source.
+SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
+# Every module of that tree, one parametrized case each.
+MODULES = sorted(SRC.rglob("*.py"))
+# Named so a rename cannot leave the guard passing on a rule it no longer finds.
+URL_RULES = {rule.__name__ for rule in RULES}
 
 
 def _called_name(func: ast.expr) -> str | None:
@@ -51,14 +53,12 @@ def _calls_without_a_source(path: Path) -> list[str]:
     return found
 
 
-def test_the_walk_reaches_both_trees() -> None:
+def test_the_walk_reaches_the_library() -> None:
     """A walk that reaches nothing parametrizes no case, which pytest reports as a skip rather than a failure."""
-    trees = {path.relative_to(REPO).parts[0] for path in MODULES}
-
-    assert trees == {"src", "tests"}
+    assert MODULES
 
 
-@pytest.mark.parametrize("path", MODULES, ids=lambda p: str(p.relative_to(REPO)))
+@pytest.mark.parametrize("path", MODULES, ids=lambda p: str(p.relative_to(SRC)))
 def test_every_call_states_its_source(path: Path) -> None:
     assert _calls_without_a_source(path) == []
 
@@ -80,13 +80,27 @@ def test_the_guard_sees_a_call_that_says_nothing(tmp_path: Path) -> None:
     assert _calls_without_a_source(sample) == [f"{sample}:{line}" for line in (1, 3, 4, 6)]
 
 
-@pytest.mark.parametrize("rule", [_validate_url, require_url], ids=lambda rule: rule.__name__)
+@pytest.mark.parametrize("rule", RULES, ids=lambda rule: rule.__name__)
 def test_a_url_rule_takes_no_default_for_the_source(rule: Callable[..., object]) -> None:
     """A default would classify a forgotten call site rather than fail it."""
     parameter = inspect.signature(rule).parameters["caller_supplied"]
 
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: _validate_url("https://mcp.example.com/sse", None),
+        lambda: require_url("https://idp.example/realm", field="endpoint", allow_insecure_http=False),
+    ],
+    ids=[rule.__name__ for rule in RULES],
+)
+def test_a_url_rule_refuses_a_call_that_names_no_source(call: Callable[[], object]) -> None:
+    """The signature, not the guard over the library, is what a call site cannot get past."""
+    with pytest.raises(TypeError, match="caller_supplied"):
+        call()
 
 
 @pytest.mark.parametrize("is_issuer", [False, True], ids=["endpoint", "issuer"])

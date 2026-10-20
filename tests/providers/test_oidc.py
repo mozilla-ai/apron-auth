@@ -462,8 +462,8 @@ class TestHttpsRequirement:
     def test_preset_refuses_http_metadata_built_without_discovery(self, field: str, label: str) -> None:
         """Metadata that never passed through ``discover`` gets the same scheme rule.
 
-        The metadata is the caller's own argument, so the refusal underneath is classified as a
-        configuration fault rather than as a refusal of what a provider published.
+        The refusal underneath agrees with the class the caller catches, whose kind is a
+        configuration fault by definition, so the chain does not contradict itself.
         """
         with pytest.raises(ConfigurationError, match=f"{label} must use https") as exc_info:
             preset(
