@@ -16,7 +16,7 @@ class PendingAgeRefusalReason(Enum):
 
     # The creation time lies further ahead of this clock than the allowed difference.
     AHEAD_OF_CLOCK = auto()
-    # The creation time is older than the maximum age.
+    # The creation time is older than the maximum age, not merely equal to it.
     TOO_OLD = auto()
     # The creation time is not a finite number, so no age can be measured from it.
     UNUSABLE = auto()
@@ -28,8 +28,8 @@ def pending_age_refusal(created_at: object, *, max_age: float) -> PendingAgeRefu
     A creation time exactly ``max_age`` old is current, and one exactly the allowed clock difference
     ahead of this clock is current, so each limit refuses only what lies past it.
 
-    NOTE: Callers must pass a ``max_age`` the clock can be offset by, because a wider one cannot be
-    subtracted from a clock reading.
+    NOTE: Callers must pass a positive ``max_age`` that a clock reading can be offset by, because this
+    reports against the limit it is given rather than refusing it.
 
     Args:
         created_at: The creation time, in epoch seconds, as it arrived.
