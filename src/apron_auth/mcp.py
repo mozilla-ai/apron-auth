@@ -177,10 +177,8 @@ async def discover(
 
 def to_provider_config(
     metadata: ServerMetadata,
+    registration: ClientRegistration,
     *,
-    client_id: str,
-    client_secret: SecretStr | str | None = None,
-    registered_auth_method: str | None = None,
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
     resource: str | None = None,
@@ -190,11 +188,12 @@ def to_provider_config(
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
     S256 challenges, PKCE is disabled rather than downgraded to ``plain``. The
-    token-endpoint auth method is taken from ``registered_auth_method`` when
-    given — the value is authoritative for this specific client and may differ
-    from what the server advertises server-wide. Absent it, a confidential
-    client's method is chosen from the methods the server advertises (preferring
-    ``client_secret_post``) and a secretless public client uses ``none``. The
+    token-endpoint auth method is taken from the registration's
+    ``token_endpoint_auth_method`` when it states one — that value is
+    authoritative for this specific client and may differ from what the server
+    advertises server-wide. Absent it, a confidential client's method is chosen
+    from the methods the server advertises (preferring ``client_secret_post``)
+    and a secretless public client uses ``none``. The
     discovered issuer and its ``iss``-parameter support carry onto the config so
     the code exchange can validate the authorization-response ``iss`` (RFC 9207).
     The RFC 8707 resource indicator defaults to the discovered protected-resource
@@ -209,11 +208,11 @@ def to_provider_config(
 
     Args:
         metadata: Metadata from :func:`discover`.
-        client_id: Client identifier, pre-registered or minted via DCR.
-        client_secret: Secret for a confidential client; omit for a public one.
-        registered_auth_method: The token-endpoint auth method the server
-            registered for this client (RFC 7591), when known; overrides the
-            derivation from the advertised set. Omit when unknown.
+        registration: The client's credentials for this authorization server: the
+            registration :func:`register_client` issued, or one built from a
+            pre-registered identifier or a CIMD client identifier, which names a
+            secret only for a confidential client and a token-endpoint auth
+            method only when the server registered one.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
         resource: RFC 8707 resource indicator to audience-bind issued tokens to,
@@ -233,7 +232,7 @@ def to_provider_config(
         ValidationError: If the effective ``resource`` — supplied or discovered —
             is not a valid absolute URI without a fragment.
     """
-    secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
+    secret = registration.client_secret
     methods = metadata.code_challenge_methods
     # Default PKCE on when the server advertises no code-challenge methods. RFC
     # 8414 reads an omitted list as "no PKCE", but the MCP spec requires clients
@@ -243,9 +242,11 @@ def to_provider_config(
     # When methods are advertised, honor them: disable if S256 is absent, since
     # OAuthClient issues only S256 challenges.
     use_pkce = "S256" in methods if methods else True
-    auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods, registered_auth_method)
+    auth_method = _select_auth_method(
+        secret, metadata.token_endpoint_auth_methods, registration.token_endpoint_auth_method
+    )
     return ProviderConfig(
-        client_id=client_id,
+        client_id=registration.client_id,
         client_secret=secret,
         authorize_url=metadata.authorize_url,
         token_url=metadata.token_url,

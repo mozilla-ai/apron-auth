@@ -32,6 +32,7 @@ from apron_auth.mcp import (
 )
 from apron_auth.models import (
     ApplicationType,
+    ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
@@ -74,63 +75,57 @@ class TestToProviderConfig:
         return ServerMetadata(**defaults)
 
     def test_result_is_provider_config(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert isinstance(config, ProviderConfig)
 
     def test_maps_endpoints(self) -> None:
         meta = self._meta(revocation_url="https://auth.example.com/revoke")
-        config = to_provider_config(meta, client_id="c", client_secret=SecretStr("s"))
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret=SecretStr("s")))
         assert config.authorize_url == "https://auth.example.com/authorize"
         assert config.token_url == "https://auth.example.com/token"
         assert config.revocation_url == "https://auth.example.com/revoke"
 
     def test_confidential_client_uses_secret_post(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret=SecretStr("s"))
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret=SecretStr("s")))
         assert config.token_endpoint_auth_method == "client_secret_post"
         assert config.client_secret is not None
 
     def test_public_client_uses_none(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c"))
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
 
     def test_confidential_client_uses_basic_when_only_basic_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_confidential_client_defaults_basic_when_unadvertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=[])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="c", client_secret="s")
+            to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
 
     def test_public_client_rejected_when_none_not_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="c")
+            to_provider_config(meta, ClientRegistration(client_id="c"))
 
     def test_registered_method_overrides_advertised_derivation(self) -> None:
         # The server advertises only client_secret_post, but this client was
         # registered as client_secret_basic; the per-client registration wins.
         config = to_provider_config(
             self._meta(token_endpoint_auth_methods=["client_secret_post"]),
-            client_id="c",
-            client_secret="s",
-            registered_auth_method="client_secret_basic",
+            ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="client_secret_basic"),
         )
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_registered_none_yields_public_client(self) -> None:
-        config = to_provider_config(
-            self._meta(),
-            client_id="c",
-            registered_auth_method="none",
-        )
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", token_endpoint_auth_method="none"))
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
 
@@ -138,17 +133,14 @@ class TestToProviderConfig:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="private_key_jwt",
+                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="private_key_jwt"),
             )
 
     def test_registered_confidential_method_without_secret_raises(self) -> None:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                registered_auth_method="client_secret_basic",
+                ClientRegistration(client_id="c", token_endpoint_auth_method="client_secret_basic"),
             )
 
     def test_registered_none_with_secret_raises(self) -> None:
@@ -157,47 +149,48 @@ class TestToProviderConfig:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="none",
+                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="none"),
             )
 
     def test_registered_empty_string_raises(self) -> None:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="",
+                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method=""),
             )
 
     def test_absent_registered_method_falls_back_to_derivation(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_accepts_plain_string_secret(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="raw-secret")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="raw-secret"))
         assert config.client_secret is not None
         assert config.client_secret.get_secret_value() == "raw-secret"
 
     def test_pkce_enabled_when_s256_supported(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=["S256"]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=["S256"]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is True
 
     def test_pkce_enabled_by_default_when_unadvertised(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=[]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=[]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is True
 
     def test_pkce_disabled_when_s256_absent(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=["plain"]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=["plain"]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is False
 
     def test_scopes_and_redirect_passed(self) -> None:
         config = to_provider_config(
             self._meta(),
-            client_id="c",
-            client_secret="s",
+            ClientRegistration(client_id="c", client_secret="s"),
             scopes=["a", "b"],
             redirect_uri="https://app.example.com/cb",
         )
@@ -206,37 +199,36 @@ class TestToProviderConfig:
 
     def test_issuer_and_iss_requirement_threaded_from_metadata(self) -> None:
         meta = self._meta(issuer="https://auth.example.com", iss_parameter_supported=True)
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.issuer == "https://auth.example.com"
         assert config.require_iss is True
 
     def test_issuer_absent_leaves_config_unbound(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert config.issuer is None
         assert config.require_iss is False
 
     def test_resource_threaded_from_metadata(self) -> None:
         meta = self._meta(resource="https://mcp.example.com/mcp")
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.resource == "https://mcp.example.com/mcp"
 
     def test_resource_absent_leaves_config_unbound(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert config.resource is None
 
     def test_explicit_resource_overrides_metadata(self) -> None:
         meta = self._meta(resource="https://mcp.example.com")
         config = to_provider_config(
             meta,
-            client_id="c",
-            client_secret="s",
+            ClientRegistration(client_id="c", client_secret="s"),
             resource="https://mcp.example.com/server/mcp",
         )
         assert config.resource == "https://mcp.example.com/server/mcp"
 
     def test_cimd_url_client_id_yields_public_config(self) -> None:
         url = cimd_client_id("https://app.example.com/oauth/client-metadata.json")
-        config = to_provider_config(self._meta(), client_id=url, client_secret=None)
+        config = to_provider_config(self._meta(), ClientRegistration(client_id=url))
         assert config.client_id == "https://app.example.com/oauth/client-metadata.json"
         assert config.client_secret is None
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
@@ -245,7 +237,7 @@ class TestToProviderConfig:
         """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
+            to_provider_config(meta, ClientRegistration(client_id="https://app.example.com/c.json"))
 
 
 class TestToProviderConfigIdentity:
@@ -268,7 +260,7 @@ class TestToProviderConfigIdentity:
 
     def test_a_config_on_a_claimed_host_names_no_provider(self, claimed_metadata: ServerMetadata) -> None:
         """That provider's handler would send a token issued for the MCP server to its API."""
-        config = to_provider_config(claimed_metadata, client_id="c")
+        config = to_provider_config(claimed_metadata, ClientRegistration(client_id="c"))
 
         assert config.provider is None
 
@@ -276,7 +268,7 @@ class TestToProviderConfigIdentity:
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
         """The client raises the unsupported-identity error and sends nothing to the provider."""
-        client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"))
+        client = OAuthClient(to_provider_config(claimed_metadata, ClientRegistration(client_id="c")))
 
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity(FreshTokenSet(access_token="access"))
@@ -296,7 +288,7 @@ class TestToProviderConfigIdentity:
                 self.calls.append((material, config))
                 return IdentityProfile(provider="mcp", subject="u-1")
 
-        config = to_provider_config(claimed_metadata, client_id="c")
+        config = to_provider_config(claimed_metadata, ClientRegistration(client_id="c"))
         handler = McpIdentityHandler()
         client = OAuthClient(config, identity_handler=handler)
 
@@ -1400,13 +1392,7 @@ class TestEndToEndFlow:
         reg = await register_client(registration_url, _REDIRECT_URI, transport_factory=transport_factory)
         assert reg.client_id == "dcr-client"
 
-        config = to_provider_config(
-            meta,
-            client_id=reg.client_id,
-            client_secret=reg.client_secret,
-            registered_auth_method=reg.token_endpoint_auth_method,
-            redirect_uri=_REDIRECT_URI,
-        )
+        config = to_provider_config(meta, reg, redirect_uri=_REDIRECT_URI)
         assert config.token_url == "https://auth.example.com/token"
         assert config.use_pkce is True
 
@@ -1447,10 +1433,5 @@ class TestEndToEndFlow:
             token_endpoint_auth_methods=["client_secret_post"],
         )
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
-        config = to_provider_config(
-            meta,
-            client_id=reg.client_id,
-            client_secret=reg.client_secret,
-            registered_auth_method=reg.token_endpoint_auth_method,
-        )
+        config = to_provider_config(meta, reg)
         assert config.token_endpoint_auth_method == "client_secret_basic"

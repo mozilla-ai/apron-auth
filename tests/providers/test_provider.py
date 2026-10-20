@@ -11,7 +11,7 @@ from support import VaryFacts
 
 from apron_auth import providers as providers_pkg
 from apron_auth.mcp import to_provider_config
-from apron_auth.models import Provider, ProviderConfig, ProviderFacts, ServerMetadata
+from apron_auth.models import ClientRegistration, Provider, ProviderConfig, ProviderFacts, ServerMetadata
 from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import (
     atlassian,
@@ -318,5 +318,5 @@ def test_a_generic_openid_config_has_no_provider() -> None:
 
 
 def test_an_mcp_config_has_no_provider() -> None:
-    config = to_provider_config(_GENERIC_METADATA, client_id="cid", client_secret="csecret")
+    config = to_provider_config(_GENERIC_METADATA, ClientRegistration(client_id="cid", client_secret="csecret"))
     assert config.provider is None

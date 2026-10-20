@@ -592,34 +592,30 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 When the provider is not a known preset but a remote MCP (Model Context Protocol) server, `apron_auth.mcp` discovers its OAuth configuration at runtime (RFC 9728 protected-resource metadata + RFC 8414 authorization-server metadata) and, where the server supports it, registers a client dynamically (RFC 7591). The result folds into the same `ProviderConfig`/`OAuthClient` used everywhere else.
 
 ```python
-from apron_auth import OAuthClient, mcp
+from apron_auth import ClientRegistration, OAuthClient, mcp
 
 # 1. Discover the server's OAuth endpoints.
 meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transport_factory)
 
 # 2. Obtain a client identity, in the spec's priority order.
 if my_pre_registered_client_id:  # an existing relationship with this server
-    client_id, client_secret = my_pre_registered_client_id, my_pre_registered_secret
-    registered_auth_method = None
+    registration = ClientRegistration(
+        client_id=my_pre_registered_client_id,
+        client_secret=my_pre_registered_secret,
+    )
 elif meta.supports_cimd:  # CIMD — the forward path; you host the metadata document
-    client_id = mcp.cimd_client_id("https://app.example.com/oauth/client-metadata.json")
-    client_secret = None
-    registered_auth_method = None
+    registration = ClientRegistration(
+        client_id=mcp.cimd_client_id("https://app.example.com/oauth/client-metadata.json")
+    )
 elif meta.registration_url:  # DCR — deprecated, kept for backward compatibility
-    reg = await mcp.register_client(meta.registration_url, redirect_uri, transport_factory=my_transport_factory)
-    client_id, client_secret = reg.client_id, reg.client_secret
-    registered_auth_method = reg.token_endpoint_auth_method
+    registration = await mcp.register_client(
+        meta.registration_url, redirect_uri, transport_factory=my_transport_factory
+    )
 else:
     raise RuntimeError("server offers no supported client-registration mechanism")
 
 # 3. Build a ProviderConfig and drive the normal authorization-code flow.
-config = mcp.to_provider_config(
-    meta,
-    client_id=client_id,
-    client_secret=client_secret,
-    registered_auth_method=registered_auth_method,
-    redirect_uri=redirect_uri,
-)
+config = mcp.to_provider_config(meta, registration, redirect_uri=redirect_uri)
 client = OAuthClient(config, transport_factory=my_transport_factory)
 url, pending = await client.get_authorization_url()
 # Redirect the user to `url`; on the callback, pass the `iss` query
@@ -644,7 +640,7 @@ Unlike DCR or pre-registered credentials — which are bound to the authorizatio
 
 `discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 
-Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. Omit it (or pass `None`) to derive the method from the client's secret and the server's advertised set.
+A `token_endpoint_auth_method` on the registration lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration that states none, as one you build for identifiers you hold already does, derives the method from the client's secret and the server's advertised set.
 
 ### SSRF safety
 
@@ -775,6 +771,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
 - `mcp.discover`, `mcp.register_client` and `mcp.cimd_client_id` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, the registration endpoint, or the CIMD client identifier — including one the HTTP client cannot send. `mcp.cimd_client_id` raised `ValueError` before. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `mcp.to_provider_config` takes a `ClientRegistration` as its second argument, in place of the `client_id`, `client_secret` and `registered_auth_method` keywords. Pass what `mcp.register_client` returned, or build `ClientRegistration(client_id=...)` for an identifier you hold already.
 - `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
 - A built-in identity handler comes from `ProviderConfig.provider`, not from the endpoint hosts. Name the provider on a config you build by hand to keep the handler it used to be given, and expect `IdentityNotSupportedError` from `fetch_identity` for a config that names none. Naming it also takes that provider's stated facts, so a Google or Microsoft config gains `can_assert_domain_ownership=True`, which a domain-gated sign-in gate reads.
