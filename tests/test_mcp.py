@@ -447,14 +447,27 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
-    async def test_not_found_on_every_candidate_is_a_rejection(self, httpx_mock: HTTPXMock) -> None:
-        """Every candidate answering a client error says the server publishes no such document."""
+    @pytest.mark.parametrize(
+        ("status", "kind", "fault"),
+        [
+            # Only a not-found status says the server serves no such document.
+            (404, FailureKind.REJECTED, "is not published"),
+            (410, FailureKind.REJECTED, "is not published"),
+            # A refusal may guard a document that exists, and a redirect this library will not follow
+            # says nothing about whether it exists.
+            (403, FailureKind.REJECTED, "could not be fetched"),
+            (302, FailureKind.REFUSED, "could not be fetched"),
+        ],
+    )
+    async def test_a_status_on_every_candidate_names_what_it_showed(
+        self, httpx_mock: HTTPXMock, status: int, kind: FailureKind, fault: str
+    ) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
-        httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
-        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
-        with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=status)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=status)
+        with pytest.raises(McpDiscoveryError, match=fault) as exc_info:
             await discover("https://mcp.example.com")
-        assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.kind is kind
         assert exc_info.value.retryable is False
 
     async def test_an_unreadable_body_on_every_candidate_is_a_refusal(self, httpx_mock: HTTPXMock) -> None:

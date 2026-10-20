@@ -51,6 +51,9 @@ UrlValidator = Callable[[str], None]
 
 logger = logging.getLogger(__name__)
 
+# The response statuses that say the server serves no such document: not found and gone.
+_ABSENT_DOCUMENT_STATUSES = (404, 410)
+
 # The one wording for a URL this library cannot read or send, wherever the fault is caught.
 _MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
 
@@ -784,8 +787,10 @@ async def _fetch_first_metadata(
             if response.status_code != 200:
                 status = status_failure(response.status_code)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
-                # A status that may pass later leaves the document's existence unknown.
-                fault = _MetadataFault.UNAVAILABLE if status.kind.retryable else _MetadataFault.UNPUBLISHED
+                # Any other status leaves the document's existence unknown: a refusal may guard one that
+                # exists, and a redirect this library will not follow says nothing about it.
+                serves_no_document = response.status_code in _ABSENT_DOCUMENT_STATUSES
+                fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
                 outcomes.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
