@@ -56,27 +56,27 @@ class ProviderFacts:
         can_assert_domain_ownership: Whether the provider's tokens can carry a tenancy that asserts the
             authenticated user belongs to the email's domain, such as Google Workspace's ``hd`` claim.
             :attr:`ProviderConfig.can_assert_domain_ownership` describes what a consumer does with it.
+        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
+            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
+            provider's module docstring records how the value was verified.
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
             They decide whether a config that names the provider may use its identity handler, so
             they decide where an access token may be sent.
             NOTE: A config that names the provider may have endpoints outside them, such as a
             Salesforce org on a custom login domain.
-        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
-            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
-            provider's module docstring records how the value was verified.
-        scope_separator: The string the provider's scope parameter is joined with.
         identity_handler_class_name: The name of the class in the provider's module that fetches identity.
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
+        scope_separator: The string the provider's scope parameter is joined with.
     """
 
     can_assert_domain_ownership: bool
+    disconnect_fully_revokes: bool
     display_name: str
     host_suffixes: tuple[str, ...]
-    disconnect_fully_revokes: bool
-    scope_separator: str
     identity_handler_class_name: str
+    scope_separator: str
 
 
 @unique
@@ -103,14 +103,14 @@ class Provider(StrEnum):
         return self._facts.can_assert_domain_ownership
 
     @property
-    def display_name(self) -> str:
-        """The provider's name as it appears in messages and documentation."""
-        return self._facts.display_name
-
-    @property
     def disconnect_fully_revokes(self) -> bool:
         """Whether revoking a token removes the user's portal-level OAuth grant."""
         return self._facts.disconnect_fully_revokes
+
+    @property
+    def display_name(self) -> str:
+        """The provider's name as it appears in messages and documentation."""
+        return self._facts.display_name
 
     @property
     def host_suffixes(self) -> tuple[str, ...]:
@@ -131,110 +131,110 @@ class Provider(StrEnum):
         "atlassian",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Atlassian",
             host_suffixes=("auth.atlassian.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="AtlassianIdentityHandler",
+            scope_separator=" ",
         ),
     )
     GITHUB = (
         "github",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=True,
             display_name="GitHub",
             host_suffixes=("github.com",),
-            disconnect_fully_revokes=True,
-            scope_separator=" ",
             identity_handler_class_name="GitHubIdentityHandler",
+            scope_separator=" ",
         ),
     )
     GOOGLE = (
         "google",
         ProviderFacts(
             can_assert_domain_ownership=True,
+            disconnect_fully_revokes=True,
             display_name="Google",
             host_suffixes=("google.com", "googleapis.com"),
-            disconnect_fully_revokes=True,
-            scope_separator=" ",
             identity_handler_class_name="GoogleIdentityHandler",
+            scope_separator=" ",
         ),
     )
     HUBSPOT = (
         "hubspot",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="HubSpot",
             host_suffixes=("api.hubapi.com", "app.hubspot.com"),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="HubSpotIdentityHandler",
+            scope_separator=" ",
         ),
     )
     LINEAR = (
         "linear",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Linear",
             host_suffixes=("linear.app",),
-            disconnect_fully_revokes=False,
-            scope_separator=",",
             identity_handler_class_name="LinearIdentityHandler",
+            scope_separator=",",
         ),
     )
     MICROSOFT = (
         "microsoft",
         ProviderFacts(
             can_assert_domain_ownership=True,
+            disconnect_fully_revokes=False,
             display_name="Microsoft",
             host_suffixes=("login.microsoftonline.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="MicrosoftIdentityHandler",
+            scope_separator=" ",
         ),
     )
     NOTION = (
         "notion",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Notion",
             host_suffixes=("api.notion.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="NotionIdentityHandler",
+            scope_separator=" ",
         ),
     )
     SALESFORCE = (
         "salesforce",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Salesforce",
             host_suffixes=("salesforce.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="SalesforceIdentityHandler",
+            scope_separator=" ",
         ),
     )
     SLACK = (
         "slack",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Slack",
             host_suffixes=("slack.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=",",
             identity_handler_class_name="SlackIdentityHandler",
+            scope_separator=",",
         ),
     )
     TYPEFORM = (
         "typeform",
         ProviderFacts(
             can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
             display_name="Typeform",
             host_suffixes=("api.typeform.com",),
-            disconnect_fully_revokes=False,
-            scope_separator=" ",
             identity_handler_class_name="TypeformIdentityHandler",
+            scope_separator=" ",
         ),
     )
 
