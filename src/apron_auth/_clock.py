@@ -28,15 +28,15 @@ def pending_age_refusal(created_at: object, *, max_age: float) -> PendingAgeRefu
     A creation time exactly ``max_age`` old is current, and one exactly the allowed clock difference
     ahead of this clock is current, so each limit refuses only what lies past it.
 
+    NOTE: Callers must pass a ``max_age`` the clock can be offset by, because a wider one cannot be
+    subtracted from a clock reading.
+
     Args:
         created_at: The creation time, in epoch seconds, as it arrived.
         max_age: The age, in seconds, past which a pending authorization request is no longer current.
 
     Returns:
         The condition the creation time fails, or ``None`` when it fails none.
-
-    NOTE: Callers must pass a ``max_age`` the clock can be offset by, because a wider one cannot be
-    subtracted from a clock reading.
     """
     stamp = finite_number(created_at)
     if stamp is None:
