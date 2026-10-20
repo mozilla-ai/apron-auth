@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
-from apron_auth.client import _PENDING_AGE_REFUSALS, _check_pending_age
+from apron_auth.client import _check_pending_age
 from apron_auth.errors import StateError
 from apron_auth.models import OAuthPendingState
 from apron_auth.stores import MemoryStateStore
@@ -31,26 +31,24 @@ def _pending(created_at: object) -> OAuthPendingState:
 
 
 # Each creation time with the reason it fails, or ``None`` when it is still current.
-_CREATION_TIMES = [
-    pytest.param(_NOW, None, id="the clock reading itself"),
-    pytest.param(_NOW - _LIMIT, None, id="exactly the limit old"),
-    pytest.param(_NOW - _LIMIT + 0.001, None, id="just inside the limit"),
-    pytest.param(_NOW - _LIMIT - 0.001, PendingAgeRefusalReason.TOO_OLD, id="just past the limit"),
-    pytest.param(_NOW + CLOCK_SKEW_SECONDS, None, id="exactly the clock difference ahead"),
-    pytest.param(
-        _NOW + CLOCK_SKEW_SECONDS + 0.001,
-        PendingAgeRefusalReason.AHEAD_OF_CLOCK,
-        id="just past the clock difference",
-    ),
-    pytest.param(10**400, PendingAgeRefusalReason.AHEAD_OF_CLOCK, id="beyond the float range"),
-    pytest.param(-(10**400), PendingAgeRefusalReason.TOO_OLD, id="negatively beyond the float range"),
-    pytest.param(math.inf, PendingAgeRefusalReason.UNUSABLE, id="infinite"),
-    pytest.param(-math.inf, PendingAgeRefusalReason.UNUSABLE, id="negatively infinite"),
-    pytest.param(math.nan, PendingAgeRefusalReason.UNUSABLE, id="not a number"),
-    pytest.param(True, PendingAgeRefusalReason.UNUSABLE, id="a boolean"),
-    pytest.param("600", PendingAgeRefusalReason.UNUSABLE, id="a string"),
-    pytest.param(None, PendingAgeRefusalReason.UNUSABLE, id="absent"),
-]
+_CASES: tuple[tuple[str, object, PendingAgeRefusalReason | None], ...] = (
+    ("the clock reading itself", _NOW, None),
+    ("exactly the limit old", _NOW - _LIMIT, None),
+    ("just inside the limit", _NOW - _LIMIT + 0.001, None),
+    ("just past the limit", _NOW - _LIMIT - 0.001, PendingAgeRefusalReason.TOO_OLD),
+    ("exactly the clock difference ahead", _NOW + CLOCK_SKEW_SECONDS, None),
+    ("just past the clock difference", _NOW + CLOCK_SKEW_SECONDS + 0.001, PendingAgeRefusalReason.AHEAD_OF_CLOCK),
+    ("beyond the float range", 10**400, PendingAgeRefusalReason.AHEAD_OF_CLOCK),
+    ("negatively beyond the float range", -(10**400), PendingAgeRefusalReason.TOO_OLD),
+    ("infinite", math.inf, PendingAgeRefusalReason.UNUSABLE),
+    ("negatively infinite", -math.inf, PendingAgeRefusalReason.UNUSABLE),
+    ("not a number", math.nan, PendingAgeRefusalReason.UNUSABLE),
+    ("a boolean", True, PendingAgeRefusalReason.UNUSABLE),
+    ("a string", "600", PendingAgeRefusalReason.UNUSABLE),
+    ("absent", None, PendingAgeRefusalReason.UNUSABLE),
+)
+
+_CREATION_TIMES = [pytest.param(created_at, reason, id=name) for name, created_at, reason in _CASES]
 
 
 class TestPendingAgeRefusal:
@@ -87,5 +85,17 @@ class TestTheStoreAndTheExchangeAgree:
         assert dropped is (reason is not None)
         assert refused is (reason is not None)
 
-    def test_the_exchange_words_every_reason(self) -> None:
-        assert set(_PENDING_AGE_REFUSALS) == set(PendingAgeRefusalReason)
+    def test_every_reason_reaches_a_caller_as_its_own_refusal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A reason worded like another, or not worded at all, leaves a caller unable to tell them apart."""
+        _freeze_clock(monkeypatch)
+        wordings: dict[PendingAgeRefusalReason, str] = {}
+        for _, created_at, reason in _CASES:
+            if reason is None:
+                continue
+            with pytest.raises(StateError) as caught:
+                _check_pending_age(_pending(created_at), max_age=_LIMIT)
+            wordings[reason] = str(caught.value)
+
+        assert set(wordings) == set(PendingAgeRefusalReason)
+        assert all(wordings.values())
+        assert len(set(wordings.values())) == len(PendingAgeRefusalReason)

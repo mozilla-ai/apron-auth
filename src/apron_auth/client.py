@@ -11,7 +11,7 @@ import secrets
 import time
 from collections.abc import Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
@@ -49,13 +49,6 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
 
 logger = logging.getLogger(__name__)
-
-# How the exchange words each clock condition a pending authorization request can fail.
-_PENDING_AGE_REFUSALS = {
-    PendingAgeRefusalReason.AHEAD_OF_CLOCK: "Pending authorization request was created ahead of this clock",
-    PendingAgeRefusalReason.TOO_OLD: "Pending authorization request is older than the maximum age",
-    PendingAgeRefusalReason.UNUSABLE: "Pending authorization request carries no usable creation time",
-}
 
 # The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
 # NOTE: The exchange_code docstring states this value.
@@ -232,8 +225,18 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
             worded for the condition it fails.
     """
     refusal = pending_age_refusal(pending.created_at, max_age=max_age)
-    if refusal is not None:
-        raise StateError(_PENDING_AGE_REFUSALS[refusal])
+    match refusal:
+        case None:
+            return
+        case PendingAgeRefusalReason.AHEAD_OF_CLOCK:
+            msg = "Pending authorization request was created ahead of this clock"
+        case PendingAgeRefusalReason.TOO_OLD:
+            msg = "Pending authorization request is older than the maximum age"
+        case PendingAgeRefusalReason.UNUSABLE:
+            msg = "Pending authorization request carries no usable creation time"
+        case _:
+            assert_never(refusal)
+    raise StateError(msg)
 
 
 def _id_token_claims(id_token: object) -> dict[str, Any]:
