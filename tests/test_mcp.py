@@ -454,8 +454,8 @@ class TestDiscover:
             # Only a not-found status says the server serves no such document.
             (404, FailureKind.REJECTED, "is not published"),
             (410, FailureKind.REJECTED, "is not published"),
-            # A refusal may guard a document that exists, and a redirect this library will not follow
-            # says nothing about whether it exists.
+            # A refusal may guard a document that exists.
+            # A redirect this library will not follow says nothing about one either.
             (403, FailureKind.REJECTED, "could not be fetched"),
             (302, FailureKind.REFUSED, "could not be fetched"),
         ],
@@ -1182,8 +1182,8 @@ class TestRegisterClient:
         [
             # A malformed success body can carry client_secret while lacking client_id.
             {"client_secret": _LEAKED_SECRET},
-            # A body this library refuses for its stated method carries the issued secret too, and the
-            # refusal sits next to a ValueError that repeats the stated method.
+            # A body refused for its stated method carries the issued secret too.
+            # That refusal also sits next to a ValueError that repeats the stated method.
             {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "private_key_jwt"},
         ],
     )

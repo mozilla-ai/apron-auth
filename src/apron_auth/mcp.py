@@ -77,10 +77,10 @@ class _MetadataFault(Enum):
 
 
 class _MetadataOutcome(NamedTuple):
-    """How one candidate URL failed to yield a metadata document.
+    """Why a metadata fetch has no document, and what that says about a retry.
 
     Attributes:
-        fault: What the candidate showed.
+        fault: What a candidate URL showed.
         kind: What the fault says about a retry.
     """
 
@@ -302,8 +302,8 @@ async def register_client(
     POSTs a registration request to ``registration_url`` (an authorization server's registration endpoint) and
     returns the issued ``client_id`` plus, for a confidential client, a ``client_secret``.
     A ``token_endpoint_auth_method`` the response states is captured too when this library can perform it,
-    because it is authoritative for this client and may differ from the requested method, and is refused
-    otherwise.
+    and refused otherwise.
+    It is authoritative for this client and may differ from the requested method.
     The URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the
     request goes through ``transport_factory`` when supplied.
     An error never echoes the response body, which carries the issued secret.
@@ -523,9 +523,10 @@ def _honor_registered_auth_method(
     """Return the method the server registered for this client, if its secret agrees.
 
     The registered method (RFC 7591) is authoritative for the client, so this honors it.
-    It raises rather than yielding an internally inconsistent config when the method and the secret disagree:
-    a confidential method with no secret to send, or ``none`` paired with a secret, which a public client must
-    not carry and which would otherwise be attached to requests that present no client authentication.
+    It raises rather than yielding an internally inconsistent config when the method and the secret disagree.
+    The two disagreements are a confidential method with no secret to send, and ``none`` paired with a secret.
+    A public client must carry no secret, because the secret would be attached to requests that present no
+    client authentication.
 
     Args:
         registered: The method the server registered for this client.
@@ -773,7 +774,7 @@ async def _fetch_first_metadata(
             and the fault the candidates showed. Its ``kind`` tells a fetch that may
             pass later from one that cannot.
     """
-    # Nothing has failed yet, and this seed is not retryable, so the first candidate's outcome replaces it.
+    # The seed is not retryable, so the first candidate's outcome replaces it.
     outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
@@ -794,8 +795,8 @@ async def _fetch_first_metadata(
             if response.status_code != 200:
                 status = status_failure(response.status_code)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
-                # Any other status leaves the document's existence unknown: a refusal may guard one that
-                # exists, and a redirect this library will not follow says nothing about it.
+                # A refusal may guard a document that exists.
+                # A redirect this library will not follow says nothing about one either.
                 serves_no_document = response.status_code in _ABSENT_DOCUMENT_STATUSES
                 fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
                 outcome = _reported_outcome(outcome, _MetadataOutcome(fault, status.kind))
