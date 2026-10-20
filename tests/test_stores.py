@@ -202,7 +202,7 @@ class TestExpiryLogLine:
 
 
 class TestMaximumAgeArgument:
-    """Test that a limit no entry could exceed is refused where it is set."""
+    """Test that a limit that is not a positive finite number is refused where it is set."""
 
     @pytest.mark.parametrize(
         "max_age",
@@ -210,11 +210,13 @@ class TestMaximumAgeArgument:
             pytest.param(10**400, id="beyond the float range"),
             pytest.param(math.inf, id="infinite"),
             pytest.param(math.nan, id="not a number"),
+            pytest.param(None, id="absent"),
+            pytest.param("600", id="a string"),
             pytest.param(0.0, id="zero"),
             pytest.param(-1.0, id="negative"),
         ],
     )
-    def test_a_limit_that_expires_nothing_is_refused(self, max_age: float) -> None:
+    def test_a_limit_that_is_not_a_positive_finite_number_is_refused(self, max_age: object) -> None:
         with pytest.raises(ConfigurationError, match="positive finite number"):
             MemoryStateStore(max_age=max_age)
 
