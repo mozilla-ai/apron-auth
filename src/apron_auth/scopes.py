@@ -61,7 +61,7 @@ def parse_scope(scope: str | list[str], separator: str = " ") -> list[str]:
         entries dropped. A list ``scope`` is returned unchanged.
 
     Raises:
-        ValueError: If ``separator`` is empty and ``scope`` is a string with a scope in it.
+        ValueError: If ``separator`` is empty and ``scope`` is a string that is not blank.
     """
     if isinstance(scope, list):
         return scope
