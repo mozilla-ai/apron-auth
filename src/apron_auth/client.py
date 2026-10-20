@@ -219,6 +219,7 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     Args:
         pending: The pending authorization request to check.
         max_age: The age, in seconds, past which a pending authorization request is refused.
+            It must be a positive finite number.
 
     Raises:
         StateError: If the creation time fails any of the clock conditions for a pending request,

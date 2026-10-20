@@ -35,10 +35,8 @@ class MemoryStateStore:
     of await points — if an await is ever added to save or consume,
     an asyncio.Lock must be introduced to guard _states.
 
-    Expiry is decided against the system clock.
-    A state exactly ``max_age`` old is still current, and one past it is not.
-    A creation time that cannot be measured, or that lies further ahead of the clock
-    than the allowed difference, is expired too.
+    A state is expired when its creation time is past ``max_age``, lies further ahead of the
+    system clock than the allowed difference, or cannot be measured at all.
     """
 
     def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
