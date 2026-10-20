@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
-from apron_auth.errors import RevocationError
+from apron_auth.errors import ConfigurationError, RevocationError
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
@@ -154,13 +154,13 @@ class StandardRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         revocation_url = config.revocation_url
         if self._client is not None:
             return await self._send(self._client, token, revocation_url, config)

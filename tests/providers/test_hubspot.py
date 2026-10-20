@@ -7,7 +7,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -421,7 +421,7 @@ class TestHubSpotRevocationHandler:
             scopes=["contacts"],
         )
         handler = HubSpotRevocationHandler()
-        with pytest.raises(ValueError, match="revocation_url"):
+        with pytest.raises(ConfigurationError, match="no revocation endpoint"):
             await handler.revoke("refresh-abc", config)
 
 

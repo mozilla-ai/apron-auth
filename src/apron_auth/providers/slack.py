@@ -36,7 +36,13 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
+from apron_auth.errors import (
+    ConfigurationError,
+    FailureKind,
+    IdentityFetchError,
+    IdentityScopeNotGrantedError,
+    RevocationError,
+)
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.scopes import parse_scope
@@ -461,8 +467,8 @@ class SlackRevocationHandler:
                 The caught error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(

@@ -17,7 +17,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
-from apron_auth.errors import RevocationError
+from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
 from apron_auth.providers._identity_requests import fetch_identity_json
 
@@ -219,8 +219,8 @@ class GitHubRevocationHandler:
                 The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         revocation_url = config.revocation_url
         if self._client is not None:
             return await self._send(self._client, token, revocation_url, config)
