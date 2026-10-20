@@ -503,6 +503,17 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    def test_a_token_set_refusal_repeats_no_token(self) -> None:
+        token = "THE_" + "REAL_TOKEN"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            TokenSet.model_validate({"access_token": token, "expires_in": "not-a-number"})
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert token not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
     def test_a_pending_state_refusal_repeats_no_secret(self) -> None:
         verifier = "THE_" + "REAL_VERIFIER"
 
