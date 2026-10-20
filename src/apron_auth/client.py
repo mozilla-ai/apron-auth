@@ -16,7 +16,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
 
-from apron_auth._clock import CLOCK_SKEW_SECONDS
+from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
@@ -49,6 +49,13 @@ if TYPE_CHECKING:
     from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore, TransportFactory
 
 logger = logging.getLogger(__name__)
+
+# How the exchange words each clock condition a pending authorization request can fail.
+_PENDING_AGE_REFUSALS = {
+    PendingAgeRefusalReason.AHEAD_OF_CLOCK: "Pending authorization request was created ahead of this clock",
+    PendingAgeRefusalReason.TOO_OLD: "Pending authorization request is older than the maximum age",
+    PendingAgeRefusalReason.UNUSABLE: "Pending authorization request carries no usable creation time",
+}
 
 # The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
 # NOTE: The exchange_code docstring states this value.
@@ -221,21 +228,12 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
         max_age: The age, in seconds, past which a pending authorization request is refused.
 
     Raises:
-        StateError: If the creation time is not a finite number, lies further ahead of the system clock
-            than the allowed clock difference, or is older than ``max_age``.
+        StateError: If the creation time fails any of the clock conditions for a pending request,
+            worded for the condition it fails.
     """
-    created_at = finite_number(pending.created_at)
-    if created_at is None:
-        msg = "Pending authorization request carries no usable creation time"
-        raise StateError(msg)
-    now = time.time()
-    # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
-    if created_at > now + CLOCK_SKEW_SECONDS:
-        msg = "Pending authorization request was created ahead of this clock"
-        raise StateError(msg)
-    if created_at < now - max_age:
-        msg = "Pending authorization request is older than the maximum age"
-        raise StateError(msg)
+    refusal = pending_age_refusal(pending.created_at, max_age=max_age)
+    if refusal is not None:
+        raise StateError(_PENDING_AGE_REFUSALS[refusal])
 
 
 def _id_token_claims(id_token: object) -> dict[str, Any]:

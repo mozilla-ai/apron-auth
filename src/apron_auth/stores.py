@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import logging
 import sys
-import time
 from typing import TYPE_CHECKING
 
-from apron_auth._clock import CLOCK_SKEW_SECONDS
+from apron_auth._clock import pending_age_refusal
 from apron_auth._numbers import finite_number
 from apron_auth.errors import ConfigurationError
 
@@ -41,8 +40,7 @@ class MemoryStateStore:
     of await points — if an await is ever added to save or consume,
     an asyncio.Lock must be introduced to guard _states.
 
-    Expiry is based on wall-clock time (time.time) to match
-    OAuthPendingState.created_at, which stores epoch seconds.
+    Expiry is decided against the system clock.
     A state exactly ``max_age`` old is still current, and one past it is not.
     """
 
@@ -93,22 +91,13 @@ class MemoryStateStore:
     def _is_expired(self, state: OAuthPendingState) -> bool:
         """Report whether ``state`` is no longer current against the system clock.
 
-        A creation time further ahead of the clock than the allowed clock difference is not current either,
-        because no nearby clock produced it.
-
         Args:
             state: The pending state to test.
 
         Returns:
-            ``True`` when the creation time is not a finite number,
-            lies further ahead of the clock than the allowed clock difference,
-            or is older than this store's maximum age.
+            ``True`` when the creation time fails any of the clock conditions for a pending request.
         """
-        created_at = finite_number(state.created_at)
-        if created_at is None:
-            return True
-        now = time.time()
-        return created_at > now + CLOCK_SKEW_SECONDS or created_at < now - self._max_age
+        return pending_age_refusal(state.created_at, max_age=self._max_age) is not None
 
     def _prune(self) -> None:
         """Drop every stored state that has expired."""

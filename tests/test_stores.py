@@ -15,11 +15,11 @@ from apron_auth.stores import MemoryStateStore
 
 
 def _freeze_store_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
-    """Pin the clock the store reads to ``now``.
+    """Pin the clock the expiry rule reads to ``now``.
 
-    NOTE: The stub exposes only ``time.time``, so any other clock the store reads raises in the test.
+    NOTE: The stub exposes only ``time.time``, so any other clock the rule reads raises in the test.
     """
-    monkeypatch.setattr("apron_auth.stores.time", SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr("apron_auth._clock.time", SimpleNamespace(time=lambda: now))
 
 
 def _make_pending(state: str = "test-state", age: float = 0.0) -> OAuthPendingState:
