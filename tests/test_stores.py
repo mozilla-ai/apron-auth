@@ -163,9 +163,10 @@ class TestCreationTimeThatCannotBeMeasured:
 
 
 class TestExpiryLogLine:
-    """Test that dropping an entry reports why without interpolating anything into the line."""
+    """Test that dropping an entry reports why without carrying any value from the entry."""
 
     async def test_the_line_carries_no_value_at_all(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The whole line is asserted, because a value can reach it however the message is built."""
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(state="s3cr3t-state-key-value", age=301.0)
         await store.save(pending)
@@ -173,10 +174,9 @@ class TestExpiryLogLine:
         with caplog.at_level(logging.DEBUG, logger="apron_auth.stores"):
             assert await store.consume(pending.state) is None
 
-        assert caplog.records
-        for record in caplog.records:
-            assert not record.args
-        assert pending.state not in caplog.text
+        assert [record.getMessage() for record in caplog.records] == [
+            "Dropped a pending authorization request that is no longer current"
+        ]
 
 
 class TestMaximumAgeArgument:
