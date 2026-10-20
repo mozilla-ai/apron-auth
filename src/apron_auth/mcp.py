@@ -381,13 +381,15 @@ async def register_client(
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = data.get("client_secret")
     stated_method = data.get("token_endpoint_auth_method")
-    registered_method = _stated_auth_method(stated_method)
-    if stated_method is not None and registered_method is None:
-        msg = (
-            "client registration states a client authentication method this library cannot perform, "
-            "so the issued credentials were discarded"
-        )
-        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    registered_method = None
+    if stated_method is not None:
+        registered_method = _stated_auth_method(stated_method)
+        if registered_method is None:
+            msg = (
+                "client registration states a client authentication method this library cannot perform, "
+                "so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     return ClientRegistration(
         client_id=client_id,
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
@@ -451,7 +453,7 @@ def cimd_client_id(url: str) -> str:
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
-    """Return the token-endpoint auth method a document states, or None when it is not one this library performs."""
+    """Return the token-endpoint auth method a value names, or None when this library performs no such method."""
     try:
         return TokenEndpointAuthMethod(value)
     except ValueError:
