@@ -96,8 +96,8 @@ class SalesforceIdentityHandler:
         if not matches_suffix(host, Provider.SALESFORCE.host_suffixes):
             msg = (
                 f"Salesforce identity fetch refused: authorize_url host {host!r} is not a "
-                f"Salesforce host. The bearer token would otherwise be sent to a non-Salesforce "
-                f"endpoint derived from a mismatched ProviderConfig."
+                f"Salesforce host. The bearer token would otherwise be sent to an endpoint that is "
+                f"not Salesforce's."
             )
             raise IdentityFetchError(msg, kind=FailureKind.CONFIGURATION)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"

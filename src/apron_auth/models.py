@@ -57,8 +57,7 @@ class ProviderFacts:
             authenticated user belongs to the email's domain, such as Google Workspace's ``hd`` claim.
             :attr:`ProviderConfig.can_assert_domain_ownership` describes what a consumer does with it.
         disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
-            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
-            provider's module docstring records how the value was verified.
+            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences.
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
             They decide whether a config that names the provider may use its identity handler, so
@@ -84,8 +83,8 @@ class Provider(StrEnum):
     """The OAuth providers this library knows by name, each with the facts that differ between them.
 
     A member's value is its module name under ``apron_auth.providers``, and a member is declared as
-    ``(value, facts)``. Each fact is read through the property of its own name, and no property can be
-    assigned, because the facts decide where an access token may be sent.
+    ``(value, facts)``. Each fact is read through the property of its own name, and nothing supported
+    changes a member's facts, because they decide where an access token may be sent.
     """
 
     _facts: ProviderFacts
@@ -275,8 +274,8 @@ class ScopeMetadata(BaseModel, frozen=True):
 class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
-    A field this model does not define is refused, so a renamed or mistyped one cannot be dropped
-    silently and leave the config weaker than the caller asked for.
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and leave the config weaker than the caller asked for.
 
     Attributes:
         extra_params: Fixed parameters added to every authorization request.
