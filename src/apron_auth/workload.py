@@ -208,7 +208,9 @@ class WorkloadTokenVerifier:
             try:
                 document = await fetch_document(self._document_url, self._transport_factory)
                 require_openid_issuer(document, self._issuer)
-                jwks_url = optional_url(document, "jwks_uri", "signing key set", self._allow_insecure_http)
+                jwks_url = optional_url(
+                    document, "jwks_uri", "signing key set", self._allow_insecure_http, caller_supplied=False
+                )
                 if jwks_url is None:
                     msg = "OpenID provider configuration names no signing key set"
                     raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)

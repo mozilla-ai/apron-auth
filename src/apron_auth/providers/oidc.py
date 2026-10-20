@@ -124,7 +124,7 @@ def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
         OidcDiscoveryError: If ``issuer`` is not a parseable absolute URL or has a query, fragment or userinfo.
             It is also raised if ``issuer`` is not ``https`` and ``allow_insecure_http`` is unset.
     """
-    require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+    require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True, caller_supplied=True)
     return get_well_known_url(issuer, external=True)
 
 
@@ -174,16 +174,26 @@ async def discover(
     if authorize_url is None or token_url is None:
         msg = "OpenID provider configuration is missing an endpoint"
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
-    authorize_url = require_url(authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
-    token_url = require_url(token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
-    jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
+    authorize_url = require_url(
+        authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http, caller_supplied=False
+    )
+    token_url = require_url(
+        token_url, field="token endpoint", allow_insecure_http=allow_insecure_http, caller_supplied=False
+    )
+    jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http, caller_supplied=False)
     if jwks_url is None:
         msg = "OpenID provider configuration names no signing key set"
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
 
-    userinfo_url = optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
-    revocation_url = optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
-    registration_url = optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
+    userinfo_url = optional_url(
+        document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http, caller_supplied=False
+    )
+    revocation_url = optional_url(
+        document, "revocation_endpoint", "revocation endpoint", allow_insecure_http, caller_supplied=False
+    )
+    registration_url = optional_url(
+        document, "registration_endpoint", "registration endpoint", allow_insecure_http, caller_supplied=False
+    )
 
     return ServerMetadata(
         authorize_url=authorize_url,
@@ -404,10 +414,19 @@ class OidcIdentityHandler:
                 that :func:`discover` would refuse.
         """
         try:
-            require_url(issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
+            require_url(
+                issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True, caller_supplied=True
+            )
             if userinfo_url is not None:
-                require_url(userinfo_url, field="userinfo endpoint", allow_insecure_http=allow_insecure_http)
-            require_url(jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http)
+                require_url(
+                    userinfo_url,
+                    field="userinfo endpoint",
+                    allow_insecure_http=allow_insecure_http,
+                    caller_supplied=True,
+                )
+            require_url(
+                jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http, caller_supplied=True
+            )
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
@@ -819,9 +838,18 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     Raises:
         OidcDiscoveryError: If any URL is not acceptable.
     """
-    require_url(metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True)
-    require_url(metadata.authorize_url, field="authorization endpoint", allow_insecure_http=allow_insecure_http)
-    require_url(metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http)
+    require_url(
+        metadata.issuer, field="issuer", allow_insecure_http=allow_insecure_http, is_issuer=True, caller_supplied=True
+    )
+    require_url(
+        metadata.authorize_url,
+        field="authorization endpoint",
+        allow_insecure_http=allow_insecure_http,
+        caller_supplied=True,
+    )
+    require_url(
+        metadata.token_url, field="token endpoint", allow_insecure_http=allow_insecure_http, caller_supplied=True
+    )
     optional_urls = (
         ("registration endpoint", metadata.registration_url),
         ("revocation endpoint", metadata.revocation_url),
@@ -830,7 +858,7 @@ def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: boo
     )
     for field, url in optional_urls:
         if url is not None:
-            require_url(url, field=field, allow_insecure_http=allow_insecure_http)
+            require_url(url, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=True)
 
 
 __all__ = [

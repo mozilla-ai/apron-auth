@@ -26,7 +26,7 @@ logger = logging.getLogger("apron_auth.providers.oidc")
 
 
 def require_url(
-    value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False, caller_supplied: bool = False
+    value: Any, *, field: str, allow_insecure_http: bool, caller_supplied: bool, is_issuer: bool = False
 ) -> str:
     """Require ``value`` to be an absolute URL apron-auth may talk to.
 
@@ -39,8 +39,9 @@ def require_url(
         value: The raw value to check.
         field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules. An issuer is always caller-supplied.
+        is_issuer: Apply the stricter issuer rules, which forbid a query and userinfo.
         caller_supplied: The value is an argument of this library's caller, not a member of a fetched document.
+            It has no default, so a call site cannot leave the source for this rule to guess.
 
     Returns:
         ``value``, once it passes.
@@ -48,8 +49,8 @@ def require_url(
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
-    # A caller's own URL is a configuration fault. A URL from the provider's document is refused.
-    kind = FailureKind.CONFIGURATION if is_issuer or caller_supplied else FailureKind.REFUSED
+    # The source decides the class: a caller's own URL is a configuration fault, a provider's is refused.
+    kind = FailureKind.CONFIGURATION if caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
         raise OidcDiscoveryError(msg, kind=kind)
@@ -108,7 +109,9 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
-def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
+def optional_url(
+    document: dict[str, Any], key: str, field: str, allow_insecure_http: bool, *, caller_supplied: bool
+) -> str | None:
     """Validate an optional endpoint when the document names one.
 
     Args:
@@ -116,6 +119,7 @@ def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_
         key: The document member to read.
         field: What the endpoint is, for errors.
         allow_insecure_http: Passed through to :func:`require_url`.
+        caller_supplied: Passed through to :func:`require_url`, which takes no default for it.
 
     Returns:
         The endpoint, or ``None`` when the document omits it or gives an empty string.
@@ -126,7 +130,7 @@ def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_
     value = document.get(key)
     if value is None or value == "":
         return None
-    return require_url(value, field=field, allow_insecure_http=allow_insecure_http)
+    return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=caller_supplied)
 
 
 async def fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
