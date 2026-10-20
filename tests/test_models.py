@@ -14,6 +14,8 @@ from apron_auth import providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
+    ApplicationType,
+    ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
@@ -22,8 +24,46 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
+    TokenEndpointAuthMethod,
     TokenSet,
 )
+
+
+class TestApplicationType:
+    def test_members_are_in_alphabetical_order(self) -> None:
+        names = [member.name for member in ApplicationType]
+        assert names == sorted(names)
+
+    def test_values_are_the_registered_names(self) -> None:
+        assert [member.value for member in ApplicationType] == ["native", "web"]
+
+
+class TestTokenEndpointAuthMethod:
+    def test_members_are_in_alphabetical_order(self) -> None:
+        names = [member.name for member in TokenEndpointAuthMethod]
+        assert names == sorted(names)
+
+    def test_values_are_the_registered_names(self) -> None:
+        assert [member.value for member in TokenEndpointAuthMethod] == [
+            "client_secret_basic",
+            "client_secret_post",
+            "none",
+        ]
+
+    def test_a_method_this_library_cannot_perform_is_not_a_member(self) -> None:
+        with pytest.raises(ValueError, match="private_key_jwt"):
+            TokenEndpointAuthMethod("private_key_jwt")
+
+
+class TestClientRegistration:
+    def test_a_method_this_library_cannot_perform_is_refused(self) -> None:
+        """The registration's method is read off a server document, so it is validated into the type."""
+        with pytest.raises(ValidationError):
+            ClientRegistration(client_id="c", token_endpoint_auth_method="private_key_jwt")
+
+    def test_a_registered_method_is_the_enum_member(self) -> None:
+        registration = ClientRegistration(client_id="c", token_endpoint_auth_method="none")
+        assert registration.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
 
 
 class TestProviderConfig:
@@ -172,6 +212,17 @@ class TestProviderConfig:
                 build()
         else:
             build()
+
+    def test_an_auth_method_this_library_cannot_perform_is_refused(self) -> None:
+        """A method outside the closed set would be sent to the token endpoint and rejected there."""
+        with pytest.raises(ValidationError):
+            ProviderConfig(
+                client_id="c",
+                client_secret=SecretStr("s"),
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                token_endpoint_auth_method="private_key_jwt",
+            )
 
     def test_full_config(self) -> None:
         config = ProviderConfig(

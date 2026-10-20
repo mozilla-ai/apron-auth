@@ -9,6 +9,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth import mcp
 from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
@@ -129,13 +130,6 @@ class TestToProviderConfig:
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
 
-    def test_registered_unsupported_method_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
-            to_provider_config(
-                self._meta(),
-                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="private_key_jwt"),
-            )
-
     def test_registered_confidential_method_without_secret_raises(self) -> None:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
@@ -150,13 +144,6 @@ class TestToProviderConfig:
             to_provider_config(
                 self._meta(),
                 ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="none"),
-            )
-
-    def test_registered_empty_string_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
-            to_provider_config(
-                self._meta(),
-                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method=""),
             )
 
     def test_absent_registered_method_falls_back_to_derivation(self) -> None:
@@ -359,47 +346,45 @@ class TestSelectAuthMethod:
 
     def test_registered_method_wins_over_advertised(self) -> None:
         # The advertised set would derive post; the registered method wins.
-        method = _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="client_secret_basic")
+        method = _select_auth_method(
+            SecretStr("s"), ["client_secret_post"], registered=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+        )
         assert method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
-
-    def test_empty_registered_string_is_validated_not_ignored(self) -> None:
-        # An empty string is "provided" and rejected, not silently derived from
-        # the advertised set — a malformed registration must not be masked.
-        with pytest.raises(McpDiscoveryError):
-            _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="")
 
 
 class TestHonorRegisteredAuthMethod:
     @pytest.mark.parametrize(
-        ("registered", "secret", "expected"),
+        ("registered", "secret"),
         [
-            ("none", None, TokenEndpointAuthMethod.NONE),
-            ("client_secret_post", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_POST),
-            ("client_secret_basic", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
+            (TokenEndpointAuthMethod.NONE, None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s")),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, SecretStr("s")),
         ],
     )
-    def test_returns_performable_method(self, registered: str, secret: SecretStr | None, expected: str) -> None:
-        assert _honor_registered_auth_method(registered, secret) == expected
+    def test_returns_performable_method(self, registered: TokenEndpointAuthMethod, secret: SecretStr | None) -> None:
+        assert _honor_registered_auth_method(registered, secret) is registered
 
     @pytest.mark.parametrize(
         ("registered", "secret"),
         [
-            # A method this library cannot perform, regardless of secret state.
-            ("private_key_jwt", SecretStr("s")),
-            ("tls_client_auth", None),
             # A confidential method with no secret to send it.
-            ("client_secret_post", None),
-            ("client_secret_basic", None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, None),
             # A public client (none) must not carry a secret.
-            ("none", SecretStr("s")),
-            # An empty/invalid method string is validated, not ignored.
-            ("", SecretStr("s")),
-            ("", None),
+            (TokenEndpointAuthMethod.NONE, SecretStr("s")),
         ],
     )
-    def test_raises_when_unperformable(self, registered: str, secret: SecretStr | None) -> None:
+    def test_raises_when_the_secret_disagrees(
+        self, registered: TokenEndpointAuthMethod, secret: SecretStr | None
+    ) -> None:
         with pytest.raises(McpDiscoveryError):
             _honor_registered_auth_method(registered, secret)
+
+    def test_raises_for_a_method_outside_the_performable_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The performable set gates what is honored, so a method it omits is refused rather than configured."""
+        monkeypatch.setattr(mcp, "CONFIDENTIAL_AUTH_METHODS", ())
+        with pytest.raises(McpDiscoveryError, match="unsupported"):
+            _honor_registered_auth_method(TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s"))
 
 
 class TestDiscover:
@@ -1125,6 +1110,29 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.token_endpoint_auth_method is None
 
+    @pytest.mark.parametrize("stated", ["private_key_jwt", "", 7])
+    async def test_stated_method_this_library_cannot_perform_raises(
+        self, httpx_mock: HTTPXMock, stated: object
+    ) -> None:
+        """The response states the method, so it is refused where the response is read, not at config time."""
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "token_endpoint_auth_method": stated},
+        )
+        with pytest.raises(McpRegistrationError, match="authentication method") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_stated_method_is_the_enum_member(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "token_endpoint_auth_method": "none"},
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
+
     async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
         with pytest.raises(McpRegistrationError):
@@ -1216,7 +1224,7 @@ class TestRegisterClient:
 
     @pytest.mark.parametrize("application_type", [ApplicationType.WEB, ApplicationType.NATIVE])
     async def test_explicit_application_type_included_in_payload(
-        self, httpx_mock: HTTPXMock, application_type: str
+        self, httpx_mock: HTTPXMock, application_type: ApplicationType
     ) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
         await register_client(_REGISTER_URL, _REDIRECT_URI, application_type=application_type)
@@ -1276,10 +1284,6 @@ class TestRegisterClient:
         request = httpx_mock.get_request()
         assert request is not None
         assert json.loads(request.content)["application_type"] == "web"
-
-    async def test_invalid_application_type_rejected_locally(self) -> None:
-        with pytest.raises(ValueError, match="application_type"):
-            await register_client(_REGISTER_URL, _REDIRECT_URI, application_type="desktop")
 
 
 class TestCimdClientId:

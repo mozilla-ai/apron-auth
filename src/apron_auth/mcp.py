@@ -267,7 +267,7 @@ async def register_client(
     redirect_uri: str,
     *,
     client_name: str = "apron-auth",
-    application_type: str | None = None,
+    application_type: ApplicationType | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
 ) -> ClientRegistration:
@@ -286,11 +286,10 @@ async def register_client(
         registration_url: The authorization server's registration endpoint.
         redirect_uri: Redirect URI to register for the authorization flow.
         client_name: Human-readable client name sent in the request.
-        application_type: The application_type to register
-            (``ApplicationType.WEB`` or ``ApplicationType.NATIVE``). When
-            omitted, ``native`` is inferred from a loopback ``redirect_uri``
-            and otherwise left unset. Registering ``native`` lets servers that
-            gate ``localhost`` redirects on it accept the registration.
+        application_type: The application type to register. When omitted,
+            ``native`` is inferred from a loopback ``redirect_uri`` and
+            otherwise left unset. Registering ``native`` lets servers that gate
+            ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
         transport_factory: Optional factory controlling the outbound connection.
 
@@ -303,15 +302,12 @@ async def register_client(
     Raises:
         ConfigurationError: If ``registration_url`` is rejected.
         McpRegistrationError: If the request fails in transit, the endpoint returns
-            a non-success status, or its response is not a JSON object with a usable
-            ``client_id``.
+            a non-success status, its response is not a JSON object with a usable
+            ``client_id``, or the response states a token-endpoint authentication
+            method this library cannot perform.
         OAuthError: As raised by ``url_validator``, unchanged.
-        ValueError: If ``application_type`` is neither ``web`` nor ``native``.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
-    if application_type not in (None, ApplicationType.WEB, ApplicationType.NATIVE):
-        msg = "application_type must be 'web' or 'native'"
-        raise ValueError(msg)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -356,11 +352,15 @@ async def register_client(
         msg = "client registration response is missing client_id"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = data.get("client_secret")
-    auth_method = data.get("token_endpoint_auth_method")
+    stated_method = data.get("token_endpoint_auth_method")
+    registered_method = _stated_auth_method(stated_method)
+    if stated_method is not None and registered_method is None:
+        msg = "client registration states an unsupported client authentication method"
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     return ClientRegistration(
         client_id=client_id,
         client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
-        token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else None,
+        token_endpoint_auth_method=registered_method,
     )
 
 
@@ -419,7 +419,14 @@ def cimd_client_id(url: str) -> str:
     return url
 
 
-def _select_auth_method(secret: SecretStr | None, advertised: list[str], registered: str | None = None) -> str:
+def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
+    """Return the token-endpoint auth method a document states, or None when it names none this library performs."""
+    return next((method for method in TokenEndpointAuthMethod if method == value), None)
+
+
+def _select_auth_method(
+    secret: SecretStr | None, advertised: list[str], registered: TokenEndpointAuthMethod | None = None
+) -> TokenEndpointAuthMethod:
     """Choose the token-endpoint authentication method for a discovered server.
 
     A ``registered`` method is authoritative and takes precedence: it is the
@@ -442,8 +449,7 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
         secret: The client secret, or None for a public client.
         advertised: The server's advertised token-endpoint auth methods.
         registered: The method the server registered for this client, or None
-            when unknown. Any non-None value — including an empty string — is
-            treated as an asserted method and validated, not silently ignored.
+            when the registration states none.
 
     Returns:
         A token-endpoint authentication method.
@@ -476,7 +482,9 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
     raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
-def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> str:
+def _honor_registered_auth_method(
+    registered: TokenEndpointAuthMethod, secret: SecretStr | None
+) -> TokenEndpointAuthMethod:
     """Return the method the server registered for this client, if performable.
 
     The registered method (RFC 7591) is authoritative for the client, so this
@@ -499,7 +507,7 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
         McpDiscoveryError: If the method disagrees with the secret's presence, or
             this library cannot perform it.
     """
-    if registered == TokenEndpointAuthMethod.NONE:
+    if registered is TokenEndpointAuthMethod.NONE:
         if secret is not None:
             msg = "MCP server registered a public client (none) but issued a client secret"
             raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
@@ -575,7 +583,7 @@ def _is_localhost_name(host: str) -> bool:
     return host == "localhost" or host.endswith(".localhost")
 
 
-def _infer_application_type(redirect_uri: str) -> str | None:
+def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     """Return ``native`` for a loopback redirect URI, else ``None``.
 
     A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252

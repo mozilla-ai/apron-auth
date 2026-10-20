@@ -632,7 +632,7 @@ The config that `to_provider_config` returns names no built-in provider and allo
 
 A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
-Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `TokenEndpointAuthMethod.NONE`.
 
 When using CIMD, you host the `client-metadata.json` yourself at the `client_id` URL — apron-auth is stateless and does not host it. The document must include `client_id`, `client_name`, and `redirect_uris`. Its `client_id` must equal that URL, and its `redirect_uris` must include the redirect you use in the flow; the authorization server fetches and validates the document. `mcp.cimd_client_id(url)` checks the URL is a well-formed CIMD identifier (`https` scheme, a document path, no userinfo or fragment) and raises `ConfigurationError` when it is not; it does not fetch the URL.
 
@@ -640,7 +640,7 @@ Unlike DCR or pre-registered credentials — which are bound to the authorizatio
 
 `discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 
-A `token_endpoint_auth_method` on the registration lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration that states none, as one you build for identifiers you hold already does, derives the method from the client's secret and the server's advertised set.
+The registration's `token_endpoint_auth_method` is a `TokenEndpointAuthMethod` validated out of the registration response. It lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration you build yourself states no method, so the method is derived from the client's secret and the server's advertised set.
 
 ### SSRF safety
 
@@ -771,6 +771,8 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
 - `mcp.discover`, `mcp.register_client` and `mcp.cimd_client_id` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, the registration endpoint, or the CIMD client identifier — including one the HTTP client cannot send. `mcp.cimd_client_id` raised `ValueError` before. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `TokenEndpointAuthMethod` and `ApplicationType` are `StrEnum`s, and `ProviderConfig`, `ClientRegistration` and `mcp.register_client` take the members. A member equals its wire value, so a `"client_secret_basic"` or `"native"` string still works, but a value outside the set is refused where the model or the registration response is read instead of at the token request.
+- `mcp.register_client` refuses a registration response that states a token-endpoint auth method this library cannot perform. It returned the method for `mcp.to_provider_config` to refuse before.
 - `mcp.to_provider_config` takes a `ClientRegistration` as its second argument, in place of the `client_id`, `client_secret` and `registered_auth_method` keywords. Pass what `mcp.register_client` returned, or build `ClientRegistration(client_id=...)` for an identifier you hold already.
 - `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.

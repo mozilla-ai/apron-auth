@@ -37,19 +37,27 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
 )
 
 
-class TokenEndpointAuthMethod:
-    """RFC 7591/8414 token_endpoint_auth_method values."""
+@unique
+class TokenEndpointAuthMethod(StrEnum):
+    """Each member is one token-endpoint authentication method this library can perform.
 
-    CLIENT_SECRET_POST = "client_secret_post"  # pragma: allowlist secret
+    A member's value is the method's registered name (RFC 7591/8414), which is what goes on the wire.
+    """
+
     CLIENT_SECRET_BASIC = "client_secret_basic"  # pragma: allowlist secret
+    CLIENT_SECRET_POST = "client_secret_post"  # pragma: allowlist secret
     NONE = "none"
 
 
-class ApplicationType:
-    """RFC 7591/OpenID Connect application_type values."""
+@unique
+class ApplicationType(StrEnum):
+    """Each member is one client application type a registration request can declare.
 
-    WEB = "web"
+    A member's value is the type's registered name (RFC 7591/OpenID Connect Dynamic Client Registration 1.0).
+    """
+
     NATIVE = "native"
+    WEB = "web"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -396,7 +404,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     scopes: list[str] = []
     scope_separator: str = " "
     use_pkce: bool = True
-    token_endpoint_auth_method: str = TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    token_endpoint_auth_method: TokenEndpointAuthMethod = TokenEndpointAuthMethod.CLIENT_SECRET_POST
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
@@ -698,7 +706,7 @@ class ClientRegistration(BaseModel, frozen=True):
 
     client_id: str
     client_secret: SecretStr | None = None
-    token_endpoint_auth_method: str | None = None
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
 
 class TokenSet(BaseModel, frozen=True):
