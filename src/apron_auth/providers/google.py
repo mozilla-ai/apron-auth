@@ -193,6 +193,5 @@ def preset(
         scopes=merged_scopes,
         extra_params=defaults,
         scope_metadata=BASE_SCOPE_METADATA,
-        can_assert_domain_ownership=True,
     )
     return config, GoogleRevocationHandler()

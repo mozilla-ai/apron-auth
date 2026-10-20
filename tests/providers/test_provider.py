@@ -45,6 +45,7 @@ MODULES: dict[Provider, ModuleType] = {
 # The known-good facts per provider, pinned independently of the enum.
 MODULE_FACTS: dict[Provider, ProviderFacts] = {
     Provider.ATLASSIAN: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Atlassian",
         host_suffixes=("auth.atlassian.com",),
         disconnect_fully_revokes=False,
@@ -52,6 +53,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="AtlassianIdentityHandler",
     ),
     Provider.GITHUB: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="GitHub",
         host_suffixes=("github.com",),
         disconnect_fully_revokes=True,
@@ -59,6 +61,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="GitHubIdentityHandler",
     ),
     Provider.GOOGLE: ProviderFacts(
+        can_assert_domain_ownership=True,
         display_name="Google",
         host_suffixes=("google.com", "googleapis.com"),
         disconnect_fully_revokes=True,
@@ -66,6 +69,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="GoogleIdentityHandler",
     ),
     Provider.HUBSPOT: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="HubSpot",
         host_suffixes=("api.hubapi.com", "app.hubspot.com"),
         disconnect_fully_revokes=False,
@@ -73,6 +77,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="HubSpotIdentityHandler",
     ),
     Provider.LINEAR: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Linear",
         host_suffixes=("linear.app",),
         disconnect_fully_revokes=False,
@@ -80,6 +85,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="LinearIdentityHandler",
     ),
     Provider.MICROSOFT: ProviderFacts(
+        can_assert_domain_ownership=True,
         display_name="Microsoft",
         host_suffixes=("login.microsoftonline.com",),
         disconnect_fully_revokes=False,
@@ -87,6 +93,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="MicrosoftIdentityHandler",
     ),
     Provider.NOTION: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Notion",
         host_suffixes=("api.notion.com",),
         disconnect_fully_revokes=False,
@@ -94,6 +101,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="NotionIdentityHandler",
     ),
     Provider.SALESFORCE: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Salesforce",
         host_suffixes=("salesforce.com",),
         disconnect_fully_revokes=False,
@@ -101,6 +109,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="SalesforceIdentityHandler",
     ),
     Provider.SLACK: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Slack",
         host_suffixes=("slack.com",),
         disconnect_fully_revokes=False,
@@ -108,6 +117,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         identity_handler_class_name="SlackIdentityHandler",
     ),
     Provider.TYPEFORM: ProviderFacts(
+        can_assert_domain_ownership=False,
         display_name="Typeform",
         host_suffixes=("api.typeform.com",),
         disconnect_fully_revokes=False,
@@ -199,12 +209,20 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
     assert provider.disconnect_fully_revokes is pinned.disconnect_fully_revokes
     assert provider.scope_separator == pinned.scope_separator
     assert provider.identity_handler_class_name == pinned.identity_handler_class_name
+    assert provider.can_assert_domain_ownership is pinned.can_assert_domain_ownership
 
 
 @pytest.mark.parametrize("provider", list(Provider))
 @pytest.mark.parametrize(
     "fact",
-    ["disconnect_fully_revokes", "display_name", "host_suffixes", "identity_handler_class_name", "scope_separator"],
+    [
+        "can_assert_domain_ownership",
+        "disconnect_fully_revokes",
+        "display_name",
+        "host_suffixes",
+        "identity_handler_class_name",
+        "scope_separator",
+    ],
 )
 def test_a_members_fact_cannot_be_assigned(provider: Provider, fact: str) -> None:
     """A member's facts decide where an access token may be sent, so no caller may change one."""
@@ -238,6 +256,7 @@ def test_a_preset_config_resolves_the_member_handler(provider: Provider) -> None
 @pytest.mark.parametrize("provider", list(Provider))
 def test_preset_config_carries_the_member_data(provider: Provider) -> None:
     config = _preset_config(MODULES[provider])
+    assert config.can_assert_domain_ownership is provider.can_assert_domain_ownership
     assert config.disconnect_fully_revokes is provider.disconnect_fully_revokes
     assert config.scope_separator == provider.scope_separator
 
@@ -263,10 +282,16 @@ def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> N
 @pytest.mark.parametrize("provider", list(Provider))
 def test_preset_follows_a_changed_member_fact(provider: Provider, vary_facts: Callable[..., None]) -> None:
     # Varying the facts proves the preset reads each one from the member rather than repeating the value.
-    vary_facts(provider, disconnect_fully_revokes=not provider.disconnect_fully_revokes, scope_separator="|")
+    vary_facts(
+        provider,
+        can_assert_domain_ownership=not provider.can_assert_domain_ownership,
+        disconnect_fully_revokes=not provider.disconnect_fully_revokes,
+        scope_separator="|",
+    )
 
     config = _preset_config(MODULES[provider])
 
+    assert config.can_assert_domain_ownership is provider.can_assert_domain_ownership
     assert config.disconnect_fully_revokes is provider.disconnect_fully_revokes
     assert config.scope_separator == provider.scope_separator
 

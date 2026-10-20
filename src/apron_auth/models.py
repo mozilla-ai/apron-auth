@@ -53,6 +53,9 @@ class ProviderFacts:
     """The facts that differ between the providers this library knows by name.
 
     Attributes:
+        can_assert_domain_ownership: Whether the provider's tokens can carry a tenancy that asserts the
+            authenticated user belongs to the email's domain, such as Google Workspace's ``hd`` claim.
+            :attr:`ProviderConfig.can_assert_domain_ownership` describes what a consumer does with it.
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
             They decide whether a config that names the provider may use its identity handler, so
@@ -68,6 +71,7 @@ class ProviderFacts:
             A member names it rather than holding it, because every provider module imports this one.
     """
 
+    can_assert_domain_ownership: bool
     display_name: str
     host_suffixes: tuple[str, ...]
     disconnect_fully_revokes: bool
@@ -92,6 +96,11 @@ class Provider(StrEnum):
         member._value_ = value
         member._facts = facts
         return member
+
+    @property
+    def can_assert_domain_ownership(self) -> bool:
+        """Whether the provider's tokens can carry a tenancy that asserts ownership of an email's domain."""
+        return self._facts.can_assert_domain_ownership
 
     @property
     def display_name(self) -> str:
@@ -121,6 +130,7 @@ class Provider(StrEnum):
     ATLASSIAN = (
         "atlassian",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Atlassian",
             host_suffixes=("auth.atlassian.com",),
             disconnect_fully_revokes=False,
@@ -131,6 +141,7 @@ class Provider(StrEnum):
     GITHUB = (
         "github",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="GitHub",
             host_suffixes=("github.com",),
             disconnect_fully_revokes=True,
@@ -141,6 +152,7 @@ class Provider(StrEnum):
     GOOGLE = (
         "google",
         ProviderFacts(
+            can_assert_domain_ownership=True,
             display_name="Google",
             host_suffixes=("google.com", "googleapis.com"),
             disconnect_fully_revokes=True,
@@ -151,6 +163,7 @@ class Provider(StrEnum):
     HUBSPOT = (
         "hubspot",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="HubSpot",
             host_suffixes=("api.hubapi.com", "app.hubspot.com"),
             disconnect_fully_revokes=False,
@@ -161,6 +174,7 @@ class Provider(StrEnum):
     LINEAR = (
         "linear",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Linear",
             host_suffixes=("linear.app",),
             disconnect_fully_revokes=False,
@@ -171,6 +185,7 @@ class Provider(StrEnum):
     MICROSOFT = (
         "microsoft",
         ProviderFacts(
+            can_assert_domain_ownership=True,
             display_name="Microsoft",
             host_suffixes=("login.microsoftonline.com",),
             disconnect_fully_revokes=False,
@@ -181,6 +196,7 @@ class Provider(StrEnum):
     NOTION = (
         "notion",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Notion",
             host_suffixes=("api.notion.com",),
             disconnect_fully_revokes=False,
@@ -191,6 +207,7 @@ class Provider(StrEnum):
     SALESFORCE = (
         "salesforce",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Salesforce",
             host_suffixes=("salesforce.com",),
             disconnect_fully_revokes=False,
@@ -201,6 +218,7 @@ class Provider(StrEnum):
     SLACK = (
         "slack",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Slack",
             host_suffixes=("slack.com",),
             disconnect_fully_revokes=False,
@@ -211,6 +229,7 @@ class Provider(StrEnum):
     TYPEFORM = (
         "typeform",
         ProviderFacts(
+            can_assert_domain_ownership=False,
             display_name="Typeform",
             host_suffixes=("api.typeform.com",),
             disconnect_fully_revokes=False,
@@ -301,10 +320,11 @@ class ProviderConfig(BaseModel, frozen=True):
         can_assert_domain_ownership: ``True`` only for providers whose
             tokens can in principle carry a tenancy that asserts the
             authenticated user belongs to the email's domain (e.g.
-            Google Workspace via the ``hd`` claim). Set by the preset
-            at construction time. Consumers building domain-gated
-            tenancy can refuse to wire up an incapable provider at
-            startup rather than discovering the gap at login time.
+            Google Workspace via the ``hd`` claim). Taken from
+            :attr:`provider` when the config names one, and set by the
+            preset otherwise. Consumers building domain-gated tenancy
+            can refuse to wire up an incapable provider at startup
+            rather than discovering the gap at login time.
             Defaults to ``False``.
         implicit_scopes: Mapping from a high-level scope to the
             finer-grained scopes it implicitly includes — used to avoid
@@ -353,8 +373,9 @@ class ProviderConfig(BaseModel, frozen=True):
             Must be a positive finite number. Defaults to 600 (ten minutes).
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
-            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
-            and a config that contradicts them is refused at construction.
+            When set, :attr:`can_assert_domain_ownership`, :attr:`disconnect_fully_revokes` and
+            :attr:`scope_separator` must equal the member's, and a config that contradicts them is
+            refused at construction.
             NOTE: The label is not an attestation. Construction checks nothing else about a config
             against the member, so a caller must not read this as proof of where the endpoints lead.
     """
@@ -491,7 +512,7 @@ class ProviderConfig(BaseModel, frozen=True):
             member = Provider(data["provider"])
         except (KeyError, ValueError):
             return data
-        for field in ("disconnect_fully_revokes", "scope_separator"):
+        for field in ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator"):
             data.setdefault(field, getattr(member, field))
         return data
 
@@ -506,11 +527,17 @@ class ProviderConfig(BaseModel, frozen=True):
             The validated config, unchanged.
 
         Raises:
-            ValueError: If ``provider`` is set and ``disconnect_fully_revokes`` or
-                ``scope_separator`` differs from the member's.
+            ValueError: If ``provider`` is set and ``can_assert_domain_ownership``,
+                ``disconnect_fully_revokes`` or ``scope_separator`` differs from the member's.
         """
         if self.provider is None:
             return self
+        if self.can_assert_domain_ownership is not self.provider.can_assert_domain_ownership:
+            msg = (
+                f"can_assert_domain_ownership must be {self.provider.can_assert_domain_ownership} "
+                f"for provider {self.provider.display_name}, got {self.can_assert_domain_ownership}"
+            )
+            raise ValueError(msg)
         if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
             msg = (
                 f"disconnect_fully_revokes must be {self.provider.disconnect_fully_revokes} "

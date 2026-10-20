@@ -691,6 +691,20 @@ class TestProviderConfigProvider:
                 scope_separator=" ",
             )
 
+    def test_rejects_a_domain_ownership_claim_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
+        with pytest.raises(
+            ValidationError, match="can_assert_domain_ownership must be False for provider Linear, got True"
+        ):
+            ProviderConfig(
+                provider=Provider.LINEAR,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+                can_assert_domain_ownership=True,
+            )
+
     def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
         """A value the member does not state is refused; leaving it out takes the member's."""
         with pytest.raises(
