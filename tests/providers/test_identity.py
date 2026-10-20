@@ -37,6 +37,27 @@ def test_endpoints_outside_the_named_provider_are_refused(provider: Provider) ->
     assert exc_info.value.kind is FailureKind.CONFIGURATION
 
 
+@pytest.mark.parametrize(
+    ("authorize_host", "token_host"),
+    [
+        ("accounts.google.com", "attacker.example.com"),
+        ("attacker.example.com", "oauth2.googleapis.com"),
+    ],
+)
+def test_one_endpoint_on_the_provider_is_not_enough(authorize_host: str, token_host: str) -> None:
+    """Either endpoint off the provider's hosts is a config the handler must not be given."""
+    config = ProviderConfig(
+        provider=Provider.GOOGLE,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url=f"https://{authorize_host}/authorize",
+        token_url=f"https://{token_host}/token",
+    )
+
+    with pytest.raises(ConfigurationError, match="Google"):
+        identity_handler_for(config)
+
+
 def test_a_config_that_names_no_provider_has_no_handler() -> None:
     assert identity_handler_for(_config("accounts.google.com")) is None
 
