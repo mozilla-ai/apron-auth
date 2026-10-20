@@ -3,14 +3,22 @@ from __future__ import annotations
 import logging
 import math
 import time
+from types import SimpleNamespace
 
 import pytest
 
-from apron_auth import stores
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore
 from apron_auth.stores import MemoryStateStore
+
+
+def _freeze_store_clock(monkeypatch: pytest.MonkeyPatch, now: float) -> None:
+    """Pin the clock the store reads to ``now``.
+
+    NOTE: The stub exposes only ``time.time``, so any other clock the store reads raises in the test.
+    """
+    monkeypatch.setattr("apron_auth.stores.time", SimpleNamespace(time=lambda: now))
 
 
 def _make_pending(state: str = "test-state", age: float = 0.0) -> OAuthPendingState:
@@ -59,7 +67,7 @@ class TestMemoryStateStore:
         pending = _make_pending(age=300.0)
         await store.save(pending)
         # The clock is frozen, because the microseconds a live clock advances would carry the age past the limit.
-        monkeypatch.setattr(stores.time, "time", lambda: pending.created_at + 300.0)
+        _freeze_store_clock(monkeypatch, pending.created_at + 300.0)
 
         assert await store.consume(pending.state) == pending
 
@@ -67,7 +75,7 @@ class TestMemoryStateStore:
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=300.0)
         await store.save(pending)
-        monkeypatch.setattr(stores.time, "time", lambda: pending.created_at + 300.001)
+        _freeze_store_clock(monkeypatch, pending.created_at + 300.001)
 
         assert await store.consume(pending.state) is None
 
