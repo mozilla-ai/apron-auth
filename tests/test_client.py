@@ -14,7 +14,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
@@ -74,11 +74,12 @@ def _pending_state(**overrides: object) -> OAuthPendingState:
 
 
 def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the clock the client reads to ``_NOW``.
+    """Pin every clock an exchange reads to ``_NOW``, including the one the pending-age rule reads.
 
-    NOTE: The stub exposes only ``time.time``, so any other clock the client reads raises in the test.
+    NOTE: The stub exposes only ``time.time``, so any other clock either module reads raises in the test.
     """
     monkeypatch.setattr("apron_auth.client.time", SimpleNamespace(time=lambda: _NOW))
+    monkeypatch.setattr("apron_auth._clock.time", SimpleNamespace(time=lambda: _NOW))
 
 
 def _id_token(claims: object) -> str:

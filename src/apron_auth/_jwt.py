@@ -11,9 +11,6 @@ from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth.errors import TokenValidationReason
 
-# The clock difference, in seconds, allowed between this client and another host wherever a time is checked.
-CLOCK_SKEW_SECONDS = 60
-
 # A certificate chain (``x5c``) in the header and an 8192-bit RSA signature both exceed the library's default limits.
 _MAX_HEADER_LENGTH = 16384
 _MAX_SIGNATURE_LENGTH = 2048

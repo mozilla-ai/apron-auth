@@ -19,9 +19,10 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClai
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import SecretStr
 
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
+from apron_auth._jwt import claim_refusal_reason
 from apron_auth.errors import (
     FailureKind,
     IdentityFetchError,

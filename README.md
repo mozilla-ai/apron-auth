@@ -544,7 +544,7 @@ await client.revoke_token(tokens.access_token)
 
 ### State management
 
-If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one at its `max_age`, ten minutes by default, so with it the shorter of the two limits applies.
+If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one past its `max_age`, ten minutes by default, drawing the boundary where the exchange draws it, so with it the shorter of the two limits applies.
 
 ```python
 from apron_auth import StateStore, OAuthPendingState
@@ -785,6 +785,10 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `apron_auth.providers.identity`, each provider module's `maybe_identity_handler` and `IDENTITY_RESOLVER`, and `apron_auth.protocols.IdentityResolver` are gone. `apron_auth.providers.identity_handler_for(config)` returns the handler a config resolves to.
 - A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
 - `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
+- `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
+- `MemoryStateStore` raises `ConfigurationError` for a `max_age` that is not a positive number of seconds that can be subtracted from a clock reading, as the provider config already refuses such a `max_pending_age_seconds`. A store built with `0` to expire every state at once no longer constructs.
+- `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. After the system clock steps backwards, a state younger than the step less that difference is expired, so a step beyond the difference plus `max_age` expires every state the store holds.
+- `stores.DEFAULT_MAX_AGE` is gone, and was never exported from the package. `MemoryStateStore` and `max_pending_age_seconds` now default to one ten-minute limit, so omit `max_age` to take it or pass your own.
 
 ## Logging
 
@@ -809,7 +813,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | Logger                           | Emits                                                       |
 |----------------------------------|-------------------------------------------------------------|
 | `apron_auth.client`              | Refused tokens that could not be revoked.                    |
-| `apron_auth.stores`              | Expired OAuth state discarded on lookup.                     |
+| `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
 | `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
 | `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
@@ -834,7 +838,7 @@ configuring `apron_auth` reaches all of them, and adapters, filters, and
 
 ### What is never logged
 
-Access tokens, refresh tokens, client secrets, and ID-token payload bytes are never written to logs at any level. Exception *values* are not logged either — in their place goes whichever non-sensitive primitive actually carries diagnostic signal, such as an HTTP status code or an exception class name. Where no such primitive is at hand, the line is fixed text only. A raised exception's rendering can embed the request that carried a credential, and for some providers a token travels in the URL path, so the exception value is not safe to emit generically.
+Access tokens, refresh tokens, client secrets, OAuth state, and ID-token payload bytes are never written to logs at any level. Exception *values* are not logged either — in their place goes whichever non-sensitive primitive actually carries diagnostic signal, such as an HTTP status code or an exception class name. Where no such primitive is at hand, the line is fixed text only. A raised exception's rendering can embed the request that carried a credential, and for some providers a token travels in the URL path, so the exception value is not safe to emit generically.
 
 This is a contract, not an implementation detail: if you find a
 credential in log output, treat it as a bug and report it.

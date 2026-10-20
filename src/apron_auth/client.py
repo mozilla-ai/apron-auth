@@ -6,20 +6,21 @@ import asyncio
 import hmac
 import json
 import logging
-import math
 import re
 import secrets
 import time
 from collections.abc import Iterable, Sequence
 from functools import cached_property
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
 
+from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, unverified_claims
+from apron_auth._jwt import unverified_claims
+from apron_auth._numbers import finite_number
 from apron_auth.errors import (
     SERVER_ERROR,
     TEMPORARILY_UNAVAILABLE,
@@ -154,7 +155,7 @@ def _check_claims(claims: Mapping[str, Any], *, client_id: str, issuer: str | No
     if authorized_party is not None and authorized_party != client_id:
         msg = "ID token authorized party is not this client"
         raise IdTokenValidationError(msg)
-    expiry = _finite_number(claims.get("exp"))
+    expiry = finite_number(claims.get("exp"))
     if expiry is None or expiry + CLOCK_SKEW_SECONDS < time.time():
         msg = "ID token has expired or carries no usable expiry"
         raise IdTokenValidationError(msg)
@@ -218,35 +219,25 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     Args:
         pending: The pending authorization request to check.
         max_age: The age, in seconds, past which a pending authorization request is refused.
+            It must be a positive number of seconds that can be subtracted from a clock reading.
 
     Raises:
-        StateError: If the creation time is not a finite number, lies further ahead of the system clock
-            than the allowed clock difference, or is older than ``max_age``.
+        StateError: If the creation time fails any of the clock conditions for a pending request,
+            worded for the condition it fails.
     """
-    created_at = _finite_number(pending.created_at)
-    if created_at is None:
-        msg = "Pending authorization request carries no usable creation time"
-        raise StateError(msg)
-    now = time.time()
-    # NOTE: A creation time ahead of this clock is skew, allowed the same difference as a token's times.
-    if created_at > now + CLOCK_SKEW_SECONDS:
-        msg = "Pending authorization request was created ahead of this clock"
-        raise StateError(msg)
-    if created_at < now - max_age:
-        msg = "Pending authorization request is older than the maximum age"
-        raise StateError(msg)
-
-
-def _finite_number(value: object) -> int | float | None:
-    """Return ``value`` when it is a finite number, else ``None``.
-
-    A boolean is not a number here, and an integer is always finite, however large.
-    """
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    return value
+    refusal = pending_age_refusal(pending.created_at, max_age=max_age)
+    match refusal:
+        case None:
+            return
+        case PendingAgeRefusalReason.AHEAD_OF_CLOCK:
+            msg = "Pending authorization request was created ahead of this clock"
+        case PendingAgeRefusalReason.TOO_OLD:
+            msg = "Pending authorization request is older than the maximum age"
+        case PendingAgeRefusalReason.UNUSABLE:
+            msg = "Pending authorization request carries no usable creation time"
+        case _:
+            assert_never(refusal)
+    raise StateError(msg)
 
 
 def _id_token_claims(id_token: object) -> dict[str, Any]:

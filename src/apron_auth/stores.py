@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import TYPE_CHECKING
+
+from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS, pending_age_refusal, usable_max_age
+from apron_auth.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from apron_auth.models import OAuthPendingState
 
 logger = logging.getLogger(__name__)
-
-# The default age, in seconds, after which a stored pending state expires.
-DEFAULT_MAX_AGE = 600.0
 
 
 class MemoryStateStore:
@@ -33,20 +32,26 @@ class MemoryStateStore:
     of await points — if an await is ever added to save or consume,
     an asyncio.Lock must be introduced to guard _states.
 
-    Expiry is based on wall-clock time (time.time) to match
-    OAuthPendingState.created_at, which stores epoch seconds.
-    A state is considered expired when its age >= max_age.
+    A state is expired when its creation time is past ``max_age``, lies further ahead of the
+    system clock than the allowed difference, or cannot be measured at all.
     """
 
-    def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
+    def __init__(self, max_age: float = DEFAULT_MAX_AGE_SECONDS) -> None:
         """Create the store.
 
         Args:
-            max_age: Maximum age in seconds before a stored state is
-                treated as expired.
+            max_age: The age, in seconds, past which a stored state is treated as expired.
+
+        Raises:
+            ConfigurationError: If ``max_age`` is not a positive number of seconds
+                that can be subtracted from a clock reading.
         """
+        limit = usable_max_age(max_age)
+        if limit is None:
+            msg = "max_age must be a positive number of seconds that can be subtracted from a clock reading"
+            raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
-        self._max_age = max_age
+        self._max_age = limit
 
     async def save(self, state: OAuthPendingState) -> None:
         """Store pending state and prune any expired entries.
@@ -70,29 +75,28 @@ class MemoryStateStore:
         if pending is None:
             return None
         if self._is_expired(pending):
-            age = time.time() - pending.created_at
-            logger.debug(
-                "State %.8s… expired (age=%.1fs, max_age=%.1fs)",
-                state_key,
-                age,
-                self._max_age,
-            )
+            # NOTE: A state key identifies one user's authorization attempt, so no part of it is logged.
+            logger.debug("Dropped a pending authorization request that is no longer current")
             return None
         return pending
 
     def _is_expired(self, state: OAuthPendingState) -> bool:
-        """Report whether ``state`` has reached the configured maximum age.
+        """Report whether ``state`` is no longer current against the system clock.
 
         Args:
             state: The pending state to test.
 
         Returns:
-            ``True`` when the state's age is at least ``max_age``.
+            ``True`` when the creation time fails any of the clock conditions for a pending request.
         """
-        return time.time() - state.created_at >= self._max_age
+        return pending_age_refusal(state.created_at, max_age=self._max_age) is not None
 
     def _prune(self) -> None:
-        """Drop every stored state that has expired."""
+        """Drop every stored state that has expired, reporting how many were dropped."""
         expired_keys = [k for k, v in self._states.items() if self._is_expired(v)]
         for key in expired_keys:
             del self._states[key]
+        if expired_keys:
+            logger.debug(
+                "Dropped pending authorization requests that are no longer current: count=%d", len(expired_keys)
+            )
