@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import time
+import traceback
 from typing import Any
 
 import httpx
@@ -460,14 +461,21 @@ class TestHttpsRequirement:
         ],
     )
     def test_preset_refuses_http_metadata_built_without_discovery(self, field: str, label: str) -> None:
-        """Metadata that never passed through ``discover`` gets the same scheme rule."""
-        with pytest.raises(ConfigurationError, match=f"{label} must use https"):
+        """Metadata that never passed through ``discover`` gets the same scheme rule.
+
+        The refusal underneath agrees with the class the caller catches, whose kind is a
+        configuration fault by definition, so the chain does not contradict itself.
+        """
+        with pytest.raises(ConfigurationError, match=f"{label} must use https") as exc_info:
             preset(
                 client_id=CLIENT_ID,
                 client_secret=CLIENT_SECRET,
                 scopes=[],
                 metadata=metadata(**{field: "http://idp.example/endpoint"}),
             )
+
+        assert isinstance(exc_info.value.__cause__, OidcDiscoveryError)
+        assert exc_info.value.__cause__.kind is FailureKind.CONFIGURATION
 
     def test_preset_accepts_http_metadata_with_the_explicit_opt_in(self, caplog: pytest.LogCaptureFixture) -> None:
         """The opt-in on ``preset`` matches the one on ``discover``."""
@@ -1428,14 +1436,15 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="different subject"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config)
 
-    async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
-        """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url="https://idp.example/\x00")
+    def test_refuses_a_userinfo_url_that_cannot_be_requested(self):
+        """A URL the request itself would reject is the caller's own, so no handler is built on it."""
+        userinfo = "operator-7f3a9c"
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch") as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
-        assert excinfo.value.__cause__ is None
-        assert excinfo.value.__context__ is None
+        with pytest.raises(ConfigurationError, match="userinfo endpoint is malformed") as excinfo:
+            OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url=f"https://{userinfo}@idp.example/\x00")
+
+        assert excinfo.value.kind is FailureKind.CONFIGURATION
+        assert userinfo not in "".join(traceback.format_exception(excinfo.value))
 
     async def test_reports_a_token_that_cannot_be_sent(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A token that is not ASCII cannot go in a header, and the error must not repeat it."""

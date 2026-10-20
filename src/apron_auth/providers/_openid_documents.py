@@ -21,17 +21,18 @@ from apron_auth.errors import FailureKind, OidcDiscoveryError
 if TYPE_CHECKING:
     from apron_auth.protocols import TransportFactory
 
-# The documented logger for OpenID discovery, kept although these helpers moved out of that module.
+# The logger name is part of the documented interface, so it does not follow __name__.
 logger = logging.getLogger("apron_auth.providers.oidc")
 
 
 def require_url(
-    value: Any, *, field: str, allow_insecure_http: bool, is_issuer: bool = False, caller_supplied: bool = False
+    value: Any, *, field: str, allow_insecure_http: bool, caller_supplied: bool, is_issuer: bool = False
 ) -> str:
     """Require ``value`` to be an absolute URL apron-auth may talk to.
 
     This is the one URL rule for the issuer, the document URL and every endpoint.
     The value must be a string with a scheme, a host and no fragment.
+    A URL that cannot be requested as written is refused here rather than at the fetch.
     It must use ``https`` unless ``allow_insecure_http`` is set.
     An issuer also has no query and no userinfo (OpenID Connect Discovery 1.0 section 4.1).
 
@@ -39,8 +40,9 @@ def require_url(
         value: The raw value to check.
         field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules. An issuer is always caller-supplied.
-        caller_supplied: The value is an argument of this library's caller, not a member of a fetched document.
+        caller_supplied: The value is an argument of this library's caller, or derives from one,
+            not a member of a fetched document.
+        is_issuer: Apply the stricter issuer rules.
 
     Returns:
         ``value``, once it passes.
@@ -48,8 +50,7 @@ def require_url(
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
-    # A caller's own URL is a configuration fault. A URL from the provider's document is refused.
-    kind = FailureKind.CONFIGURATION if is_issuer or caller_supplied else FailureKind.REFUSED
+    kind = FailureKind.CONFIGURATION if caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
         raise OidcDiscoveryError(msg, kind=kind)
@@ -58,7 +59,9 @@ def require_url(
         hostname = parsed.hostname
         # The port is parsed only when read, so a port that is not a number surfaces here and not at the fetch.
         parsed.port  # noqa: B018
-    except ValueError as exc:
+        # The HTTP client's parser is stricter than urlparse, so a URL it cannot request is refused here.
+        httpx.URL(value)
+    except (ValueError, httpx.InvalidURL) as exc:
         msg = f"OpenID {field} is malformed"
         raise OidcDiscoveryError(msg, kind=kind) from exc
     if not parsed.scheme or not hostname:
@@ -108,14 +111,17 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
-def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
+def optional_url(document: dict[str, Any], *, key: str, field: str, allow_insecure_http: bool) -> str | None:
     """Validate an optional endpoint when the document names one.
+
+    The endpoint is a member of a fetched document.
+    An unacceptable one is a refusal of what the provider published, not a fault in the caller's configuration.
 
     Args:
         document: The configuration document.
         key: The document member to read.
         field: What the endpoint is, for errors.
-        allow_insecure_http: Passed through to :func:`require_url`.
+        allow_insecure_http: Let an ``http`` endpoint through, logging a WARNING.
 
     Returns:
         The endpoint, or ``None`` when the document omits it or gives an empty string.
@@ -126,7 +132,7 @@ def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_
     value = document.get(key)
     if value is None or value == "":
         return None
-    return require_url(value, field=field, allow_insecure_http=allow_insecure_http)
+    return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=False)
 
 
 async def fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
