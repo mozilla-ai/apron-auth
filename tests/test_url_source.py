@@ -2,8 +2,9 @@
 
 A value this library's caller passed is a configuration fault,
 and one read out of a fetched document is a refusal of what the other side sent.
-Each call to a URL rule therefore names its value's source, which a guard over the library's
-own source reads syntactically: it holds every call to the convention, not to a correct answer.
+Each call to a URL rule therefore names its value's source. A guard reads the repository's own
+trees syntactically and holds every call it can resolve by name to that convention, which is
+weaker than the rule itself: it cannot tell whether the source a call names is the right one.
 """
 
 from __future__ import annotations
@@ -22,10 +23,10 @@ from apron_auth.providers._openid_documents import require_url
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# The library's source tree, walked to hold every call to a URL rule to the convention.
-SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
-# Every module of that tree, one parametrized case each.
-MODULES = sorted(SRC.rglob("*.py"))
+REPO = Path(__file__).resolve().parents[1]
+# Every module the guard walks, one parametrized case each. The test tree is included because the
+# type checker covers the library only, so a call there would otherwise fail at runtime or not at all.
+MODULES = sorted(path for tree in ("src", "tests") for path in (REPO / tree).rglob("*.py"))
 # The URL rules whose refusal follows the source, named so a rename cannot leave the guard passing.
 URL_RULES = {rule.__name__ for rule in (_validate_url, require_url)}
 
@@ -40,22 +41,24 @@ def _called_name(func: ast.expr) -> str | None:
 
 
 def _calls_without_a_source(path: Path) -> list[str]:
-    """Return ``file:line`` for each call to a URL rule in ``path`` that says nothing about its value's source."""
+    """Return ``path:line`` for each call to a URL rule in ``path`` that says nothing about its value's source."""
     found = []
     for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
         if not isinstance(node, ast.Call) or _called_name(node.func) not in URL_RULES:
             continue
         if "caller_supplied" not in {keyword.arg for keyword in node.keywords}:
-            found.append(f"{path.name}:{node.lineno}")
+            found.append(f"{path}:{node.lineno}")
     return found
 
 
-def test_the_walk_reaches_the_library() -> None:
+def test_the_walk_reaches_both_trees() -> None:
     """A walk that reaches nothing parametrizes no case, which pytest reports as a skip rather than a failure."""
-    assert MODULES
+    trees = {path.relative_to(REPO).parts[0] for path in MODULES}
+
+    assert trees == {"src", "tests"}
 
 
-@pytest.mark.parametrize("path", MODULES, ids=lambda p: str(p.relative_to(SRC)))
+@pytest.mark.parametrize("path", MODULES, ids=lambda p: str(p.relative_to(REPO)))
 def test_every_call_states_its_source(path: Path) -> None:
     assert _calls_without_a_source(path) == []
 
@@ -74,7 +77,7 @@ def test_the_guard_sees_a_call_that_says_nothing(tmp_path: Path) -> None:
     sample = tmp_path / "sample.py"
     sample.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    assert _calls_without_a_source(sample) == ["sample.py:1", "sample.py:3", "sample.py:4", "sample.py:6"]
+    assert _calls_without_a_source(sample) == [f"{sample}:{line}" for line in (1, 3, 4, 6)]
 
 
 @pytest.mark.parametrize("rule", [_validate_url, require_url], ids=lambda rule: rule.__name__)
@@ -114,3 +117,17 @@ def test_the_issuer_flag_selects_rules_and_not_a_source() -> None:
         require_url(with_a_query, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)
 
     assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+
+@pytest.mark.parametrize(
+    ("value", "refusal"),
+    [
+        ("https://idp.example/realm?tenant=acme", "must not carry a query"),
+        ("https://operator@idp.example/realm", "must not carry userinfo"),
+    ],
+    ids=["query", "userinfo"],
+)
+def test_the_issuer_rules_refuse_a_query_and_userinfo(value: str, refusal: str) -> None:
+    """Userinfo would travel as credentials on every request the issuer's URLs carry."""
+    with pytest.raises(OidcDiscoveryError, match=refusal):
+        require_url(value, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)

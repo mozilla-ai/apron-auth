@@ -823,7 +823,7 @@ def _select_auth_method(advertised: Sequence[str]) -> TokenEndpointAuthMethod:
 
 
 def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: bool) -> None:
-    """Require every URL in ``metadata`` to meet the rule :func:`discover` applies.
+    """Require every URL in ``metadata`` to pass :func:`require_url`.
 
     The metadata is the caller's own argument, whatever produced it,
     so a URL it holds is a configuration fault rather than a refusal of what a provider sent.

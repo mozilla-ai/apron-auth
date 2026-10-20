@@ -460,14 +460,21 @@ class TestHttpsRequirement:
         ],
     )
     def test_preset_refuses_http_metadata_built_without_discovery(self, field: str, label: str) -> None:
-        """Metadata that never passed through ``discover`` gets the same scheme rule."""
-        with pytest.raises(ConfigurationError, match=f"{label} must use https"):
+        """Metadata that never passed through ``discover`` gets the same scheme rule.
+
+        The metadata is the caller's own argument, so the refusal underneath is classified as a
+        configuration fault rather than as a refusal of what a provider published.
+        """
+        with pytest.raises(ConfigurationError, match=f"{label} must use https") as exc_info:
             preset(
                 client_id=CLIENT_ID,
                 client_secret=CLIENT_SECRET,
                 scopes=[],
                 metadata=metadata(**{field: "http://idp.example/endpoint"}),
             )
+
+        assert isinstance(exc_info.value.__cause__, OidcDiscoveryError)
+        assert exc_info.value.__cause__.kind is FailureKind.CONFIGURATION
 
     def test_preset_accepts_http_metadata_with_the_explicit_opt_in(self, caplog: pytest.LogCaptureFixture) -> None:
         """The opt-in on ``preset`` matches the one on ``discover``."""
