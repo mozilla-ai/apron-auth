@@ -57,11 +57,12 @@ class MemoryStateStore:
             ConfigurationError: If ``max_age`` is not a positive finite number, because no stored state
                 would ever reach a limit it cannot be compared against.
         """
-        if finite_number(max_age) is None or max_age <= 0 or max_age > _WIDEST_MAX_AGE:
+        limit = finite_number(max_age)
+        if limit is None or limit <= 0 or limit > _WIDEST_MAX_AGE:
             msg = "max_age must be a positive finite number"
             raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
-        self._max_age = max_age
+        self._max_age = limit
 
     async def save(self, state: OAuthPendingState) -> None:
         """Store pending state and prune any expired entries.
