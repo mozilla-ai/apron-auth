@@ -1145,11 +1145,15 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.token_endpoint_auth_method is None
 
-    @pytest.mark.parametrize("stated", ["private_key_jwt", "", 7])
+    @pytest.mark.parametrize("stated", ["private_key_jwt", "", 7, ["none"], {"method": "none"}])
     async def test_stated_method_this_library_cannot_perform_raises(
         self, httpx_mock: HTTPXMock, stated: object
     ) -> None:
-        """The response states the method, so it is refused where the response is read, not at config time."""
+        """The response states the method, so it is refused where the response is read, not at config time.
+
+        The cases include a value a dictionary cannot key, because reading the method must refuse a
+        JSON array or object rather than fail on the lookup.
+        """
         httpx_mock.add_response(
             url=_REGISTER_URL,
             status_code=201,
