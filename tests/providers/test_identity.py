@@ -63,7 +63,7 @@ def test_a_config_that_names_no_provider_has_no_handler() -> None:
 
 
 def test_a_config_that_allows_no_handler_of_its_own_has_none() -> None:
-    config = _config("accounts.google.com", Provider.GOOGLE).model_copy(update={"allow_identity_inference": False})
+    config = _config("accounts.google.com", Provider.GOOGLE).model_copy(update={"use_builtin_identity_handler": False})
 
     assert identity_handler_for(config) is None
 

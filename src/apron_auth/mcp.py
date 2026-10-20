@@ -257,7 +257,7 @@ def to_provider_config(
         issuer=metadata.issuer,
         require_iss=metadata.iss_parameter_supported,
         resource=resource if resource is not None else metadata.resource,
-        allow_identity_inference=False,
+        use_builtin_identity_handler=False,
     )
 
 

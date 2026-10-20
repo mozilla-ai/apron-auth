@@ -32,7 +32,7 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
             the provider it names.
     """
     provider = config.provider
-    if provider is None or not config.allow_identity_inference:
+    if provider is None or not config.use_builtin_identity_handler:
         return None
     if not oauth_hosts_match(config, provider.host_suffixes):
         msg = (

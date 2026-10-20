@@ -289,7 +289,7 @@ def preset(
         require_iss=metadata.iss_parameter_supported,
         # OpenID Connect standardizes no claim for an organization owning an email domain.
         can_assert_domain_ownership=False,
-        allow_identity_inference=False,
+        use_builtin_identity_handler=False,
     )
     # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
     return config, StandardRevocationHandler() if metadata.revocation_url else None

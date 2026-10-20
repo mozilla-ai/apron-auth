@@ -229,8 +229,8 @@ class ProviderConfig(BaseModel, frozen=True):
             resource. ``None`` (the default) emits no ``resource`` parameter
             anywhere, preserving behavior for providers that do not use
             resource indicators.
-        allow_identity_inference: Whether this library may establish identity with the identity handler
-            of the provider :attr:`provider` names.
+        use_builtin_identity_handler: Whether this library may establish identity with the identity
+            handler of the provider :attr:`provider` names.
             Set ``False`` to leave a handler passed to :class:`~apron_auth.client.OAuthClient` as the
             only source of identity. A config that names no provider has no handler of its own either
             way. Defaults to ``True``.
@@ -264,7 +264,7 @@ class ProviderConfig(BaseModel, frozen=True):
     issuer: str | None = None
     require_iss: bool = False
     resource: str | None = None
-    allow_identity_inference: bool = True
+    use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = 600.0
     provider: Provider | None = None
 

@@ -2329,7 +2329,7 @@ class TestFetchIdentity:
             provider=Provider.GOOGLE,
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
-            allow_identity_inference=False,
+            use_builtin_identity_handler=False,
         )
         client = OAuthClient(config=config)
 
@@ -2349,7 +2349,7 @@ class TestFetchIdentity:
             provider=Provider.GOOGLE,
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
-            allow_identity_inference=False,
+            use_builtin_identity_handler=False,
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
