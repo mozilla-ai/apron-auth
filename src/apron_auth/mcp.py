@@ -330,10 +330,10 @@ async def register_client(
             a non-success status, its response is not a JSON object with a usable
             ``client_id``, or the response states a client secret this library
             cannot use, a token-endpoint authentication method it cannot perform,
-            or a method that contradicts the secret the response states. Each of
-            those last three leaves a registration standing at the authorization
-            server, because the server issued the credentials this call then
-            discards.
+            or a method that contradicts the secret the response states. Every
+            refusal after a success status leaves a registration standing at the
+            authorization server, because the server issued credentials this call
+            then discards.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
@@ -447,13 +447,13 @@ def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
         The registration the response issued.
 
     Raises:
-        McpRegistrationError: If the response names no usable client identifier, states a client secret this
+        McpRegistrationError: If the response states no usable client identifier, states a client secret this
             library cannot use, states a token-endpoint authentication method it cannot perform, or states a
             method that contradicts the secret.
     """
     client_id = document.get("client_id")
     if not isinstance(client_id, str) or not client_id:
-        msg = "client registration response names no usable client_id"
+        msg = "client registration states no usable client_id, so the issued credentials were discarded"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = document.get("client_secret")
     if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
