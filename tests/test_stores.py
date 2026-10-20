@@ -62,7 +62,7 @@ class TestMemoryStateStore:
         assert result is None
 
     async def test_consume_state_at_boundary_returns_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Exactly the limit is still current, which is where the code exchange draws the line too."""
+        """A state whose age is exactly the limit is still current, and only one past it is not."""
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=300.0)
         await store.save(pending)
@@ -154,7 +154,7 @@ class TestCreationTimeThatCannotBeMeasured:
         assert await store.consume(unusable.state) is None
 
     async def test_a_creation_time_ahead_of_the_clock_expires_the_entry(self) -> None:
-        """A stamp no nearby clock produced is unusable, as the code exchange also treats it."""
+        """A creation time further ahead of the clock than the allowed difference is not current."""
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=-3600.0)
         await store.save(pending)
