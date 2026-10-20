@@ -489,16 +489,10 @@ def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
 def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) -> bool:
     """Return whether a client secret's presence agrees with a token-endpoint auth method.
 
-    A public client declares ``none`` and carries no secret.
-    Any other method is a confidential client, which has a secret to send.
+    A method that requires a secret has one to send, and a method that requires none is a public client,
+    which carries none.
     """
-    match method:
-        case TokenEndpointAuthMethod.NONE:
-            return secret is None
-        case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC | TokenEndpointAuthMethod.CLIENT_SECRET_POST:
-            return secret is not None
-        case _:
-            assert_never(method)
+    return method.requires_secret is (secret is not None)
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:

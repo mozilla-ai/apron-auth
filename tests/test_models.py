@@ -54,6 +54,19 @@ class TestTokenEndpointAuthMethod:
         with pytest.raises(ValueError, match="private_key_jwt"):
             TokenEndpointAuthMethod("private_key_jwt")
 
+    @pytest.mark.parametrize(
+        ("method", "requires_secret"),
+        [
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, True),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, True),
+            (TokenEndpointAuthMethod.NONE, False),
+        ],
+    )
+    def test_each_member_says_whether_its_client_sends_a_secret(
+        self, method: TokenEndpointAuthMethod, requires_secret: bool
+    ) -> None:
+        assert method.requires_secret is requires_secret
+
 
 class TestClientRegistration:
     def test_a_method_this_library_cannot_perform_is_refused(self) -> None:
