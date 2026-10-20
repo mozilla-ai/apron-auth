@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
-from collections.abc import Callable
 from types import ModuleType
 
 import pytest
+from conftest import VaryFacts
 
 from apron_auth import providers as providers_pkg
 from apron_auth.mcp import to_provider_config
@@ -280,7 +280,7 @@ def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> N
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_preset_follows_a_changed_member_fact(provider: Provider, vary_facts: Callable[..., None]) -> None:
+def test_preset_follows_a_changed_member_fact(provider: Provider, vary_facts: VaryFacts) -> None:
     # Varying the facts proves the preset reads each one from the member rather than repeating the value.
     vary_facts(
         provider,

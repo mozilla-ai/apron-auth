@@ -84,8 +84,8 @@ class Provider(StrEnum):
     """The OAuth providers this library knows by name, each with the facts that differ between them.
 
     A member's value is its module name under ``apron_auth.providers``, and a member is declared as
-    ``(value, facts)``. Each fact is read through the property of its own name, and a member's facts
-    cannot be replaced, because they decide where an access token may be sent.
+    ``(value, facts)``. Each fact is read through the property of its own name, and no property can be
+    assigned, because the facts decide where an access token may be sent.
     """
 
     _facts: ProviderFacts

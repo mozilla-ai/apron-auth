@@ -6,11 +6,11 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 from apron_auth.errors import ConfigurationError
+from apron_auth.protocols import IdentityHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
-    from apron_auth.protocols import IdentityHandler
 
 
 def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
@@ -30,6 +30,8 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
     Raises:
         ConfigurationError: If either the config's authorization or token endpoint is not a host of
             the provider it names.
+        TypeError: If the class the named provider states is not an identity handler, which is a
+            defect in this library rather than in the config.
     """
     provider = config.provider
     if provider is None or not config.use_builtin_identity_handler:
@@ -43,5 +45,8 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
         raise ConfigurationError(msg)
     # A registry would import every provider module. Resolving by name imports only the named one.
     module = import_module(f".{provider.value}", __package__)
-    handler: IdentityHandler = getattr(module, provider.identity_handler_class_name)()
+    handler = getattr(module, provider.identity_handler_class_name)()
+    if not isinstance(handler, IdentityHandler):
+        msg = f"{module.__name__}.{provider.identity_handler_class_name} is not an identity handler"
+        raise TypeError(msg)
     return handler

@@ -508,10 +508,7 @@ def preset(
     """Create a Microsoft OAuth provider configuration.
 
     Microsoft does not provide a token revocation endpoint. Scopes from
-    BASE_SCOPES are merged automatically. The member states that Microsoft
-    can assert domain ownership: an Entra ID workforce sign-in can carry a
-    verified domain-owning tenancy resolved from the ID token and the
-    tenant's admin-verified domains.
+    BASE_SCOPES are merged automatically.
 
     Args:
         client_id: The OAuth client identifier. A GUID is stored in lowercase, which names the same
