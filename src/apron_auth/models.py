@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import math
 from enum import StrEnum, unique
-from importlib import import_module
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler
 
 AccessType = Literal["read", "write", "admin"]
 
@@ -34,9 +30,6 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
         "state",
     }
 )
-
-# The package whose module names the provider members are named after.
-_PROVIDER_PACKAGE = "apron_auth.providers"
 
 
 class TokenEndpointAuthMethod:
@@ -71,8 +64,7 @@ class Provider(StrEnum):
             :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
             provider's module docstring records how the value was verified.
         scope_separator: The string the provider's scope parameter is joined with.
-        identity_handler_class_name: The name of the class in the member's module that fetches identity,
-            which :meth:`identity_handler` builds.
+        identity_handler_class_name: The name of the class in the member's module that fetches identity.
     """
 
     display_name: str
@@ -99,17 +91,6 @@ class Provider(StrEnum):
         member.scope_separator = scope_separator
         member.identity_handler_class_name = identity_handler_class_name
         return member
-
-    def identity_handler(self) -> IdentityHandler:
-        """Build this provider's identity handler.
-
-        Returns:
-            A new handler that fetches identity from this provider.
-        """
-        # NOTE: The import happens here because every provider module imports this one.
-        module = import_module(f"{_PROVIDER_PACKAGE}.{self.value}")
-        handler: IdentityHandler = getattr(module, self.identity_handler_class_name)()
-        return handler
 
     ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ", "AtlassianIdentityHandler")
     GITHUB = ("github", "GitHub", ("github.com",), True, " ", "GitHubIdentityHandler")

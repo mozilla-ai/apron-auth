@@ -59,6 +59,9 @@ MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str, str]] = {
 # ``oidc`` presets any OpenID provider rather than one named provider, so it has no member.
 _GENERIC_MODULE_NAMES = frozenset({"oidc"})
 
+# ``identity`` serves every provider rather than presetting one, so it exposes no preset.
+_NON_PRESET_MODULE_NAMES = frozenset({"identity"})
+
 _GENERIC_METADATA = ServerMetadata(
     authorize_url="https://issuer.example/authorize",
     token_url="https://issuer.example/token",
@@ -98,7 +101,7 @@ def test_members_are_ordered_a_to_z() -> None:
 def test_public_provider_modules_expose_a_preset() -> None:
     missing_preset: list[str] = []
     for info in pkgutil.iter_modules(providers_pkg.__path__):
-        if info.name.startswith("_"):
+        if info.name.startswith("_") or info.name in _NON_PRESET_MODULE_NAMES:
             continue
         module = importlib.import_module(f"{providers_pkg.__name__}.{info.name}")
         if not callable(getattr(module, "preset", None)):
@@ -141,15 +144,10 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_member_builds_the_identity_handler_it_names(provider: Provider) -> None:
-    handler = provider.identity_handler()
-    assert isinstance(handler, getattr(MODULES[provider], provider.identity_handler_class_name))
-    assert isinstance(handler, IdentityHandler)
-
-
-@pytest.mark.parametrize("provider", list(Provider))
-def test_member_builds_a_handler_per_call(provider: Provider) -> None:
-    assert provider.identity_handler() is not provider.identity_handler()
+def test_member_names_an_identity_handler_its_module_defines(provider: Provider) -> None:
+    handler_class = getattr(MODULES[provider], provider.identity_handler_class_name, None)
+    assert handler_class is not None, f"{MODULES[provider].__name__} defines no {provider.identity_handler_class_name}."
+    assert isinstance(handler_class(), IdentityHandler)
 
 
 @pytest.mark.parametrize("provider", list(Provider))

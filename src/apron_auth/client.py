@@ -38,7 +38,7 @@ from apron_auth.errors import (
 from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, FreshTokenSet, IdentityMaterial, OAuthPendingState
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._host_match import oauth_hosts_match
+from apron_auth.providers.identity import identity_handler as provider_identity_handler
 from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
@@ -734,18 +734,7 @@ class OAuthClient:
             ConfigurationError: If the config's OAuth endpoints are not the hosts of the
                 provider it names.
         """
-        provider = self._config.provider
-        if provider is None:
-            return None
-        # NOTE: A handler may derive the endpoint it sends the access token to from the config.
-        if not oauth_hosts_match(self._config, provider.host_suffixes):
-            msg = (
-                f"The configured authorization and token endpoints are not {provider.display_name}'s, "
-                f"so its identity handler cannot establish identity. Pass an identity handler for a "
-                f"{provider.display_name} deployment on other hosts."
-            )
-            raise ConfigurationError(msg)
-        return provider.identity_handler()
+        return provider_identity_handler(self._config)
 
     def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
         """Return the query of an authorization URL that sends ``params``.

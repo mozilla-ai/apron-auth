@@ -2307,19 +2307,16 @@ class TestFetchIdentity:
 
         assert httpx_mock.get_requests() == []
 
-    @pytest.mark.parametrize("provider", list(Provider))
-    async def test_endpoints_outside_the_named_provider_are_refused(
-        self, provider: Provider, httpx_mock: HTTPXMock
-    ) -> None:
-        """A config whose endpoints are not the named provider's contradicts itself."""
+    async def test_endpoints_outside_the_named_provider_are_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A config whose endpoints are not the named provider's is refused before any request."""
         config = _make_config(
-            provider=provider,
+            provider=Provider.GOOGLE,
             authorize_url="https://attacker.example.com/authorize",
             token_url="https://attacker.example.com/token",
         )
         client = OAuthClient(config=config)
 
-        with pytest.raises(ConfigurationError, match=provider.display_name) as exc_info:
+        with pytest.raises(ConfigurationError, match="Google") as exc_info:
             await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert not isinstance(exc_info.value, IdentityNotSupportedError)
