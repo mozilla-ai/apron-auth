@@ -94,7 +94,7 @@ Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/
 The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
 match by design.
 
-Always pass the identity handler explicitly, as above. The config that `preset` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. Inference would otherwise give a config on an Entra or Google host that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
+Always pass the identity handler explicitly, as above. The config that `preset` returns names no built-in provider and allows no provider's identity handler, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. The endpoint hosts select nothing. A config on an Entra or Google host would otherwise get that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
 
 Build the handler and the config from the same `metadata`. The handler is bound to that
 metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,
@@ -228,7 +228,7 @@ token and, for OIDC providers, the ID token — before being handed to
 the provider's identity handler, so handlers never receive the refresh
 token or caller context.
 
-Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler. The generic OpenID preset and `mcp.to_provider_config` set it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
+A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
@@ -427,9 +427,11 @@ needs no consent beyond the `User.Read` scope already in the preset's
 #### Refusing incapable providers at startup
 
 `ProviderConfig.can_assert_domain_ownership` declares whether a
-preset's tokens can *in principle* carry a domain-owning tenancy.
-Consumers building a domain-gated tenancy flow can reject incapable
-providers at startup, rather than discovering the gap at login time:
+provider's tokens can *in principle* carry a domain-owning tenancy. A
+config that names a provider takes the answer from that provider, and a
+config that names none carries its own. Consumers building a
+domain-gated tenancy flow can reject incapable providers at startup,
+rather than discovering the gap at login time:
 
 ```python
 config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
@@ -630,9 +632,9 @@ tokens = await client.exchange_code(
 )
 ```
 
-The config that `to_provider_config` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. Inference would otherwise give an authorization server on a built-in provider's host that provider's handler, which sends the MCP server's access token to that provider's API.
+The config that `to_provider_config` returns names no built-in provider and allows no provider's identity handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. An authorization server on a built-in provider's host gets no handler either, which would otherwise send the MCP server's access token to that provider's API.
 
-A `ProviderConfig` that you build by hand from `discover` output allows inference by default, so set `allow_identity_inference=False` on it yourself. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
+A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
 
@@ -750,7 +752,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
 | `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
-| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server or registration URL this library refuses, or a `TokenSet` reloaded from storage passed to `fetch_identity`. |
+| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server or registration URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. A URL you passed raises `ConfigurationError` instead. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
@@ -775,6 +777,15 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `mcp.discover` and `mcp.register_client` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, or the registration endpoint — including one the HTTP client cannot send. A URL the server's metadata declares still raises `McpDiscoveryError`.
 - `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
+- A built-in identity handler comes from `ProviderConfig.provider`, not from the endpoint hosts. Name the provider on a config you build by hand to keep the handler it used to be given, and expect `IdentityNotSupportedError` from `fetch_identity` for a config that names none. Naming it also takes that provider's stated facts, so a Google or Microsoft config gains `can_assert_domain_ownership=True`, which a domain-gated sign-in gate reads.
+- A config that names a provider whose host suffixes do not cover both its authorization and token endpoints raises `ConfigurationError` from `fetch_identity`, where it used to raise `IdentityNotSupportedError`. Pass your own `identity_handler` for a deployment on other hosts.
+- `ProviderConfig.allow_identity_inference` is now `use_builtin_identity_handler`, because a config names its provider rather than having one inferred from its hosts. It still refuses that provider's handler when `False`.
+- `ProviderConfig` refuses a field it does not define, so a renamed or mistyped keyword raises instead of being dropped. A persisted config carrying a field this version removed must be migrated before it is loaded.
+- A revocation handler you call yourself raises `ConfigurationError`, not `ValueError`, for a config that carries no revocation endpoint. `revoke_token` already refused such a config with `ConfigurationError`, so this changes only a direct call.
+- A handler that refuses the configuration it was given raises `ConfigurationError`, and `fetch_identity` and `revoke_token` pass that class through. The Salesforce identity handler used to raise `IdentityFetchError` with `kind` `CONFIGURATION` for a non-Salesforce `authorize_url`, and a revocation handler's `ConfigurationError` used to arrive as `RevocationError`, so catch `ConfigurationError` for a configuration fault on either path. Revoking the tokens of a refused token response stays best effort and logs such a fault rather than raising it.
+- `apron_auth.providers.identity`, each provider module's `maybe_identity_handler` and `IDENTITY_RESOLVER`, and `apron_auth.protocols.IdentityResolver` are gone. `apron_auth.providers.identity_handler_for(config)` returns the handler a config resolves to.
+- A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
+- `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
 
 ## Logging
 

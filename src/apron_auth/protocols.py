@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
-from apron_auth.errors import RevocationError
+from apron_auth.errors import ConfigurationError, RevocationError
 
 if TYPE_CHECKING:
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
@@ -74,6 +74,9 @@ class RevocationHandler(Protocol):
             ``True`` if revocation succeeded.
 
         Raises:
+            ConfigurationError: If the configuration cannot be used to revoke.
+                A caller's configuration is the source of that fault, so it is not a revocation
+                failure.
             RevocationError: If the request cannot be sent or the provider refuses it.
                 Implementations should pass ``kind``, because only they know whether the provider
                 was unreachable, answered a server error, or rejected the request.
@@ -93,6 +96,10 @@ class IdentityHandler(Protocol):
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
 
+        NOTE: An implementation that derives the endpoint it sends the access token to must derive it
+        from ``config.authorize_url`` or ``config.token_url``.
+        No other field of a configuration is checked against the hosts of the provider it names.
+
         Args:
             material: The token material to establish identity from.
             config: The provider configuration the tokens were issued under.
@@ -106,24 +113,10 @@ class IdentityHandler(Protocol):
                 was unreachable, answered a server error, rejected the token, or sent an invalid response.
                 An error raised without one is ``UNEXPECTED`` and never retried.
                 ``IdentityScopeNotGrantedError`` reports a token that lacks a scope the endpoint needs.
-            ConfigurationError: If the configuration cannot be used for an identity request.
-        """
-        ...
-
-
-@runtime_checkable
-class IdentityResolver(Protocol):
-    """Provider-specific identity-handler resolver."""
-
-    def __call__(self, config: ProviderConfig) -> IdentityHandler | None:
-        """Return an identity handler when config matches this provider.
-
-        Args:
-            config: The provider configuration to match.
-
-        Returns:
-            An identity handler when ``config`` matches this provider, else
-            ``None``.
+            ConfigurationError: If the configuration cannot be used for an identity request,
+                including a refusal of the endpoints it carries.
+                A caller's configuration is the source of that fault, so it is not an identity
+                fetch failure.
         """
         ...
 
@@ -161,13 +154,13 @@ class StandardRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         revocation_url = config.revocation_url
         if self._client is not None:
             return await self._send(self._client, token, revocation_url, config)

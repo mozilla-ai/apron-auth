@@ -35,7 +35,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
-from apron_auth.errors import RevocationError
+from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -45,12 +45,10 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
 )
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 logger = logging.getLogger(__name__)
@@ -241,48 +239,19 @@ class HubSpotRevocationHandler:
             ``False`` for any other status.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         encoded = quote(token, safe="")
         url = f"{config.revocation_url.rstrip('/')}/{encoded}"
         if self._client is not None:
             return await self._send(self._client, url)
         async with httpx.AsyncClient() as client:
             return await self._send(client, url)
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the HubSpot identity handler when config matches HubSpot hosts.
-
-    HubSpot's ``authorize_url`` and ``token_url`` use distinct hosts
-    (``app.hubspot.com`` and ``api.hubapi.com`` respectively), so both
-    must match the HubSpot suffix list. Requiring both — rather than
-    either — prevents a misconfigured ``ProviderConfig`` with one
-    HubSpot-shaped URL and one attacker-controlled URL from inferring
-    this handler and routing the bearer token to a non-HubSpot host.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A HubSpot identity handler when both OAuth hosts are HubSpot's,
-        else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.HUBSPOT.host_suffixes):
-        return HubSpotIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="hubspot",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

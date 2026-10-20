@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
-from apron_auth.providers.linear import LinearIdentityHandler, maybe_identity_handler, preset
+from apron_auth.providers.linear import LinearIdentityHandler, preset
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 
@@ -133,49 +132,6 @@ class TestLinearIdentityHandler:
 
         with pytest.raises(IdentityFetchError, match="missing data.viewer"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
-
-
-class TestLinearMaybeIdentityHandler:
-    def test_canonical_linear_host_returns_handler(self) -> None:
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
-        handler = maybe_identity_handler(config)
-        assert isinstance(handler, LinearIdentityHandler)
-
-    def test_lookalike_host_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="lid",
-            client_secret=SecretStr("lsecret"),  # pragma: allowlist secret
-            authorize_url="https://linear.app.attacker.test/oauth/authorize",
-            token_url="https://linear.app.attacker.test/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_authorize_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="lid",
-            client_secret=SecretStr("lsecret"),  # pragma: allowlist secret
-            authorize_url="https://linear.app/oauth/authorize",
-            token_url="https://attacker.example.com/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_token_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="lid",
-            client_secret=SecretStr("lsecret"),  # pragma: allowlist secret
-            authorize_url="https://attacker.example.com/oauth/authorize",
-            token_url="https://api.linear.app/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_non_linear_host_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="lid",
-            client_secret=SecretStr("lsecret"),  # pragma: allowlist secret
-            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-            token_url="https://oauth2.googleapis.com/token",
-        )
-        assert maybe_identity_handler(config) is None
 
 
 class TestLinearPreset:

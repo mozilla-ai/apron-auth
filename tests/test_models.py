@@ -5,6 +5,7 @@ import math
 import pickle
 import time
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 from pydantic import BaseModel, SecretStr, ValidationError
@@ -352,6 +353,57 @@ class TestProviderConfig:
         assert config.require_iss is False
 
 
+class TestProviderConfigUnknownFields:
+    @pytest.mark.parametrize("field", ["allow_identity_inference", "redirect_url"])
+    def test_rejects_a_field_it_does_not_define(self, field: str) -> None:
+        """A field this model does not define is refused, so a renamed or mistyped one cannot be dropped."""
+        with pytest.raises(ValidationError, match=field):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                **{field: False},
+            )
+
+
+class TestProviderConfigKeepsTheCallersMapping:
+    def test_validation_adds_no_key_to_the_mapping_it_was_given(self) -> None:
+        """A caller that reuses or re-persists its mapping must not find a provider's facts in it."""
+        raw = {
+            "provider": "google",
+            "client_id": "cid",
+            "client_secret": "csec",  # pragma: allowlist secret
+            "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url": "https://oauth2.googleapis.com/token",
+        }
+        given = set(raw)
+
+        config = ProviderConfig.model_validate(raw)
+
+        assert config.can_assert_domain_ownership is True
+        assert set(raw) == given
+
+
+class TestProviderConfigTakesFactsFromAnyMapping:
+    def test_a_mapping_that_is_not_a_dict_takes_the_members_facts(self) -> None:
+        """A caller's stored mapping validates the same whatever mapping type holds it."""
+        raw = MappingProxyType(
+            {
+                "provider": "google",
+                "client_id": "cid",
+                "client_secret": "csec",  # pragma: allowlist secret
+                "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_url": "https://oauth2.googleapis.com/token",
+            }
+        )
+
+        config = ProviderConfig.model_validate(raw)
+
+        assert config.can_assert_domain_ownership is True
+        assert config.disconnect_fully_revokes is True
+
+
 class TestProviderConfigValidateIssuer:
     def _config(self, **overrides: object) -> ProviderConfig:
         defaults: dict[str, object] = {
@@ -689,6 +741,20 @@ class TestProviderConfigProvider:
                 authorize_url="https://linear.app/oauth/authorize",
                 token_url="https://api.linear.app/oauth/token",
                 scope_separator=" ",
+            )
+
+    def test_rejects_a_domain_ownership_claim_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
+        with pytest.raises(
+            ValidationError, match="can_assert_domain_ownership must be False for provider Linear, got True"
+        ):
+            ProviderConfig(
+                provider=Provider.LINEAR,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+                can_assert_domain_ownership=True,
             )
 
     def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:

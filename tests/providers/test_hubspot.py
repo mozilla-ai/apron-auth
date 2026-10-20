@@ -7,7 +7,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 
@@ -231,71 +231,6 @@ class TestHubSpotIdentityHandler:
         assert identity.email == "u@example.com"
 
 
-class TestHubSpotMaybeIdentityHandler:
-    def test_canonical_hubspot_hosts_returns_handler(self):
-        from apron_auth.providers.hubspot import HubSpotIdentityHandler, maybe_identity_handler, preset
-
-        config, _ = preset(
-            client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
-            scopes=["contacts"],
-        )
-        handler = maybe_identity_handler(config)
-        assert isinstance(handler, HubSpotIdentityHandler)
-
-    def test_lookalike_host_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.hubspot import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="hsid",
-            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
-            authorize_url="https://evilhubspot.com/oauth/authorize",
-            token_url="https://evilhubapi.com/oauth/v1/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_non_hubspot_host_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.hubspot import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="hsid",
-            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
-            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-            token_url="https://oauth2.googleapis.com/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_authorize_url_matching_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.hubspot import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="hsid",
-            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
-            authorize_url="https://app.hubspot.com/oauth/authorize",
-            token_url="https://attacker.example.com/oauth/v1/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_token_url_matching_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.hubspot import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="hsid",
-            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
-            authorize_url="https://attacker.example.com/oauth/authorize",
-            token_url="https://api.hubapi.com/oauth/v1/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-
 class TestHubSpotPreset:
     def test_returns_config_and_handler(self):
         from apron_auth.providers.hubspot import preset
@@ -486,7 +421,7 @@ class TestHubSpotRevocationHandler:
             scopes=["contacts"],
         )
         handler = HubSpotRevocationHandler()
-        with pytest.raises(ValueError, match="revocation_url"):
+        with pytest.raises(ConfigurationError, match="no revocation endpoint"):
             await handler.revoke("refresh-abc", config)
 
 

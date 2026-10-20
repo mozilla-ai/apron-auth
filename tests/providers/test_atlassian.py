@@ -4,7 +4,6 @@ import logging
 
 import httpx
 import pytest
-from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
@@ -13,7 +12,6 @@ from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.atlassian import (
     BASE_SCOPES,
     AtlassianIdentityHandler,
-    maybe_identity_handler,
     preset,
 )
 
@@ -378,46 +376,3 @@ class TestAtlassianIdentityHandler:
             match="Failed to parse Atlassian accessible resources response",
         ):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
-
-
-class TestAtlassianMaybeIdentityHandler:
-    def test_canonical_atlassian_host_returns_handler(self) -> None:
-        config, _ = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
-        handler = maybe_identity_handler(config)
-        assert isinstance(handler, AtlassianIdentityHandler)
-
-    def test_lookalike_host_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="aid",
-            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
-            authorize_url="https://evilauth.atlassian.com.attacker.test/authorize",
-            token_url="https://evilauth.atlassian.com.attacker.test/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_non_atlassian_host_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="aid",
-            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
-            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-            token_url="https://oauth2.googleapis.com/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_authorize_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="aid",
-            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
-            authorize_url="https://auth.atlassian.com/authorize",
-            token_url="https://attacker.example.com/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_token_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="aid",
-            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
-            authorize_url="https://attacker.example.com/authorize",
-            token_url="https://auth.atlassian.com/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None

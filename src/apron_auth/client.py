@@ -38,7 +38,7 @@ from apron_auth.errors import (
 from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, FreshTokenSet, IdentityMaterial, OAuthPendingState
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers.identity import infer_identity_handler
+from apron_auth.providers import identity_handler_for
 from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
@@ -301,7 +301,7 @@ class OAuthClient:
     """OAuth 2.0 client for authorization code flows, which keeps no per-user state.
 
     NOTE: Callers must not use one client from event loops in several threads at once,
-    because the identity handler it infers may keep caches that are not thread-safe.
+    because the identity handler it builds may keep caches that are not thread-safe.
     """
 
     DEFAULT_RETRYABLE_ERROR_CODES = frozenset({SERVER_ERROR, TEMPORARILY_UNAVAILABLE})
@@ -564,6 +564,9 @@ class OAuthClient:
     async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
         """Revoke one token of a refused token response, and log a failure instead of raising it.
 
+        A configuration that cannot revoke is logged like any other failure, because the refusal
+        this cleanup follows is what the caller must see.
+
         Args:
             label: The token's name for the log line, such as ``refresh token``.
             token: The token to revoke.
@@ -571,7 +574,7 @@ class OAuthClient:
         """
         try:
             await self.revoke_token(token)
-        except RevocationError:
+        except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
@@ -623,8 +626,9 @@ class OAuthClient:
             ``True`` when the provider confirms revocation.
 
         Raises:
-            ConfigurationError: If the provider has no revocation endpoint
-                configured.
+            ConfigurationError: If the provider has no revocation endpoint configured, or if the
+                handler refuses the configuration.
+                It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
                 It chains nothing from the handler.
@@ -645,12 +649,17 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise exc.with_traceback(None) from None
+        except ConfigurationError as exc:
+            # A fault in the configuration keeps its class, because the caller's configuration is its source.
+            failure_class, failure_message, failure_kind = ConfigurationError, str(exc), exc.kind
         except OAuthError as exc:
-            failure_message, failure_kind = str(exc), exc.kind
+            failure_class, failure_message, failure_kind = RevocationError, str(exc), exc.kind
         except httpx.HTTPError as exc:
             failure = http_failure(exc)
+            failure_class = RevocationError
             failure_message, failure_kind = f"Failed to revoke token: {failure.description}", failure.kind
         except Exception:
+            failure_class = RevocationError
             failure_message, failure_kind = "Failed to revoke token", FailureKind.UNEXPECTED
         else:
             if not result:
@@ -659,7 +668,7 @@ class OAuthClient:
             return True
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message, kind=failure_kind)
+        raise failure_class(failure_message, kind=failure_kind)
 
     async def fetch_identity(self, tokens: FreshTokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.
@@ -672,9 +681,10 @@ class OAuthClient:
         the granted scopes, and, for OIDC providers, the ID token — before being handed to the identity handler,
         so handlers never receive the refresh token or caller context.
 
-        Uses the configured identity handler when provided, otherwise tries
-        to infer a built-in handler from the provider endpoints.
-        A config may disallow that inference, which leaves the configured handler as the only source of identity.
+        Uses the configured identity handler when provided, otherwise the handler of the provider the config names.
+        A config that names no provider, such as a generic OpenID or MCP config, has no handler of its own,
+        and neither does one that allows none.
+        The configured handler is then the only source of identity.
 
         Args:
             tokens: The fresh token set to establish identity from.
@@ -683,13 +693,16 @@ class OAuthClient:
             The normalized identity profile.
 
         Raises:
-            ConfigurationError: If ``tokens`` is not a fresh token set,
-                or if built-in inference matches more than one provider for the configuration.
-            IdentityNotSupportedError: If no identity handler is configured
-                and none can be inferred for the provider.
-                That includes a config that disallows inference.
+            ConfigurationError: If ``tokens`` is not a fresh token set, if no handler is configured
+                and either of the config's OAuth endpoints is not a host of the provider it names, or
+                if the handler refuses the configuration.
+                It chains nothing from the handler.
+            IdentityNotSupportedError: If no identity handler is configured, and the config names no
+                provider or allows no handler of its own.
             IdentityFetchError: If the handler fails to fetch identity.
                 It chains nothing from the handler.
+            TypeError: If the named provider states a class that does not fetch identity, which is a
+                defect in this library rather than in the config.
         """
         if not isinstance(tokens, FreshTokenSet):
             msg = (
@@ -697,7 +710,8 @@ class OAuthClient:
                 "A token set reloaded from storage cannot be used for identity."
             )
             raise ConfigurationError(msg)
-        handler = self._identity_handler or self._inferred_identity_handler
+        configured = self._identity_handler
+        handler = configured if configured is not None else self._provider_identity_handler
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)
@@ -710,27 +724,37 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise exc.with_traceback(None) from None
+        except ConfigurationError as exc:
+            # A fault in the configuration keeps its class, because the caller's configuration is its source.
+            failure_class, failure_message, failure_kind = ConfigurationError, str(exc), exc.kind
         except OAuthError as exc:
-            failure_message, failure_kind = str(exc), exc.kind
+            failure_class, failure_message, failure_kind = IdentityFetchError, str(exc), exc.kind
         except httpx.HTTPError as exc:
             failure = http_failure(exc)
+            failure_class = IdentityFetchError
             failure_message, failure_kind = f"Failed to fetch identity: {failure.description}", failure.kind
         except Exception:
+            failure_class = IdentityFetchError
             failure_message, failure_kind = "Failed to fetch identity", FailureKind.UNEXPECTED
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise IdentityFetchError(failure_message, kind=failure_kind)
+        raise failure_class(failure_message, kind=failure_kind)
 
     @cached_property
-    def _inferred_identity_handler(self) -> IdentityHandler | None:
-        """Return the built-in handler inferred for this config, inferring it on first use.
+    def _provider_identity_handler(self) -> IdentityHandler | None:
+        """Return the identity handler of the provider this config names, building it on first use.
 
         Keeping one handler lets its caches, such as an issuer's signing keys, serve every sign-in.
 
         Returns:
-            The inferred handler, or ``None`` when no built-in provider matches the config.
+            The named provider's handler, or ``None`` when the config names no provider or allows
+            no handler of its own.
+
+        Raises:
+            ConfigurationError: If either of the config's OAuth endpoints is not a host of the
+                provider it names.
         """
-        return infer_identity_handler(self._config)
+        return identity_handler_for(self._config)
 
     def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
         """Return the query of an authorization URL that sends ``params``.

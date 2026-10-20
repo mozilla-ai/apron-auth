@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
@@ -13,6 +15,9 @@ from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 AccessType = Literal["read", "write", "admin"]
+
+# The facts a config takes from the provider it names, rather than repeating them.
+FACTS_TAKEN_FROM_PROVIDER = ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator")
 
 # The authorization request parameters that bind the request to the client, plus the request object parameters
 # that would replace them all. extra_params must not set them.
@@ -47,56 +52,194 @@ class ApplicationType:
     NATIVE = "native"
 
 
+@dataclass(frozen=True, kw_only=True)
+class ProviderFacts:
+    """The facts that differ between the providers this library knows by name.
+
+    Attributes:
+        can_assert_domain_ownership: Whether the provider's tokens can carry a tenancy that asserts the
+            authenticated user belongs to the email's domain, such as Google Workspace's ``hd`` claim.
+            :attr:`ProviderConfig.can_assert_domain_ownership` describes what a consumer does with it.
+        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
+            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences.
+        display_name: The provider's name as it appears in messages and documentation.
+        host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
+            They decide whether a config that names the provider may use its identity handler, so
+            they decide where an access token may be sent.
+            NOTE: A config that names the provider may have endpoints outside them, such as a
+            Salesforce org on a custom login domain.
+        identity_handler_class_name: The name of the class in the provider's module that fetches identity.
+            The class takes no constructor arguments.
+            A member names it rather than holding it, because every provider module imports this one.
+        scope_separator: The string the provider's scope parameter is joined with.
+    """
+
+    can_assert_domain_ownership: bool
+    disconnect_fully_revokes: bool
+    display_name: str
+    host_suffixes: tuple[str, ...]
+    identity_handler_class_name: str
+    scope_separator: str
+
+
 @unique
 class Provider(StrEnum):
     """The OAuth providers this library knows by name, each with the facts that differ between them.
 
     A member's value is its module name under ``apron_auth.providers``, and a member is declared as
-    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator)``.
-
-    Attributes:
-        display_name: The provider's name as it appears in messages and documentation.
-        host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
-            NOTE: A config that names this member may have endpoints outside them, such as a
-            Salesforce org on a custom login domain.
-        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
-            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
-            provider's module docstring records how the value was verified.
-        scope_separator: The string the provider's scope parameter is joined with.
+    ``(value, facts)``. Each fact is read through the property of its own name, and nothing supported
+    changes a member's facts, because they decide where an access token may be sent.
     """
 
-    display_name: str
-    host_suffixes: tuple[str, ...]
-    disconnect_fully_revokes: bool
-    scope_separator: str
+    _facts: ProviderFacts
 
-    def __new__(
-        cls,
-        value: str,
-        display_name: str,
-        host_suffixes: tuple[str, ...],
-        disconnect_fully_revokes: bool,
-        scope_separator: str,
-    ) -> Provider:
+    def __new__(cls, value: str, facts: ProviderFacts) -> Provider:
         """Create a member from its module name and the facts that differ between providers."""
         member = str.__new__(cls, value)
         member._value_ = value
-        member.display_name = display_name
-        member.host_suffixes = host_suffixes
-        member.disconnect_fully_revokes = disconnect_fully_revokes
-        member.scope_separator = scope_separator
+        member._facts = facts
         return member
 
-    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ")
-    GITHUB = ("github", "GitHub", ("github.com",), True, " ")
-    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ")
-    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ")
-    LINEAR = ("linear", "Linear", ("linear.app",), False, ",")
-    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ")
-    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ")
-    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ")
-    SLACK = ("slack", "Slack", ("slack.com",), False, ",")
-    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ")
+    @property
+    def can_assert_domain_ownership(self) -> bool:
+        """Whether the provider's tokens can carry a tenancy that asserts ownership of an email's domain."""
+        return self._facts.can_assert_domain_ownership
+
+    @property
+    def disconnect_fully_revokes(self) -> bool:
+        """Whether revoking a token removes the user's portal-level OAuth grant."""
+        return self._facts.disconnect_fully_revokes
+
+    @property
+    def display_name(self) -> str:
+        """The provider's name as it appears in messages and documentation."""
+        return self._facts.display_name
+
+    @property
+    def host_suffixes(self) -> tuple[str, ...]:
+        """The provider's own OAuth endpoint hosts, matched on a label boundary."""
+        return self._facts.host_suffixes
+
+    @property
+    def identity_handler_class_name(self) -> str:
+        """The name of the class in the provider's module that fetches identity."""
+        return self._facts.identity_handler_class_name
+
+    @property
+    def scope_separator(self) -> str:
+        """The string the provider's scope parameter is joined with."""
+        return self._facts.scope_separator
+
+    ATLASSIAN = (
+        "atlassian",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Atlassian",
+            host_suffixes=("auth.atlassian.com",),
+            identity_handler_class_name="AtlassianIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    GITHUB = (
+        "github",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=True,
+            display_name="GitHub",
+            host_suffixes=("github.com",),
+            identity_handler_class_name="GitHubIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    GOOGLE = (
+        "google",
+        ProviderFacts(
+            can_assert_domain_ownership=True,
+            disconnect_fully_revokes=True,
+            display_name="Google",
+            host_suffixes=("google.com", "googleapis.com"),
+            identity_handler_class_name="GoogleIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    HUBSPOT = (
+        "hubspot",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="HubSpot",
+            host_suffixes=("api.hubapi.com", "app.hubspot.com"),
+            identity_handler_class_name="HubSpotIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    LINEAR = (
+        "linear",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Linear",
+            host_suffixes=("linear.app",),
+            identity_handler_class_name="LinearIdentityHandler",
+            scope_separator=",",
+        ),
+    )
+    MICROSOFT = (
+        "microsoft",
+        ProviderFacts(
+            can_assert_domain_ownership=True,
+            disconnect_fully_revokes=False,
+            display_name="Microsoft",
+            host_suffixes=("login.microsoftonline.com",),
+            identity_handler_class_name="MicrosoftIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    NOTION = (
+        "notion",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Notion",
+            host_suffixes=("api.notion.com",),
+            identity_handler_class_name="NotionIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    SALESFORCE = (
+        "salesforce",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Salesforce",
+            host_suffixes=("salesforce.com",),
+            identity_handler_class_name="SalesforceIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
+    SLACK = (
+        "slack",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Slack",
+            host_suffixes=("slack.com",),
+            identity_handler_class_name="SlackIdentityHandler",
+            scope_separator=",",
+        ),
+    )
+    TYPEFORM = (
+        "typeform",
+        ProviderFacts(
+            can_assert_domain_ownership=False,
+            disconnect_fully_revokes=False,
+            display_name="Typeform",
+            host_suffixes=("api.typeform.com",),
+            identity_handler_class_name="TypeformIdentityHandler",
+            scope_separator=" ",
+        ),
+    )
 
 
 class ScopeMetadata(BaseModel, frozen=True):
@@ -132,8 +275,11 @@ class ScopeMetadata(BaseModel, frozen=True):
     required: bool = False
 
 
-class ProviderConfig(BaseModel, frozen=True):
+class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and leave the config weaker than the caller asked for.
 
     Attributes:
         extra_params: Fixed parameters added to every authorization request.
@@ -180,10 +326,11 @@ class ProviderConfig(BaseModel, frozen=True):
         can_assert_domain_ownership: ``True`` only for providers whose
             tokens can in principle carry a tenancy that asserts the
             authenticated user belongs to the email's domain (e.g.
-            Google Workspace via the ``hd`` claim). Set by the preset
-            at construction time. Consumers building domain-gated
-            tenancy can refuse to wire up an incapable provider at
-            startup rather than discovering the gap at login time.
+            Google Workspace via the ``hd`` claim). Taken from
+            :attr:`provider` when the config names one, and set by the
+            preset otherwise. Consumers building domain-gated tenancy
+            can refuse to wire up an incapable provider at startup
+            rather than discovering the gap at login time.
             Defaults to ``False``.
         implicit_scopes: Mapping from a high-level scope to the
             finer-grained scopes it implicitly includes — used to avoid
@@ -222,19 +369,22 @@ class ProviderConfig(BaseModel, frozen=True):
             resource. ``None`` (the default) emits no ``resource`` parameter
             anywhere, preserving behavior for providers that do not use
             resource indicators.
-        allow_identity_inference: Whether a built-in identity handler may be inferred from the endpoint hosts.
-            Set ``False`` when the hosts do not decide which identity contract applies,
-            for example a generic OpenID provider on a host that a built-in provider also serves.
-            Defaults to ``True``.
+        use_builtin_identity_handler: Whether this library may establish identity with the identity
+            handler of the provider :attr:`provider` names.
+            Set ``False`` to leave a handler passed to :class:`~apron_auth.client.OAuthClient` as the
+            only source of identity. A config that names no provider has no handler of its own either
+            way. Defaults to ``True``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
-            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
-            and a config that contradicts them is refused at construction.
-            NOTE: The label is not an attestation. Nothing else about a config is checked against the
-            member, so a caller must not read this as proof of where the endpoints lead.
+            When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
+            config that contradicts one is refused at construction.
+            NOTE: The label is not an attestation. Construction checks nothing else about a config
+            against the member, so a caller must not read this as proof of where the endpoints lead.
+            NOTE: Only construction takes and checks a member's facts. A config whose provider is set
+            through :meth:`~pydantic.BaseModel.model_copy` keeps the facts it already carried.
     """
 
     client_id: str
@@ -256,7 +406,7 @@ class ProviderConfig(BaseModel, frozen=True):
     issuer: str | None = None
     require_iss: bool = False
     resource: str | None = None
-    allow_identity_inference: bool = True
+    use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = 600.0
     provider: Provider | None = None
 
@@ -361,16 +511,18 @@ class ProviderConfig(BaseModel, frozen=True):
             data: The raw input, which is a mapping when the config is built from keywords or JSON.
 
         Returns:
-            The input, with each stated fact filled in where it was left out.
+            A mapping with each stated fact filled in where it was left out, leaving the caller's own
+            mapping as it was.
         """
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             return data
         try:
             member = Provider(data["provider"])
         except (KeyError, ValueError):
             return data
-        for field in ("disconnect_fully_revokes", "scope_separator"):
-            data.setdefault(field, getattr(member, field))
+        data = dict(data)
+        for fact in FACTS_TAKEN_FROM_PROVIDER:
+            data.setdefault(fact, getattr(member, fact))
         return data
 
     @model_validator(mode="after")
@@ -384,23 +536,17 @@ class ProviderConfig(BaseModel, frozen=True):
             The validated config, unchanged.
 
         Raises:
-            ValueError: If ``provider`` is set and ``disconnect_fully_revokes`` or
-                ``scope_separator`` differs from the member's.
+            ValueError: If ``provider`` is set and a fact the config takes from it differs from the
+                member's.
         """
         if self.provider is None:
             return self
-        if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
-            msg = (
-                f"disconnect_fully_revokes must be {self.provider.disconnect_fully_revokes} "
-                f"for provider {self.provider.display_name}, got {self.disconnect_fully_revokes}"
-            )
-            raise ValueError(msg)
-        if self.scope_separator != self.provider.scope_separator:
-            msg = (
-                f"scope_separator must be {self.provider.scope_separator!r} "
-                f"for provider {self.provider.display_name}, got {self.scope_separator!r}"
-            )
-            raise ValueError(msg)
+        for fact in FACTS_TAKEN_FROM_PROVIDER:
+            stated = getattr(self.provider, fact)
+            carried = getattr(self, fact)
+            if carried != stated:
+                msg = f"{fact} must be {stated!r} for provider {self.provider.display_name}, got {carried!r}"
+                raise ValueError(msg)
         return self
 
     def basic_auth(self) -> tuple[str, str] | None:

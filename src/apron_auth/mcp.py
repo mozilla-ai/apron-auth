@@ -2,7 +2,7 @@
 
 This module discovers a remote MCP server's OAuth endpoints from its RFC 9728 and RFC 8414 metadata.
 It folds them together with client credentials into a :class:`~apron_auth.models.ProviderConfig`.
-That config infers no identity handler.
+That config names no built-in provider, so it has no identity handler of its own.
 An authorization server's host does not decide which identity contract applies to its tokens.
 This module is stateless and stores no credentials.
 
@@ -185,7 +185,7 @@ def to_provider_config(
     redirect_uri: str | None = None,
     resource: str | None = None,
 ) -> ProviderConfig:
-    """Fold discovered metadata and client credentials into a ProviderConfig that infers no identity handler.
+    """Fold discovered metadata and client credentials into a ProviderConfig with no identity handler of its own.
 
     PKCE is enabled unless the server advertises code-challenge methods that
     exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
@@ -200,7 +200,8 @@ def to_provider_config(
     The RFC 8707 resource indicator defaults to the discovered protected-resource
     identifier and can be overridden by ``resource``.
 
-    The returned config disallows identity handler inference, and no parameter re-enables it.
+    The returned config names no built-in provider and allows no provider's identity handler,
+    and no parameter changes either.
     An authorization server's host does not decide which identity contract applies to its tokens.
 
     NOTE: Callers must supply an explicit identity handler to fetch identity with the returned config.
@@ -256,7 +257,7 @@ def to_provider_config(
         issuer=metadata.issuer,
         require_iss=metadata.iss_parameter_supported,
         resource=resource if resource is not None else metadata.resource,
-        allow_identity_inference=False,
+        use_builtin_identity_handler=False,
     )
 
 

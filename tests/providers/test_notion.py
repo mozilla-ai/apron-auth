@@ -9,10 +9,10 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
-from apron_auth.providers.notion import NotionIdentityHandler, NotionRevocationHandler, maybe_identity_handler, preset
+from apron_auth.providers.notion import NotionIdentityHandler, NotionRevocationHandler, preset
 
 NOTION_REVOKE_URL = "https://api.notion.com/v1/oauth/revoke"
 NOTION_ME_URL = "https://api.notion.com/v1/users/me"
@@ -163,40 +163,6 @@ class TestNotionIdentityHandler:
         )
 
 
-class TestNotionMaybeIdentityHandler:
-    def test_canonical_notion_host_returns_handler(self) -> None:
-        config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
-        handler = maybe_identity_handler(config)
-        assert isinstance(handler, NotionIdentityHandler)
-
-    def test_lookalike_host_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="nid",
-            client_secret=SecretStr("nsecret"),  # pragma: allowlist secret
-            authorize_url="https://api.notion.com.attacker.test/v1/oauth/authorize",
-            token_url="https://api.notion.com.attacker.test/v1/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_authorize_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="nid",
-            client_secret=SecretStr("nsecret"),  # pragma: allowlist secret
-            authorize_url="https://api.notion.com/v1/oauth/authorize",
-            token_url="https://attacker.example.com/v1/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_token_url_matching_returns_none(self) -> None:
-        config = ProviderConfig(
-            client_id="nid",
-            client_secret=SecretStr("nsecret"),  # pragma: allowlist secret
-            authorize_url="https://attacker.example.com/v1/oauth/authorize",
-            token_url="https://api.notion.com/v1/oauth/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-
 class TestNotionPreset:
     def test_config_has_correct_endpoints(self) -> None:
         config, _ = preset(client_id="nid", client_secret="nsecret", scopes=[])
@@ -280,7 +246,7 @@ class TestNotionRevocationHandler:
             token_endpoint_auth_method="client_secret_basic",
         )
         handler = NotionRevocationHandler()
-        with pytest.raises(ValueError, match="revocation_url"):
+        with pytest.raises(ConfigurationError, match="no revocation endpoint"):
             await handler.revoke("access-token-abc", config)
 
     async def test_successful_revocation(self, httpx_mock: HTTPXMock) -> None:

@@ -16,14 +16,12 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
-from apron_auth.errors import RevocationError
+from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 # The scopes the preset always requests, with the labels a consent screen shows.
@@ -132,13 +130,13 @@ class GoogleRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
         if config.revocation_url is None:
-            msg = "revocation_url is required but not set in ProviderConfig"
-            raise ValueError(msg)
+            msg = "the provider configuration carries no revocation endpoint"
+            raise ConfigurationError(msg)
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
@@ -152,28 +150,6 @@ class GoogleRevocationHandler:
         # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise RevocationError(f"Failed to revoke Google token: {failure.description}", kind=failure.kind)
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Google identity handler when config matches Google hosts.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Google identity handler when the config's OAuth hosts are
-        Google's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.GOOGLE.host_suffixes):
-        return GoogleIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="google",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(
@@ -217,6 +193,5 @@ def preset(
         scopes=merged_scopes,
         extra_params=defaults,
         scope_metadata=BASE_SCOPE_METADATA,
-        can_assert_domain_ownership=True,
     )
     return config, GoogleRevocationHandler()

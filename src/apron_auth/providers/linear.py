@@ -22,12 +22,10 @@ from pydantic import SecretStr
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 # The GraphQL endpoint that the identity query goes to.
@@ -126,28 +124,6 @@ class LinearIdentityHandler:
             tenancies=tenancies,
             raw=viewer,
         )
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Linear identity handler when config matches Linear hosts.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Linear identity handler when the config's OAuth hosts are
-        Linear's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.LINEAR.host_suffixes):
-        return LinearIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="linear",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

@@ -14,13 +14,11 @@ from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 # The scope the userinfo endpoint requires.
@@ -98,28 +96,6 @@ class TypeformIdentityHandler:
             tenancies=(),
             raw=payload,
         )
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Typeform identity handler when config matches Typeform hosts.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Typeform identity handler when the config's OAuth hosts are
-        Typeform's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.TYPEFORM.host_suffixes):
-        return TypeformIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="typeform",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

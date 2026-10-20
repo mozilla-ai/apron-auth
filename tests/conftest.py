@@ -1,8 +1,29 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
+from support import VaryFacts
+
+from apron_auth.models import Provider
+
+
+@pytest.fixture
+def vary_facts(monkeypatch: pytest.MonkeyPatch) -> VaryFacts:
+    """Return the callable that varies a provider member's facts.
+
+    A member's facts are read-only, so a test that needs a provider whose facts differ from the
+    shipped ones asks for them here rather than assigning to the member.
+
+    Returns:
+        The callable, which takes a member and the facts to change.
+    """
+
+    def vary(provider: Provider, **changes: object) -> None:
+        monkeypatch.setattr(provider, "_facts", replace(provider._facts, **changes))
+
+    return vary
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

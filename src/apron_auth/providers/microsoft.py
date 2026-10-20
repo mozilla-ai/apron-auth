@@ -30,13 +30,11 @@ from apron_auth.errors import (
     TokenValidationReason,
 )
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 logger = logging.getLogger(__name__)
@@ -500,28 +498,6 @@ def _email_verified(id_token: _IdToken | None, email: object) -> bool | None:
     return value if isinstance(value, bool) else None
 
 
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Microsoft identity handler when config matches Microsoft hosts.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Microsoft identity handler when the config's OAuth hosts are
-        Microsoft's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.MICROSOFT.host_suffixes):
-        return MicrosoftIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="microsoft",
-    resolver=maybe_identity_handler,
-)
-
-
 def preset(
     client_id: str,
     client_secret: str,
@@ -532,10 +508,7 @@ def preset(
     """Create a Microsoft OAuth provider configuration.
 
     Microsoft does not provide a token revocation endpoint. Scopes from
-    BASE_SCOPES are merged automatically. ``can_assert_domain_ownership``
-    is set: an Entra ID workforce sign-in can carry a verified
-    domain-owning tenancy resolved from the ID token and the tenant's
-    admin-verified domains.
+    BASE_SCOPES are merged automatically.
 
     Args:
         client_id: The OAuth client identifier. A GUID is stored in lowercase, which names the same
@@ -571,6 +544,5 @@ def preset(
         scopes=merged_scopes,
         extra_params=defaults,
         scope_metadata=BASE_SCOPE_METADATA,
-        can_assert_domain_ownership=True,
     )
     return config, None
