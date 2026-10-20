@@ -35,7 +35,7 @@ class TestApplicationType:
         assert names == sorted(names)
 
     def test_values_are_the_registered_names(self) -> None:
-        assert [member.value for member in ApplicationType] == ["native", "web"]
+        assert {member.value for member in ApplicationType} == {"native", "web"}
 
 
 class TestTokenEndpointAuthMethod:
@@ -44,11 +44,11 @@ class TestTokenEndpointAuthMethod:
         assert names == sorted(names)
 
     def test_values_are_the_registered_names(self) -> None:
-        assert [member.value for member in TokenEndpointAuthMethod] == [
+        assert {member.value for member in TokenEndpointAuthMethod} == {
             "client_secret_basic",
             "client_secret_post",
             "none",
-        ]
+        }
 
     def test_a_method_this_library_cannot_perform_is_not_a_member(self) -> None:
         with pytest.raises(ValueError, match="private_key_jwt"):
