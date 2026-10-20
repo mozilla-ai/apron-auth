@@ -366,6 +366,24 @@ class TestProviderConfigUnknownFields:
             )
 
 
+class TestProviderConfigKeepsTheCallersMapping:
+    def test_validation_adds_no_key_to_the_mapping_it_was_given(self) -> None:
+        """A caller that reuses or re-persists its mapping must not find a provider's facts in it."""
+        raw = {
+            "provider": "google",
+            "client_id": "cid",
+            "client_secret": "csec",  # pragma: allowlist secret
+            "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
+            "token_url": "https://oauth2.googleapis.com/token",
+        }
+        given = set(raw)
+
+        config = ProviderConfig.model_validate(raw)
+
+        assert config.can_assert_domain_ownership is True
+        assert set(raw) == given
+
+
 class TestProviderConfigValidateIssuer:
     def _config(self, **overrides: object) -> ProviderConfig:
         defaults: dict[str, object] = {

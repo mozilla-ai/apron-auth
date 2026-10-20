@@ -507,7 +507,8 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             data: The raw input, which is a mapping when the config is built from keywords or JSON.
 
         Returns:
-            The input, with each stated fact filled in where it was left out.
+            A mapping with each stated fact filled in where it was left out, leaving the caller's own
+            mapping as it was.
         """
         if not isinstance(data, dict):
             return data
@@ -515,6 +516,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             member = Provider(data["provider"])
         except (KeyError, ValueError):
             return data
+        data = dict(data)
         for field in ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator"):
             data.setdefault(field, getattr(member, field))
         return data
