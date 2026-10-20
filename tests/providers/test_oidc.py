@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import time
+import traceback
 from typing import Any
 
 import httpx
@@ -1435,14 +1436,15 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="different subject"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config)
 
-    async def test_reports_a_malformed_userinfo_url(self, config: ProviderConfig):
-        """``httpx.InvalidURL`` is not a ``RequestError``, so it is caught by name."""
-        handler = OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url="https://idp.example/\x00")
+    def test_refuses_a_userinfo_url_that_cannot_be_requested(self):
+        """A URL the request itself would reject is the caller's own, so no handler is built on it."""
+        userinfo = "operator-7f3a9c"
 
-        with pytest.raises(IdentityFetchError, match="Failed to fetch") as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
-        assert excinfo.value.__cause__ is None
-        assert excinfo.value.__context__ is None
+        with pytest.raises(ConfigurationError, match="userinfo endpoint is malformed") as excinfo:
+            OidcIdentityHandler(issuer=ISSUER, jwks_url=JWKS_URL, userinfo_url=f"https://{userinfo}@idp.example/\x00")
+
+        assert excinfo.value.kind is FailureKind.CONFIGURATION
+        assert userinfo not in "".join(traceback.format_exception(excinfo.value))
 
     async def test_reports_a_token_that_cannot_be_sent(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A token that is not ASCII cannot go in a header, and the error must not repeat it."""

@@ -32,6 +32,7 @@ def require_url(
 
     This is the one URL rule for the issuer, the document URL and every endpoint.
     The value must be a string with a scheme, a host and no fragment.
+    A URL that cannot be requested as written is refused here rather than at the fetch.
     It must use ``https`` unless ``allow_insecure_http`` is set.
     An issuer also has no query and no userinfo (OpenID Connect Discovery 1.0 section 4.1).
 
@@ -58,7 +59,9 @@ def require_url(
         hostname = parsed.hostname
         # The port is parsed only when read, so a port that is not a number surfaces here and not at the fetch.
         parsed.port  # noqa: B018
-    except ValueError as exc:
+        # The HTTP client's parser is stricter than urlparse, so a URL it cannot request is refused here.
+        httpx.URL(value)
+    except (ValueError, httpx.InvalidURL) as exc:
         msg = f"OpenID {field} is malformed"
         raise OidcDiscoveryError(msg, kind=kind) from exc
     if not parsed.scheme or not hostname:

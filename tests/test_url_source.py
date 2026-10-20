@@ -145,3 +145,19 @@ def test_the_issuer_rules_refuse_a_query_and_userinfo(value: str, refusal: str) 
     """Userinfo in an issuer would be sent as credentials with every request derived from it."""
     with pytest.raises(OidcDiscoveryError, match=refusal):
         require_url(value, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("https://idp.example\x00/realm", id="a non-printable character"),
+        pytest.param("https://idp\texample.com/realm", id="a control character"),
+        pytest.param("https://\u2026.example/realm", id="a host with no IDNA form"),
+    ],
+)
+def test_a_url_that_cannot_be_requested_is_refused_by_its_source(value: str) -> None:
+    """A URL the request itself would reject is the caller's fault when the caller passed it."""
+    with pytest.raises(OidcDiscoveryError, match="is malformed") as exc_info:
+        require_url(value, field="document URL", allow_insecure_http=False, caller_supplied=True)
+
+    assert exc_info.value.kind is FailureKind.CONFIGURATION
