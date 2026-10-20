@@ -4,6 +4,7 @@ import copy
 import math
 import pickle
 import time
+import traceback
 from pathlib import Path
 from types import MappingProxyType
 
@@ -72,7 +73,7 @@ class TestTokenEndpointAuthMethod:
 class TestClientRegistration:
     def test_a_method_this_library_cannot_perform_is_refused(self) -> None:
         """The registration's method is read off a server document, so it is validated into the type."""
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ClientRegistration(client_id="c", token_endpoint_auth_method="private_key_jwt")
 
     def test_a_registered_method_is_the_enum_member(self) -> None:
@@ -112,7 +113,7 @@ class TestProviderConfig:
         "max_age", [0, -1, math.inf, math.nan], ids=["zero", "negative", "infinite", "not-a-number"]
     )
     def test_max_pending_age_rejects_a_value_that_is_not_positive_and_finite(self, max_age: float) -> None:
-        with pytest.raises(ValidationError, match="max_pending_age_seconds must be a positive finite number"):
+        with pytest.raises(ConfigurationError, match="max_pending_age_seconds must be a positive finite number"):
             ProviderConfig(
                 client_id="test-client",
                 client_secret=SecretStr("test-secret"),
@@ -146,7 +147,7 @@ class TestProviderConfig:
         ],
     )
     def test_resource_rejects_non_absolute_or_fragmented_uri(self, bad_resource: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ProviderConfig(
                 client_id="test-client",
                 client_secret=SecretStr("test-secret"),
@@ -222,7 +223,7 @@ class TestProviderConfig:
             )
 
         if raises:
-            with pytest.raises(ValidationError):
+            with pytest.raises(ConfigurationError):
                 build()
         else:
             build()
@@ -240,7 +241,7 @@ class TestProviderConfig:
 
     def test_an_auth_method_this_library_cannot_perform_is_refused(self) -> None:
         """A method outside the closed set would be sent to the token endpoint and rejected there."""
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ProviderConfig(
                 client_id="c",
                 client_secret=SecretStr("s"),
@@ -271,7 +272,7 @@ class TestProviderConfig:
     @pytest.mark.parametrize("name", sorted(RESERVED_AUTHORIZATION_PARAMS))
     def test_extra_params_cannot_set_a_reserved_parameter(self, name: str) -> None:
         """A parameter that binds the request to the client, or replaces it, is refused when the config is built."""
-        with pytest.raises(ValidationError, match=f"reserved authorization request parameters: {name}"):
+        with pytest.raises(ConfigurationError, match=f"reserved authorization request parameters: {name}"):
             ProviderConfig(
                 client_id="test-client",
                 client_secret=SecretStr("test-secret"),
@@ -281,7 +282,7 @@ class TestProviderConfig:
             )
 
     def test_extra_params_error_names_every_refused_parameter(self) -> None:
-        with pytest.raises(ValidationError, match="response_type, state"):
+        with pytest.raises(ConfigurationError, match="response_type, state"):
             ProviderConfig(
                 client_id="test-client",
                 client_secret=SecretStr("test-secret"),
@@ -341,7 +342,7 @@ class TestProviderConfig:
         assert "test-secret" not in str(config)
 
     def test_missing_required_fields(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ProviderConfig(client_id="test")
 
     def test_scope_metadata_defaults_to_empty_list(self) -> None:
@@ -433,7 +434,7 @@ class TestProviderConfigUnknownFields:
     @pytest.mark.parametrize("field", ["allow_identity_inference", "redirect_url"])
     def test_rejects_a_field_it_does_not_define(self, field: str) -> None:
         """A field this model does not define is refused, so a renamed or mistyped one cannot be dropped."""
-        with pytest.raises(ValidationError, match=field):
+        with pytest.raises(ConfigurationError, match=field):
             ProviderConfig(
                 client_id="cid",
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
@@ -461,7 +462,7 @@ class TestProviderConfigUrlCredentials:
         }
         endpoints[field] = f"https://{authority}provider.example.com/endpoint"
 
-        with pytest.raises(ValidationError, match="must not carry userinfo"):
+        with pytest.raises(ConfigurationError, match="must not carry userinfo"):
             ProviderConfig(
                 client_id="cid",
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
@@ -469,8 +470,8 @@ class TestProviderConfigUrlCredentials:
             )
 
     def test_the_refusal_message_names_only_the_field(self) -> None:
-        """The message is what this model controls. The surrounding error is the framework's and echoes the input."""
-        with pytest.raises(ValidationError) as exc_info:
+        """The refusal names the field that failed and nothing else, so a log of it carries no value."""
+        with pytest.raises(ConfigurationError) as exc_info:
             ProviderConfig(
                 client_id="cid",
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
@@ -478,8 +479,40 @@ class TestProviderConfigUrlCredentials:
                 token_url="https://operator:sesame@provider.example.com/token",  # pragma: allowlist secret
             )
 
-        messages = " ".join(error["msg"] for error in exc_info.value.errors())
-        assert messages == "Value error, token_url must not carry userinfo"
+        assert str(exc_info.value) == "token_url must not carry userinfo"
+
+
+class TestARefusalRepeatsNoValue:
+    """A framework refusal carries the constructor's raw input, which for these models holds a credential."""
+
+    def test_a_config_refusal_repeats_no_secret_and_no_url(self) -> None:
+        secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
+        payload = {
+            "client_id": "cid",
+            "client_secret": secret,
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://operator:" + "sesame@provider.example.com/token",
+        }
+
+        with pytest.raises(ConfigurationError, match="token_url must not carry userinfo") as exc_info:
+            ProviderConfig(**payload)
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in rendered
+        assert "operator" not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    def test_a_pending_state_refusal_repeats_no_secret(self) -> None:
+        verifier = "THE_" + "REAL_VERIFIER"
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            OAuthPendingState.model_validate({"state": "s", "code_verifier": verifier, "created_at": "not-a-number"})
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert verifier not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
 
 class TestProviderConfigKeepsTheCallersMapping:
@@ -848,7 +881,7 @@ class TestProviderConfigProvider:
 
     def test_rejects_a_scope_separator_that_contradicts_the_member(self) -> None:
         """A value the member does not state is refused; leaving it out takes the member's."""
-        with pytest.raises(ValidationError, match="scope_separator must be ',' for provider Linear, got ' '"):
+        with pytest.raises(ConfigurationError, match="scope_separator must be ',' for provider Linear, got ' '"):
             ProviderConfig(
                 provider=Provider.LINEAR,
                 client_id="cid",
@@ -861,7 +894,7 @@ class TestProviderConfigProvider:
     def test_rejects_a_domain_ownership_claim_that_contradicts_the_member(self) -> None:
         """A value the member does not state is refused; leaving it out takes the member's."""
         with pytest.raises(
-            ValidationError, match="can_assert_domain_ownership must be False for provider Linear, got True"
+            ConfigurationError, match="can_assert_domain_ownership must be False for provider Linear, got True"
         ):
             ProviderConfig(
                 provider=Provider.LINEAR,
@@ -875,7 +908,7 @@ class TestProviderConfigProvider:
     def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
         """A value the member does not state is refused; leaving it out takes the member's."""
         with pytest.raises(
-            ValidationError, match="disconnect_fully_revokes must be True for provider GitHub, got False"
+            ConfigurationError, match="disconnect_fully_revokes must be True for provider GitHub, got False"
         ):
             ProviderConfig(
                 provider=Provider.GITHUB,
@@ -1230,7 +1263,7 @@ class TestProviderFactsAreDerived:
         [("scope_separator", " "), ("disconnect_fully_revokes", True)],
     )
     def test_a_value_that_contradicts_the_member_is_still_refused(self, field: str, value: object) -> None:
-        with pytest.raises(ValidationError, match="Linear"):
+        with pytest.raises(ConfigurationError, match="Linear"):
             ProviderConfig(
                 client_id="c",
                 client_secret=SecretStr("s"),
@@ -1266,7 +1299,7 @@ class TestScopeSeparator:
     """Test that a config refuses an empty separator and that no provider member states one."""
 
     def test_an_empty_separator_is_refused(self) -> None:
-        with pytest.raises(ValidationError, match="scope_separator must not be empty"):
+        with pytest.raises(ConfigurationError, match="scope_separator must not be empty"):
             ProviderConfig(
                 client_id="cid",
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret

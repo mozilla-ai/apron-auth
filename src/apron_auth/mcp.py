@@ -255,11 +255,11 @@ def to_provider_config(
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
 
     Raises:
-        McpDiscoveryError: If the registration's method disagrees with its
-            secret, or the server advertises no method the client can satisfy.
-        ValidationError: If a URL the metadata states carries a credential in its
+        ConfigurationError: If a URL the metadata states carries a credential in its
             authority, or the effective ``resource`` — supplied or discovered — is
             not a valid absolute URI without a fragment.
+        McpDiscoveryError: If the registration's method disagrees with its
+            secret, or the server advertises no method the client can satisfy.
     """
     secret = registration.client_secret
     methods = metadata.code_challenge_methods

@@ -9,7 +9,7 @@ from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn, assert_never
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationError, ValidationInfo, model_validator
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
 from apron_auth._urls import AuthorityCredential, authority_credential
@@ -309,7 +309,47 @@ class ScopeMetadata(BaseModel, frozen=True):
     required: bool = False
 
 
-class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
+def _refusal_text(error: ValidationError) -> str:
+    """Return a model's refusals as one line, naming each field it refused without repeating its value.
+
+    Args:
+        error: The refusal raised while validating the model.
+
+    Returns:
+        One line naming each refused field and why, or the model-level reason when a refusal names no field.
+    """
+    refusals: list[str] = []
+    for entry in error.errors(include_url=False, include_input=False, include_context=False):
+        reason = entry["msg"].removeprefix("Value error, ")
+        field = ".".join(str(part) for part in entry["loc"])
+        refusals.append(f"{field}: {reason}" if field else reason)
+    return "; ".join(refusals)
+
+
+class _CredentialBearingModel(BaseModel):
+    """A model that holds a credential, and refuses without repeating what it was given.
+
+    NOTE: A validation refusal carries the constructor's raw input, which for these models holds a
+    caller's secret or token, and a caller that records the refusal would record that too.
+
+    NOTE: A model that refuses to be built from a nested field must not use this. A custom
+    constructor makes the framework validate a nested value through it, where no field name is
+    set, so such a refusal would never fire.
+    """
+
+    def __init__(self, **data: Any) -> None:
+        """Build the model, refusing with a configuration error that repeats no value it was given."""
+        refusals: str | None = None
+        try:
+            super().__init__(**data)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        if refusals is not None:
+            raise ConfigurationError(refusals)
+
+
+class ProviderConfig(_CredentialBearingModel, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
@@ -762,7 +802,7 @@ class ServerMetadata(BaseModel, frozen=True):
     jwks_url: str | None = None
 
 
-class ClientRegistration(BaseModel, frozen=True):
+class ClientRegistration(_CredentialBearingModel, frozen=True):
     """A client's credentials at one authorization server.
 
     RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
@@ -1133,7 +1173,7 @@ class IdentityProfile(BaseModel, frozen=True):
         return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
 
-class OAuthPendingState(BaseModel, frozen=True):
+class OAuthPendingState(_CredentialBearingModel, frozen=True):
     """State stored during the OAuth authorization flow.
 
     Attributes:
