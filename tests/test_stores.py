@@ -159,6 +159,7 @@ class TestMaximumAgeArgument:
     @pytest.mark.parametrize(
         "max_age",
         [
+            pytest.param(10**400, id="beyond the float range"),
             pytest.param(math.inf, id="infinite"),
             pytest.param(math.nan, id="not a number"),
             pytest.param(0.0, id="zero"),

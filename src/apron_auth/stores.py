@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 # The default age, in seconds, after which a stored pending state expires.
 DEFAULT_MAX_AGE = 600.0
+
+# The widest maximum age, in seconds, the system clock can be offset by.
+_WIDEST_MAX_AGE = sys.float_info.max
 
 
 class MemoryStateStore:
@@ -53,7 +57,7 @@ class MemoryStateStore:
             ConfigurationError: If ``max_age`` is not a positive finite number, because no stored state
                 would ever reach a limit it cannot be compared against.
         """
-        if finite_number(max_age) is None or max_age <= 0:
+        if finite_number(max_age) is None or max_age <= 0 or max_age > _WIDEST_MAX_AGE:
             msg = "max_age must be a positive finite number"
             raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
