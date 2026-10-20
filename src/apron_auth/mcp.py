@@ -493,8 +493,13 @@ def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) ->
     A public client declares ``none`` and carries no secret.
     Any other method is a confidential client, which has a secret to send.
     """
-    is_public = method is TokenEndpointAuthMethod.NONE
-    return is_public == (secret is None)
+    match method:
+        case TokenEndpointAuthMethod.NONE:
+            return secret is None
+        case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC | TokenEndpointAuthMethod.CLIENT_SECRET_POST:
+            return secret is not None
+        case _:
+            assert_never(method)
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
@@ -569,11 +574,10 @@ def _honor_registered_auth_method(
 
     The registered method (RFC 7591) is authoritative for the client, so this honors it.
     It raises rather than yielding an internally inconsistent config when the method and the secret disagree.
-    The two disagreements are a confidential method with no secret to send, and ``none`` paired with a secret.
     A public client must carry no secret, because the secret would be attached to requests that present no
     client authentication.
-    A registration :func:`register_client` issued was refused when its response was read, so this stands for
-    a registration the caller holds from anywhere else.
+    This checks whatever pair it is given, because the method and the secret can come from any registration
+    the caller holds.
 
     Args:
         registered: The method the server registered for this client.
@@ -585,19 +589,16 @@ def _honor_registered_auth_method(
     Raises:
         McpDiscoveryError: If the method disagrees with the secret's presence.
     """
+    if _secret_agrees(registered, secret):
+        return registered
     match registered:
         case TokenEndpointAuthMethod.NONE:
-            if secret is not None:
-                msg = "MCP server registered a public client (none) but issued a client secret"
-                raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
-            return TokenEndpointAuthMethod.NONE
+            msg = "MCP server registered a public client (none) but issued a client secret"
         case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC | TokenEndpointAuthMethod.CLIENT_SECRET_POST:
-            if secret is None:
-                msg = "MCP server registered a confidential auth method but issued no client secret"
-                raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
-            return registered
+            msg = "MCP server registered a confidential auth method but issued no client secret"
         case _:
             assert_never(registered)
+    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
