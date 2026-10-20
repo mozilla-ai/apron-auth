@@ -22,6 +22,8 @@ if TYPE_CHECKING:
 
 # The library's source tree, walked to hold every call to a URL rule to the convention.
 SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
+# Every module of that tree, one parametrized case each.
+MODULES = sorted(SRC.rglob("*.py"))
 # The URL rules whose refusal follows the source, so every call to one names it.
 URL_RULES = {"_validate_url", "require_url"}
 
@@ -46,7 +48,12 @@ def _calls_without_a_source(path: Path) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")), ids=lambda p: str(p.relative_to(SRC)))
+def test_the_walk_reaches_the_library() -> None:
+    """A walk that reaches nothing parametrizes no case, which pytest reports as a skip rather than a failure."""
+    assert MODULES
+
+
+@pytest.mark.parametrize("path", MODULES, ids=lambda p: str(p.relative_to(SRC)))
 def test_every_call_states_its_source(path: Path) -> None:
     assert _calls_without_a_source(path) == []
 
