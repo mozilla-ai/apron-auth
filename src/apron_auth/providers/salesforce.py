@@ -3,7 +3,7 @@
 ``disconnect_fully_revokes=False``: Salesforce's
 RFC 7009 ``/services/oauth2/revoke`` invalidates the supplied token
 but its effect on the org-level Connected App authorization has not
-been verified end-to-end. Tracking issue: #35.
+been verified end-to-end.
 """
 
 from __future__ import annotations
