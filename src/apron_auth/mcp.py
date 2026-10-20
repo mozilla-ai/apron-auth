@@ -721,22 +721,21 @@ def _asm_candidate_urls(auth_server: str) -> list[str]:
     return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
 
 
-def _reported_outcome(outcomes: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
-    """Return the outcome a metadata fetch reports when no candidate URL yielded a document.
+def _reported_outcome(reported: _MetadataOutcome, observed: _MetadataOutcome) -> _MetadataOutcome:
+    """Return the outcome a metadata fetch reports, given a further candidate's outcome.
 
-    A retryable outcome on any candidate is reported, because the fallback locations answer a client error
-    as a rule and must not hide an outage on the real URL.
-    Otherwise the last candidate's outcome is reported.
-
-    NOTE: The caller must pass the outcome of at least one candidate.
+    A retryable outcome stands, because the fallback locations answer a client error as a rule and must not
+    hide an outage on the real URL.
+    Otherwise the further candidate's outcome replaces it.
 
     Args:
-        outcomes: Each candidate's outcome, in the order the candidates were tried.
+        reported: The outcome the candidates tried so far report.
+        observed: The outcome a further candidate showed.
 
     Returns:
         The outcome to report.
     """
-    return next((outcome for outcome in outcomes if outcome.kind.retryable), outcomes[-1])
+    return reported if reported.kind.retryable else observed
 
 
 async def _fetch_first_metadata(
@@ -753,8 +752,6 @@ async def _fetch_first_metadata(
     skipping request errors, non-200 responses, and non-object bodies. Each skip
     is logged at debug with a non-sensitive reason.
 
-    NOTE: The caller must pass at least one candidate URL.
-
     Args:
         candidate_urls: The URLs to try, in order.
         url_validator: Optional policy invoked on each URL before it is requested.
@@ -770,11 +767,12 @@ async def _fetch_first_metadata(
         ConfigurationError: If a candidate is rejected and ``caller_supplied`` says
             the candidates derive from an argument of this library's caller.
         McpDiscoveryError: If a candidate is rejected and the candidates derive from
-            a fetched document, or if no candidate succeeds. The error names
-            ``what`` and the fault the candidates showed, and its ``kind`` tells a
-            fetch that may pass later from a document the server does not serve.
+            a fetched document, or if no candidate succeeds. The error names ``what``
+            and the fault the candidates showed. Its ``kind`` tells a fetch that may
+            pass later from one that cannot.
     """
-    outcomes: list[_MetadataOutcome] = []
+    # Nothing has failed yet, and this seed is not retryable, so the first candidate's outcome replaces it.
+    outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
     for url in candidate_urls:
         _validate_url(url, url_validator, caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
@@ -787,7 +785,8 @@ async def _fetch_first_metadata(
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
-                outcomes.append(_MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind))
+                failure = _MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind)
+                outcome = _reported_outcome(outcome, failure)
                 continue
             if response.status_code != 200:
                 status = status_failure(response.status_code)
@@ -796,18 +795,18 @@ async def _fetch_first_metadata(
                 # exists, and a redirect this library will not follow says nothing about it.
                 serves_no_document = response.status_code in _ABSENT_DOCUMENT_STATUSES
                 fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
-                outcomes.append(_MetadataOutcome(fault, status.kind))
+                outcome = _reported_outcome(outcome, _MetadataOutcome(fault, status.kind))
                 continue
+            unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
             try:
                 payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
-                outcomes.append(_MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED))
+                outcome = _reported_outcome(outcome, unreadable)
                 continue
             if isinstance(payload, dict):
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
-            outcomes.append(_MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED))
-    outcome = _reported_outcome(outcomes)
+            outcome = _reported_outcome(outcome, unreadable)
     msg = f"{what} {outcome.fault.value}"
     raise McpDiscoveryError(msg, kind=outcome.kind)

@@ -1006,20 +1006,16 @@ class TestAsmCandidateUrls:
 
 
 class TestReportedOutcome:
-    def test_a_retryable_outcome_wins_over_a_later_refusal(self) -> None:
+    def test_a_retryable_outcome_stands_over_a_later_refusal(self) -> None:
         """The fallback locations answer a client error as a rule, which must not hide an outage."""
-        outcomes = [
-            _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR),
-            _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED),
-        ]
-        assert _reported_outcome(outcomes) == outcomes[0]
+        outage = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR)
+        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
+        assert _reported_outcome(outage, refusal) == outage
 
-    def test_the_last_outcome_is_reported_when_none_is_retryable(self) -> None:
-        outcomes = [
-            _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED),
-            _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED),
-        ]
-        assert _reported_outcome(outcomes) == outcomes[-1]
+    def test_a_further_outcome_replaces_one_that_is_not_retryable(self) -> None:
+        unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
+        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
+        assert _reported_outcome(unreadable, refusal) == refusal
 
 
 class TestValidateUrl:
