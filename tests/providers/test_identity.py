@@ -84,8 +84,17 @@ def test_a_name_the_module_does_not_define_is_refused(monkeypatch: pytest.Monkey
     """A member naming a class that is not there is a defect in this library, not in the config."""
     monkeypatch.delattr("apron_auth.providers.google.GoogleIdentityHandler")
 
-    with pytest.raises(TypeError, match="GoogleIdentityHandler is not an identity handler"):
+    with pytest.raises(TypeError, match="defines no GoogleIdentityHandler"):
         identity_handler_for(_config("accounts.google.com", Provider.GOOGLE))
+
+
+def test_a_config_that_allows_no_handler_is_not_host_checked() -> None:
+    """A deployment on other hosts opts out without being told its endpoints are wrong."""
+    config = _config("login.acme.example", Provider.SALESFORCE).model_copy(
+        update={"use_builtin_identity_handler": False}
+    )
+
+    assert identity_handler_for(config) is None
 
 
 def test_a_handler_is_built_per_call() -> None:

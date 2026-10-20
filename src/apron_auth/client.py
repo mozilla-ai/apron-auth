@@ -690,6 +690,8 @@ class OAuthClient:
                 provider or allows no handler of its own.
             IdentityFetchError: If the handler fails to fetch identity.
                 It chains nothing from the handler.
+            TypeError: If the named provider states a class that does not fetch identity, which is a
+                defect in this library rather than in the config.
         """
         if not isinstance(tokens, FreshTokenSet):
             msg = (
@@ -727,6 +729,8 @@ class OAuthClient:
         """Return the identity handler of the provider this config names, building it on first use.
 
         Keeping one handler lets its caches, such as an issuer's signing keys, serve every sign-in.
+        NOTE: The first use imports the named provider's module, so the first sign-in of a client
+        pays for that import.
 
         Returns:
             The named provider's handler, or ``None`` when the config names no provider or allows
