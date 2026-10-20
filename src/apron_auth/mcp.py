@@ -269,7 +269,7 @@ def to_provider_config(
     # OAuthClient issues only S256 challenges.
     use_pkce = "S256" in methods if methods else True
     auth_method = _select_auth_method(
-        secret, metadata.token_endpoint_auth_methods, registration.token_endpoint_auth_method
+        secret, metadata.token_endpoint_auth_methods, registered=registration.token_endpoint_auth_method
     )
     return ProviderConfig(
         client_id=registration.client_id,
