@@ -49,7 +49,6 @@ def require_url(
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
-    # The source decides the kind: a caller's own URL is a configuration fault, a provider's is refused.
     kind = FailureKind.CONFIGURATION if caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
@@ -112,11 +111,14 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
 def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
     """Validate an optional endpoint when the document names one.
 
+    The endpoint is a member of a fetched document, so an unacceptable one is a refusal of what
+    the provider published rather than a fault in the caller's own configuration.
+
     Args:
         document: The configuration document.
         key: The document member to read.
         field: What the endpoint is, for errors.
-        allow_insecure_http: Passed through to :func:`require_url`.
+        allow_insecure_http: Let an ``http`` endpoint through, logging a WARNING.
 
     Returns:
         The endpoint, or ``None`` when the document omits it or gives an empty string.
