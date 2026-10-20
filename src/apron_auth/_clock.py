@@ -32,7 +32,7 @@ def pending_age_refusal(created_at: object, *, max_age: float) -> PendingAgeRefu
     A creation time exactly ``max_age`` old is current, and one exactly the allowed clock difference
     ahead of this clock is current, so each limit refuses only what lies past it.
 
-    NOTE: Callers must pass a positive ``max_age`` that a clock reading can be offset by, which
+    NOTE: Callers must pass a ``max_age`` that can be subtracted from a clock reading, which
     ``usable_max_age`` decides, because this reports against the limit it is given rather than
     refusing it.
 
@@ -61,7 +61,8 @@ def usable_max_age(value: object) -> float | None:
         value: The maximum age, in seconds, as it arrived.
 
     Returns:
-        The maximum age, or ``None`` when it is not a positive number a clock reading can be offset by.
+        The maximum age, or ``None`` when it is not a positive number of seconds
+        that can be subtracted from a clock reading.
     """
     limit = finite_number(value)
     if limit is None or limit <= 0 or limit > _WIDEST_MAX_AGE:

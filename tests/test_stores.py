@@ -214,7 +214,7 @@ class TestExpiryLogLine:
 
 
 class TestMaximumAgeArgument:
-    """Test that a limit that is not a positive finite number is refused where it is set."""
+    """Test that a limit the clock cannot be offset by is refused where it is set."""
 
     @pytest.mark.parametrize(
         "max_age",
@@ -228,8 +228,8 @@ class TestMaximumAgeArgument:
             pytest.param(-1.0, id="negative"),
         ],
     )
-    def test_a_limit_that_is_not_a_positive_finite_number_is_refused(self, max_age: object) -> None:
-        with pytest.raises(ConfigurationError, match="positive finite number"):
+    def test_a_limit_the_clock_cannot_be_offset_by_is_refused(self, max_age: object) -> None:
+        with pytest.raises(ConfigurationError, match="subtracted from a clock reading"):
             MemoryStateStore(max_age=max_age)
 
     async def test_a_usable_limit_is_accepted(self) -> None:

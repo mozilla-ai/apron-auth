@@ -46,11 +46,12 @@ class MemoryStateStore:
             max_age: The age, in seconds, past which a stored state is treated as expired.
 
         Raises:
-            ConfigurationError: If ``max_age`` is not a positive finite number.
+            ConfigurationError: If ``max_age`` is not a positive number of seconds
+                that can be subtracted from a clock reading.
         """
         limit = usable_max_age(max_age)
         if limit is None:
-            msg = "max_age must be a positive finite number"
+            msg = "max_age must be a positive number of seconds that can be subtracted from a clock reading"
             raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
         self._max_age = limit
