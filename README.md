@@ -786,6 +786,8 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
 - `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
 - `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
+- `MemoryStateStore` raises `ConfigurationError` for a `max_age` that is not a positive finite number, as the provider config already refuses such a `max_pending_age_seconds`. A store built with `0` to expire every state at once no longer constructs.
+- `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. A system clock stepped backwards further than that discards the pending states the store is holding.
 
 ## Logging
 
@@ -835,7 +837,7 @@ configuring `apron_auth` reaches all of them, and adapters, filters, and
 
 ### What is never logged
 
-Access tokens, refresh tokens, client secrets, and ID-token payload bytes are never written to logs at any level. Exception *values* are not logged either — in their place goes whichever non-sensitive primitive actually carries diagnostic signal, such as an HTTP status code or an exception class name. Where no such primitive is at hand, the line is fixed text only. A raised exception's rendering can embed the request that carried a credential, and for some providers a token travels in the URL path, so the exception value is not safe to emit generically.
+Access tokens, refresh tokens, client secrets, OAuth state, and ID-token payload bytes are never written to logs at any level. Exception *values* are not logged either — in their place goes whichever non-sensitive primitive actually carries diagnostic signal, such as an HTTP status code or an exception class name. Where no such primitive is at hand, the line is fixed text only. A raised exception's rendering can embed the request that carried a credential, and for some providers a token travels in the URL path, so the exception value is not safe to emit generically.
 
 This is a contract, not an implementation detail: if you find a
 credential in log output, treat it as a bug and report it.
