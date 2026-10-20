@@ -99,6 +99,7 @@ class ProviderFacts:
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
         scope_separator: The string the provider's scope parameter is joined with.
+            NOTE: It must not be empty, as :attr:`ProviderConfig.scope_separator` requires.
     """
 
     can_assert_domain_ownership: bool
