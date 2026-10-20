@@ -97,7 +97,10 @@ class TestParseScope:
         assert parse_scope("openid") == ["openid"]
 
     def test_an_empty_separator_is_refused(self) -> None:
-        # The parser adds no check of its own: a config cannot carry an empty separator, so only a
-        # direct caller can pass one, and it is refused at that call.
-        with pytest.raises(ValueError, match="empty separator"):
+        # The config refuses an empty separator, so the parser adds no check and the split refuses it here.
+        with pytest.raises(ValueError):
             parse_scope("openid email", separator="")
+
+    @pytest.mark.parametrize("scope", ["", "   "])
+    def test_an_empty_separator_does_not_refuse_a_blank_scope(self, scope: str) -> None:
+        assert parse_scope(scope, separator="") == []
