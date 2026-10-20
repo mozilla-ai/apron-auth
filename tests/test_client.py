@@ -2323,6 +2323,40 @@ class TestFetchIdentity:
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
 
+    async def test_a_config_that_allows_no_handler_of_its_own_is_unsupported(self, httpx_mock: HTTPXMock) -> None:
+        """The opt-out holds for a config that names a provider, so nothing reaches that provider's API."""
+        config = _make_config(
+            provider=Provider.GOOGLE,
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+            allow_identity_inference=False,
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert httpx_mock.get_requests() == []
+
+    async def test_a_configured_handler_serves_a_config_that_allows_no_other(self) -> None:
+        """The opt-out leaves the caller's own handler as the one source of identity."""
+
+        class DummyIdentityHandler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                return IdentityProfile(email="custom@example.com")
+
+        config = _make_config(
+            provider=Provider.GOOGLE,
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+            allow_identity_inference=False,
+        )
+        client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
+
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert identity.email == "custom@example.com"
+
     async def test_an_explicit_handler_serves_endpoints_outside_the_named_provider(self) -> None:
         """A caller's own handler establishes identity for a config the host check refuses."""
 

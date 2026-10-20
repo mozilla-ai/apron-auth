@@ -673,8 +673,8 @@ class OAuthClient:
         so handlers never receive the refresh token or caller context.
 
         Uses the configured identity handler when provided, otherwise the handler of the provider the config names.
-        A config that names no provider, such as a generic OpenID or MCP config,
-        leaves the configured handler as the only source of identity.
+        A config that names no provider, such as a generic OpenID or MCP config, and one that allows no handler
+        of its own, leave the configured handler as the only source of identity.
 
         Args:
             tokens: The fresh token set to establish identity from.
@@ -686,8 +686,8 @@ class OAuthClient:
             ConfigurationError: If ``tokens`` is not a fresh token set,
                 or if no handler is configured and the config's OAuth endpoints
                 are not the hosts of the provider it names.
-            IdentityNotSupportedError: If no identity handler is configured
-                and the config names no provider.
+            IdentityNotSupportedError: If no identity handler is configured, and the config names no
+                provider or allows no handler of its own.
             IdentityFetchError: If the handler fails to fetch identity.
                 It chains nothing from the handler.
         """
@@ -729,7 +729,8 @@ class OAuthClient:
         Keeping one handler lets its caches, such as an issuer's signing keys, serve every sign-in.
 
         Returns:
-            The named provider's handler, or ``None`` when the config names no provider.
+            The named provider's handler, or ``None`` when the config names no provider or allows
+            no handler of its own.
 
         Raises:
             ConfigurationError: If the config's OAuth endpoints are not the hosts of the
