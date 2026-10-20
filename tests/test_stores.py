@@ -52,7 +52,7 @@ class TestMemoryStateStore:
         result = await store.consume(pending.state)
         assert result is None
 
-    async def test_consume_state_at_boundary_returns_state(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_consume_state_at_boundary_returns_state(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Exactly the limit is still current, which is where the code exchange draws the line too."""
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=300.0)
@@ -62,7 +62,7 @@ class TestMemoryStateStore:
 
         assert await store.consume(pending.state) == pending
 
-    async def test_consume_state_past_the_boundary_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_consume_state_past_the_boundary_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=300.0)
         await store.save(pending)
