@@ -30,8 +30,8 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
     Raises:
         ConfigurationError: If either the config's authorization or token endpoint is not a host of
             the provider it names.
-        TypeError: If the class the named provider states is not an identity handler, which is a
-            defect in this library rather than in the config.
+        TypeError: If the named provider states a class its module does not define, or one that is
+            not an identity handler, which is a defect in this library rather than in the config.
     """
     provider = config.provider
     if provider is None or not config.use_builtin_identity_handler:
@@ -45,7 +45,8 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
         raise ConfigurationError(msg)
     # A registry would import every provider module. Resolving by name imports only the named one.
     module = import_module(f".{provider.value}", __package__)
-    handler = getattr(module, provider.identity_handler_class_name)()
+    handler_class = getattr(module, provider.identity_handler_class_name, None)
+    handler = handler_class() if handler_class is not None else None
     if not isinstance(handler, IdentityHandler):
         msg = f"{module.__name__}.{provider.identity_handler_class_name} is not an identity handler"
         raise TypeError(msg)

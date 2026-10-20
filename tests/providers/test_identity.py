@@ -80,6 +80,14 @@ def test_a_named_class_that_is_not_a_handler_is_refused(monkeypatch: pytest.Monk
         identity_handler_for(_config("accounts.google.com", Provider.GOOGLE))
 
 
+def test_a_name_the_module_does_not_define_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A member naming a class that is not there is a defect in this library, not in the config."""
+    monkeypatch.delattr("apron_auth.providers.google.GoogleIdentityHandler")
+
+    with pytest.raises(TypeError, match="GoogleIdentityHandler is not an identity handler"):
+        identity_handler_for(_config("accounts.google.com", Provider.GOOGLE))
+
+
 def test_a_handler_is_built_per_call() -> None:
     config = _config("accounts.google.com", Provider.GOOGLE)
 
