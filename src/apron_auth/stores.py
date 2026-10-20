@@ -61,7 +61,7 @@ class MemoryStateStore:
             msg = "max_age must be a positive finite number"
             raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
-        self._max_age = limit
+        self._max_age = float(limit)
 
     async def save(self, state: OAuthPendingState) -> None:
         """Store pending state and prune any expired entries.
