@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
@@ -47,26 +48,24 @@ class ApplicationType:
     NATIVE = "native"
 
 
-@unique
-class Provider(StrEnum):
-    """The OAuth providers this library knows by name, each with the facts that differ between them.
-
-    A member's value is its module name under ``apron_auth.providers``, and a member is declared as
-    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator,
-    identity_handler_class_name)``.
+@dataclass(frozen=True, kw_only=True)
+class ProviderFacts:
+    """The facts that differ between the providers this library knows by name.
 
     Attributes:
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
-            NOTE: A config that names this member may have endpoints outside them, such as a
+            They decide whether a config that names the provider may use its identity handler, so
+            they decide where an access token may be sent.
+            NOTE: A config that names the provider may have endpoints outside them, such as a
             Salesforce org on a custom login domain.
         disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
             :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
             provider's module docstring records how the value was verified.
         scope_separator: The string the provider's scope parameter is joined with.
-        identity_handler_class_name: The name of the class in the member's module that fetches identity.
+        identity_handler_class_name: The name of the class in the provider's module that fetches identity.
             The class takes no constructor arguments.
-            The member names it rather than holding it, because every provider module imports this one.
+            A member names it rather than holding it, because every provider module imports this one.
     """
 
     display_name: str
@@ -75,35 +74,150 @@ class Provider(StrEnum):
     scope_separator: str
     identity_handler_class_name: str
 
-    def __new__(
-        cls,
-        value: str,
-        display_name: str,
-        host_suffixes: tuple[str, ...],
-        disconnect_fully_revokes: bool,
-        scope_separator: str,
-        identity_handler_class_name: str,
-    ) -> Provider:
+
+@unique
+class Provider(StrEnum):
+    """The OAuth providers this library knows by name, each with the facts that differ between them.
+
+    A member's value is its module name under ``apron_auth.providers``, and a member is declared as
+    ``(value, facts)``. Each fact is read through the property of its own name, and a member's facts
+    cannot be replaced, because they decide where an access token may be sent.
+    """
+
+    _facts: ProviderFacts
+
+    def __new__(cls, value: str, facts: ProviderFacts) -> Provider:
         """Create a member from its module name and the facts that differ between providers."""
         member = str.__new__(cls, value)
         member._value_ = value
-        member.display_name = display_name
-        member.host_suffixes = host_suffixes
-        member.disconnect_fully_revokes = disconnect_fully_revokes
-        member.scope_separator = scope_separator
-        member.identity_handler_class_name = identity_handler_class_name
+        member._facts = facts
         return member
 
-    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ", "AtlassianIdentityHandler")
-    GITHUB = ("github", "GitHub", ("github.com",), True, " ", "GitHubIdentityHandler")
-    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ", "GoogleIdentityHandler")
-    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ", "HubSpotIdentityHandler")
-    LINEAR = ("linear", "Linear", ("linear.app",), False, ",", "LinearIdentityHandler")
-    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ", "MicrosoftIdentityHandler")
-    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ", "NotionIdentityHandler")
-    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ", "SalesforceIdentityHandler")
-    SLACK = ("slack", "Slack", ("slack.com",), False, ",", "SlackIdentityHandler")
-    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ", "TypeformIdentityHandler")
+    @property
+    def display_name(self) -> str:
+        """The provider's name as it appears in messages and documentation."""
+        return self._facts.display_name
+
+    @property
+    def disconnect_fully_revokes(self) -> bool:
+        """Whether revoking a token removes the user's portal-level OAuth grant."""
+        return self._facts.disconnect_fully_revokes
+
+    @property
+    def host_suffixes(self) -> tuple[str, ...]:
+        """The provider's own OAuth endpoint hosts, matched on a label boundary."""
+        return self._facts.host_suffixes
+
+    @property
+    def identity_handler_class_name(self) -> str:
+        """The name of the class in the provider's module that fetches identity."""
+        return self._facts.identity_handler_class_name
+
+    @property
+    def scope_separator(self) -> str:
+        """The string the provider's scope parameter is joined with."""
+        return self._facts.scope_separator
+
+    ATLASSIAN = (
+        "atlassian",
+        ProviderFacts(
+            display_name="Atlassian",
+            host_suffixes=("auth.atlassian.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="AtlassianIdentityHandler",
+        ),
+    )
+    GITHUB = (
+        "github",
+        ProviderFacts(
+            display_name="GitHub",
+            host_suffixes=("github.com",),
+            disconnect_fully_revokes=True,
+            scope_separator=" ",
+            identity_handler_class_name="GitHubIdentityHandler",
+        ),
+    )
+    GOOGLE = (
+        "google",
+        ProviderFacts(
+            display_name="Google",
+            host_suffixes=("google.com", "googleapis.com"),
+            disconnect_fully_revokes=True,
+            scope_separator=" ",
+            identity_handler_class_name="GoogleIdentityHandler",
+        ),
+    )
+    HUBSPOT = (
+        "hubspot",
+        ProviderFacts(
+            display_name="HubSpot",
+            host_suffixes=("api.hubapi.com", "app.hubspot.com"),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="HubSpotIdentityHandler",
+        ),
+    )
+    LINEAR = (
+        "linear",
+        ProviderFacts(
+            display_name="Linear",
+            host_suffixes=("linear.app",),
+            disconnect_fully_revokes=False,
+            scope_separator=",",
+            identity_handler_class_name="LinearIdentityHandler",
+        ),
+    )
+    MICROSOFT = (
+        "microsoft",
+        ProviderFacts(
+            display_name="Microsoft",
+            host_suffixes=("login.microsoftonline.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="MicrosoftIdentityHandler",
+        ),
+    )
+    NOTION = (
+        "notion",
+        ProviderFacts(
+            display_name="Notion",
+            host_suffixes=("api.notion.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="NotionIdentityHandler",
+        ),
+    )
+    SALESFORCE = (
+        "salesforce",
+        ProviderFacts(
+            display_name="Salesforce",
+            host_suffixes=("salesforce.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="SalesforceIdentityHandler",
+        ),
+    )
+    SLACK = (
+        "slack",
+        ProviderFacts(
+            display_name="Slack",
+            host_suffixes=("slack.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=",",
+            identity_handler_class_name="SlackIdentityHandler",
+        ),
+    )
+    TYPEFORM = (
+        "typeform",
+        ProviderFacts(
+            display_name="Typeform",
+            host_suffixes=("api.typeform.com",),
+            disconnect_fully_revokes=False,
+            scope_separator=" ",
+            identity_handler_class_name="TypeformIdentityHandler",
+        ),
+    )
 
 
 class ScopeMetadata(BaseModel, frozen=True):

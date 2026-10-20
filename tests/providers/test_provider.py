@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import importlib
 import pkgutil
+from collections.abc import Callable
 from types import ModuleType
 
 import pytest
 
 from apron_auth import providers as providers_pkg
 from apron_auth.mcp import to_provider_config
-from apron_auth.models import Provider, ProviderConfig, ServerMetadata
+from apron_auth.models import Provider, ProviderConfig, ProviderFacts, ServerMetadata
 from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import (
     atlassian,
@@ -41,19 +42,78 @@ MODULES: dict[Provider, ModuleType] = {
     Provider.TYPEFORM: typeform,
 }
 
-# The known-good facts per provider, pinned independently of the enum: display name,
-# identity host suffixes, disconnect_fully_revokes, scope separator, identity handler class name.
-MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str, str]] = {
-    Provider.ATLASSIAN: ("Atlassian", ("auth.atlassian.com",), False, " ", "AtlassianIdentityHandler"),
-    Provider.GITHUB: ("GitHub", ("github.com",), True, " ", "GitHubIdentityHandler"),
-    Provider.GOOGLE: ("Google", ("google.com", "googleapis.com"), True, " ", "GoogleIdentityHandler"),
-    Provider.HUBSPOT: ("HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ", "HubSpotIdentityHandler"),
-    Provider.LINEAR: ("Linear", ("linear.app",), False, ",", "LinearIdentityHandler"),
-    Provider.MICROSOFT: ("Microsoft", ("login.microsoftonline.com",), False, " ", "MicrosoftIdentityHandler"),
-    Provider.NOTION: ("Notion", ("api.notion.com",), False, " ", "NotionIdentityHandler"),
-    Provider.SALESFORCE: ("Salesforce", ("salesforce.com",), False, " ", "SalesforceIdentityHandler"),
-    Provider.SLACK: ("Slack", ("slack.com",), False, ",", "SlackIdentityHandler"),
-    Provider.TYPEFORM: ("Typeform", ("api.typeform.com",), False, " ", "TypeformIdentityHandler"),
+# The known-good facts per provider, pinned independently of the enum.
+MODULE_FACTS: dict[Provider, ProviderFacts] = {
+    Provider.ATLASSIAN: ProviderFacts(
+        display_name="Atlassian",
+        host_suffixes=("auth.atlassian.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="AtlassianIdentityHandler",
+    ),
+    Provider.GITHUB: ProviderFacts(
+        display_name="GitHub",
+        host_suffixes=("github.com",),
+        disconnect_fully_revokes=True,
+        scope_separator=" ",
+        identity_handler_class_name="GitHubIdentityHandler",
+    ),
+    Provider.GOOGLE: ProviderFacts(
+        display_name="Google",
+        host_suffixes=("google.com", "googleapis.com"),
+        disconnect_fully_revokes=True,
+        scope_separator=" ",
+        identity_handler_class_name="GoogleIdentityHandler",
+    ),
+    Provider.HUBSPOT: ProviderFacts(
+        display_name="HubSpot",
+        host_suffixes=("api.hubapi.com", "app.hubspot.com"),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="HubSpotIdentityHandler",
+    ),
+    Provider.LINEAR: ProviderFacts(
+        display_name="Linear",
+        host_suffixes=("linear.app",),
+        disconnect_fully_revokes=False,
+        scope_separator=",",
+        identity_handler_class_name="LinearIdentityHandler",
+    ),
+    Provider.MICROSOFT: ProviderFacts(
+        display_name="Microsoft",
+        host_suffixes=("login.microsoftonline.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="MicrosoftIdentityHandler",
+    ),
+    Provider.NOTION: ProviderFacts(
+        display_name="Notion",
+        host_suffixes=("api.notion.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="NotionIdentityHandler",
+    ),
+    Provider.SALESFORCE: ProviderFacts(
+        display_name="Salesforce",
+        host_suffixes=("salesforce.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="SalesforceIdentityHandler",
+    ),
+    Provider.SLACK: ProviderFacts(
+        display_name="Slack",
+        host_suffixes=("slack.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=",",
+        identity_handler_class_name="SlackIdentityHandler",
+    ),
+    Provider.TYPEFORM: ProviderFacts(
+        display_name="Typeform",
+        host_suffixes=("api.typeform.com",),
+        disconnect_fully_revokes=False,
+        scope_separator=" ",
+        identity_handler_class_name="TypeformIdentityHandler",
+    ),
 }
 
 
@@ -133,12 +193,25 @@ def test_member_value_is_the_module_name(provider: Provider) -> None:
 
 @pytest.mark.parametrize("provider", list(Provider))
 def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
-    display_name, host_suffixes, disconnect_fully_revokes, scope_separator, handler_class_name = MODULE_FACTS[provider]
-    assert provider.display_name == display_name
-    assert provider.host_suffixes == host_suffixes
-    assert provider.disconnect_fully_revokes is disconnect_fully_revokes
-    assert provider.scope_separator == scope_separator
-    assert provider.identity_handler_class_name == handler_class_name
+    pinned = MODULE_FACTS[provider]
+    assert provider.display_name == pinned.display_name
+    assert provider.host_suffixes == pinned.host_suffixes
+    assert provider.disconnect_fully_revokes is pinned.disconnect_fully_revokes
+    assert provider.scope_separator == pinned.scope_separator
+    assert provider.identity_handler_class_name == pinned.identity_handler_class_name
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+@pytest.mark.parametrize(
+    "fact",
+    ["disconnect_fully_revokes", "display_name", "host_suffixes", "identity_handler_class_name", "scope_separator"],
+)
+def test_a_members_fact_cannot_be_assigned(provider: Provider, fact: str) -> None:
+    """A member's facts decide where an access token may be sent, so no caller may change one."""
+    with pytest.raises(AttributeError):
+        setattr(provider, fact, "whatever")
+
+    assert getattr(provider, fact) == getattr(MODULE_FACTS[provider], fact)
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -188,10 +261,9 @@ def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> N
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_preset_follows_a_changed_member_fact(provider: Provider, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Patching the member proves the preset reads each fact from it rather than repeating the value.
-    monkeypatch.setattr(provider, "disconnect_fully_revokes", not provider.disconnect_fully_revokes)
-    monkeypatch.setattr(provider, "scope_separator", "|")
+def test_preset_follows_a_changed_member_fact(provider: Provider, vary_facts: Callable[..., None]) -> None:
+    # Varying the facts proves the preset reads each one from the member rather than repeating the value.
+    vary_facts(provider, disconnect_fully_revokes=not provider.disconnect_fully_revokes, scope_separator="|")
 
     config = _preset_config(MODULES[provider])
 

@@ -1,8 +1,29 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from dataclasses import replace
 
 import pytest
+
+from apron_auth.models import Provider
+
+
+@pytest.fixture
+def vary_facts(monkeypatch: pytest.MonkeyPatch) -> Callable[..., None]:
+    """Return a callable that gives a provider member different facts for one test.
+
+    A member's facts are read-only, so a test that needs a provider whose facts differ from the
+    shipped ones asks for them here rather than assigning to the member.
+
+    Returns:
+        A callable taking a member and the facts to change, as keyword arguments.
+    """
+
+    def vary(provider: Provider, **changes: object) -> None:
+        monkeypatch.setattr(provider, "_facts", replace(provider._facts, **changes))  # noqa: SLF001
+
+    return vary
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
