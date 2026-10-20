@@ -1220,3 +1220,20 @@ class TestProviderFactsAreDerived:
             if ("scope_separator=Provider." in line or "disconnect_fully_revokes=Provider." in line)
         ]
         assert restated == []
+
+
+class TestScopeSeparator:
+    """Test that a separator no scope string can be split on is refused where it is set."""
+
+    def test_an_empty_separator_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="scope_separator must not be empty"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://idp.example.com/authorize",
+                token_url="https://idp.example.com/token",
+                scope_separator="",
+            )
+
+    def test_every_provider_member_states_a_usable_separator(self) -> None:
+        assert all(member.scope_separator for member in Provider)
