@@ -5,8 +5,7 @@ the token but does not uninstall the app or remove workspace-level
 authorization. For full grant removal, Slack requires uninstalling the
 app from workspace settings (or org admin removal for org-wide apps).
 
-The identity handler covers two distinct Slack OAuth flows behind a
-single resolver registration:
+The identity handler covers two distinct Slack OAuth flows:
 
 - Sign-in-with-Slack (``openid`` in scopes) → OIDC ``userInfo`` for
   full person identity plus single-workspace tenancy.
@@ -39,13 +38,11 @@ from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 # The endpoint that identifies the token's user and workspace.
@@ -87,8 +84,8 @@ def _has_openid_scope(config: ProviderConfig) -> bool:
     Slack's Sign-in-with-Slack flow can request ``openid`` either as a
     bot scope (pure SiwS) or as a user scope (combined bot + SiwS via
     Slack's ``user_scope`` query parameter, which the preset stores in
-    ``extra_params["user_scope"]``). Either placement should enable
-    identity inference.
+    ``extra_params["user_scope"]``). Either placement selects the
+    Sign-in-with-Slack identity path.
 
     Args:
         config: The provider configuration to inspect.
@@ -167,17 +164,13 @@ class SlackIdentityHandler:
       of workspace identity (``team:read``-gated) and ``auth.test``
       is the universal fallback when ``team:read`` was not granted.
 
-    Both flows are handled by a single registration and a single
-    handler that branches internally on ``openid`` presence. The
-    alternative — registering two handlers — would break the
-    registry's implicit 1:1 provider→handler assumption and force
-    :func:`apron_auth.providers.identity.infer_identity_handler` to
-    special-case Slack to disambiguate. Internal branching keeps the
-    registry contract clean and mirrors how Slack itself layers
-    user-vs-workspace identity over the same OAuth surface. Tokens
-    granted both ``openid`` and bot scopes route to the OIDC path
-    because it is strictly richer (full person identity plus
-    tenancy).
+    One handler serves both flows and branches internally on
+    ``openid`` presence, because a provider has one identity handler
+    and the two flows are one provider. The branching mirrors how
+    Slack itself layers user-vs-workspace identity over the same
+    OAuth surface. Tokens granted both ``openid`` and bot scopes
+    route to the OIDC path because it is strictly richer (full person
+    identity plus tenancy).
 
     For workspace-bot tokens, person-identity fields
     (:attr:`IdentityProfile.subject`, ``email``, ``name``, ``username``,
@@ -500,35 +493,6 @@ class SlackRevocationHandler:
         # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
         # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
         raise RevocationError(failure_message, kind=kind)
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Slack identity handler when config matches Slack hosts.
-
-    Both ``authorize_url`` and ``token_url`` must match the Slack host
-    suffix list. The handler itself branches on ``openid`` presence at
-    fetch time — Sign-in-with-Slack and workspace-bot tokens are both
-    handled — so resolution is purely host-based here. The single
-    handler / single registration design is documented on
-    :class:`SlackIdentityHandler`.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Slack identity handler when both OAuth hosts are Slack's, else
-        ``None``.
-    """
-    if not oauth_hosts_match(config, Provider.SLACK.host_suffixes):
-        return None
-    return SlackIdentityHandler()
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="slack",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

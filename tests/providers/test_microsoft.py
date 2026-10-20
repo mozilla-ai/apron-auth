@@ -566,67 +566,6 @@ class TestMicrosoftOrganizationDegradation:
         assert "returned no organization" in caplog.text
 
 
-class TestMicrosoftMaybeIdentityHandler:
-    def test_canonical_microsoft_host_returns_handler(self):
-        from apron_auth.providers.microsoft import MicrosoftIdentityHandler, maybe_identity_handler, preset
-
-        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["openid"])
-        handler = maybe_identity_handler(config)
-        assert isinstance(handler, MicrosoftIdentityHandler)
-
-    def test_lookalike_host_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.microsoft import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="mid",
-            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
-            authorize_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/authorize",
-            token_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_non_microsoft_host_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.microsoft import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="mid",
-            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
-            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-            token_url="https://oauth2.googleapis.com/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_authorize_url_matching_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.microsoft import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="mid",
-            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
-            authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-            token_url="https://attacker.example.com/common/oauth2/v2.0/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-    def test_only_token_url_matching_returns_none(self):
-        from pydantic import SecretStr
-
-        from apron_auth.providers.microsoft import maybe_identity_handler
-
-        config = ProviderConfig(
-            client_id="mid",
-            client_secret=SecretStr("msecret"),  # pragma: allowlist secret
-            authorize_url="https://attacker.example.com/common/oauth2/v2.0/authorize",
-            token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
-        )
-        assert maybe_identity_handler(config) is None
-
-
 class TestMicrosoftIdTokenVerification:
     """Test that the ID token is trusted only after its signature and claims check out."""
 
@@ -698,7 +637,7 @@ class TestMicrosoftIdTokenVerification:
                 IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
             )
 
-    async def test_the_client_keeps_its_inferred_handler(self, httpx_mock: HTTPXMock) -> None:
+    async def test_the_client_keeps_the_handler_it_built(self, httpx_mock: HTTPXMock) -> None:
         """Two sign-ins through one client fetch Microsoft's key set once."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO, is_reusable=True)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]), is_reusable=True)

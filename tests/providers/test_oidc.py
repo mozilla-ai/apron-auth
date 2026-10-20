@@ -27,7 +27,6 @@ from apron_auth.errors import (
 )
 from apron_auth.models import FreshTokenSet, IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers.identity import infer_identity_handler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
     _bearer_error,
@@ -903,17 +902,11 @@ class TestHandlerInference:
         issuer, authorize_url, token_url = request.param
         return metadata(issuer=issuer, authorize_url=authorize_url, token_url=token_url)
 
-    def test_a_generic_config_on_a_claimed_host_infers_nothing(self, claimed_metadata: ServerMetadata) -> None:
-        """The built-in handler would change ``provider`` and so every user's ``identity_key()``."""
+    def test_a_generic_config_on_a_claimed_host_names_no_provider(self, claimed_metadata: ServerMetadata) -> None:
+        """A built-in handler would change ``provider`` and so every user's ``identity_key()``."""
         config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
 
-        assert infer_identity_handler(config) is None
-
-    def test_an_arbitrary_generic_config_infers_nothing(self) -> None:
-        """Only the explicit handler establishes identity for an unclaimed host."""
-        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
-
-        assert infer_identity_handler(config) is None
+        assert config.provider is None
 
     async def test_a_client_without_a_handler_refuses_before_any_request(
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
@@ -930,7 +923,7 @@ class TestHandlerInference:
     async def test_a_client_with_the_generic_handler_establishes_identity(
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
-        """The explicit handler is the one source of identity for a config that allows no inference."""
+        """The explicit handler is the one source of identity for a config that names no provider."""
         config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
         client = OAuthClient(config, identity_handler=identity_handler(claimed_metadata))

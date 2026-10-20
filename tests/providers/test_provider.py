@@ -25,7 +25,7 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
-from apron_auth.providers.identity import infer_identity_handler
+from apron_auth.providers._host_match import oauth_hosts_match
 
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
@@ -92,6 +92,21 @@ def test_members_are_ordered_a_to_z() -> None:
     assert names == sorted(names), (
         "Declare a new member in its alphabetical position rather than appending it, so a reader "
         "knows where to look and the order does not decay."
+    )
+
+
+def test_public_provider_modules_expose_a_preset() -> None:
+    missing_preset: list[str] = []
+    for info in pkgutil.iter_modules(providers_pkg.__path__):
+        if info.name.startswith("_"):
+            continue
+        module = importlib.import_module(f"{providers_pkg.__name__}.{info.name}")
+        if not callable(getattr(module, "preset", None)):
+            missing_preset.append(info.name)
+
+    assert not missing_preset, (
+        "A public module under apron_auth.providers presets a provider and exposes preset(...). "
+        f"Rename a helper module with a leading underscore. Modules with no preset: {', '.join(missing_preset)}."
     )
 
 
@@ -164,8 +179,8 @@ def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> N
     )
 
     assert on_suffix.provider is off_suffix.provider is Provider.SALESFORCE
-    assert infer_identity_handler(on_suffix) is not None
-    assert infer_identity_handler(off_suffix) is None
+    assert oauth_hosts_match(on_suffix, Provider.SALESFORCE.host_suffixes)
+    assert not oauth_hosts_match(off_suffix, Provider.SALESFORCE.host_suffixes)
 
 
 @pytest.mark.parametrize("provider", list(Provider))

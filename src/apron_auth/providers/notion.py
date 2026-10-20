@@ -29,12 +29,10 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
 )
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 logger = logging.getLogger(__name__)
 
@@ -237,28 +235,6 @@ class NotionRevocationHandler:
             return await self._send(self._client, token, revocation_url, config)
         async with httpx.AsyncClient() as client:
             return await self._send(client, token, revocation_url, config)
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Notion identity handler when config matches Notion hosts.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Notion identity handler when the config's OAuth hosts are
-        Notion's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.NOTION.host_suffixes):
-        return NotionIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="notion",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

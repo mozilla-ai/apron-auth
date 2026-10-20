@@ -45,12 +45,10 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
 )
-from apron_auth.providers._host_match import oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 logger = logging.getLogger(__name__)
@@ -254,35 +252,6 @@ class HubSpotRevocationHandler:
             return await self._send(self._client, url)
         async with httpx.AsyncClient() as client:
             return await self._send(client, url)
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the HubSpot identity handler when config matches HubSpot hosts.
-
-    HubSpot's ``authorize_url`` and ``token_url`` use distinct hosts
-    (``app.hubspot.com`` and ``api.hubapi.com`` respectively), so both
-    must match the HubSpot suffix list. Requiring both — rather than
-    either — prevents a misconfigured ``ProviderConfig`` with one
-    HubSpot-shaped URL and one attacker-controlled URL from inferring
-    this handler and routing the bearer token to a non-HubSpot host.
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A HubSpot identity handler when both OAuth hosts are HubSpot's,
-        else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.HUBSPOT.host_suffixes):
-        return HubSpotIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="hubspot",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

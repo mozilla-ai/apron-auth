@@ -39,7 +39,6 @@ from apron_auth.models import (
     ServerMetadata,
     TokenEndpointAuthMethod,
 )
-from apron_auth.providers.identity import infer_identity_handler
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
@@ -249,7 +248,7 @@ class TestToProviderConfig:
             to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
 
 
-class TestToProviderConfigIdentityInference:
+class TestToProviderConfigIdentity:
     @pytest.fixture(
         params=[
             pytest.param(
@@ -267,24 +266,11 @@ class TestToProviderConfigIdentityInference:
         authorize_url, token_url = request.param
         return ServerMetadata(authorize_url=authorize_url, token_url=token_url)
 
-    def test_a_config_on_a_claimed_host_infers_nothing(self, claimed_metadata: ServerMetadata) -> None:
-        """The built-in handler would send a token issued for the MCP server to that provider's API."""
+    def test_a_config_on_a_claimed_host_names_no_provider(self, claimed_metadata: ServerMetadata) -> None:
+        """That provider's handler would send a token issued for the MCP server to its API."""
         config = to_provider_config(claimed_metadata, client_id="c")
 
-        assert infer_identity_handler(config) is None
-
-    def test_a_config_on_a_claimed_host_infers_a_handler_when_it_allows_inference(
-        self, claimed_metadata: ServerMetadata
-    ) -> None:
-        """The fixture hosts match a built-in provider, so the opt-out is what prevents inference."""
-        config = ProviderConfig(
-            client_id="c",
-            client_secret="s",
-            authorize_url=claimed_metadata.authorize_url,
-            token_url=claimed_metadata.token_url,
-        )
-
-        assert infer_identity_handler(config) is not None
+        assert config.provider is None
 
     async def test_a_client_without_a_handler_refuses_before_any_request(
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
@@ -300,7 +286,7 @@ class TestToProviderConfigIdentityInference:
     async def test_a_client_with_an_explicit_handler_establishes_identity(
         self, claimed_metadata: ServerMetadata
     ) -> None:
-        """The explicit handler is the one source of identity for a config that allows no inference."""
+        """The explicit handler is the one source of identity for a config that names no provider."""
 
         class McpIdentityHandler:
             def __init__(self) -> None:

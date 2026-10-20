@@ -17,12 +17,11 @@ from pydantic import SecretStr
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
-from apron_auth.providers._identity_registry import IdentityResolverRegistration
+from apron_auth.providers._host_match import matches_suffix
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import IdentityHandler, RevocationHandler
+    from apron_auth.protocols import RevocationHandler
 
 
 # The scopes the preset always requests, with the labels a consent screen shows.
@@ -157,34 +156,6 @@ class SalesforceIdentityHandler:
             tenancies=tenancies,
             raw=payload,
         )
-
-
-def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
-    """Return the Salesforce identity handler when config matches Salesforce hosts.
-
-    Both ``authorize_url`` and ``token_url`` hosts must match the
-    Salesforce suffix. Requiring both — rather than either — prevents a
-    misconfigured ``ProviderConfig`` from inferring this handler and
-    then leaking the bearer token to a non-Salesforce host (the
-    userinfo URL is derived from ``authorize_url`` at fetch time).
-
-    Args:
-        config: The provider configuration to match.
-
-    Returns:
-        A Salesforce identity handler when both OAuth hosts are
-        Salesforce's, else ``None``.
-    """
-    if oauth_hosts_match(config, Provider.SALESFORCE.host_suffixes):
-        return SalesforceIdentityHandler()
-    return None
-
-
-# The entry that lets the client infer this provider's identity handler.
-IDENTITY_RESOLVER = IdentityResolverRegistration(
-    provider="salesforce",
-    resolver=maybe_identity_handler,
-)
 
 
 def preset(

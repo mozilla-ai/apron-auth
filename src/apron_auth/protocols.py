@@ -111,23 +111,6 @@ class IdentityHandler(Protocol):
         ...
 
 
-@runtime_checkable
-class IdentityResolver(Protocol):
-    """Provider-specific identity-handler resolver."""
-
-    def __call__(self, config: ProviderConfig) -> IdentityHandler | None:
-        """Return an identity handler when config matches this provider.
-
-        Args:
-            config: The provider configuration to match.
-
-        Returns:
-            An identity handler when ``config`` matches this provider, else
-            ``None``.
-        """
-        ...
-
-
 class StandardRevocationHandler:
     """RFC 7009 token revocation via POST with token in form body."""
 
