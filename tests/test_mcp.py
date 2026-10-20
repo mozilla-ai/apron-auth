@@ -9,7 +9,6 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth import mcp
 from apron_auth._discovery import IssuerNotDeclaredError
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
@@ -382,12 +381,6 @@ class TestHonorRegisteredAuthMethod:
     ) -> None:
         with pytest.raises(McpDiscoveryError):
             _honor_registered_auth_method(registered, secret)
-
-    def test_raises_for_a_method_outside_the_performable_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The performable set gates what is honored, so a method it omits is refused rather than configured."""
-        monkeypatch.setattr(mcp, "CONFIDENTIAL_AUTH_METHODS", ())
-        with pytest.raises(McpDiscoveryError, match="unsupported"):
-            _honor_registered_auth_method(TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s"))
 
 
 class TestDiscover:

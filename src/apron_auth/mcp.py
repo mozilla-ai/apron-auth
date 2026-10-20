@@ -251,9 +251,8 @@ def to_provider_config(
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
 
     Raises:
-        McpDiscoveryError: If the registered method is one this library cannot
-            perform, or the server advertises only such methods for a
-            confidential client.
+        McpDiscoveryError: If the registration's method disagrees with its
+            secret, or the server advertises no method the client can satisfy.
         ValidationError: If the effective ``resource`` — supplied or discovered —
             is not a valid absolute URI without a fragment.
     """
@@ -459,9 +458,8 @@ def _select_auth_method(
 
     A ``registered`` method is authoritative and takes precedence: it is the
     method the server assigned this specific client (RFC 7591) and may differ
-    from the server-wide advertised set, so when present it is honored (or
-    raises if this library cannot perform it) and the advertised set is not
-    consulted.
+    from the server-wide advertised set, so when present it is honored and the
+    advertised set is not consulted.
 
     Otherwise the method is derived. A secretless client is public and uses
     ``none``, unless the server publishes an explicit method list that omits
@@ -483,8 +481,8 @@ def _select_auth_method(
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the registered method is one this library cannot
-            perform, or the server advertises an explicit method list the client
+        McpDiscoveryError: If the registered method disagrees with the secret's
+            presence, or the server advertises an explicit method list the client
             cannot satisfy — omitting ``none`` for a public client, or offering
             only methods this library cannot perform for a confidential client.
     """
@@ -513,16 +511,12 @@ def _select_auth_method(
 def _honor_registered_auth_method(
     registered: TokenEndpointAuthMethod, secret: SecretStr | None
 ) -> TokenEndpointAuthMethod:
-    """Return the method the server registered for this client, if performable.
+    """Return the method the server registered for this client, if its secret agrees.
 
-    The registered method (RFC 7591) is authoritative for the client, so this
-    honors ``none`` for a public client and the confidential methods in
-    :data:`CONFIDENTIAL_AUTH_METHODS`. It raises rather than yielding an
-    internally inconsistent config when the method and the secret disagree — a
-    confidential method with no secret to send, or ``none`` paired with a secret
-    (a public client must carry none, and a lingering secret would be attached
-    to requests that should present no client authentication) — and when the
-    method is one this library cannot perform.
+    The registered method (RFC 7591) is authoritative for the client, so this honors it.
+    It raises rather than yielding an internally inconsistent config when the method and the secret disagree:
+    a confidential method with no secret to send, or ``none`` paired with a secret, which a public client must
+    not carry and which would otherwise be attached to requests that present no client authentication.
 
     Args:
         registered: The method the server registered for this client.
@@ -532,21 +526,21 @@ def _honor_registered_auth_method(
         The registered token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the method disagrees with the secret's presence, or
-            this library cannot perform it.
+        McpDiscoveryError: If the method disagrees with the secret's presence.
     """
-    if registered is TokenEndpointAuthMethod.NONE:
-        if secret is not None:
-            msg = "MCP server registered a public client (none) but issued a client secret"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
-        return TokenEndpointAuthMethod.NONE
-    if registered in CONFIDENTIAL_AUTH_METHODS:
-        if secret is None:
-            msg = "MCP server registered a confidential auth method but issued no client secret"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
-        return registered
-    msg = "MCP server registered an unsupported client authentication method"
-    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    match registered:
+        case TokenEndpointAuthMethod.NONE:
+            if secret is not None:
+                msg = "MCP server registered a public client (none) but issued a client secret"
+                raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+            return TokenEndpointAuthMethod.NONE
+        case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC | TokenEndpointAuthMethod.CLIENT_SECRET_POST:
+            if secret is None:
+                msg = "MCP server registered a confidential auth method but issued no client secret"
+                raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+            return registered
+        case _:
+            assert_never(registered)
 
 
 def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
