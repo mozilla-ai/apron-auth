@@ -230,6 +230,8 @@ class ProviderConfig(BaseModel, frozen=True):
         allow_identity_inference: Not consulted. :attr:`provider` decides which built-in identity handler
             applies, so a config's endpoint hosts never select one.
             Defaults to ``True``.
+            NOTE: A config that names a provider gets that provider's identity handler even when this
+            is ``False``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
@@ -237,8 +239,8 @@ class ProviderConfig(BaseModel, frozen=True):
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
             and a config that contradicts them is refused at construction.
-            NOTE: The label is not an attestation. Nothing else about a config is checked against the
-            member, so a caller must not read this as proof of where the endpoints lead.
+            NOTE: The label is not an attestation. Construction checks nothing else about a config
+            against the member, so a caller must not read this as proof of where the endpoints lead.
     """
 
     client_id: str
