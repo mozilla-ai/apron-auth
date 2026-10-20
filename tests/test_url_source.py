@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import traceback
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,8 @@ MODULES = sorted(SRC.rglob("*.py"))
 RULES = (_validate_url, require_url)
 # The names the guard matches, read off the rules so a rename cannot leave it passing.
 URL_RULES = {rule.__name__ for rule in RULES}
+# A URL whose authority carries a credential the HTTP client would present.
+_URL_WITH_CREDENTIAL = "https://operator:sesame@idp.example/token"  # pragma: allowlist secret
 
 
 def _called_name(func: ast.expr) -> str | None:
@@ -133,18 +136,56 @@ def test_the_issuer_flag_selects_rules_and_not_a_source() -> None:
     assert exc_info.value.kind is FailureKind.CONFIGURATION
 
 
+def test_the_issuer_rules_refuse_a_query() -> None:
+    """A query belongs to a request, not to the identifier every other URL is derived from."""
+    with pytest.raises(OidcDiscoveryError, match="must not carry a query"):
+        require_url(
+            "https://idp.example/realm?tenant=acme",
+            field="issuer",
+            allow_insecure_http=False,
+            caller_supplied=True,
+            is_issuer=True,
+        )
+
+
+@pytest.mark.parametrize("is_issuer", [False, True], ids=["endpoint", "issuer"])
 @pytest.mark.parametrize(
-    ("value", "refusal"),
-    [
-        ("https://idp.example/realm?tenant=acme", "must not carry a query"),
-        ("https://operator@idp.example/realm", "must not carry userinfo"),
-    ],
-    ids=["query", "userinfo"],
+    ("caller_supplied", "expected"),
+    [(False, FailureKind.REFUSED), (True, FailureKind.CONFIGURATION)],
+    ids=["document", "caller"],
 )
-def test_the_issuer_rules_refuse_a_query_and_userinfo(value: str, refusal: str) -> None:
-    """Userinfo in an issuer would be sent as credentials with every request derived from it."""
-    with pytest.raises(OidcDiscoveryError, match=refusal):
-        require_url(value, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(_URL_WITH_CREDENTIAL, id="a user and a password"),
+        pytest.param("https://operator@idp.example/token", id="a user alone"),
+        pytest.param("https://@idp.example/token", id="an empty user"),
+    ],
+)
+def test_every_url_refuses_a_credential_in_its_authority(
+    value: str, caller_supplied: bool, expected: FailureKind, is_issuer: bool
+) -> None:
+    """A public client states no credential of its own, so the request would present the URL's."""
+    with pytest.raises(OidcDiscoveryError, match="must not carry userinfo") as exc_info:
+        require_url(
+            value,
+            field="token endpoint",
+            allow_insecure_http=False,
+            caller_supplied=caller_supplied,
+            is_issuer=is_issuer,
+        )
+
+    assert exc_info.value.kind is expected
+
+
+def test_a_refused_credential_reaches_neither_the_error_nor_its_traceback() -> None:
+    """The refusal reaches a log and a caller's error reporter, so it must not repeat what it refused."""
+    with pytest.raises(OidcDiscoveryError) as exc_info:
+        require_url(_URL_WITH_CREDENTIAL, field="token endpoint", allow_insecure_http=False, caller_supplied=True)
+
+    rendered = "".join(traceback.format_exception(exc_info.value))
+    assert "operator" not in rendered
+    assert "sesame" not in rendered
 
 
 @pytest.mark.parametrize(
