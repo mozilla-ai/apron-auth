@@ -42,7 +42,8 @@ MODULES: dict[Provider, ModuleType] = {
     Provider.TYPEFORM: typeform,
 }
 
-# The known-good facts per provider, pinned independently of the enum.
+# The known-good facts per provider, pinned independently of the enum, so a slip in a member's
+# declaration fails a test rather than shipping, including one that moves where a token may be sent.
 MODULE_FACTS: dict[Provider, ProviderFacts] = {
     Provider.ATLASSIAN: ProviderFacts(
         can_assert_domain_ownership=False,
