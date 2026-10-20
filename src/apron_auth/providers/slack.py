@@ -461,7 +461,7 @@ class SlackRevocationHandler:
             ``False`` for an error status, or for an ``ok`` value that is missing or anything other than ``true``.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the revocation URL is invalid, the request cannot be sent,
                 the request fails to reach the endpoint, or its response body is not a valid JSON object.
                 The caught error is not attached as its cause or context.

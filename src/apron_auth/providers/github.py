@@ -214,7 +214,7 @@ class GitHubRevocationHandler:
             when GitHub reports a soft failure.
 
         Raises:
-            ValueError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL.
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
