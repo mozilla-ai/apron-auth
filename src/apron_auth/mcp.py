@@ -387,8 +387,8 @@ def cimd_client_id(url: str) -> str:
         The validated URL, unchanged, for use as a ``client_id``.
 
     Raises:
-        ValueError: If the URL is malformed or has an invalid port, is not
-            ``https``, has no host, carries userinfo or a fragment, names no
+        ConfigurationError: If the URL is malformed or has an invalid port, is
+            not ``https``, has no host, carries userinfo or a fragment, names no
             document path beyond a bare ``/``, or contains a ``.`` or ``..``
             path segment.
     """
@@ -396,25 +396,25 @@ def cimd_client_id(url: str) -> str:
         parsed = _parse_url(url)
     except ValueError as exc:
         msg = "CIMD client_id must be a valid URL"
-        raise ValueError(msg) from exc
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION) from exc
     if parsed.scheme != "https":
         msg = "CIMD client_id must be an https URL"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if not parsed.hostname:
         msg = "CIMD client_id must be an https URL with a host"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if parsed.username is not None or parsed.password is not None:
         msg = "CIMD client_id must not contain a username or password"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if parsed.fragment:
         msg = "CIMD client_id must not contain a fragment"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if not parsed.path.strip("/"):
         msg = "CIMD client_id must be an https URL with a path component"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if any(segment in (".", "..") for segment in parsed.path.split("/")):
         msg = "CIMD client_id must not contain a . or .. path segment"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
 
 

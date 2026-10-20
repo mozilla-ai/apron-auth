@@ -1300,19 +1300,19 @@ class TestCimdClientId:
         assert cimd_client_id(url) == url
 
     def test_http_scheme_rejected(self) -> None:
-        with pytest.raises(ValueError, match="https"):
+        with pytest.raises(ConfigurationError, match="https"):
             cimd_client_id("http://app.example.com/client.json")
 
     def test_missing_path_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path"):
+        with pytest.raises(ConfigurationError, match="path"):
             cimd_client_id("https://app.example.com")
 
     def test_bare_slash_path_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path"):
+        with pytest.raises(ConfigurationError, match="path"):
             cimd_client_id("https://app.example.com/")
 
     def test_no_host_rejected(self) -> None:
-        with pytest.raises(ValueError, match="host"):
+        with pytest.raises(ConfigurationError, match="host"):
             cimd_client_id("https:///client.json")
 
     def test_valid_url_with_port_accepted(self) -> None:
@@ -1320,23 +1320,23 @@ class TestCimdClientId:
         assert cimd_client_id(url) == url
 
     def test_invalid_port_rejected(self) -> None:
-        with pytest.raises(ValueError, match="valid URL"):
+        with pytest.raises(ConfigurationError, match="valid URL"):
             cimd_client_id("https://app.example.com:notaport/client.json")
 
     def test_userinfo_rejected(self) -> None:
-        with pytest.raises(ValueError, match="username or password"):
+        with pytest.raises(ConfigurationError, match="username or password"):
             cimd_client_id("https://user:pass@app.example.com/client.json")  # pragma: allowlist secret
 
     def test_fragment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="fragment"):
+        with pytest.raises(ConfigurationError, match="fragment"):
             cimd_client_id("https://app.example.com/client.json#section")
 
     def test_dot_path_segment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path segment"):
+        with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/./client.json")
 
     def test_dotdot_path_segment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path segment"):
+        with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/../client.json")
 
     def test_non_public_host_accepted(self) -> None:
@@ -1348,6 +1348,13 @@ class TestCimdClientId:
         """
         url = "https://127.0.0.1/client.json"
         assert cimd_client_id(url) == url
+
+    def test_rejection_is_a_configuration_fault(self) -> None:
+        """The client identifier is the caller's own argument, as the server and registration URLs are."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            cimd_client_id("http://app.example.com/client.json")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert exc_info.value.retryable is False
 
 
 class TestEndToEndFlow:
