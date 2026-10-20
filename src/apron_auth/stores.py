@@ -51,7 +51,6 @@ class MemoryStateStore:
 
         Args:
             max_age: The age, in seconds, past which a stored state is treated as expired.
-                A state exactly this old is still current.
 
         Raises:
             ConfigurationError: If ``max_age`` is not a positive finite number.
