@@ -787,7 +787,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
 - `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
 - `MemoryStateStore` raises `ConfigurationError` for a `max_age` that is not a positive finite number, as the provider config already refuses such a `max_pending_age_seconds`. A store built with `0` to expire every state at once no longer constructs.
-- `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. A system clock stepped backwards further than that discards the pending states the store is holding.
+- `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. After the system clock steps backwards, a state younger than the step less that difference is expired, so a step beyond the difference plus `max_age` expires every state the store holds.
 
 ## Logging
 
