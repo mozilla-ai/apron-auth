@@ -17,6 +17,7 @@ from apron_auth.providers import (
     github,
     google,
     hubspot,
+    identity_handler_for,
     linear,
     microsoft,
     notion,
@@ -151,6 +152,14 @@ def test_member_names_an_identity_handler_its_module_defines(provider: Provider)
 def test_preset_sets_the_matching_member(provider: Provider) -> None:
     config = _preset_config(MODULES[provider])
     assert config.provider is provider
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+def test_a_preset_config_resolves_the_member_handler(provider: Provider) -> None:
+    """The preset's own endpoints must satisfy the host condition its member states."""
+    handler = identity_handler_for(_preset_config(MODULES[provider]))
+
+    assert type(handler).__name__ == provider.identity_handler_class_name
 
 
 @pytest.mark.parametrize("provider", list(Provider))
