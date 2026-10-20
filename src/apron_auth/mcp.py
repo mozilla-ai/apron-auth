@@ -97,13 +97,12 @@ async def discover(
 ) -> ServerMetadata:
     """Discover a remote MCP server's OAuth metadata.
 
-    Fetches the RFC 9728 protected-resource metadata (trying the
-    ``resource_metadata_url`` hint, then well-known locations), reads its
-    resource identifier and first authorization server, and fetches that
-    server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
-    and the block on ``localhost`` names and on IP literals that are not
-    globally reachable are defense-in-depth; they do not stop any other
-    hostname that resolves to an internal address, so untrusted ``server_url``
+    Fetches the RFC 9728 protected-resource metadata (trying the ``resource_metadata_url`` hint, then
+    well-known locations), reads its resource identifier and first authorization server, and fetches that
+    server's RFC 8414 metadata (with an OIDC fallback).
+    The HTTPS requirement and the block on ``localhost`` names and on IP literals that are not globally
+    reachable are defense-in-depth.
+    They do not stop any other hostname that resolves to an internal address, so untrusted ``server_url``
     values need a ``transport_factory`` that pins DNS to validated addresses.
 
     Args:
