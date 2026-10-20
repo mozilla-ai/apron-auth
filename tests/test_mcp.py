@@ -92,7 +92,7 @@ class TestToProviderConfig:
 
     def test_confidential_client_uses_secret_post(self) -> None:
         config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret=SecretStr("s")))
-        assert config.token_endpoint_auth_method == "client_secret_post"
+        assert config.token_endpoint_auth_method is TokenEndpointAuthMethod.CLIENT_SECRET_POST
         assert config.client_secret is not None
 
     def test_public_client_uses_none(self) -> None:
@@ -323,6 +323,12 @@ class TestSelectAuthMethod:
     )
     def test_returns_expected_method(self, secret: SecretStr | None, advertised: list[str], expected: str) -> None:
         assert _select_auth_method(secret, advertised) == expected
+
+    def test_a_derived_method_is_the_enum_member(self) -> None:
+        """A member equals its wire name, so only identity shows that the derived set holds members."""
+        assert _select_auth_method(SecretStr("s"), ["client_secret_basic"]) is (
+            TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+        )
 
     @pytest.mark.parametrize(
         "advertised",
