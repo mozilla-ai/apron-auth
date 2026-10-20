@@ -180,20 +180,14 @@ async def discover(
     token_url = require_url(
         token_url, field="token endpoint", allow_insecure_http=allow_insecure_http, caller_supplied=False
     )
-    jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http, caller_supplied=False)
+    jwks_url = optional_url(document, "jwks_uri", "signing key set", allow_insecure_http)
     if jwks_url is None:
         msg = "OpenID provider configuration names no signing key set"
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
 
-    userinfo_url = optional_url(
-        document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http, caller_supplied=False
-    )
-    revocation_url = optional_url(
-        document, "revocation_endpoint", "revocation endpoint", allow_insecure_http, caller_supplied=False
-    )
-    registration_url = optional_url(
-        document, "registration_endpoint", "registration endpoint", allow_insecure_http, caller_supplied=False
-    )
+    userinfo_url = optional_url(document, "userinfo_endpoint", "userinfo endpoint", allow_insecure_http)
+    revocation_url = optional_url(document, "revocation_endpoint", "revocation endpoint", allow_insecure_http)
+    registration_url = optional_url(document, "registration_endpoint", "registration endpoint", allow_insecure_http)
 
     return ServerMetadata(
         authorize_url=authorize_url,

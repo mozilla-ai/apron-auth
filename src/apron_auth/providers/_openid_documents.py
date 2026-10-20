@@ -109,9 +109,7 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
-def optional_url(
-    document: dict[str, Any], key: str, field: str, allow_insecure_http: bool, *, caller_supplied: bool
-) -> str | None:
+def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
     """Validate an optional endpoint when the document names one.
 
     Args:
@@ -119,7 +117,6 @@ def optional_url(
         key: The document member to read.
         field: What the endpoint is, for errors.
         allow_insecure_http: Passed through to :func:`require_url`.
-        caller_supplied: Passed through to :func:`require_url`, which takes no default for it.
 
     Returns:
         The endpoint, or ``None`` when the document omits it or gives an empty string.
@@ -130,7 +127,7 @@ def optional_url(
     value = document.get(key)
     if value is None or value == "":
         return None
-    return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=caller_supplied)
+    return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=False)
 
 
 async def fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
