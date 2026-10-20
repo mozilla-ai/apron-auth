@@ -1,4 +1,4 @@
-"""Provider presets for common OAuth providers."""
+"""Provider presets for common OAuth providers, and the identity handler a configuration resolves to."""
 
 from __future__ import annotations
 

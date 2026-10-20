@@ -38,10 +38,11 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
         msg = (
             f"The authorization and token endpoints must both be {provider.display_name} hosts for the "
             f"built-in {provider.display_name} identity handler to apply. Pass an identity handler that "
-            f"accepts the configured endpoints."
+            f"accepts the configured endpoints, or name no provider for a server that is not "
+            f"{provider.display_name}'s."
         )
         raise ConfigurationError(msg)
-    # Only the named provider's module is imported, so naming one provider loads no other.
+    # A registry of the ten classes would import every provider module; resolving by name imports one.
     module = import_module(f".{provider.value}", __package__)
     handler: IdentityHandler = getattr(module, provider.identity_handler_class_name)()
     return handler
