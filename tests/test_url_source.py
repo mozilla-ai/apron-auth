@@ -1,10 +1,9 @@
 """A refused URL is classified by where its value came from.
 
-A value this library's caller passed is a configuration fault,
-and one read out of a fetched document is a refusal of what the other side sent.
-Each call to a URL rule therefore names its value's source. The signature is what enforces that,
-and a guard over the library states the convention in one place. The guard is the weaker of the
-two, because it reads a call by name and cannot tell whether the source a call names is right.
+A value this library's caller passed is a configuration fault, and one read out of a fetched document is a refusal.
+Each call to a URL rule therefore names its value's source, and the signature is what enforces that.
+A guard over the library states the convention in one place, and is the weaker of the two.
+It reads a call by name, so it cannot tell whether the source a call names is the right one.
 """
 
 from __future__ import annotations
@@ -23,13 +22,14 @@ from apron_auth.providers._openid_documents import require_url
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# The URL rules whose refusal follows the source, kept as a pair so each is held to both tests.
-RULES = (_validate_url, require_url)
-# The library's source tree. The guard walks it alone, so a test may still call a rule without a source.
+# Ordered so each constant follows the one it derives from.
+# The library's source tree, which the guard walks alone so a test can still call a rule with no source.
 SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 # Every module of that tree, one parametrized case each.
 MODULES = sorted(SRC.rglob("*.py"))
-# Named so a rename cannot leave the guard passing on a rule it no longer finds.
+# The two URL rules whose refusal follows the source of the value.
+RULES = (_validate_url, require_url)
+# The names the guard matches, read off the rules so a rename cannot leave it passing.
 URL_RULES = {rule.__name__ for rule in RULES}
 
 
@@ -142,6 +142,6 @@ def test_the_issuer_flag_selects_rules_and_not_a_source() -> None:
     ids=["query", "userinfo"],
 )
 def test_the_issuer_rules_refuse_a_query_and_userinfo(value: str, refusal: str) -> None:
-    """Userinfo would travel as credentials on every request the issuer's URLs carry."""
+    """Userinfo in an issuer would be sent as credentials with every request derived from it."""
     with pytest.raises(OidcDiscoveryError, match=refusal):
         require_url(value, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)

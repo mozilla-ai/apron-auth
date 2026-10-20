@@ -111,8 +111,8 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
 def optional_url(document: dict[str, Any], *, key: str, field: str, allow_insecure_http: bool) -> str | None:
     """Validate an optional endpoint when the document names one.
 
-    The endpoint is a member of a fetched document, so an unacceptable one is a refusal of what
-    the provider published rather than a fault in the caller's own configuration.
+    The endpoint is a member of a fetched document.
+    An unacceptable one is a refusal of what the provider published, not a fault in the caller's configuration.
 
     Args:
         document: The configuration document.
