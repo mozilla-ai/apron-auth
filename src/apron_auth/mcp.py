@@ -210,19 +210,18 @@ def to_provider_config(
 ) -> ProviderConfig:
     """Fold discovered metadata and client credentials into a ProviderConfig with no identity handler of its own.
 
-    PKCE is enabled unless the server advertises code-challenge methods that
-    exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
-    S256 challenges, PKCE is disabled rather than downgraded to ``plain``. The
-    token-endpoint auth method is taken from the registration's
-    ``token_endpoint_auth_method`` when it states one — that value is
-    authoritative for this specific client and may differ from what the server
-    advertises server-wide. Absent it, a confidential client's method is chosen
-    from the methods the server advertises (preferring ``client_secret_post``)
-    and a secretless public client uses ``none``. The
-    discovered issuer and its ``iss``-parameter support carry onto the config so
-    the code exchange can validate the authorization-response ``iss`` (RFC 9207).
-    The RFC 8707 resource indicator defaults to the discovered protected-resource
-    identifier and can be overridden by ``resource``.
+    PKCE is enabled unless the server advertises code-challenge methods that exclude S256.
+    Because :class:`~apron_auth.client.OAuthClient` issues only S256 challenges, PKCE is disabled rather than
+    downgraded to ``plain``.
+    The token-endpoint auth method is taken from the registration's ``token_endpoint_auth_method`` when it
+    states one, because that value is authoritative for this specific client and may differ from what the
+    server advertises server-wide.
+    Absent it, a confidential client's method is chosen from the methods the server advertises (preferring
+    ``client_secret_post``) and a secretless public client uses ``none``.
+    The discovered issuer and its ``iss``-parameter support carry onto the config so the code exchange can
+    validate the authorization-response ``iss`` (RFC 9207).
+    The RFC 8707 resource indicator defaults to the discovered protected-resource identifier and can be
+    overridden by ``resource``.
 
     The returned config names no built-in provider and allows no provider's identity handler,
     and no parameter changes either.
@@ -233,11 +232,11 @@ def to_provider_config(
 
     Args:
         metadata: Metadata from :func:`discover`.
-        registration: The client's credentials for this authorization server: the
-            registration :func:`register_client` issued, or one built from a
-            pre-registered identifier or a CIMD client identifier, which names a
-            secret only for a confidential client and a token-endpoint auth
-            method only when the server registered one.
+        registration: The client's credentials for this authorization server, from
+            :func:`register_client` or built around a pre-registered identifier or
+            a CIMD client identifier. It carries a secret only for a confidential
+            client, and a token-endpoint auth method only when the server
+            registered one for this client.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
         resource: RFC 8707 resource indicator to audience-bind issued tokens to,
@@ -745,6 +744,8 @@ async def _fetch_first_metadata(
     Tries each URL in order through a per-URL client from ``transport_factory``,
     skipping request errors, non-200 responses, and non-object bodies. Each skip
     is logged at debug with a non-sensitive reason.
+
+    NOTE: The caller must pass at least one candidate URL.
 
     Args:
         candidate_urls: The URLs to try, in order.
