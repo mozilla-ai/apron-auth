@@ -7,7 +7,7 @@ import pkgutil
 from types import ModuleType
 
 import pytest
-from conftest import VaryFacts
+from support import VaryFacts
 
 from apron_auth import providers as providers_pkg
 from apron_auth.mcp import to_provider_config
