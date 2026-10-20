@@ -382,19 +382,17 @@ async def register_client(
 def cimd_client_id(url: str) -> str:
     """Validate an HTTPS URL as a Client ID Metadata Document (CIMD) client identifier.
 
-    A CIMD client is identified by an HTTPS URL to a metadata document the client
-    hosts, and that URL is sent verbatim as the ``client_id`` in the authorization
-    and token requests. This enforces the client-identifier URL rules this library
-    can check locally and returns the URL for use as a ``client_id``: an ``https``
-    scheme, a valid port, a path component naming the document, and none of the
-    components the specification forbids — userinfo, a fragment, or a ``.`` or
-    ``..`` path segment. A query string is only discouraged, not forbidden, so it
-    is left alone.
+    A CIMD client is identified by an HTTPS URL to a metadata document the client hosts, and that URL is sent
+    verbatim as the ``client_id`` in the authorization and token requests.
+    This enforces the client-identifier URL rules this library can check locally and returns the URL for use
+    as a ``client_id``: an ``https`` scheme, a valid port, a path component naming the document, and none of
+    the components the specification forbids, which are userinfo, a fragment, and a ``.`` or ``..`` path
+    segment.
+    A query string is only discouraged, not forbidden, so it is left alone.
 
-    Unlike :func:`discover` and :func:`register_client`, this does not block
-    non-public hosts. The URL is the client's own metadata document, which this
-    library never fetches — the authorization server resolves it — so blocking
-    non-public hosts would reject a legitimate caller-hosted URL.
+    Unlike :func:`discover` and :func:`register_client`, this does not block non-public hosts.
+    The URL is the client's own metadata document, which the authorization server resolves and this library
+    never fetches, so blocking non-public hosts would reject a legitimate caller-hosted URL.
 
     Args:
         url: The HTTPS URL of the client's hosted metadata document.
@@ -508,20 +506,18 @@ def _select_auth_method(
 ) -> TokenEndpointAuthMethod:
     """Choose the token-endpoint authentication method for a discovered server.
 
-    A ``registered`` method is authoritative and takes precedence: it is the
-    method the server assigned this specific client (RFC 7591) and may differ
-    from the server-wide advertised set, so when present it is honored and the
-    advertised set is not consulted.
+    A ``registered`` method is authoritative and takes precedence, because it is the method the server
+    assigned this specific client (RFC 7591) and may differ from the server-wide advertised set.
+    When it is present it is honored, and the advertised set is not consulted.
 
-    Otherwise the method is derived. A secretless client is public and uses
-    ``none``, unless the server publishes an explicit method list that omits
-    ``none`` — then it accepts no public client and this raises. A confidential
-    client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server
-    advertises; a server advertising only methods this library cannot perform is
-    unusable, so this raises rather than yielding a config doomed to fail at
-    token exchange. When the server advertises nothing, this defaults to
-    ``client_secret_basic`` — RFC 8414's stated default, and the one scheme
-    RFC 6749 requires every authorization server to support.
+    Otherwise the method is derived.
+    A secretless client is public and uses ``none``, unless the server publishes an explicit method list that
+    omits ``none``, which accepts no public client and raises.
+    A confidential client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server advertises.
+    A server advertising only methods this library cannot perform is unusable, so this raises rather than
+    yielding a config doomed to fail at token exchange.
+    When the server advertises nothing, this defaults to ``client_secret_basic``, which is RFC 8414's stated
+    default and the one scheme RFC 6749 requires every authorization server to support.
 
     Args:
         secret: The client secret, or None for a public client.
@@ -659,10 +655,10 @@ def _is_localhost_name(host: str) -> bool:
 def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     """Return ``native`` for a loopback redirect URI, else ``None``.
 
-    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252
-    signature of a native or CLI client. Any other redirect leaves the value
-    unset so the registration request is byte-identical to one that never
-    considered it.
+    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252 signature of a native or CLI
+    client.
+    Any other redirect leaves the value unset, so the registration request is byte-identical to one that
+    never considered it.
     """
     try:
         host = _host_name(urlparse(redirect_uri).hostname or "")
