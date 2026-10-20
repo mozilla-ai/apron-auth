@@ -42,7 +42,7 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
             f"{provider.display_name}'s."
         )
         raise ConfigurationError(msg)
-    # A registry of the ten classes would import every provider module; resolving by name imports one.
+    # A registry would import every provider module. Resolving by name imports only the named one.
     module = import_module(f".{provider.value}", __package__)
     handler: IdentityHandler = getattr(module, provider.identity_handler_class_name)()
     return handler

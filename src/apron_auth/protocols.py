@@ -93,6 +93,10 @@ class IdentityHandler(Protocol):
         A raised error's cause and context are discarded.
         An error that is not one of this library's errors is replaced by a fixed message.
 
+        NOTE: An implementation that derives the endpoint it sends the access token to must derive it
+        from ``config.authorize_url`` or ``config.token_url``.
+        No other field of a configuration is checked against the hosts of the provider it names.
+
         Args:
             material: The token material to establish identity from.
             config: The provider configuration the tokens were issued under.
