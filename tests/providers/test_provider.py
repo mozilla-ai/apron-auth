@@ -59,9 +59,6 @@ MODULE_FACTS: dict[Provider, tuple[str, tuple[str, ...], bool, str, str]] = {
 # ``oidc`` presets any OpenID provider rather than one named provider, so it has no member.
 _GENERIC_MODULE_NAMES = frozenset({"oidc"})
 
-# ``identity`` serves every provider rather than presetting one, so it exposes no preset.
-_SHARED_MODULE_NAMES = frozenset({"identity"})
-
 _GENERIC_METADATA = ServerMetadata(
     authorize_url="https://issuer.example/authorize",
     token_url="https://issuer.example/token",
@@ -101,16 +98,15 @@ def test_members_are_ordered_a_to_z() -> None:
 def test_public_provider_modules_expose_a_preset() -> None:
     missing_preset: list[str] = []
     for info in pkgutil.iter_modules(providers_pkg.__path__):
-        if info.name.startswith("_") or info.name in _SHARED_MODULE_NAMES:
+        if info.name.startswith("_"):
             continue
         module = importlib.import_module(f"{providers_pkg.__name__}.{info.name}")
         if not callable(getattr(module, "preset", None)):
             missing_preset.append(info.name)
 
     assert not missing_preset, (
-        "A public module under apron_auth.providers presets a provider and exposes preset(...), unless it "
-        "serves every provider and is named in _SHARED_MODULE_NAMES. Rename a provider-internal helper "
-        f"with a leading underscore. Modules with no preset: {', '.join(missing_preset)}."
+        "A public module under apron_auth.providers presets a provider and exposes preset(...). "
+        f"Rename a helper module with a leading underscore. Modules with no preset: {', '.join(missing_preset)}."
     )
 
 

@@ -12,11 +12,8 @@ if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
     from apron_auth.protocols import IdentityHandler
 
-# The package that holds one module per provider member.
-_PROVIDER_PACKAGE = "apron_auth.providers"
 
-
-def identity_handler(config: ProviderConfig) -> IdentityHandler | None:
+def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
     """Build the identity handler of the provider ``config`` names.
 
     The provider's endpoint hosts are a condition rather than a selector: a config that names a
@@ -39,12 +36,12 @@ def identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         return None
     if not oauth_hosts_match(config, provider.host_suffixes):
         msg = (
-            f"The configured authorization and token endpoints are not {provider.display_name}'s, "
-            f"so the built-in {provider.display_name} identity handler does not apply. "
-            f"Pass an identity handler for a {provider.display_name} deployment on other hosts."
+            f"The authorization and token endpoints must both be {provider.display_name} hosts for the "
+            f"built-in {provider.display_name} identity handler to apply. Pass an identity handler that "
+            f"accepts the configured endpoints."
         )
         raise ConfigurationError(msg)
     # Only the named provider's module is imported, so naming one provider loads no other.
-    module = import_module(f"{_PROVIDER_PACKAGE}.{provider.value}")
+    module = import_module(f".{provider.value}", __package__)
     handler: IdentityHandler = getattr(module, provider.identity_handler_class_name)()
     return handler
