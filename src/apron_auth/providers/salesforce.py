@@ -1,6 +1,6 @@
 """Salesforce OAuth provider preset and identity handler.
 
-``disconnect_fully_revokes`` defaults to ``False``: Salesforce's
+``disconnect_fully_revokes=False``: Salesforce's
 RFC 7009 ``/services/oauth2/revoke`` invalidates the supplied token
 but its effect on the org-level Connected App authorization has not
 been verified end-to-end. Tracking issue: #35.
@@ -15,7 +15,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -48,10 +48,6 @@ BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 # The characters that make an instance host unsafe to put into a URL.
 _FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-# NOTE: The identity fetch also refuses to send the access token to a userinfo host outside them.
-_SALESFORCE_IDENTITY_HOST_SUFFIXES = ("salesforce.com",)
 
 # The path of the userinfo endpoint on the user's Salesforce instance.
 _SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
@@ -97,7 +93,8 @@ class SalesforceIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         host = urlparse(config.authorize_url).hostname or ""
-        if not matches_suffix(host, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
+        # NOTE: The access token goes to a userinfo URL on this host, so the suffixes limit where it is sent.
+        if not matches_suffix(host, Provider.SALESFORCE.host_suffixes):
             msg = (
                 f"Salesforce identity fetch refused: authorize_url host {host!r} is not a "
                 f"Salesforce host. The bearer token would otherwise be sent to a non-Salesforce "
@@ -150,7 +147,7 @@ class SalesforceIdentityHandler:
             )
 
         return IdentityProfile(
-            provider="salesforce",
+            provider=Provider.SALESFORCE,
             subject=payload.get("sub"),
             email=payload.get("email"),
             email_verified=email_verified,
@@ -178,7 +175,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Salesforce identity handler when both OAuth hosts are
         Salesforce's, else ``None``.
     """
-    if oauth_hosts_match(config, _SALESFORCE_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.SALESFORCE.host_suffixes):
         return SalesforceIdentityHandler()
     return None
 
@@ -233,6 +230,7 @@ def preset(
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
+        provider=Provider.SALESFORCE,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url=f"https://{host}/services/oauth2/authorize",

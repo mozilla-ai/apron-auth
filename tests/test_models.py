@@ -4,10 +4,12 @@ import copy
 import math
 import pickle
 import time
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from apron_auth import providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
@@ -15,6 +17,7 @@ from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
+    Provider,
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
@@ -655,6 +658,54 @@ class TestProviderConfigCanAssertDomainOwnership:
         assert config.can_assert_domain_ownership is True
 
 
+class TestProviderConfigProvider:
+    def test_defaults_to_none(self) -> None:
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.provider is None
+
+    def test_accepts_a_member_whose_facts_match(self) -> None:
+        config = ProviderConfig(
+            provider=Provider.LINEAR,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            scope_separator=",",
+        )
+        assert config.provider is Provider.LINEAR
+
+    def test_rejects_a_scope_separator_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
+        with pytest.raises(ValidationError, match="scope_separator must be ',' for provider Linear, got ' '"):
+            ProviderConfig(
+                provider=Provider.LINEAR,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+                scope_separator=" ",
+            )
+
+    def test_rejects_a_disconnect_fully_revokes_that_contradicts_the_member(self) -> None:
+        """A value the member does not state is refused; leaving it out takes the member's."""
+        with pytest.raises(
+            ValidationError, match="disconnect_fully_revokes must be True for provider GitHub, got False"
+        ):
+            ProviderConfig(
+                provider=Provider.GITHUB,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://github.com/login/oauth/authorize",
+                token_url="https://github.com/login/oauth/access_token",
+                disconnect_fully_revokes=False,
+            )
+
+
 class TestTenancyContextOwnsEmailDomain:
     def test_defaults_to_false(self) -> None:
         ctx = TenancyContext()
@@ -688,6 +739,26 @@ class TestIdentityProfileProvider:
         assert identity.provider == "google"
         assert identity.subject == "g-1"
 
+    def test_a_built_in_provider_name_becomes_its_member(self) -> None:
+        identity = IdentityProfile(provider="google")
+        assert identity.provider is Provider.GOOGLE
+
+    def test_a_member_survives_a_round_trip_through_its_dump(self) -> None:
+        identity = IdentityProfile(provider=Provider.GOOGLE, subject="g-1")
+        rebuilt = IdentityProfile.model_validate(identity.model_dump(mode="json"))
+        assert rebuilt.provider is Provider.GOOGLE
+
+    def test_a_dump_carries_the_member_in_python_mode_and_the_name_in_json_mode(self) -> None:
+        identity = IdentityProfile(provider=Provider.GOOGLE)
+        assert identity.model_dump()["provider"] is Provider.GOOGLE
+        assert identity.model_dump()["provider"] == "google"
+        assert identity.model_dump(mode="json")["provider"] == "google"
+
+    def test_a_generic_provider_name_stays_a_string(self) -> None:
+        identity = IdentityProfile(provider="oidc:https://issuer.example")
+        assert identity.provider == "oidc:https://issuer.example"
+        assert type(identity.provider) is str
+
 
 class TestIdentityProfileVerifiedEmail:
     def test_returns_email_when_verified(self) -> None:
@@ -711,6 +782,12 @@ class TestIdentityProfileIdentityKey:
     def test_returns_tuple_when_both_present(self) -> None:
         identity = IdentityProfile(provider="github", subject="12345")
         assert identity.identity_key() == ("github", "12345")
+
+    def test_returns_a_plain_string_for_a_member(self) -> None:
+        identity = IdentityProfile(provider=Provider.GITHUB, subject="12345")
+        key = identity.identity_key()
+        assert key == ("github", "12345")
+        assert type(key[0]) is str
 
     def test_returns_none_when_provider_missing(self) -> None:
         identity = IdentityProfile(provider=None, subject="12345")
@@ -941,3 +1018,64 @@ class TestOAuthPendingState:
         )
         with pytest.raises(ValidationError):
             state.state = "other"
+
+
+class TestProviderFactsAreDerived:
+    """Test that a member states its facts once and a config does not restate them."""
+
+    def test_a_named_provider_takes_its_facts_from_the_member(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            provider=Provider.LINEAR,
+        )
+        assert config.scope_separator == Provider.LINEAR.scope_separator
+        assert config.disconnect_fully_revokes is Provider.LINEAR.disconnect_fully_revokes
+
+    def test_a_config_with_no_provider_keeps_the_field_defaults(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+        )
+        assert config.scope_separator == " "
+        assert config.disconnect_fully_revokes is False
+
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [("scope_separator", " "), ("disconnect_fully_revokes", True)],
+    )
+    def test_a_value_that_contradicts_the_member_is_still_refused(self, field: str, value: object) -> None:
+        with pytest.raises(ValidationError, match="Linear"):
+            ProviderConfig(
+                client_id="c",
+                client_secret=SecretStr("s"),
+                authorize_url="https://linear.app/oauth/authorize",
+                token_url="https://api.linear.app/oauth/token",
+                provider=Provider.LINEAR,
+                **{field: value},
+            )
+
+    def test_a_value_that_agrees_with_the_member_is_accepted(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            provider=Provider.LINEAR,
+            scope_separator=",",
+        )
+        assert config.scope_separator == ","
+
+    def test_no_preset_restates_a_fact_the_member_states(self) -> None:
+        """A preset names its member, so restating a fact would be a second statement of it."""
+        restated = [
+            f"{path.name}:{number}"
+            for path in (Path(providers.__file__).parent).glob("*.py")
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+            if ("scope_separator=Provider." in line or "disconnect_fully_revokes=Provider." in line)
+        ]
+        assert restated == []

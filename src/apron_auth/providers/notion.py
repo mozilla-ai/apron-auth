@@ -24,6 +24,7 @@ from apron_auth.errors import RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
+    Provider,
     ProviderConfig,
     TenancyContext,
     TokenEndpointAuthMethod,
@@ -39,9 +40,6 @@ logger = logging.getLogger(__name__)
 
 # The endpoint that revokes a Notion access token.
 NOTION_REVOCATION_URL = "https://api.notion.com/v1/oauth/revoke"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_NOTION_IDENTITY_HOST_SUFFIXES = ("api.notion.com",)
 
 # The endpoint that returns the bot user of the access token, with its owner.
 _NOTION_USERINFO_URL = "https://api.notion.com/v1/users/me"
@@ -141,7 +139,7 @@ class NotionIdentityHandler:
                 )
 
         return IdentityProfile(
-            provider="notion",
+            provider=Provider.NOTION,
             subject=subject,
             email=email,
             email_verified=None,
@@ -251,7 +249,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Notion identity handler when the config's OAuth hosts are
         Notion's, else ``None``.
     """
-    if oauth_hosts_match(config, _NOTION_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.NOTION.host_suffixes):
         return NotionIdentityHandler()
     return None
 
@@ -293,6 +291,7 @@ def preset(
         defaults.update(extra_params)
 
     config = ProviderConfig(
+        provider=Provider.NOTION,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://api.notion.com/v1/oauth/authorize",
@@ -302,6 +301,5 @@ def preset(
         scopes=scopes,
         token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
         extra_params=defaults,
-        disconnect_fully_revokes=False,
     )
     return config, NotionRevocationHandler()

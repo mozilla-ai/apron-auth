@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import math
+from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, SecretStr, ValidationInfo, model_validator
+from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
@@ -44,6 +45,58 @@ class ApplicationType:
 
     WEB = "web"
     NATIVE = "native"
+
+
+@unique
+class Provider(StrEnum):
+    """The OAuth providers this library knows by name, each with the facts that differ between them.
+
+    A member's value is its module name under ``apron_auth.providers``, and a member is declared as
+    ``(value, display_name, host_suffixes, disconnect_fully_revokes, scope_separator)``.
+
+    Attributes:
+        display_name: The provider's name as it appears in messages and documentation.
+        host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
+            NOTE: A config that names this member may have endpoints outside them, such as a
+            Salesforce org on a custom login domain.
+        disconnect_fully_revokes: Whether revoking a token removes the user's portal-level OAuth grant.
+            :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
+            provider's module docstring records how the value was verified.
+        scope_separator: The string the provider's scope parameter is joined with.
+    """
+
+    display_name: str
+    host_suffixes: tuple[str, ...]
+    disconnect_fully_revokes: bool
+    scope_separator: str
+
+    def __new__(
+        cls,
+        value: str,
+        display_name: str,
+        host_suffixes: tuple[str, ...],
+        disconnect_fully_revokes: bool,
+        scope_separator: str,
+    ) -> Provider:
+        """Create a member from its module name and the facts that differ between providers."""
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member.display_name = display_name
+        member.host_suffixes = host_suffixes
+        member.disconnect_fully_revokes = disconnect_fully_revokes
+        member.scope_separator = scope_separator
+        return member
+
+    ATLASSIAN = ("atlassian", "Atlassian", ("auth.atlassian.com",), False, " ")
+    GITHUB = ("github", "GitHub", ("github.com",), True, " ")
+    GOOGLE = ("google", "Google", ("google.com", "googleapis.com"), True, " ")
+    HUBSPOT = ("hubspot", "HubSpot", ("api.hubapi.com", "app.hubspot.com"), False, " ")
+    LINEAR = ("linear", "Linear", ("linear.app",), False, ",")
+    MICROSOFT = ("microsoft", "Microsoft", ("login.microsoftonline.com",), False, " ")
+    NOTION = ("notion", "Notion", ("api.notion.com",), False, " ")
+    SALESFORCE = ("salesforce", "Salesforce", ("salesforce.com",), False, " ")
+    SLACK = ("slack", "Slack", ("slack.com",), False, ",")
+    TYPEFORM = ("typeform", "Typeform", ("api.typeform.com",), False, " ")
 
 
 class ScopeMetadata(BaseModel, frozen=True):
@@ -176,6 +229,12 @@ class ProviderConfig(BaseModel, frozen=True):
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
+        provider: The built-in provider this config is labeled with, which every preset sets to its own.
+            ``None`` for a hand-built config, and for a generic OpenID or MCP config.
+            When set, :attr:`disconnect_fully_revokes` and :attr:`scope_separator` must equal the member's,
+            and a config that contradicts them is refused at construction.
+            NOTE: The label is not an attestation. Nothing else about a config is checked against the
+            member, so a caller must not read this as proof of where the endpoints lead.
     """
 
     client_id: str
@@ -199,6 +258,7 @@ class ProviderConfig(BaseModel, frozen=True):
     resource: str | None = None
     allow_identity_inference: bool = True
     max_pending_age_seconds: float = 600.0
+    provider: Provider | None = None
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
@@ -285,6 +345,61 @@ class ProviderConfig(BaseModel, frozen=True):
             raise ValueError(msg)
         if not urlparse(self.resource).scheme:
             msg = "resource must be an absolute URI when set"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="before")
+    @classmethod
+    def _take_provider_facts_from_member(cls, data: Any) -> Any:
+        """Fill the facts a provider member states, for a config that names one and leaves them out.
+
+        The member is the one statement of a provider's facts, so a config that names it need not
+        repeat them. A value given explicitly is left alone, and the check after this one refuses
+        one that contradicts the member.
+
+        Args:
+            data: The raw input, which is a mapping when the config is built from keywords or JSON.
+
+        Returns:
+            The input, with each stated fact filled in where it was left out.
+        """
+        if not isinstance(data, dict):
+            return data
+        try:
+            member = Provider(data["provider"])
+        except (KeyError, ValueError):
+            return data
+        for field in ("disconnect_fully_revokes", "scope_separator"):
+            data.setdefault(field, getattr(member, field))
+        return data
+
+    @model_validator(mode="after")
+    def _provider_facts_match_member(self) -> ProviderConfig:
+        """Reject a config whose per-provider facts contradict its provider.
+
+        The member states a provider's facts once. A config that named a member and carried a different
+        value for one of them would answer one way from the config and another from the member.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``provider`` is set and ``disconnect_fully_revokes`` or
+                ``scope_separator`` differs from the member's.
+        """
+        if self.provider is None:
+            return self
+        if self.disconnect_fully_revokes is not self.provider.disconnect_fully_revokes:
+            msg = (
+                f"disconnect_fully_revokes must be {self.provider.disconnect_fully_revokes} "
+                f"for provider {self.provider.display_name}, got {self.disconnect_fully_revokes}"
+            )
+            raise ValueError(msg)
+        if self.scope_separator != self.provider.scope_separator:
+            msg = (
+                f"scope_separator must be {self.provider.scope_separator!r} "
+                f"for provider {self.provider.display_name}, got {self.scope_separator!r}"
+            )
             raise ValueError(msg)
         return self
 
@@ -674,10 +789,12 @@ class IdentityProfile(BaseModel, frozen=True):
     example).
 
     Attributes:
-        provider: Name of the OAuth provider that issued this profile
-            (e.g. ``"google"``, ``"github"``). Populated by each
-            provider's ``fetch_identity`` implementation. Used by
-            :meth:`identity_key` to produce a ``(provider, subject)``
+        provider: The OAuth provider that issued this profile.
+            A provider with a built-in preset is its :class:`Provider` member, and the member's value validates
+            back into the member, so a profile rebuilt from a dump holds the member too.
+            Any other provider is a string naming it, such as ``oidc:<issuer>``.
+            Either form compares equal to its string value.
+            Used by :meth:`identity_key` to produce a ``(provider, subject)``
             tuple suitable for keying a consumer's user table without
             cross-provider collision.
         subject: Provider user identifier when available.
@@ -694,7 +811,7 @@ class IdentityProfile(BaseModel, frozen=True):
         raw: Full provider response payload(s) for advanced callers.
     """
 
-    provider: str | None = None
+    provider: Provider | str | None = Field(default=None, union_mode="left_to_right")
     subject: str | None = None
     email: str | None = None
     email_verified: bool | None = None
@@ -722,6 +839,7 @@ class IdentityProfile(BaseModel, frozen=True):
     def identity_key(self) -> tuple[str, str] | None:
         """Return ``(provider, subject)``, the recommended primary key for users.
 
+        Both parts are plain strings, whether :attr:`provider` holds a member or a string.
         Returns ``None`` if either field is missing or empty. Consumers
         should key their user/identity tables on this tuple rather than
         on ``email`` to avoid cross-provider account hijack via email
@@ -732,7 +850,7 @@ class IdentityProfile(BaseModel, frozen=True):
             field is missing or empty.
         """
         if self.provider and self.subject:
-            return (self.provider, self.subject)
+            return (str(self.provider), self.subject)
         return None
 
     def domain_owning_tenancies(self) -> tuple[TenancyContext, ...]:

@@ -1,6 +1,6 @@
 """Linear OAuth provider preset and identity handler.
 
-``disconnect_fully_revokes`` defaults to ``False``: Linear's RFC 7009
+``disconnect_fully_revokes=False``: Linear's RFC 7009
 ``POST /oauth/revoke`` invalidates the supplied token but its effect
 on the workspace-level OAuth grant has not been verified end-to-end.
 Tracking issue: #34.
@@ -20,7 +20,7 @@ import httpx
 from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -32,9 +32,6 @@ if TYPE_CHECKING:
 
 # The GraphQL endpoint that the identity query goes to.
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_LINEAR_IDENTITY_HOST_SUFFIXES = ("linear.app",)
 
 # The identity query, which reads the signed-in user and their organization.
 # ``organization`` is a top-level field on the GraphQL query root,
@@ -119,7 +116,7 @@ class LinearIdentityHandler:
                 )
 
         return IdentityProfile(
-            provider="linear",
+            provider=Provider.LINEAR,
             subject=viewer.get("id"),
             email=viewer.get("email"),
             email_verified=None,
@@ -141,7 +138,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Linear identity handler when the config's OAuth hosts are
         Linear's, else ``None``.
     """
-    if oauth_hosts_match(config, _LINEAR_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.LINEAR.host_suffixes):
         return LinearIdentityHandler()
     return None
 
@@ -173,6 +170,7 @@ def preset(
         The provider configuration paired with its revocation handler.
     """
     config = ProviderConfig(
+        provider=Provider.LINEAR,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://linear.app/oauth/authorize",
@@ -180,7 +178,6 @@ def preset(
         revocation_url="https://api.linear.app/oauth/revoke",
         redirect_uri=redirect_uri,
         scopes=scopes,
-        scope_separator=",",
         extra_params=extra_params or {},
     )
     return config, StandardRevocationHandler()

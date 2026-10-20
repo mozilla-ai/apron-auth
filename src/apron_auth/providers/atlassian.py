@@ -17,7 +17,7 @@ from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
@@ -55,9 +55,6 @@ BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
 # The endpoint that lists the Atlassian sites the access token can reach.
 _ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_ATLASSIAN_IDENTITY_HOST_SUFFIXES = ("auth.atlassian.com",)
 
 # The endpoint that returns the signed-in user's profile.
 _ATLASSIAN_USERINFO_URL = "https://api.atlassian.com/me"
@@ -163,7 +160,7 @@ class AtlassianIdentityHandler:
             payload = await self._fetch_profile(client, headers)
 
         return IdentityProfile(
-            provider="atlassian",
+            provider=Provider.ATLASSIAN,
             subject=_optional_str(payload.get("account_id")),
             email=_optional_str(payload.get("email")),
             email_verified=None,
@@ -259,7 +256,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         An Atlassian identity handler when the config's OAuth hosts are
         Atlassian's, else ``None``.
     """
-    if oauth_hosts_match(config, _ATLASSIAN_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.ATLASSIAN.host_suffixes):
         return AtlassianIdentityHandler()
     return None
 
@@ -300,6 +297,7 @@ def preset(
     merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
 
     config = ProviderConfig(
+        provider=Provider.ATLASSIAN,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://auth.atlassian.com/authorize",

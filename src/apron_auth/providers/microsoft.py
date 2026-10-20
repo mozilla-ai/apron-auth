@@ -29,7 +29,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.providers._identity_registry import IdentityResolverRegistration
 from apron_auth.providers._identity_requests import fetch_identity_json
@@ -80,9 +80,6 @@ _GUID_RE = re.compile(r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-
 # has no organization tenant. Such a sign-in carries no workforce
 # tenancy, so it is treated as ``tenancies=()``.
 _MICROSOFT_CONSUMERS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad"
-
-# The hosts both OAuth endpoints of a config must be on for this provider's identity handler to be inferred.
-_MICROSOFT_IDENTITY_HOST_SUFFIXES = ("login.microsoftonline.com",)
 
 # The v2.0 issuer for the commercial cloud. ``{tid}`` is the tenant GUID;
 # binding ``iss`` to ``tid`` this way is the chain of trust that promotes
@@ -279,7 +276,7 @@ class MicrosoftIdentityHandler:
 
         email = payload.get("email")
         return IdentityProfile(
-            provider="microsoft",
+            provider=Provider.MICROSOFT,
             subject=id_token.subject if id_token is not None else _userinfo_subject(payload),
             email=email,
             email_verified=_email_verified(id_token, email),
@@ -513,7 +510,7 @@ def maybe_identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         A Microsoft identity handler when the config's OAuth hosts are
         Microsoft's, else ``None``.
     """
-    if oauth_hosts_match(config, _MICROSOFT_IDENTITY_HOST_SUFFIXES):
+    if oauth_hosts_match(config, Provider.MICROSOFT.host_suffixes):
         return MicrosoftIdentityHandler()
     return None
 
@@ -565,6 +562,7 @@ def preset(
         client_id = client_id.lower()
 
     config = ProviderConfig(
+        provider=Provider.MICROSOFT,
         client_id=client_id,
         client_secret=SecretStr(client_secret),
         authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",

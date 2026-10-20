@@ -7,9 +7,10 @@ consumers branch on to choose between automatic scope reduction
 across the board, so this test pins the known-good value for every
 preset and trips CI on any drift.
 
-When a preset's verified behaviour genuinely changes, update both the
-preset module's docstring (with the verification source) and the
-``EXPECTED`` table below in the same commit.
+The value itself lives on the provider's ``Provider`` member. When a
+provider's verified behavior genuinely changes, update that member, the
+preset module's docstring that records the verification source, and the
+``EXPECTED`` table below, in the same commit.
 """
 
 from __future__ import annotations
