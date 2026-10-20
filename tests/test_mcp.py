@@ -23,7 +23,10 @@ from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
     _is_blocked_host,
+    _MetadataFault,
+    _MetadataOutcome,
     _prm_candidate_urls,
+    _reported_outcome,
     _select_auth_method,
     _validate_url,
     cimd_client_id,
@@ -446,18 +449,30 @@ class TestDiscover:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, status_code=503)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
     async def test_not_found_on_every_candidate_is_a_rejection(self, httpx_mock: HTTPXMock) -> None:
+        """Every candidate answering a client error says the server publishes no such document."""
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.retryable is False
+
+    async def test_an_unreadable_body_on_every_candidate_is_a_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """A document that answers but does not decode is told apart from one the server does not publish."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
+        httpx_mock.add_response(url=_ASM_OIDC, json=["not", "an", "object"])
+        with pytest.raises(McpDiscoveryError, match="is not a JSON object") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert exc_info.value.retryable is False
 
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -859,7 +874,7 @@ class TestDiscover:
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("boom", request=request)
 
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
             await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
         assert exc_info.value.kind is FailureKind.UNREACHABLE
         assert exc_info.value.retryable is True
@@ -981,6 +996,23 @@ class TestAsmCandidateUrls:
     )
     def test_candidate_order(self, auth_server: str, expected: list[str]) -> None:
         assert _asm_candidate_urls(auth_server) == expected
+
+
+class TestReportedOutcome:
+    def test_a_retryable_outcome_wins_over_a_later_refusal(self) -> None:
+        """The fallback locations answer a client error as a rule, which must not hide an outage."""
+        outcomes = [
+            _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR),
+            _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED),
+        ]
+        assert _reported_outcome(outcomes) == outcomes[0]
+
+    def test_the_last_outcome_is_reported_when_none_is_retryable(self) -> None:
+        outcomes = [
+            _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED),
+            _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED),
+        ]
+        assert _reported_outcome(outcomes) == outcomes[-1]
 
 
 class TestValidateUrl:

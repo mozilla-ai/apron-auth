@@ -20,7 +20,8 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Callable, Sequence
-from typing import Any, assert_never
+from enum import Enum, unique
+from typing import Any, NamedTuple, assert_never
 from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
@@ -58,6 +59,30 @@ _MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
 _WELL_KNOWN_OIDC = "/.well-known/openid-configuration"
 _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
+
+
+@unique
+class _MetadataFault(Enum):
+    """Each member is one way a candidate URL failed to yield a metadata document.
+
+    A member's value says what the error reports about the document, after the document's name.
+    """
+
+    UNAVAILABLE = "could not be fetched"
+    UNPUBLISHED = "is not published"
+    UNREADABLE = "is not a JSON object"
+
+
+class _MetadataOutcome(NamedTuple):
+    """How one candidate URL failed to yield a metadata document.
+
+    Attributes:
+        fault: What the candidate showed.
+        kind: What the fault says about a retry.
+    """
+
+    fault: _MetadataFault
+    kind: FailureKind
 
 
 async def discover(
@@ -692,6 +717,24 @@ def _asm_candidate_urls(auth_server: str) -> list[str]:
     return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
 
 
+def _reported_outcome(outcomes: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
+    """Return the outcome a metadata fetch reports when no candidate URL yielded a document.
+
+    A retryable outcome on any candidate is reported, because the fallback locations answer a client error
+    as a rule and must not hide an outage on the real URL.
+    Otherwise the last candidate's outcome is reported.
+
+    NOTE: The caller must pass the outcome of at least one candidate.
+
+    Args:
+        outcomes: Each candidate's outcome, in the order the candidates were tried.
+
+    Returns:
+        The outcome to report.
+    """
+    return next((outcome for outcome in outcomes if outcome.kind.retryable), outcomes[-1])
+
+
 async def _fetch_first_metadata(
     candidate_urls: Sequence[str],
     url_validator: UrlValidator | None,
@@ -722,12 +765,10 @@ async def _fetch_first_metadata(
             the candidates derive from an argument of this library's caller.
         McpDiscoveryError: If a candidate is rejected and the candidates derive from
             a fetched document, or if no candidate succeeds. The error names
-            ``what``.
+            ``what`` and the fault the candidates showed, and its ``kind`` tells a
+            fetch that may pass later from a document the server does not serve.
     """
-    # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
-    # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
-    kind = FailureKind.REFUSED
-    retryable_kind: FailureKind | None = None
+    outcomes: list[_MetadataOutcome] = []
     for url in candidate_urls:
         _validate_url(url, url_validator, caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
@@ -740,23 +781,25 @@ async def _fetch_first_metadata(
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
-                kind = transport.kind
-                retryable_kind = retryable_kind or (kind if kind.retryable else None)
+                outcomes.append(_MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind))
                 continue
             if response.status_code != 200:
+                status = status_failure(response.status_code)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
-                kind = status_failure(response.status_code).kind
-                retryable_kind = retryable_kind or (kind if kind.retryable else None)
+                # A status that may pass later leaves the document's existence unknown.
+                fault = _MetadataFault.UNAVAILABLE if status.kind.retryable else _MetadataFault.UNPUBLISHED
+                outcomes.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
                 payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
-                kind = FailureKind.REFUSED
+                outcomes.append(_MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED))
                 continue
             if isinstance(payload, dict):
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
-            kind = FailureKind.REFUSED
-    msg = f"could not fetch {what}"
-    raise McpDiscoveryError(msg, kind=retryable_kind or kind)
+            outcomes.append(_MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED))
+    outcome = _reported_outcome(outcomes)
+    msg = f"{what} {outcome.fault.value}"
+    raise McpDiscoveryError(msg, kind=outcome.kind)
