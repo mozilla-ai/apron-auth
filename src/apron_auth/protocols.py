@@ -110,9 +110,10 @@ class IdentityHandler(Protocol):
                 was unreachable, answered a server error, rejected the token, or sent an invalid response.
                 An error raised without one is ``UNEXPECTED`` and never retried.
                 ``IdentityScopeNotGrantedError`` reports a token that lacks a scope the endpoint needs.
-            ConfigurationError: If the configuration cannot be used for an identity request at all.
-                A refusal of the endpoints the configuration carries is an ``IdentityFetchError``
-                whose ``kind`` is ``CONFIGURATION``, because it is found while fetching.
+            ConfigurationError: If the configuration cannot be used for an identity request,
+                including a refusal of the endpoints it carries.
+                A caller's configuration is the source of that fault, so it is not an identity
+                fetch failure.
         """
         ...
 

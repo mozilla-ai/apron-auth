@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.errors import FailureKind, IdentityFetchError
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix
@@ -86,9 +86,9 @@ class SalesforceIdentityHandler:
             when the userinfo response names one.
 
         Raises:
-            IdentityFetchError: If ``authorize_url`` is not a Salesforce
-                host, the userinfo request fails, or its response cannot be
-                parsed.
+            ConfigurationError: If ``authorize_url`` is not a Salesforce host, because the token
+                would otherwise reach an endpoint that is not Salesforce's.
+            IdentityFetchError: If the userinfo request fails, or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
         host = urlparse(config.authorize_url).hostname or ""
@@ -99,7 +99,7 @@ class SalesforceIdentityHandler:
                 f"Salesforce host. The bearer token would otherwise be sent to an endpoint that is "
                 f"not Salesforce's."
             )
-            raise IdentityFetchError(msg, kind=FailureKind.CONFIGURATION)
+            raise ConfigurationError(msg)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"
 
         async with httpx.AsyncClient() as client:

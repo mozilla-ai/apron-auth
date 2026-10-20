@@ -314,15 +314,16 @@ class TestHandlerErrors:
         assert str(exc_info.value) == "revocation needs client authentication"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
-    async def test_library_error_from_an_identity_handler_keeps_its_message(self) -> None:
+    async def test_configuration_error_from_an_identity_handler_keeps_its_class_and_message(self) -> None:
         class MisconfiguredHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
                 raise ConfigurationError("config names a different issuer")
 
         client = OAuthClient(_config(), identity_handler=MisconfiguredHandler())
-        with pytest.raises(IdentityFetchError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
 
+        assert not isinstance(exc_info.value, IdentityFetchError)
         assert str(exc_info.value) == "config names a different issuer"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 

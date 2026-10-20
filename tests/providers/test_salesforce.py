@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers.salesforce import BASE_SCOPES, preset
@@ -353,6 +353,9 @@ class TestSalesforceIdentityHandler:
         )
         handler = SalesforceIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="not a Salesforce host"):
+        with pytest.raises(ConfigurationError, match="not a Salesforce host") as exc_info:
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert not isinstance(exc_info.value, IdentityFetchError)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []

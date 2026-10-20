@@ -2701,6 +2701,28 @@ class TestFetchIdentity:
             raw=viewer,
         )
 
+    async def test_a_handlers_configuration_fault_stays_one(self) -> None:
+        """One condition keeps one class, so a config fault a handler finds is not an identity failure."""
+
+        class RefusingHandler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                msg = "the configured endpoints are not this provider's"
+                raise ConfigurationError(msg)
+
+        config = _make_config(
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+        client = OAuthClient(config=config, identity_handler=RefusingHandler())
+
+        with pytest.raises(ConfigurationError, match="not this provider's") as exc_info:
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert not isinstance(exc_info.value, IdentityFetchError)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:

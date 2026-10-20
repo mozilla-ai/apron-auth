@@ -684,8 +684,10 @@ class OAuthClient:
             The normalized identity profile.
 
         Raises:
-            ConfigurationError: If ``tokens`` is not a fresh token set, or if no handler is configured
-                and either of the config's OAuth endpoints is not a host of the provider it names.
+            ConfigurationError: If ``tokens`` is not a fresh token set, if no handler is configured
+                and either of the config's OAuth endpoints is not a host of the provider it names, or
+                if the handler refuses the configuration.
+                It chains nothing from the handler.
             IdentityNotSupportedError: If no identity handler is configured, and the config names no
                 provider or allows no handler of its own.
             IdentityFetchError: If the handler fails to fetch identity.
@@ -713,16 +715,21 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise exc.with_traceback(None) from None
+        except ConfigurationError as exc:
+            # A fault in the configuration keeps its class, because the caller's configuration is its source.
+            failure_class, failure_message, failure_kind = ConfigurationError, str(exc), exc.kind
         except OAuthError as exc:
-            failure_message, failure_kind = str(exc), exc.kind
+            failure_class, failure_message, failure_kind = IdentityFetchError, str(exc), exc.kind
         except httpx.HTTPError as exc:
             failure = http_failure(exc)
+            failure_class = IdentityFetchError
             failure_message, failure_kind = f"Failed to fetch identity: {failure.description}", failure.kind
         except Exception:
+            failure_class = IdentityFetchError
             failure_message, failure_kind = "Failed to fetch identity", FailureKind.UNEXPECTED
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise IdentityFetchError(failure_message, kind=failure_kind)
+        raise failure_class(failure_message, kind=failure_kind)
 
     @cached_property
     def _provider_identity_handler(self) -> IdentityHandler | None:
