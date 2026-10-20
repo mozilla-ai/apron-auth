@@ -812,7 +812,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | Logger                           | Emits                                                       |
 |----------------------------------|-------------------------------------------------------------|
 | `apron_auth.client`              | Refused tokens that could not be revoked.                    |
-| `apron_auth.stores`              | Expired OAuth state discarded on lookup.                     |
+| `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
 | `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
 | `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |

@@ -200,6 +200,18 @@ class TestExpiryLogLine:
             "Dropped a pending authorization request that is no longer current"
         ]
 
+    async def test_the_pruning_scan_reports_what_it_dropped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """The scan drops entries nobody looked up, so the count is the only record that it happened."""
+        store = MemoryStateStore(max_age=300.0)
+        await store.save(_make_pending(state="s3cr3t-state-key-value", age=301.0))
+
+        with caplog.at_level(logging.DEBUG, logger="apron_auth.stores"):
+            await store.save(_make_pending(state="fresh"))
+
+        assert [record.getMessage() for record in caplog.records] == [
+            "Dropped pending authorization requests that are no longer current: count=1"
+        ]
+
 
 class TestMaximumAgeArgument:
     """Test that a limit that is not a positive finite number is refused where it is set."""

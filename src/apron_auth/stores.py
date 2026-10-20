@@ -102,7 +102,11 @@ class MemoryStateStore:
         return pending_age_refusal(state.created_at, max_age=self._max_age) is not None
 
     def _prune(self) -> None:
-        """Drop every stored state that has expired."""
+        """Drop every stored state that has expired, reporting how many were dropped."""
         expired_keys = [k for k, v in self._states.items() if self._is_expired(v)]
         for key in expired_keys:
             del self._states[key]
+        if expired_keys:
+            logger.debug(
+                "Dropped pending authorization requests that are no longer current: count=%d", len(expired_keys)
+            )
