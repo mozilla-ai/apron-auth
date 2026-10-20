@@ -26,6 +26,7 @@ from apron_auth.mcp import (
     _MetadataOutcome,
     _prm_candidate_urls,
     _reported_outcome,
+    _secret_agrees,
     _select_auth_method,
     _validate_url,
     cimd_client_id,
@@ -353,6 +354,24 @@ class TestSelectAuthMethod:
             SecretStr("s"), ["client_secret_post"], registered=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
         )
         assert method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+
+
+class TestSecretAgrees:
+    @pytest.mark.parametrize(
+        ("method", "secret", "agrees"),
+        [
+            (TokenEndpointAuthMethod.NONE, None, True),
+            (TokenEndpointAuthMethod.NONE, SecretStr("s"), False),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s"), True),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, None, False),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, SecretStr("s"), True),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, None, False),
+        ],
+    )
+    def test_a_public_method_agrees_with_no_secret_and_any_other_with_one(
+        self, method: TokenEndpointAuthMethod, secret: SecretStr | None, agrees: bool
+    ) -> None:
+        assert _secret_agrees(method, secret) is agrees
 
 
 class TestHonorRegisteredAuthMethod:
@@ -1179,6 +1198,25 @@ class TestRegisterClient:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert exc_info.value.kind is FailureKind.REFUSED
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A public client declares none and carries no secret.
+            {"client_id": "x", "client_secret": "s", "token_endpoint_auth_method": "none"},
+            # Any other method is a confidential client, which has a secret to send.
+            {"client_id": "x", "token_endpoint_auth_method": "client_secret_post"},
+            {"client_id": "x", "token_endpoint_auth_method": "client_secret_basic"},
+        ],
+    )
+    async def test_a_stated_method_that_contradicts_the_secret_raises(
+        self, httpx_mock: HTTPXMock, body: dict[str, str]
+    ) -> None:
+        """The response states both, so the contradiction is refused where the response is read."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
+        with pytest.raises(McpRegistrationError, match="contradicts") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
     async def test_a_secret_stated_as_null_states_a_public_client(self, httpx_mock: HTTPXMock) -> None:
         """A member stated as null states no value, as an absent member does."""
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "pub", "client_secret": None})
@@ -1209,6 +1247,8 @@ class TestRegisterClient:
             {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "private_key_jwt"},
             # A secret this library cannot use can still hold one, nested where it cannot be read.
             {"client_id": "x", "client_secret": {"value": _LEAKED_SECRET}},
+            # A method that contradicts the secret is refused with the secret in hand.
+            {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "none"},
         ],
     )
     async def test_registration_error_never_leaks_client_secret(

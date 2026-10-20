@@ -330,10 +330,11 @@ async def register_client(
         McpRegistrationError: If the request fails in transit, the endpoint returns
             a non-success status, its response is not a JSON object with a usable
             ``client_id``, or the response states a client secret this library
-            cannot use or a token-endpoint authentication method it cannot
-            perform. Either of those last two leaves a registration standing at
-            the authorization server, because the server issued the credentials
-            this call then discards.
+            cannot use, a token-endpoint authentication method it cannot perform,
+            or a method that contradicts the secret the response states. Each of
+            those last three leaves a registration standing at the authorization
+            server, because the server issued the credentials this call then
+            discards.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
@@ -387,6 +388,7 @@ async def register_client(
             "so the issued credentials were discarded"
         )
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    secret = SecretStr(client_secret) if client_secret is not None else None
     stated_method = data.get("token_endpoint_auth_method")
     registered_method = None
     if stated_method is not None:
@@ -397,9 +399,15 @@ async def register_client(
                 "so the issued credentials were discarded"
             )
             raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+        if not _secret_agrees(registered_method, secret):
+            msg = (
+                "client registration states a client authentication method that contradicts the secret it "
+                "issued, so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     return ClientRegistration(
         client_id=client_id,
-        client_secret=SecretStr(client_secret) if client_secret is not None else None,
+        client_secret=secret,
         token_endpoint_auth_method=registered_method,
     )
 
@@ -457,6 +465,16 @@ def cimd_client_id(url: str) -> str:
         msg = "CIMD client_id must not contain a . or .. path segment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
+
+
+def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) -> bool:
+    """Return whether a client secret's presence agrees with a token-endpoint auth method.
+
+    A public client declares ``none`` and carries no secret.
+    Any other method is a confidential client, which has a secret to send.
+    """
+    is_public = method is TokenEndpointAuthMethod.NONE
+    return is_public == (secret is None)
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
@@ -534,6 +552,8 @@ def _honor_registered_auth_method(
     The two disagreements are a confidential method with no secret to send, and ``none`` paired with a secret.
     A public client must carry no secret, because the secret would be attached to requests that present no
     client authentication.
+    A registration :func:`register_client` issued was refused when its response was read, so this stands for
+    a registration the caller holds from anywhere else.
 
     Args:
         registered: The method the server registered for this client.
