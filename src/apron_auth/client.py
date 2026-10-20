@@ -857,7 +857,7 @@ class OAuthClient:
         """
         scope = query.get("scope")
         values = [scope] if isinstance(scope, str) else scope or []
-        delimiters = {",", self._config.scope_separator} - {""}
+        delimiters = {",", self._config.scope_separator}
         words: set[str] = set()
         for value in values:
             for delimiter in delimiters:
