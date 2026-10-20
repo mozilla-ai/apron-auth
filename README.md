@@ -94,7 +94,7 @@ Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/
 The `/common` and `/organizations` documents name a templated issuer, which fails the issuer
 match by design.
 
-Always pass the identity handler explicitly, as above. The config that `preset` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. Inference would otherwise give a config on an Entra or Google host that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
+Always pass the identity handler explicitly, as above. The config that `preset` returns names no built-in provider, so `fetch_identity` raises `IdentityNotSupportedError` without a handler. The endpoint hosts select nothing: a config on an Entra or Google host would otherwise get that provider's handler, with `provider` set to `microsoft` or `google` instead of `oidc:<issuer>`, and a different `identity_key()` for every user.
 
 Build the handler and the config from the same `metadata`. The handler is bound to that
 metadata's issuer, and it raises `ConfigurationError` for a config that names another issuer,
@@ -228,7 +228,7 @@ token and, for OIDC providers, the ID token — before being handed to
 the provider's identity handler, so handlers never receive the refresh
 token or caller context.
 
-Built-in identity handlers are inferred from standard Google, GitHub, HubSpot, Microsoft, Atlassian, Typeform, Salesforce, Notion, and Linear endpoint hostnames, so they apply to both the bundled `preset(...)` configs and any manually constructed `ProviderConfig` pointing at those hosts. A config with `allow_identity_inference=False` gets no inferred handler. The generic OpenID preset and `mcp.to_provider_config` set it that way. For other providers, pass a custom `identity_handler` to `OAuthClient`.
+A built-in identity handler comes from the provider the config names: every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`; the generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints is refused with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config: pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. For a provider this library does not know, pass a custom `identity_handler`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
@@ -630,9 +630,9 @@ tokens = await client.exchange_code(
 )
 ```
 
-The config that `to_provider_config` returns sets `allow_identity_inference=False`, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. Inference would otherwise give an authorization server on a built-in provider's host that provider's handler, which sends the MCP server's access token to that provider's API.
+The config that `to_provider_config` returns names no built-in provider, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. An authorization server on a built-in provider's host gets no handler either, which would otherwise send the MCP server's access token to that provider's API.
 
-A `ProviderConfig` that you build by hand from `discover` output allows inference by default, so set `allow_identity_inference=False` on it yourself. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
+A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
 

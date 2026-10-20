@@ -246,9 +246,8 @@ class ProviderConfig(BaseModel, frozen=True):
             resource. ``None`` (the default) emits no ``resource`` parameter
             anywhere, preserving behavior for providers that do not use
             resource indicators.
-        allow_identity_inference: Whether a built-in identity handler may be inferred from the endpoint hosts.
-            Set ``False`` when the hosts do not decide which identity contract applies,
-            for example a generic OpenID provider on a host that a built-in provider also serves.
+        allow_identity_inference: Not consulted. :attr:`provider` decides which built-in identity handler
+            applies, so a config's endpoint hosts never select one.
             Defaults to ``True``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.

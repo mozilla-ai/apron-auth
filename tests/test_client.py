@@ -35,6 +35,7 @@ from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     OAuthPendingState,
+    Provider,
     ProviderConfig,
     TenancyContext,
     TokenSet,
@@ -2207,7 +2208,7 @@ class TestFetchIdentity:
 
         assert httpx_mock.get_requests() == []
 
-    async def test_google_identity_inferred_from_config(self, httpx_mock):
+    async def test_google_identity_resolved_from_the_provider(self, httpx_mock):
         httpx_mock.add_response(
             url="https://www.googleapis.com/oauth2/v3/userinfo",
             json={
@@ -2219,6 +2220,7 @@ class TestFetchIdentity:
             },
         )
         config = _make_config(
+            provider=Provider.GOOGLE,
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
         )
@@ -2261,6 +2263,7 @@ class TestFetchIdentity:
             ],
         )
         config = _make_config(
+            provider=Provider.GITHUB,
             authorize_url="https://github.com/login/oauth/authorize",
             token_url="https://github.com/login/oauth/access_token",
         )
@@ -2289,6 +2292,58 @@ class TestFetchIdentity:
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
+    async def test_a_config_on_a_provider_host_that_names_no_provider_gets_no_handler(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The named provider decides the handler, so endpoints on a provider's own hosts do not."""
+        config = _make_config(
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(IdentityNotSupportedError):
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize("provider", list(Provider))
+    async def test_endpoints_outside_the_named_provider_are_refused(
+        self, provider: Provider, httpx_mock: HTTPXMock
+    ) -> None:
+        """A config whose endpoints are not the named provider's contradicts itself."""
+        config = _make_config(
+            provider=provider,
+            authorize_url="https://attacker.example.com/authorize",
+            token_url="https://attacker.example.com/token",
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(ConfigurationError, match=provider.display_name) as exc_info:
+            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert not isinstance(exc_info.value, IdentityNotSupportedError)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
+
+    async def test_an_explicit_handler_serves_endpoints_outside_the_named_provider(self) -> None:
+        """A caller's own handler establishes identity for a config the host check refuses."""
+
+        class DummyIdentityHandler:
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                return IdentityProfile(email="custom@example.com")
+
+        config = _make_config(
+            provider=Provider.SALESFORCE,
+            authorize_url="https://login.acme.example/services/oauth2/authorize",
+            token_url="https://login.acme.example/services/oauth2/token",
+        )
+        client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
+
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert identity.email == "custom@example.com"
+
     async def test_fetch_identity_custom_handler(self):
         class DummyIdentityHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -2306,41 +2361,30 @@ class TestFetchIdentity:
 
         assert identity.email == "custom@example.com"
 
-    async def test_fetch_identity_infers_the_handler_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The client keeps the handler it inferred, so a handler's caches serve every sign-in."""
+    async def test_fetch_identity_builds_the_handler_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The client keeps the handler it built, so a handler's caches serve every sign-in."""
         built: list[object] = []
 
         class DummyIdentityHandler:
+            def __init__(self) -> None:
+                built.append(self)
+
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-                return IdentityProfile(email="inferred@example.com")
+                return IdentityProfile(email="resolved@example.com")
 
-        def infer(config: ProviderConfig) -> DummyIdentityHandler:
-            built.append(config)
-            return DummyIdentityHandler()
-
-        monkeypatch.setattr("apron_auth.client.infer_identity_handler", infer)
-        client = OAuthClient(config=_make_config())
+        monkeypatch.setattr("apron_auth.providers.google.GoogleIdentityHandler", DummyIdentityHandler)
+        client = OAuthClient(
+            config=_make_config(
+                provider=Provider.GOOGLE,
+                authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+                token_url="https://oauth2.googleapis.com/token",
+            )
+        )
 
         await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
         await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
         assert len(built) == 1
-
-    async def test_fetch_identity_remembers_that_no_handler_was_inferred(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A config with no built-in handler is not inferred again on every call."""
-        calls: list[ProviderConfig] = []
-
-        def infer(config: ProviderConfig) -> None:
-            calls.append(config)
-
-        monkeypatch.setattr("apron_auth.client.infer_identity_handler", infer)
-        client = OAuthClient(config=_make_config())
-
-        for _ in range(2):
-            with pytest.raises(IdentityNotSupportedError):
-                await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-        assert len(calls) == 1
 
     async def test_fetch_identity_provider_error_wrapped(self, httpx_mock):
         httpx_mock.add_response(
@@ -2349,6 +2393,7 @@ class TestFetchIdentity:
             json={"error": "invalid_token"},
         )
         config = _make_config(
+            provider=Provider.GOOGLE,
             authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
         )
@@ -2357,27 +2402,7 @@ class TestFetchIdentity:
         with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
             await client.fetch_identity(FreshTokenSet(access_token="bad-token"))
 
-    async def test_fetch_identity_lookalike_google_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://evilgoogle.com/authorize",
-            token_url="https://evilgoogle.com/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_fetch_identity_lookalike_github_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://evilgithub.com/login/oauth/authorize",
-            token_url="https://evilgithub.com/login/oauth/access_token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_microsoft_identity_inferred_from_config(self, httpx_mock):
+    async def test_microsoft_identity_resolved_from_the_provider(self, httpx_mock):
         httpx_mock.add_response(
             url="https://graph.microsoft.com/oidc/userinfo",
             json={
@@ -2388,6 +2413,7 @@ class TestFetchIdentity:
             },
         )
         config = _make_config(
+            provider=Provider.MICROSOFT,
             authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
             token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
         )
@@ -2410,17 +2436,7 @@ class TestFetchIdentity:
             },
         )
 
-    async def test_fetch_identity_lookalike_microsoft_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/authorize",
-            token_url="https://evilmicrosoftonline.com/common/oauth2/v2.0/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_atlassian_identity_inferred_from_config(self, httpx_mock):
+    async def test_atlassian_identity_resolved_from_the_provider(self, httpx_mock):
         payload = {
             "account_id": "557058:abc-123",
             "email": "user@example.com",
@@ -2436,6 +2452,7 @@ class TestFetchIdentity:
             json=[],
         )
         config = _make_config(
+            provider=Provider.ATLASSIAN,
             authorize_url="https://auth.atlassian.com/authorize",
             token_url="https://auth.atlassian.com/oauth/token",
         )
@@ -2455,17 +2472,7 @@ class TestFetchIdentity:
             raw=payload,
         )
 
-    async def test_fetch_identity_lookalike_atlassian_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://evilatlassian.com/authorize",
-            token_url="https://evilatlassian.com/oauth/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_typeform_identity_inferred_from_config(self, httpx_mock):
+    async def test_typeform_identity_resolved_from_the_provider(self, httpx_mock):
         payload = {
             "alias": "octouser",
             "email": "user@example.com",
@@ -2473,6 +2480,7 @@ class TestFetchIdentity:
         }
         httpx_mock.add_response(url="https://api.typeform.com/me", json=payload)
         config = _make_config(
+            provider=Provider.TYPEFORM,
             authorize_url="https://api.typeform.com/oauth/authorize",
             token_url="https://api.typeform.com/oauth/token",
             use_pkce=False,
@@ -2494,6 +2502,7 @@ class TestFetchIdentity:
 
     async def test_typeform_scope_not_granted_propagates_from_token_set(self) -> None:
         config = _make_config(
+            provider=Provider.TYPEFORM,
             authorize_url="https://api.typeform.com/oauth/authorize",
             token_url="https://api.typeform.com/oauth/token",
             scopes=["accounts:read", "forms:read"],
@@ -2504,28 +2513,7 @@ class TestFetchIdentity:
         with pytest.raises(IdentityScopeNotGrantedError):
             await client.fetch_identity(FreshTokenSet(access_token="access-abc", scope="forms:read"))
 
-    async def test_fetch_identity_lookalike_typeform_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://eviltypeform.com/oauth/authorize",
-            token_url="https://eviltypeform.com/oauth/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_notion_fetch_identity_lookalike_notion_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://api.notion.com.attacker.test/v1/oauth/authorize",
-            token_url="https://api.notion.com.attacker.test/v1/oauth/token",
-            token_endpoint_auth_method="client_secret_basic",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_notion_identity_inferred_from_config(self, httpx_mock):
+    async def test_notion_identity_resolved_from_the_provider(self, httpx_mock):
         payload = {
             "object": "user",
             "id": "11111111-1111-1111-1111-111111111111",
@@ -2547,6 +2535,7 @@ class TestFetchIdentity:
         }
         httpx_mock.add_response(url="https://api.notion.com/v1/users/me", json=payload)
         config = _make_config(
+            provider=Provider.NOTION,
             authorize_url="https://api.notion.com/v1/oauth/authorize",
             token_url="https://api.notion.com/v1/oauth/token",
             token_endpoint_auth_method="client_secret_basic",
@@ -2572,7 +2561,7 @@ class TestFetchIdentity:
             raw=payload,
         )
 
-    async def test_salesforce_identity_inferred_from_config(self, httpx_mock):
+    async def test_salesforce_identity_resolved_from_the_provider(self, httpx_mock):
         payload = {
             "sub": "https://login.salesforce.com/id/00Dxx0000001gZWEAY/005xx000001SwiUAAS",
             "email": "user@example.com",
@@ -2586,6 +2575,7 @@ class TestFetchIdentity:
         }
         httpx_mock.add_response(url="https://login.salesforce.com/services/oauth2/userinfo", json=payload)
         config = _make_config(
+            provider=Provider.SALESFORCE,
             authorize_url="https://login.salesforce.com/services/oauth2/authorize",
             token_url="https://login.salesforce.com/services/oauth2/token",
         )
@@ -2610,12 +2600,13 @@ class TestFetchIdentity:
             raw=payload,
         )
 
-    async def test_salesforce_my_domain_identity_inferred(self, httpx_mock):
+    async def test_salesforce_my_domain_identity_resolved_from_the_provider(self, httpx_mock):
         httpx_mock.add_response(
             url="https://acme.my.salesforce.com/services/oauth2/userinfo",
             json={"sub": "https://acme.my.salesforce.com/id/X/Y", "email": "user@acme.com"},
         )
         config = _make_config(
+            provider=Provider.SALESFORCE,
             authorize_url="https://acme.my.salesforce.com/services/oauth2/authorize",
             token_url="https://acme.my.salesforce.com/services/oauth2/token",
         )
@@ -2626,17 +2617,7 @@ class TestFetchIdentity:
         assert identity.provider == "salesforce"
         assert identity.email == "user@acme.com"
 
-    async def test_fetch_identity_lookalike_salesforce_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://evilsalesforce.com/services/oauth2/authorize",
-            token_url="https://evilsalesforce.com/services/oauth2/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-
-    async def test_linear_identity_inferred_from_config(self, httpx_mock):
+    async def test_linear_identity_resolved_from_the_provider(self, httpx_mock):
         viewer = {
             "id": "user-123",
             "name": "Linear User",
@@ -2649,6 +2630,7 @@ class TestFetchIdentity:
             json={"data": {"viewer": viewer}},
         )
         config = _make_config(
+            provider=Provider.LINEAR,
             authorize_url="https://linear.app/oauth/authorize",
             token_url="https://api.linear.app/oauth/token",
         )
@@ -2666,16 +2648,6 @@ class TestFetchIdentity:
             avatar_url="https://example.com/avatar.png",
             raw=viewer,
         )
-
-    async def test_fetch_identity_lookalike_linear_host_not_inferred(self):
-        config = _make_config(
-            authorize_url="https://linear.app.attacker.test/oauth/authorize",
-            token_url="https://linear.app.attacker.test/oauth/token",
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
 
     async def test_fetch_identity_custom_handler_unexpected_error_wrapped(self):
         class BoomHandler:

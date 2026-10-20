@@ -38,7 +38,7 @@ from apron_auth.errors import (
 from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, FreshTokenSet, IdentityMaterial, OAuthPendingState
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers.identity import infer_identity_handler
+from apron_auth.providers._host_match import oauth_hosts_match
 from apron_auth.scopes import join_scopes
 
 if TYPE_CHECKING:
@@ -301,7 +301,7 @@ class OAuthClient:
     """OAuth 2.0 client for authorization code flows, which keeps no per-user state.
 
     NOTE: Callers must not use one client from event loops in several threads at once,
-    because the identity handler it infers may keep caches that are not thread-safe.
+    because the identity handler it builds may keep caches that are not thread-safe.
     """
 
     DEFAULT_RETRYABLE_ERROR_CODES = frozenset({SERVER_ERROR, TEMPORARILY_UNAVAILABLE})
@@ -672,9 +672,9 @@ class OAuthClient:
         the granted scopes, and, for OIDC providers, the ID token — before being handed to the identity handler,
         so handlers never receive the refresh token or caller context.
 
-        Uses the configured identity handler when provided, otherwise tries
-        to infer a built-in handler from the provider endpoints.
-        A config may disallow that inference, which leaves the configured handler as the only source of identity.
+        Uses the configured identity handler when provided, otherwise the handler of the provider the config names.
+        A config that names no provider, such as a generic OpenID or MCP config,
+        leaves the configured handler as the only source of identity.
 
         Args:
             tokens: The fresh token set to establish identity from.
@@ -684,10 +684,10 @@ class OAuthClient:
 
         Raises:
             ConfigurationError: If ``tokens`` is not a fresh token set,
-                or if built-in inference matches more than one provider for the configuration.
+                or if no handler is configured and the config's OAuth endpoints
+                are not the hosts of the provider it names.
             IdentityNotSupportedError: If no identity handler is configured
-                and none can be inferred for the provider.
-                That includes a config that disallows inference.
+                and the config names no provider.
             IdentityFetchError: If the handler fails to fetch identity.
                 It chains nothing from the handler.
         """
@@ -697,7 +697,7 @@ class OAuthClient:
                 "A token set reloaded from storage cannot be used for identity."
             )
             raise ConfigurationError(msg)
-        handler = self._identity_handler or self._inferred_identity_handler
+        handler = self._identity_handler or self._provider_identity_handler
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)
@@ -722,15 +722,30 @@ class OAuthClient:
         raise IdentityFetchError(failure_message, kind=failure_kind)
 
     @cached_property
-    def _inferred_identity_handler(self) -> IdentityHandler | None:
-        """Return the built-in handler inferred for this config, inferring it on first use.
+    def _provider_identity_handler(self) -> IdentityHandler | None:
+        """Return the identity handler of the provider this config names, building it on first use.
 
         Keeping one handler lets its caches, such as an issuer's signing keys, serve every sign-in.
 
         Returns:
-            The inferred handler, or ``None`` when no built-in provider matches the config.
+            The named provider's handler, or ``None`` when the config names no provider.
+
+        Raises:
+            ConfigurationError: If the config's OAuth endpoints are not the hosts of the
+                provider it names.
         """
-        return infer_identity_handler(self._config)
+        provider = self._config.provider
+        if provider is None:
+            return None
+        # NOTE: A handler may derive the endpoint it sends the access token to from the config.
+        if not oauth_hosts_match(self._config, provider.host_suffixes):
+            msg = (
+                f"The configured authorization and token endpoints are not {provider.display_name}'s, "
+                f"so its identity handler cannot establish identity. Pass an identity handler for a "
+                f"{provider.display_name} deployment on other hosts."
+            )
+            raise ConfigurationError(msg)
+        return provider.identity_handler()
 
     def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
         """Return the query of an authorization URL that sends ``params``.
