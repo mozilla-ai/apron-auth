@@ -592,34 +592,30 @@ print(tokens.metadata)  # {"team_id": "T123", ...}
 When the provider is not a known preset but a remote MCP (Model Context Protocol) server, `apron_auth.mcp` discovers its OAuth configuration at runtime (RFC 9728 protected-resource metadata + RFC 8414 authorization-server metadata) and, where the server supports it, registers a client dynamically (RFC 7591). The result folds into the same `ProviderConfig`/`OAuthClient` used everywhere else.
 
 ```python
-from apron_auth import OAuthClient, mcp
+from apron_auth import ClientRegistration, OAuthClient, mcp
 
 # 1. Discover the server's OAuth endpoints.
 meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transport_factory)
 
 # 2. Obtain a client identity, in the spec's priority order.
 if my_pre_registered_client_id:  # an existing relationship with this server
-    client_id, client_secret = my_pre_registered_client_id, my_pre_registered_secret
-    registered_auth_method = None
+    registration = ClientRegistration(
+        client_id=my_pre_registered_client_id,
+        client_secret=my_pre_registered_secret,
+    )
 elif meta.supports_cimd:  # CIMD — the forward path; you host the metadata document
-    client_id = mcp.cimd_client_id("https://app.example.com/oauth/client-metadata.json")
-    client_secret = None
-    registered_auth_method = None
+    registration = ClientRegistration(
+        client_id=mcp.cimd_client_id("https://app.example.com/oauth/client-metadata.json")
+    )
 elif meta.registration_url:  # DCR — deprecated, kept for backward compatibility
-    reg = await mcp.register_client(meta.registration_url, redirect_uri, transport_factory=my_transport_factory)
-    client_id, client_secret = reg.client_id, reg.client_secret
-    registered_auth_method = reg.token_endpoint_auth_method
+    registration = await mcp.register_client(
+        meta.registration_url, redirect_uri, transport_factory=my_transport_factory
+    )
 else:
     raise RuntimeError("server offers no supported client-registration mechanism")
 
 # 3. Build a ProviderConfig and drive the normal authorization-code flow.
-config = mcp.to_provider_config(
-    meta,
-    client_id=client_id,
-    client_secret=client_secret,
-    registered_auth_method=registered_auth_method,
-    redirect_uri=redirect_uri,
-)
+config = mcp.to_provider_config(meta, registration, redirect_uri=redirect_uri)
 client = OAuthClient(config, transport_factory=my_transport_factory)
 url, pending = await client.get_authorization_url()
 # Redirect the user to `url`; on the callback, pass the `iss` query
@@ -636,15 +632,15 @@ The config that `to_provider_config` returns names no built-in provider and allo
 
 A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
-Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `"none"`.
+Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `TokenEndpointAuthMethod.NONE`.
 
-When using CIMD, you host the `client-metadata.json` yourself at the `client_id` URL — apron-auth is stateless and does not host it. The document must include `client_id`, `client_name`, and `redirect_uris`. Its `client_id` must equal that URL, and its `redirect_uris` must include the redirect you use in the flow; the authorization server fetches and validates the document. `mcp.cimd_client_id(url)` checks the URL is a well-formed CIMD identifier (`https` scheme, a document path, no userinfo or fragment); it does not fetch the URL.
+When using CIMD, you host the `client-metadata.json` yourself at the `client_id` URL — apron-auth is stateless and does not host it. The document must include `client_id`, `client_name`, and `redirect_uris`. Its `client_id` must equal that URL, and its `redirect_uris` must include the redirect you use in the flow; the authorization server fetches and validates the document. `mcp.cimd_client_id(url)` checks the URL is a well-formed CIMD identifier (`https` scheme, a document path, no userinfo or fragment) and raises `ConfigurationError` when it is not; it does not fetch the URL.
 
 Unlike DCR or pre-registered credentials — which are bound to the authorization server that issued them and must be re-registered when that server changes — a CIMD `client_id` is a self-hosted URL, portable across authorization servers with no re-registration.
 
 `discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
 
-Passing `registered_auth_method` lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. Omit it (or pass `None`) to derive the method from the client's secret and the server's advertised set.
+The registration's `token_endpoint_auth_method` is a `TokenEndpointAuthMethod` validated out of the registration response. It lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration you build yourself states no method, so the method is derived from the client's secret and the server's advertised set.
 
 ### SSRF safety
 
@@ -752,9 +748,9 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
 | `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
-| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server or registration URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
+| `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
-| `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. A URL you passed raises `ConfigurationError` instead. |
+| `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal.                                     |
@@ -774,7 +770,10 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
 - `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
 - `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
-- `mcp.discover` and `mcp.register_client` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, or the registration endpoint — including one the HTTP client cannot send. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `mcp.discover`, `mcp.register_client` and `mcp.cimd_client_id` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, the registration endpoint, or the CIMD client identifier — including one the HTTP client cannot send. `mcp.cimd_client_id` raised `ValueError` before. A URL the server's metadata declares still raises `McpDiscoveryError`.
+- `TokenEndpointAuthMethod` and `ApplicationType` are `StrEnum`s, and `ProviderConfig`, `ClientRegistration` and `mcp.register_client` take the members. A member equals its wire value, so a `"client_secret_basic"` or `"native"` string still works, but a value outside the set is refused where the model or the registration response is read instead of at the token request. `mcp.register_client` no longer raises `ValueError` for an `application_type` outside the set: the parameter's type is the check, so a value your type checker accepts is registered as given.
+- `mcp.register_client` refuses a registration response whose credentials this library cannot use: a `client_secret` that is present but empty or not a string, a token-endpoint auth method it cannot perform, or a method that contradicts the secret the response states, such as `none` arriving with a secret. An unusable secret was dropped silently before, and the other two were refused a phase later by `mcp.to_provider_config`. Each refusal leaves a registration standing at the authorization server, whose credentials the call discards. A member stated as `null` still states no value, as an absent member does.
+- `mcp.to_provider_config` takes a `ClientRegistration` as its second argument, in place of the `client_id`, `client_secret` and `registered_auth_method` keywords. Pass what `mcp.register_client` returned, or build `ClientRegistration(client_id=...)` for an identifier you hold already.
 - `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
 - A built-in identity handler comes from `ProviderConfig.provider`, not from the endpoint hosts. Name the provider on a config you build by hand to keep the handler it used to be given, and expect `IdentityNotSupportedError` from `fetch_identity` for a config that names none. Naming it also takes that provider's stated facts, so a Google or Microsoft config gains `can_assert_domain_ownership=True`, which a domain-gated sign-in gate reads.

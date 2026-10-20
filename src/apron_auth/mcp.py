@@ -20,7 +20,8 @@ import ipaddress
 import logging
 import socket
 from collections.abc import Callable, Sequence
-from typing import Any, assert_never
+from enum import Enum, unique
+from typing import Any, NamedTuple, assert_never
 from urllib.parse import ParseResult, urljoin, urlparse
 
 import httpx
@@ -50,6 +51,9 @@ UrlValidator = Callable[[str], None]
 
 logger = logging.getLogger(__name__)
 
+# The response statuses that say the server serves no such document: not found and gone.
+_ABSENT_DOCUMENT_STATUSES = (404, 410)
+
 # The one wording for a URL this library cannot read or send, wherever the fault is caught.
 _MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
 
@@ -58,6 +62,30 @@ _MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
 _WELL_KNOWN_OIDC = "/.well-known/openid-configuration"
 _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
+
+
+@unique
+class _MetadataFault(Enum):
+    """Each member is one way a candidate URL failed to yield a metadata document.
+
+    A member's value says what the error reports about the document, after the document's name.
+    """
+
+    UNAVAILABLE = "could not be fetched"
+    UNPUBLISHED = "is not published"
+    UNREADABLE = "is not a JSON object"
+
+
+class _MetadataOutcome(NamedTuple):
+    """Why a metadata fetch has no document, and what that says about a retry.
+
+    Attributes:
+        fault: What a candidate URL showed.
+        kind: What the fault says about a retry.
+    """
+
+    fault: _MetadataFault
+    kind: FailureKind
 
 
 async def discover(
@@ -69,13 +97,12 @@ async def discover(
 ) -> ServerMetadata:
     """Discover a remote MCP server's OAuth metadata.
 
-    Fetches the RFC 9728 protected-resource metadata (trying the
-    ``resource_metadata_url`` hint, then well-known locations), reads its
-    resource identifier and first authorization server, and fetches that
-    server's RFC 8414 metadata (with an OIDC fallback). The HTTPS requirement
-    and the block on ``localhost`` names and on IP literals that are not
-    globally reachable are defense-in-depth; they do not stop any other
-    hostname that resolves to an internal address, so untrusted ``server_url``
+    Fetches the RFC 9728 protected-resource metadata (trying the ``resource_metadata_url`` hint, then
+    well-known locations), reads its resource identifier and first authorization server, and fetches that
+    server's RFC 8414 metadata (with an OIDC fallback).
+    The HTTPS requirement and the block on ``localhost`` names and on IP literals that are not globally
+    reachable are defense-in-depth.
+    They do not stop any other hostname that resolves to an internal address, so untrusted ``server_url``
     values need a ``transport_factory`` that pins DNS to validated addresses.
 
     Args:
@@ -177,28 +204,26 @@ async def discover(
 
 def to_provider_config(
     metadata: ServerMetadata,
+    registration: ClientRegistration,
     *,
-    client_id: str,
-    client_secret: SecretStr | str | None = None,
-    registered_auth_method: str | None = None,
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
     resource: str | None = None,
 ) -> ProviderConfig:
     """Fold discovered metadata and client credentials into a ProviderConfig with no identity handler of its own.
 
-    PKCE is enabled unless the server advertises code-challenge methods that
-    exclude S256; because :class:`~apron_auth.client.OAuthClient` issues only
-    S256 challenges, PKCE is disabled rather than downgraded to ``plain``. The
-    token-endpoint auth method is taken from ``registered_auth_method`` when
-    given — the value is authoritative for this specific client and may differ
-    from what the server advertises server-wide. Absent it, a confidential
-    client's method is chosen from the methods the server advertises (preferring
-    ``client_secret_post``) and a secretless public client uses ``none``. The
-    discovered issuer and its ``iss``-parameter support carry onto the config so
-    the code exchange can validate the authorization-response ``iss`` (RFC 9207).
-    The RFC 8707 resource indicator defaults to the discovered protected-resource
-    identifier and can be overridden by ``resource``.
+    PKCE is enabled unless the server advertises code-challenge methods that exclude S256.
+    Because :class:`~apron_auth.client.OAuthClient` issues only S256 challenges, PKCE is disabled rather than
+    downgraded to ``plain``.
+    The token-endpoint auth method is taken from the registration's ``token_endpoint_auth_method`` when it
+    states one, because that value is authoritative for this specific client and may differ from what the
+    server advertises server-wide.
+    Absent it, a confidential client's method is chosen from the methods the server advertises (preferring
+    ``client_secret_post``) and a secretless public client uses ``none``.
+    The discovered issuer and its ``iss``-parameter support carry onto the config so the code exchange can
+    validate the authorization-response ``iss`` (RFC 9207).
+    The RFC 8707 resource indicator defaults to the discovered protected-resource identifier and can be
+    overridden by ``resource``.
 
     The returned config names no built-in provider and allows no provider's identity handler,
     and no parameter changes either.
@@ -209,11 +234,11 @@ def to_provider_config(
 
     Args:
         metadata: Metadata from :func:`discover`.
-        client_id: Client identifier, pre-registered or minted via DCR.
-        client_secret: Secret for a confidential client; omit for a public one.
-        registered_auth_method: The token-endpoint auth method the server
-            registered for this client (RFC 7591), when known; overrides the
-            derivation from the advertised set. Omit when unknown.
+        registration: The client's credentials for this authorization server, from
+            :func:`register_client` or built around a pre-registered identifier or
+            a CIMD client identifier. It carries a secret only for a confidential
+            client, and a token-endpoint auth method only when the server
+            registered one for this client.
         scopes: Scopes to request.
         redirect_uri: Redirect URI for the authorization flow.
         resource: RFC 8707 resource indicator to audience-bind issued tokens to,
@@ -227,13 +252,12 @@ def to_provider_config(
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
 
     Raises:
-        McpDiscoveryError: If the registered method is one this library cannot
-            perform, or the server advertises only such methods for a
-            confidential client.
+        McpDiscoveryError: If the registration's method disagrees with its
+            secret, or the server advertises no method the client can satisfy.
         ValidationError: If the effective ``resource`` — supplied or discovered —
             is not a valid absolute URI without a fragment.
     """
-    secret = SecretStr(client_secret) if isinstance(client_secret, str) else client_secret
+    secret = registration.client_secret
     methods = metadata.code_challenge_methods
     # Default PKCE on when the server advertises no code-challenge methods. RFC
     # 8414 reads an omitted list as "no PKCE", but the MCP spec requires clients
@@ -243,9 +267,11 @@ def to_provider_config(
     # When methods are advertised, honor them: disable if S256 is absent, since
     # OAuthClient issues only S256 challenges.
     use_pkce = "S256" in methods if methods else True
-    auth_method = _select_auth_method(secret, metadata.token_endpoint_auth_methods, registered_auth_method)
+    auth_method = _select_auth_method(
+        secret, metadata.token_endpoint_auth_methods, registered=registration.token_endpoint_auth_method
+    )
     return ProviderConfig(
-        client_id=client_id,
+        client_id=registration.client_id,
         client_secret=secret,
         authorize_url=metadata.authorize_url,
         token_url=metadata.token_url,
@@ -266,30 +292,29 @@ async def register_client(
     redirect_uri: str,
     *,
     client_name: str = "apron-auth",
-    application_type: str | None = None,
+    application_type: ApplicationType | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
 ) -> ClientRegistration:
     """Dynamically register an OAuth client (RFC 7591) and return its credentials.
 
-    POSTs a registration request to ``registration_url`` (an authorization
-    server's registration endpoint) and returns the issued ``client_id`` plus,
-    for a confidential client, a ``client_secret``. Any
-    ``token_endpoint_auth_method`` the response states is captured too — it is
-    authoritative for this client and may differ from the requested method. The
-    URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the request
-    goes through ``transport_factory`` when supplied. An error never echoes the
-    response body, which carries the issued secret.
+    POSTs a registration request to ``registration_url`` (an authorization server's registration endpoint) and
+    returns the issued ``client_id`` plus, for a confidential client, a ``client_secret``.
+    A ``token_endpoint_auth_method`` the response states is captured too when this library can perform it,
+    and refused otherwise.
+    It is authoritative for this client and may differ from the requested method.
+    The URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the
+    request goes through ``transport_factory`` when supplied.
+    An error never echoes the response body, which carries the issued secret.
 
     Args:
         registration_url: The authorization server's registration endpoint.
         redirect_uri: Redirect URI to register for the authorization flow.
         client_name: Human-readable client name sent in the request.
-        application_type: The application_type to register
-            (``ApplicationType.WEB`` or ``ApplicationType.NATIVE``). When
-            omitted, ``native`` is inferred from a loopback ``redirect_uri``
-            and otherwise left unset. Registering ``native`` lets servers that
-            gate ``localhost`` redirects on it accept the registration.
+        application_type: The application type to register. When omitted,
+            ``native`` is inferred from a loopback ``redirect_uri`` and
+            otherwise left unset. Registering ``native`` lets servers that gate
+            ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
         transport_factory: Optional factory controlling the outbound connection.
 
@@ -302,15 +327,16 @@ async def register_client(
     Raises:
         ConfigurationError: If ``registration_url`` is rejected.
         McpRegistrationError: If the request fails in transit, the endpoint returns
-            a non-success status, or its response is not a JSON object with a usable
-            ``client_id``.
+            a non-success status, its response is not a JSON object with a usable
+            ``client_id``, or the response states a client secret this library
+            cannot use, a token-endpoint authentication method it cannot perform,
+            or a method that contradicts the secret the response states. Every
+            refusal after a success status leaves a registration standing at the
+            authorization server, because the server issued credentials this call
+            then discards.
         OAuthError: As raised by ``url_validator``, unchanged.
-        ValueError: If ``application_type`` is neither ``web`` nor ``native``.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
-    if application_type not in (None, ApplicationType.WEB, ApplicationType.NATIVE):
-        msg = "application_type must be 'web' or 'native'"
-        raise ValueError(msg)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -350,35 +376,23 @@ async def register_client(
     if not isinstance(data, dict):
         msg = "client registration returned an unexpected response"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    client_id = data.get("client_id")
-    if not isinstance(client_id, str) or not client_id:
-        msg = "client registration response is missing client_id"
-        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
-    client_secret = data.get("client_secret")
-    auth_method = data.get("token_endpoint_auth_method")
-    return ClientRegistration(
-        client_id=client_id,
-        client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
-        token_endpoint_auth_method=auth_method if isinstance(auth_method, str) else None,
-    )
+    return _issued_registration(data)
 
 
 def cimd_client_id(url: str) -> str:
     """Validate an HTTPS URL as a Client ID Metadata Document (CIMD) client identifier.
 
-    A CIMD client is identified by an HTTPS URL to a metadata document the client
-    hosts, and that URL is sent verbatim as the ``client_id`` in the authorization
-    and token requests. This enforces the client-identifier URL rules this library
-    can check locally and returns the URL for use as a ``client_id``: an ``https``
-    scheme, a valid port, a path component naming the document, and none of the
-    components the specification forbids — userinfo, a fragment, or a ``.`` or
-    ``..`` path segment. A query string is only discouraged, not forbidden, so it
-    is left alone.
+    A CIMD client is identified by an HTTPS URL to a metadata document the client hosts, and that URL is sent
+    verbatim as the ``client_id`` in the authorization and token requests.
+    This enforces the client-identifier URL rules this library can check locally and returns the URL for use
+    as a ``client_id``: an ``https`` scheme, a valid port, a path component naming the document, and none of
+    the components the specification forbids, which are userinfo, a fragment, and a ``.`` or ``..`` path
+    segment.
+    A query string is only discouraged, not forbidden, so it is left alone.
 
-    Unlike :func:`discover` and :func:`register_client`, this does not block
-    non-public hosts. The URL is the client's own metadata document, which this
-    library never fetches — the authorization server resolves it — so blocking
-    non-public hosts would reject a legitimate caller-hosted URL.
+    Unlike :func:`discover` and :func:`register_client`, this does not block non-public hosts.
+    The URL is the client's own metadata document, which the authorization server resolves and this library
+    never fetches, so blocking non-public hosts would reject a legitimate caller-hosted URL.
 
     Args:
         url: The HTTPS URL of the client's hosted metadata document.
@@ -387,8 +401,8 @@ def cimd_client_id(url: str) -> str:
         The validated URL, unchanged, for use as a ``client_id``.
 
     Raises:
-        ValueError: If the URL is malformed or has an invalid port, is not
-            ``https``, has no host, carries userinfo or a fragment, names no
+        ConfigurationError: If the URL is malformed or has an invalid port, is
+            not ``https``, has no host, carries userinfo or a fragment, names no
             document path beyond a bare ``/``, or contains a ``.`` or ``..``
             path segment.
     """
@@ -396,60 +410,128 @@ def cimd_client_id(url: str) -> str:
         parsed = _parse_url(url)
     except ValueError as exc:
         msg = "CIMD client_id must be a valid URL"
-        raise ValueError(msg) from exc
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION) from exc
     if parsed.scheme != "https":
         msg = "CIMD client_id must be an https URL"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if not parsed.hostname:
         msg = "CIMD client_id must be an https URL with a host"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if parsed.username is not None or parsed.password is not None:
         msg = "CIMD client_id must not contain a username or password"
-        raise ValueError(msg)
-    if parsed.fragment:
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+    # The delimiter is checked, so an empty fragment counts, as it does for a declared issuer.
+    if "#" in url:
         msg = "CIMD client_id must not contain a fragment"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if not parsed.path.strip("/"):
         msg = "CIMD client_id must be an https URL with a path component"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     if any(segment in (".", "..") for segment in parsed.path.split("/")):
         msg = "CIMD client_id must not contain a . or .. path segment"
-        raise ValueError(msg)
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
 
 
-def _select_auth_method(secret: SecretStr | None, advertised: list[str], registered: str | None = None) -> str:
+def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
+    """Return the client registration a decoded registration response issued.
+
+    A credential the response states must be one this library can present, so a refusal here discards the
+    credentials the authorization server issued and leaves its registration standing.
+
+    Args:
+        document: The decoded registration response.
+
+    Returns:
+        The registration the response issued.
+
+    Raises:
+        McpRegistrationError: If the response states no usable client identifier, states a client secret this
+            library cannot use, states a token-endpoint authentication method it cannot perform, or states a
+            method that contradicts the secret.
+    """
+    client_id = document.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        msg = "client registration states no usable client_id, so the issued credentials were discarded"
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    client_secret = document.get("client_secret")
+    if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
+        msg = (
+            "client registration states a client secret this library cannot use, "
+            "so the issued credentials were discarded"
+        )
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    secret = SecretStr(client_secret) if client_secret is not None else None
+    stated_method = document.get("token_endpoint_auth_method")
+    registered_method = None
+    if stated_method is not None:
+        registered_method = _stated_auth_method(stated_method)
+        if registered_method is None:
+            msg = (
+                "client registration states a client authentication method this library cannot perform, "
+                "so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+        if not _secret_agrees(registered_method, secret):
+            msg = (
+                "client registration states a client authentication method that contradicts the secret it "
+                "issued, so the issued credentials were discarded"
+            )
+            raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
+    return ClientRegistration(
+        client_id=client_id,
+        client_secret=secret,
+        token_endpoint_auth_method=registered_method,
+    )
+
+
+def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) -> bool:
+    """Return whether a client secret's presence agrees with a token-endpoint auth method.
+
+    A method that requires a secret has one to send, and a method that requires none is a public client,
+    which carries none.
+    """
+    return method.requires_secret is (secret is not None)
+
+
+def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
+    """Return the token-endpoint auth method a value names, or None when this library performs no such method."""
+    try:
+        return TokenEndpointAuthMethod(value)
+    except ValueError:
+        return None
+
+
+def _select_auth_method(
+    secret: SecretStr | None, advertised: list[str], registered: TokenEndpointAuthMethod | None = None
+) -> TokenEndpointAuthMethod:
     """Choose the token-endpoint authentication method for a discovered server.
 
-    A ``registered`` method is authoritative and takes precedence: it is the
-    method the server assigned this specific client (RFC 7591) and may differ
-    from the server-wide advertised set, so when present it is honored (or
-    raises if this library cannot perform it) and the advertised set is not
-    consulted.
+    A ``registered`` method is authoritative and takes precedence, because it is the method the server
+    assigned this specific client (RFC 7591) and may differ from the server-wide advertised set.
+    When it is present it is honored, and the advertised set is not consulted.
 
-    Otherwise the method is derived. A secretless client is public and uses
-    ``none``, unless the server publishes an explicit method list that omits
-    ``none`` — then it accepts no public client and this raises. A confidential
-    client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server
-    advertises; a server advertising only methods this library cannot perform is
-    unusable, so this raises rather than yielding a config doomed to fail at
-    token exchange. When the server advertises nothing, this defaults to
-    ``client_secret_basic`` — RFC 8414's stated default, and the one scheme
-    RFC 6749 requires every authorization server to support.
+    Otherwise the method is derived.
+    A secretless client is public and uses ``none``, unless the server publishes an explicit method list that
+    omits ``none``, which accepts no public client and raises.
+    A confidential client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server advertises.
+    A server advertising only methods this library cannot perform is unusable, so this raises rather than
+    yielding a config doomed to fail at token exchange.
+    When the server advertises nothing, this defaults to ``client_secret_basic``, which is RFC 8414's stated
+    default and the one scheme RFC 6749 requires every authorization server to support.
 
     Args:
         secret: The client secret, or None for a public client.
         advertised: The server's advertised token-endpoint auth methods.
         registered: The method the server registered for this client, or None
-            when unknown. Any non-None value — including an empty string — is
-            treated as an asserted method and validated, not silently ignored.
+            when the registration states none.
 
     Returns:
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the registered method is one this library cannot
-            perform, or the server advertises an explicit method list the client
+        McpDiscoveryError: If the registered method disagrees with the secret's
+            presence, or the server advertises an explicit method list the client
             cannot satisfy — omitting ``none`` for a public client, or offering
             only methods this library cannot perform for a confidential client.
     """
@@ -475,17 +557,17 @@ def _select_auth_method(secret: SecretStr | None, advertised: list[str], registe
     raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
-def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> str:
-    """Return the method the server registered for this client, if performable.
+def _honor_registered_auth_method(
+    registered: TokenEndpointAuthMethod, secret: SecretStr | None
+) -> TokenEndpointAuthMethod:
+    """Return the method the server registered for this client, if its secret agrees.
 
-    The registered method (RFC 7591) is authoritative for the client, so this
-    honors ``none`` for a public client and the confidential methods in
-    :data:`CONFIDENTIAL_AUTH_METHODS`. It raises rather than yielding an
-    internally inconsistent config when the method and the secret disagree — a
-    confidential method with no secret to send, or ``none`` paired with a secret
-    (a public client must carry none, and a lingering secret would be attached
-    to requests that should present no client authentication) — and when the
-    method is one this library cannot perform.
+    The registered method (RFC 7591) is authoritative for the client, so this honors it.
+    It raises rather than yielding an internally inconsistent config when the method and the secret disagree.
+    A public client must carry no secret, because the secret would be attached to requests that present no
+    client authentication.
+    This checks whatever pair it is given, because the method and the secret can come from any registration
+    the caller holds.
 
     Args:
         registered: The method the server registered for this client.
@@ -495,20 +577,17 @@ def _honor_registered_auth_method(registered: str, secret: SecretStr | None) -> 
         The registered token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the method disagrees with the secret's presence, or
-            this library cannot perform it.
+        McpDiscoveryError: If the method disagrees with the secret's presence.
     """
-    if registered == TokenEndpointAuthMethod.NONE:
-        if secret is not None:
-            msg = "MCP server registered a public client (none) but issued a client secret"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
-        return TokenEndpointAuthMethod.NONE
-    if registered in CONFIDENTIAL_AUTH_METHODS:
-        if secret is None:
-            msg = "MCP server registered a confidential auth method but issued no client secret"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    if _secret_agrees(registered, secret):
         return registered
-    msg = "MCP server registered an unsupported client authentication method"
+    match registered:
+        case TokenEndpointAuthMethod.NONE:
+            msg = "MCP server registered a public client (none) but issued a client secret"
+        case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC | TokenEndpointAuthMethod.CLIENT_SECRET_POST:
+            msg = "MCP server registered a confidential auth method but issued no client secret"
+        case _:
+            assert_never(registered)
     raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
@@ -574,13 +653,13 @@ def _is_localhost_name(host: str) -> bool:
     return host == "localhost" or host.endswith(".localhost")
 
 
-def _infer_application_type(redirect_uri: str) -> str | None:
+def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     """Return ``native`` for a loopback redirect URI, else ``None``.
 
-    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252
-    signature of a native or CLI client. Any other redirect leaves the value
-    unset so the registration request is byte-identical to one that never
-    considered it.
+    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252 signature of a native or CLI
+    client.
+    Any other redirect leaves the value unset, so the registration request is byte-identical to one that
+    never considered it.
     """
     try:
         host = _host_name(urlparse(redirect_uri).hostname or "")
@@ -683,6 +762,23 @@ def _asm_candidate_urls(auth_server: str) -> list[str]:
     return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
 
 
+def _reported_outcome(reported: _MetadataOutcome, observed: _MetadataOutcome) -> _MetadataOutcome:
+    """Return the outcome a metadata fetch reports, given a further candidate's outcome.
+
+    A retryable outcome stands, because the fallback locations answer a client error as a rule and must not
+    hide an outage on the real URL.
+    Otherwise the further candidate's outcome replaces it.
+
+    Args:
+        reported: The outcome the candidates tried so far report.
+        observed: The outcome a further candidate showed.
+
+    Returns:
+        The outcome to report.
+    """
+    return reported if reported.kind.retryable else observed
+
+
 async def _fetch_first_metadata(
     candidate_urls: Sequence[str],
     url_validator: UrlValidator | None,
@@ -712,13 +808,13 @@ async def _fetch_first_metadata(
         ConfigurationError: If a candidate is rejected and ``caller_supplied`` says
             the candidates derive from an argument of this library's caller.
         McpDiscoveryError: If a candidate is rejected and the candidates derive from
-            a fetched document, or if no candidate succeeds. The error names
-            ``what``.
+            a fetched document, or if no candidate succeeds. The error names ``what``
+            and the fault the candidates showed. Its ``kind`` tells a fetch that may
+            pass later from one that cannot.
     """
-    # A retryable failure on any candidate decides the kind, because the fallbacks answer 404 as a rule and
-    # must not hide an outage on the real URL. Otherwise the last candidate's failure decides.
-    kind = FailureKind.REFUSED
-    retryable_kind: FailureKind | None = None
+    # The seed is not retryable, so the first candidate's outcome replaces it.
+    outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+    unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
         _validate_url(url, url_validator, caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
@@ -731,23 +827,27 @@ async def _fetch_first_metadata(
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
-                kind = transport.kind
-                retryable_kind = retryable_kind or (kind if kind.retryable else None)
+                failure = _MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind)
+                outcome = _reported_outcome(outcome, failure)
                 continue
             if response.status_code != 200:
+                status = status_failure(response.status_code)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
-                kind = status_failure(response.status_code).kind
-                retryable_kind = retryable_kind or (kind if kind.retryable else None)
+                # A refusal may guard a document that exists.
+                # A redirect this library will not follow says nothing about one either.
+                serves_no_document = response.status_code in _ABSENT_DOCUMENT_STATUSES
+                fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
+                outcome = _reported_outcome(outcome, _MetadataOutcome(fault, status.kind))
                 continue
             try:
                 payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
-                kind = FailureKind.REFUSED
+                outcome = _reported_outcome(outcome, unreadable)
                 continue
             if isinstance(payload, dict):
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
-            kind = FailureKind.REFUSED
-    msg = f"could not fetch {what}"
-    raise McpDiscoveryError(msg, kind=retryable_kind or kind)
+            outcome = _reported_outcome(outcome, unreadable)
+    msg = f"{what} {outcome.fault.value}"
+    raise McpDiscoveryError(msg, kind=outcome.kind)

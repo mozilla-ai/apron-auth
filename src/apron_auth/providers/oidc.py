@@ -782,7 +782,7 @@ def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
     return value
 
 
-def _select_auth_method(advertised: Sequence[str]) -> str:
+def _select_auth_method(advertised: Sequence[str]) -> TokenEndpointAuthMethod:
     """Choose the token-endpoint auth method for a confidential client.
 
     Prefers ``client_secret_post`` among the methods the provider advertises.

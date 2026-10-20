@@ -22,7 +22,11 @@ from apron_auth.mcp import (
     _asm_candidate_urls,
     _honor_registered_auth_method,
     _is_blocked_host,
+    _MetadataFault,
+    _MetadataOutcome,
     _prm_candidate_urls,
+    _reported_outcome,
+    _secret_agrees,
     _select_auth_method,
     _validate_url,
     cimd_client_id,
@@ -32,6 +36,7 @@ from apron_auth.mcp import (
 )
 from apron_auth.models import (
     ApplicationType,
+    ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
@@ -42,6 +47,7 @@ from apron_auth.models import (
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
+_LEAKED_SECRET = "top-secret-value"  # pragma: allowlist secret
 
 _PRM_ROOT = "https://mcp.example.com/.well-known/oauth-protected-resource"
 _PRM_PATH = "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
@@ -74,81 +80,65 @@ class TestToProviderConfig:
         return ServerMetadata(**defaults)
 
     def test_result_is_provider_config(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert isinstance(config, ProviderConfig)
 
     def test_maps_endpoints(self) -> None:
         meta = self._meta(revocation_url="https://auth.example.com/revoke")
-        config = to_provider_config(meta, client_id="c", client_secret=SecretStr("s"))
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret=SecretStr("s")))
         assert config.authorize_url == "https://auth.example.com/authorize"
         assert config.token_url == "https://auth.example.com/token"
         assert config.revocation_url == "https://auth.example.com/revoke"
 
     def test_confidential_client_uses_secret_post(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret=SecretStr("s"))
-        assert config.token_endpoint_auth_method == "client_secret_post"
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret=SecretStr("s")))
+        assert config.token_endpoint_auth_method is TokenEndpointAuthMethod.CLIENT_SECRET_POST
         assert config.client_secret is not None
 
     def test_public_client_uses_none(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c"))
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
 
     def test_confidential_client_uses_basic_when_only_basic_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_confidential_client_defaults_basic_when_unadvertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=[])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="c", client_secret="s")
+            to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
 
     def test_public_client_rejected_when_none_not_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="c")
+            to_provider_config(meta, ClientRegistration(client_id="c"))
 
     def test_registered_method_overrides_advertised_derivation(self) -> None:
         # The server advertises only client_secret_post, but this client was
         # registered as client_secret_basic; the per-client registration wins.
         config = to_provider_config(
             self._meta(token_endpoint_auth_methods=["client_secret_post"]),
-            client_id="c",
-            client_secret="s",
-            registered_auth_method="client_secret_basic",
+            ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="client_secret_basic"),
         )
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_registered_none_yields_public_client(self) -> None:
-        config = to_provider_config(
-            self._meta(),
-            client_id="c",
-            registered_auth_method="none",
-        )
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", token_endpoint_auth_method="none"))
         assert config.token_endpoint_auth_method == "none"
         assert config.client_secret is None
-
-    def test_registered_unsupported_method_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
-            to_provider_config(
-                self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="private_key_jwt",
-            )
 
     def test_registered_confidential_method_without_secret_raises(self) -> None:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                registered_auth_method="client_secret_basic",
+                ClientRegistration(client_id="c", token_endpoint_auth_method="client_secret_basic"),
             )
 
     def test_registered_none_with_secret_raises(self) -> None:
@@ -157,47 +147,41 @@ class TestToProviderConfig:
         with pytest.raises(McpDiscoveryError):
             to_provider_config(
                 self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="none",
-            )
-
-    def test_registered_empty_string_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
-            to_provider_config(
-                self._meta(),
-                client_id="c",
-                client_secret="s",
-                registered_auth_method="",
+                ClientRegistration(client_id="c", client_secret="s", token_endpoint_auth_method="none"),
             )
 
     def test_absent_registered_method_falls_back_to_derivation(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
     def test_accepts_plain_string_secret(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="raw-secret")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="raw-secret"))
         assert config.client_secret is not None
         assert config.client_secret.get_secret_value() == "raw-secret"
 
     def test_pkce_enabled_when_s256_supported(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=["S256"]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=["S256"]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is True
 
     def test_pkce_enabled_by_default_when_unadvertised(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=[]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=[]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is True
 
     def test_pkce_disabled_when_s256_absent(self) -> None:
-        config = to_provider_config(self._meta(code_challenge_methods=["plain"]), client_id="c", client_secret="s")
+        config = to_provider_config(
+            self._meta(code_challenge_methods=["plain"]), ClientRegistration(client_id="c", client_secret="s")
+        )
         assert config.use_pkce is False
 
     def test_scopes_and_redirect_passed(self) -> None:
         config = to_provider_config(
             self._meta(),
-            client_id="c",
-            client_secret="s",
+            ClientRegistration(client_id="c", client_secret="s"),
             scopes=["a", "b"],
             redirect_uri="https://app.example.com/cb",
         )
@@ -206,37 +190,36 @@ class TestToProviderConfig:
 
     def test_issuer_and_iss_requirement_threaded_from_metadata(self) -> None:
         meta = self._meta(issuer="https://auth.example.com", iss_parameter_supported=True)
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.issuer == "https://auth.example.com"
         assert config.require_iss is True
 
     def test_issuer_absent_leaves_config_unbound(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert config.issuer is None
         assert config.require_iss is False
 
     def test_resource_threaded_from_metadata(self) -> None:
         meta = self._meta(resource="https://mcp.example.com/mcp")
-        config = to_provider_config(meta, client_id="c", client_secret="s")
+        config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.resource == "https://mcp.example.com/mcp"
 
     def test_resource_absent_leaves_config_unbound(self) -> None:
-        config = to_provider_config(self._meta(), client_id="c", client_secret="s")
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
         assert config.resource is None
 
     def test_explicit_resource_overrides_metadata(self) -> None:
         meta = self._meta(resource="https://mcp.example.com")
         config = to_provider_config(
             meta,
-            client_id="c",
-            client_secret="s",
+            ClientRegistration(client_id="c", client_secret="s"),
             resource="https://mcp.example.com/server/mcp",
         )
         assert config.resource == "https://mcp.example.com/server/mcp"
 
     def test_cimd_url_client_id_yields_public_config(self) -> None:
         url = cimd_client_id("https://app.example.com/oauth/client-metadata.json")
-        config = to_provider_config(self._meta(), client_id=url, client_secret=None)
+        config = to_provider_config(self._meta(), ClientRegistration(client_id=url))
         assert config.client_id == "https://app.example.com/oauth/client-metadata.json"
         assert config.client_secret is None
         assert config.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
@@ -245,7 +228,7 @@ class TestToProviderConfig:
         """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
         with pytest.raises(McpDiscoveryError):
-            to_provider_config(meta, client_id="https://app.example.com/c.json", client_secret=None)
+            to_provider_config(meta, ClientRegistration(client_id="https://app.example.com/c.json"))
 
 
 class TestToProviderConfigIdentity:
@@ -268,7 +251,7 @@ class TestToProviderConfigIdentity:
 
     def test_a_config_on_a_claimed_host_names_no_provider(self, claimed_metadata: ServerMetadata) -> None:
         """That provider's handler would send a token issued for the MCP server to its API."""
-        config = to_provider_config(claimed_metadata, client_id="c")
+        config = to_provider_config(claimed_metadata, ClientRegistration(client_id="c"))
 
         assert config.provider is None
 
@@ -276,7 +259,7 @@ class TestToProviderConfigIdentity:
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
         """The client raises the unsupported-identity error and sends nothing to the provider."""
-        client = OAuthClient(to_provider_config(claimed_metadata, client_id="c"))
+        client = OAuthClient(to_provider_config(claimed_metadata, ClientRegistration(client_id="c")))
 
         with pytest.raises(IdentityNotSupportedError):
             await client.fetch_identity(FreshTokenSet(access_token="access"))
@@ -296,7 +279,7 @@ class TestToProviderConfigIdentity:
                 self.calls.append((material, config))
                 return IdentityProfile(provider="mcp", subject="u-1")
 
-        config = to_provider_config(claimed_metadata, client_id="c")
+        config = to_provider_config(claimed_metadata, ClientRegistration(client_id="c"))
         handler = McpIdentityHandler()
         client = OAuthClient(config, identity_handler=handler)
 
@@ -341,6 +324,12 @@ class TestSelectAuthMethod:
     def test_returns_expected_method(self, secret: SecretStr | None, advertised: list[str], expected: str) -> None:
         assert _select_auth_method(secret, advertised) == expected
 
+    def test_a_derived_method_is_the_enum_member(self) -> None:
+        """A member equals its wire name, so only identity shows that the derived set holds members."""
+        assert _select_auth_method(SecretStr("s"), ["client_secret_basic"]) is (
+            TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+        )
+
     @pytest.mark.parametrize(
         "advertised",
         [
@@ -367,45 +356,55 @@ class TestSelectAuthMethod:
 
     def test_registered_method_wins_over_advertised(self) -> None:
         # The advertised set would derive post; the registered method wins.
-        method = _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="client_secret_basic")
+        method = _select_auth_method(
+            SecretStr("s"), ["client_secret_post"], registered=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+        )
         assert method == TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
 
-    def test_empty_registered_string_is_validated_not_ignored(self) -> None:
-        # An empty string is "provided" and rejected, not silently derived from
-        # the advertised set — a malformed registration must not be masked.
-        with pytest.raises(McpDiscoveryError):
-            _select_auth_method(SecretStr("s"), ["client_secret_post"], registered="")
+
+class TestSecretAgrees:
+    @pytest.mark.parametrize(
+        ("method", "secret", "agrees"),
+        [
+            (TokenEndpointAuthMethod.NONE, None, True),
+            (TokenEndpointAuthMethod.NONE, SecretStr("s"), False),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s"), True),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, None, False),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, SecretStr("s"), True),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, None, False),
+        ],
+    )
+    def test_a_public_method_agrees_with_no_secret_and_any_other_with_one(
+        self, method: TokenEndpointAuthMethod, secret: SecretStr | None, agrees: bool
+    ) -> None:
+        assert _secret_agrees(method, secret) is agrees
 
 
 class TestHonorRegisteredAuthMethod:
     @pytest.mark.parametrize(
-        ("registered", "secret", "expected"),
+        ("registered", "secret"),
         [
-            ("none", None, TokenEndpointAuthMethod.NONE),
-            ("client_secret_post", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_POST),
-            ("client_secret_basic", SecretStr("s"), TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
+            (TokenEndpointAuthMethod.NONE, None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, SecretStr("s")),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, SecretStr("s")),
         ],
     )
-    def test_returns_performable_method(self, registered: str, secret: SecretStr | None, expected: str) -> None:
-        assert _honor_registered_auth_method(registered, secret) == expected
+    def test_returns_performable_method(self, registered: TokenEndpointAuthMethod, secret: SecretStr | None) -> None:
+        assert _honor_registered_auth_method(registered, secret) is registered
 
     @pytest.mark.parametrize(
         ("registered", "secret"),
         [
-            # A method this library cannot perform, regardless of secret state.
-            ("private_key_jwt", SecretStr("s")),
-            ("tls_client_auth", None),
             # A confidential method with no secret to send it.
-            ("client_secret_post", None),
-            ("client_secret_basic", None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_POST, None),
+            (TokenEndpointAuthMethod.CLIENT_SECRET_BASIC, None),
             # A public client (none) must not carry a secret.
-            ("none", SecretStr("s")),
-            # An empty/invalid method string is validated, not ignored.
-            ("", SecretStr("s")),
-            ("", None),
+            (TokenEndpointAuthMethod.NONE, SecretStr("s")),
         ],
     )
-    def test_raises_when_unperformable(self, registered: str, secret: SecretStr | None) -> None:
+    def test_raises_when_the_secret_disagrees(
+        self, registered: TokenEndpointAuthMethod, secret: SecretStr | None
+    ) -> None:
         with pytest.raises(McpDiscoveryError):
             _honor_registered_auth_method(registered, secret)
 
@@ -469,18 +468,43 @@ class TestDiscover:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, status_code=503)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
-    async def test_not_found_on_every_candidate_is_a_rejection(self, httpx_mock: HTTPXMock) -> None:
+    @pytest.mark.parametrize(
+        ("status", "kind", "fault"),
+        [
+            # Only a not-found status says the server serves no such document.
+            (404, FailureKind.REJECTED, "is not published"),
+            (410, FailureKind.REJECTED, "is not published"),
+            # A refusal may guard a document that exists.
+            # A redirect this library will not follow says nothing about one either.
+            (403, FailureKind.REJECTED, "could not be fetched"),
+            (302, FailureKind.REFUSED, "could not be fetched"),
+        ],
+    )
+    async def test_a_status_on_every_candidate_names_what_it_showed(
+        self, httpx_mock: HTTPXMock, status: int, kind: FailureKind, fault: str
+    ) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
-        httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
-        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=status)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=status)
+        with pytest.raises(McpDiscoveryError, match=fault) as exc_info:
             await discover("https://mcp.example.com")
-        assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.kind is kind
+        assert exc_info.value.retryable is False
+
+    async def test_an_unreadable_body_on_every_candidate_is_a_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """A document that answers but does not decode is told apart from one the server does not publish."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
+        httpx_mock.add_response(url=_ASM_OIDC, json=["not", "an", "object"])
+        with pytest.raises(McpDiscoveryError, match="is not a JSON object") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert exc_info.value.retryable is False
 
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
@@ -882,7 +906,7 @@ class TestDiscover:
         def handler(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("boom", request=request)
 
-        with pytest.raises(McpDiscoveryError, match="could not fetch") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
             await discover("https://mcp.example.com", transport_factory=lambda _: httpx.MockTransport(handler))
         assert exc_info.value.kind is FailureKind.UNREACHABLE
         assert exc_info.value.retryable is True
@@ -1004,6 +1028,19 @@ class TestAsmCandidateUrls:
     )
     def test_candidate_order(self, auth_server: str, expected: list[str]) -> None:
         assert _asm_candidate_urls(auth_server) == expected
+
+
+class TestReportedOutcome:
+    def test_a_retryable_outcome_stands_over_a_later_refusal(self) -> None:
+        """The fallback locations answer a client error as a rule, which must not hide an outage."""
+        outage = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR)
+        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
+        assert _reported_outcome(outage, refusal) == outage
+
+    def test_a_further_outcome_replaces_one_that_is_not_retryable(self) -> None:
+        unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
+        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
+        assert _reported_outcome(unreadable, refusal) == refusal
 
 
 class TestValidateUrl:
@@ -1133,27 +1170,116 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.token_endpoint_auth_method is None
 
-    async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
-        with pytest.raises(McpRegistrationError):
-            await register_client(_REGISTER_URL, _REDIRECT_URI)
+    @pytest.mark.parametrize("stated", ["private_key_jwt", "", 7, ["none"], {"method": "none"}])
+    async def test_stated_method_this_library_cannot_perform_raises(
+        self, httpx_mock: HTTPXMock, stated: object
+    ) -> None:
+        """The response states the method, so it is refused where the response is read, not at config time.
 
-    async def test_registration_error_never_leaks_client_secret(self, httpx_mock: HTTPXMock) -> None:
+        The cases include a value a dictionary cannot key, because reading the method must refuse a
+        JSON array or object rather than fail on the lookup.
+        """
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "token_endpoint_auth_method": stated},
+        )
+        with pytest.raises(McpRegistrationError, match="authentication method") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize("stated", ["", 7, ["s"], {"value": "s"}])
+    async def test_stated_secret_this_library_cannot_use_raises(self, httpx_mock: HTTPXMock, stated: object) -> None:
+        """The response states the secret, so it meets the test its client_id meets, where the response is read.
+
+        An empty secret authenticates nothing, so a response stating one states a credential that cannot be
+        used, as a response stating a secret that is not text does.
+        """
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "client_secret": stated},
+        )
+        with pytest.raises(McpRegistrationError, match="client secret") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A public client declares none and carries no secret.
+            {"client_id": "x", "client_secret": "s", "token_endpoint_auth_method": "none"},
+            # Any other method is a confidential client, which has a secret to send.
+            {"client_id": "x", "token_endpoint_auth_method": "client_secret_post"},
+            {"client_id": "x", "token_endpoint_auth_method": "client_secret_basic"},
+        ],
+    )
+    async def test_a_stated_method_that_contradicts_the_secret_raises(
+        self, httpx_mock: HTTPXMock, body: dict[str, str]
+    ) -> None:
+        """The response states both, so the contradiction is refused where the response is read."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
+        with pytest.raises(McpRegistrationError, match="contradicts") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_secret_stated_as_null_states_a_public_client(self, httpx_mock: HTTPXMock) -> None:
+        """A member stated as null states no value, as an absent member does."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "pub", "client_secret": None})
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_secret is None
+
+    async def test_a_stated_method_is_the_enum_member(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "token_endpoint_auth_method": "none"},
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
+
+    @pytest.mark.parametrize("body", [{"client_secret": "s"}, {"client_id": ""}, {"client_id": 7}])
+    async def test_a_response_with_no_usable_client_id_raises(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """An identifier that is absent, empty or not text names no client, so none of the three is usable."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
+        with pytest.raises(McpRegistrationError, match="client_id") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A malformed success body can carry client_secret while lacking client_id.
+            {"client_secret": _LEAKED_SECRET},
+            # A body refused for its stated method carries the issued secret too.
+            # That refusal also sits next to a ValueError that repeats the stated method.
+            {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "private_key_jwt"},
+            # A secret this library cannot use can still hold one, nested where it cannot be read.
+            {"client_id": "x", "client_secret": {"value": _LEAKED_SECRET}},
+            # A method that contradicts the secret is refused with the secret in hand.
+            {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "none"},
+        ],
+    )
+    async def test_registration_error_never_leaks_client_secret(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
         """A registration failure must not surface the issued secret anywhere.
 
-        A malformed success body can still carry ``client_secret`` while lacking
-        ``client_id``; neither the error's message nor its rendered traceback
-        (which walks the ``__cause__``/``__context__`` chain) may expose it.
+        Neither the error's message nor its rendered traceback (which walks the
+        ``__cause__``/``__context__`` chain) may expose it.
         """
-        leaked = "top-secret-value"  # pragma: allowlist secret
-        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": leaked})
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
         with pytest.raises(McpRegistrationError) as exc_info:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
         rendered = "".join(
             traceback.format_exception(type(exc_info.value), exc_info.value, exc_info.value.__traceback__)
         )
-        assert leaked not in str(exc_info.value)
-        assert leaked not in rendered
+        assert _LEAKED_SECRET not in str(exc_info.value)
+        assert _LEAKED_SECRET not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     @pytest.mark.parametrize("status", [400, 401, 403, 500])
     async def test_non_success_status_raises(self, httpx_mock: HTTPXMock, status: int) -> None:
@@ -1224,7 +1350,7 @@ class TestRegisterClient:
 
     @pytest.mark.parametrize("application_type", [ApplicationType.WEB, ApplicationType.NATIVE])
     async def test_explicit_application_type_included_in_payload(
-        self, httpx_mock: HTTPXMock, application_type: str
+        self, httpx_mock: HTTPXMock, application_type: ApplicationType
     ) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
         await register_client(_REGISTER_URL, _REDIRECT_URI, application_type=application_type)
@@ -1285,10 +1411,6 @@ class TestRegisterClient:
         assert request is not None
         assert json.loads(request.content)["application_type"] == "web"
 
-    async def test_invalid_application_type_rejected_locally(self) -> None:
-        with pytest.raises(ValueError, match="application_type"):
-            await register_client(_REGISTER_URL, _REDIRECT_URI, application_type="desktop")
-
 
 class TestCimdClientId:
     def test_valid_url_returned_unchanged(self) -> None:
@@ -1300,19 +1422,19 @@ class TestCimdClientId:
         assert cimd_client_id(url) == url
 
     def test_http_scheme_rejected(self) -> None:
-        with pytest.raises(ValueError, match="https"):
+        with pytest.raises(ConfigurationError, match="https"):
             cimd_client_id("http://app.example.com/client.json")
 
     def test_missing_path_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path"):
+        with pytest.raises(ConfigurationError, match="path"):
             cimd_client_id("https://app.example.com")
 
     def test_bare_slash_path_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path"):
+        with pytest.raises(ConfigurationError, match="path"):
             cimd_client_id("https://app.example.com/")
 
     def test_no_host_rejected(self) -> None:
-        with pytest.raises(ValueError, match="host"):
+        with pytest.raises(ConfigurationError, match="host"):
             cimd_client_id("https:///client.json")
 
     def test_valid_url_with_port_accepted(self) -> None:
@@ -1320,23 +1442,33 @@ class TestCimdClientId:
         assert cimd_client_id(url) == url
 
     def test_invalid_port_rejected(self) -> None:
-        with pytest.raises(ValueError, match="valid URL"):
+        with pytest.raises(ConfigurationError, match="valid URL"):
             cimd_client_id("https://app.example.com:notaport/client.json")
 
     def test_userinfo_rejected(self) -> None:
-        with pytest.raises(ValueError, match="username or password"):
+        with pytest.raises(ConfigurationError, match="username or password"):
             cimd_client_id("https://user:pass@app.example.com/client.json")  # pragma: allowlist secret
 
     def test_fragment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="fragment"):
+        with pytest.raises(ConfigurationError, match="fragment"):
             cimd_client_id("https://app.example.com/client.json#section")
 
+    def test_empty_fragment_delimiter_rejected(self) -> None:
+        """A bare delimiter still carries a fragment, as the rule for a declared issuer also reads it."""
+        with pytest.raises(ConfigurationError, match="fragment"):
+            cimd_client_id("https://app.example.com/client.json#")
+
+    def test_an_encoded_number_sign_in_the_path_is_accepted(self) -> None:
+        """An encoded number sign is part of the document's path, not a delimiter."""
+        url = "https://app.example.com/client%23one.json"
+        assert cimd_client_id(url) == url
+
     def test_dot_path_segment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path segment"):
+        with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/./client.json")
 
     def test_dotdot_path_segment_rejected(self) -> None:
-        with pytest.raises(ValueError, match="path segment"):
+        with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/../client.json")
 
     def test_non_public_host_accepted(self) -> None:
@@ -1348,6 +1480,13 @@ class TestCimdClientId:
         """
         url = "https://127.0.0.1/client.json"
         assert cimd_client_id(url) == url
+
+    def test_rejection_is_a_configuration_fault(self) -> None:
+        """The client identifier is the caller's own argument, as the server and registration URLs are."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            cimd_client_id("http://app.example.com/client.json")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert exc_info.value.retryable is False
 
 
 class TestEndToEndFlow:
@@ -1393,13 +1532,7 @@ class TestEndToEndFlow:
         reg = await register_client(registration_url, _REDIRECT_URI, transport_factory=transport_factory)
         assert reg.client_id == "dcr-client"
 
-        config = to_provider_config(
-            meta,
-            client_id=reg.client_id,
-            client_secret=reg.client_secret,
-            registered_auth_method=reg.token_endpoint_auth_method,
-            redirect_uri=_REDIRECT_URI,
-        )
+        config = to_provider_config(meta, reg, redirect_uri=_REDIRECT_URI)
         assert config.token_url == "https://auth.example.com/token"
         assert config.use_pkce is True
 
@@ -1440,10 +1573,5 @@ class TestEndToEndFlow:
             token_endpoint_auth_methods=["client_secret_post"],
         )
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
-        config = to_provider_config(
-            meta,
-            client_id=reg.client_id,
-            client_secret=reg.client_secret,
-            registered_auth_method=reg.token_endpoint_auth_method,
-        )
+        config = to_provider_config(meta, reg)
         assert config.token_endpoint_auth_method == "client_secret_basic"

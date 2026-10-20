@@ -37,19 +37,46 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
 )
 
 
-class TokenEndpointAuthMethod:
-    """RFC 7591/8414 token_endpoint_auth_method values."""
+@unique
+class TokenEndpointAuthMethod(StrEnum):
+    """Each member is one token-endpoint authentication method this library can perform.
 
-    CLIENT_SECRET_POST = "client_secret_post"  # pragma: allowlist secret
-    CLIENT_SECRET_BASIC = "client_secret_basic"  # pragma: allowlist secret
-    NONE = "none"
+    A member's value is the method's registered name (RFC 7591/8414), which is what goes on the wire, and a
+    member is declared as ``(value, requires_secret)``.
+
+    Attributes:
+        requires_secret: Whether a client authenticating with this method sends a client secret.
+            A client that does not is a public client, which presents no client authentication.
+    """
+
+    _requires_secret: bool
+
+    def __new__(cls, value: str, requires_secret: bool) -> TokenEndpointAuthMethod:
+        """Create a member that carries whether its client sends a secret."""
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member._requires_secret = requires_secret
+        return member
+
+    @property
+    def requires_secret(self) -> bool:
+        """Whether a client authenticating with this method sends a client secret."""
+        return self._requires_secret
+
+    CLIENT_SECRET_BASIC = ("client_secret_basic", True)  # pragma: allowlist secret
+    CLIENT_SECRET_POST = ("client_secret_post", True)  # pragma: allowlist secret
+    NONE = ("none", False)
 
 
-class ApplicationType:
-    """RFC 7591/OpenID Connect application_type values."""
+@unique
+class ApplicationType(StrEnum):
+    """Each member is one client application type a registration request can declare.
 
-    WEB = "web"
+    A member's value is the type's registered name (RFC 7591/OpenID Connect Dynamic Client Registration 1.0).
+    """
+
     NATIVE = "native"
+    WEB = "web"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -396,7 +423,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     scopes: list[str] = []
     scope_separator: str = " "
     use_pkce: bool = True
-    token_endpoint_auth_method: str = TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    token_endpoint_auth_method: TokenEndpointAuthMethod = TokenEndpointAuthMethod.CLIENT_SECRET_POST
     extra_params: dict[str, str] = {}
     disconnect_fully_revokes: bool = False
     scope_metadata: list[ScopeMetadata] = []
@@ -414,11 +441,10 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
         """Reject a config whose secret presence contradicts its auth method.
 
-        The ``token_endpoint_auth_method`` decides the client type, and the
-        secret must agree. A public client declares ``"none"`` and carries no
-        secret; presenting one would attach client credentials to requests a
-        public client must send unauthenticated. Any other method is a
-        confidential client, for which the secret is mandatory.
+        The ``token_endpoint_auth_method`` decides the client type, and the secret must agree.
+        A method that requires no secret is a public client, and presenting one would attach client
+        credentials to requests a public client must send unauthenticated.
+        Every other method requires the secret it sends.
 
         Returns:
             The validated config, unchanged.
@@ -427,7 +453,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             ValueError: If a public client carries a secret, or a
                 confidential client lacks one.
         """
-        is_public = self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE
+        is_public = not self.token_endpoint_auth_method.requires_secret
         if is_public and self.client_secret is not None:
             msg = f"client_secret must be omitted when token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
             raise ValueError(msg)
@@ -552,16 +578,18 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     def basic_auth(self) -> tuple[str, str] | None:
         """Return the client's HTTP Basic credential, or None for a public client.
 
-        A public client declares a ``token_endpoint_auth_method`` of ``"none"``,
-        presents no client authentication, and returns None. A confidential
-        client authenticates with its ``client_id`` and ``client_secret``. The
-        declared method drives the decision, so a public client presents no
-        credential even if a secret lingers on the config.
+        A public client declares a ``token_endpoint_auth_method`` of ``"none"``, presents no client
+        authentication, and returns None.
+        A confidential client authenticates with its ``client_id`` and ``client_secret``.
+        The declared method drives the decision, so a public client presents no credential even if a secret
+        lingers on the config.
 
         Returns:
             The ``(client_id, client_secret)`` pair for a confidential
             client, or ``None`` for a public client.
         """
+        # NOTE: This compares the value rather than reading the member's facts, because a config built
+        # without validation holds whatever was passed, which may be a plain string.
         if self.token_endpoint_auth_method == TokenEndpointAuthMethod.NONE:
             return None
         if self.client_secret is None:
@@ -673,32 +701,29 @@ class ServerMetadata(BaseModel, frozen=True):
 
 
 class ClientRegistration(BaseModel, frozen=True):
-    """Client credentials issued by RFC 7591 dynamic client registration.
+    """A client's credentials at one authorization server.
 
-    The issued ``client_id`` and ``client_secret`` are bound to the
-    authorization server that minted them and are not valid at any other
-    authorization server.
+    RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
+    Client ID Metadata Document (CIMD) states its own.
 
-    NOTE: a caller that persists these credentials must store them keyed by
-    the minting issuer (the ``issuer`` of the ``ServerMetadata`` whose
-    ``registration_url`` produced them) and must not present them to a
-    different authorization server; this library is stateless and holds no
-    credentials, so it cannot enforce the binding on the caller's behalf.
+    NOTE: Credentials an authorization server issued are not valid at any other authorization server.
+    A caller that persists them must store them keyed by the minting issuer (the ``issuer`` of the
+    ``ServerMetadata`` whose ``registration_url`` produced them) and must not present them to a different
+    authorization server. This library is stateless and holds no credentials, so it cannot enforce the
+    binding on the caller's behalf.
 
     Attributes:
-        client_id: The client identifier issued by the registration
-            endpoint.
-        client_secret: The issued client secret for a confidential client;
-            ``None`` for a public client.
-        token_endpoint_auth_method: The token-endpoint authentication method
-            the server registered for this client. It is authoritative for
-            this client and may differ from the server's advertised set, and
-            is ``None`` when the registration response states no method.
+        client_id: The client identifier, issued by a registration endpoint, registered out of band, or a
+            CIMD client identifier URL.
+        client_secret: The client secret for a confidential client; ``None`` for a public client.
+        token_endpoint_auth_method: The token-endpoint authentication method the server registered for this
+            client. It is authoritative for this client and may differ from the server's advertised set,
+            and is ``None`` when no method was registered.
     """
 
     client_id: str
     client_secret: SecretStr | None = None
-    token_endpoint_auth_method: str | None = None
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
 
 class TokenSet(BaseModel, frozen=True):

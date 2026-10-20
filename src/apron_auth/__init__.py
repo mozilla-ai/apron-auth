@@ -30,6 +30,7 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    ApplicationType,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -54,6 +55,7 @@ from apron_auth.stores import MemoryStateStore
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
+    "ApplicationType",
     "ClientRegistration",
     "ConfigurationError",
     "FailureKind",
