@@ -1236,4 +1236,4 @@ class TestScopeSeparator:
             )
 
     def test_every_provider_member_states_a_usable_separator(self) -> None:
-        assert all(member.scope_separator for member in Provider)
+        assert [member.name for member in Provider if not member.scope_separator] == []
