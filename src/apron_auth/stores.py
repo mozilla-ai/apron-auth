@@ -43,7 +43,7 @@ class MemoryStateStore:
 
     Expiry is based on wall-clock time (time.time) to match
     OAuthPendingState.created_at, which stores epoch seconds.
-    A state exactly ``max_age`` old is still current, which is where the code exchange draws the line too.
+    A state exactly ``max_age`` old is still current, and one past it is not.
     """
 
     def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
@@ -93,16 +93,15 @@ class MemoryStateStore:
     def _is_expired(self, state: OAuthPendingState) -> bool:
         """Report whether ``state`` is no longer current against the system clock.
 
-        The creation time is compared against thresholds taken from the clock, so a value outside the
-        float range is answered rather than raising. A creation time further ahead of the clock than the
-        allowed difference is not current either, because no nearby clock produced it.
+        A creation time further ahead of the clock than the allowed clock difference is not current
+        either, because no nearby clock produced it.
 
         Args:
             state: The pending state to test.
 
         Returns:
-            ``True`` when the creation time is not a finite number, lies too far ahead of the clock,
-            or is older than ``max_age``.
+            ``True`` when the creation time is not a finite number, lies further ahead of the clock
+            than the allowed clock difference, or is older than ``max_age``.
         """
         created_at = finite_number(state.created_at)
         if created_at is None:
