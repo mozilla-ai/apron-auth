@@ -857,7 +857,9 @@ class OAuthClient:
         """
         scope = query.get("scope")
         values = [scope] if isinstance(scope, str) else scope or []
-        delimiters = {",", self._config.scope_separator} - {""}
+        # NOTE: ProviderConfig refuses an empty separator, so no delimiter here is empty. An empty one
+        # would split every character into its own word, and a request for openid would read as asking for none.
+        delimiters = {",", self._config.scope_separator}
         words: set[str] = set()
         for value in values:
             for delimiter in delimiters:

@@ -99,6 +99,7 @@ class ProviderFacts:
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
         scope_separator: The string the provider's scope parameter is joined with.
+            NOTE: It must not be empty, as :attr:`ProviderConfig.scope_separator` requires.
     """
 
     can_assert_domain_ownership: bool
@@ -309,6 +310,10 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     one cannot be dropped silently and leave the config weaker than the caller asked for.
 
     Attributes:
+        scope_separator: The delimiter the ``scope`` request parameter is joined with,
+            and the one a granted scope string is split on.
+            An empty value is refused at construction.
+            Defaults to a single space (RFC 6749 section 3.3).
         extra_params: Fixed parameters added to every authorization request.
             A reserved parameter is refused at construction, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
@@ -521,6 +526,21 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             raise ValueError(msg)
         if not urlparse(self.resource).scheme:
             msg = "resource must be an absolute URI when set"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _scope_separator_is_not_empty(self) -> ProviderConfig:
+        """Reject a separator that no scope string can be split on.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``scope_separator`` is empty.
+        """
+        if not self.scope_separator:
+            msg = "scope_separator must not be empty"
             raise ValueError(msg)
         return self
 
