@@ -352,6 +352,20 @@ class TestProviderConfig:
         assert config.require_iss is False
 
 
+class TestProviderConfigUnknownFields:
+    @pytest.mark.parametrize("field", ["allow_identity_inference", "redirect_url"])
+    def test_rejects_a_field_it_does_not_define(self, field: str) -> None:
+        """A field this model does not define is refused, so a renamed or mistyped one cannot be dropped."""
+        with pytest.raises(ValidationError, match=field):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                **{field: False},
+            )
+
+
 class TestProviderConfigValidateIssuer:
     def _config(self, **overrides: object) -> ProviderConfig:
         defaults: dict[str, object] = {

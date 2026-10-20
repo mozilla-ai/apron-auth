@@ -272,8 +272,11 @@ class ScopeMetadata(BaseModel, frozen=True):
     required: bool = False
 
 
-class ProviderConfig(BaseModel, frozen=True):
+class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
+
+    A field this model does not define is refused, so a renamed or mistyped one cannot be dropped
+    silently and leave the config weaker than the caller asked for.
 
     Attributes:
         extra_params: Fixed parameters added to every authorization request.
