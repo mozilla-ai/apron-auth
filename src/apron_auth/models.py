@@ -227,11 +227,11 @@ class ProviderConfig(BaseModel, frozen=True):
             resource. ``None`` (the default) emits no ``resource`` parameter
             anywhere, preserving behavior for providers that do not use
             resource indicators.
-        allow_identity_inference: Not consulted. :attr:`provider` decides which built-in identity handler
-            applies, so a config's endpoint hosts never select one.
-            Defaults to ``True``.
-            NOTE: A config that names a provider gets that provider's identity handler even when this
-            is ``False``.
+        allow_identity_inference: Whether this library may establish identity with the identity handler
+            of the provider :attr:`provider` names.
+            Set ``False`` to leave a handler passed to :class:`~apron_auth.client.OAuthClient` as the
+            only source of identity. A config that names no provider has no handler of its own either
+            way. Defaults to ``True``.
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).

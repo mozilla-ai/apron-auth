@@ -200,7 +200,8 @@ def to_provider_config(
     The RFC 8707 resource indicator defaults to the discovered protected-resource
     identifier and can be overridden by ``resource``.
 
-    The returned config names no built-in provider, and no parameter names one.
+    The returned config names no built-in provider and allows no provider's identity handler,
+    and no parameter changes either.
     An authorization server's host does not decide which identity contract applies to its tokens.
 
     NOTE: Callers must supply an explicit identity handler to fetch identity with the returned config.

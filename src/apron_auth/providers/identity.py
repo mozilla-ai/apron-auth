@@ -27,14 +27,15 @@ def identity_handler(config: ProviderConfig) -> IdentityHandler | None:
         config: The provider configuration identity is established under.
 
     Returns:
-        A new handler for the named provider, or ``None`` when the config names no provider.
+        A new handler for the named provider, or ``None`` when the config names no provider or
+        allows no handler of its own.
 
     Raises:
         ConfigurationError: If the config's authorization and token endpoints are not hosts of
             the provider it names.
     """
     provider = config.provider
-    if provider is None:
+    if provider is None or not config.allow_identity_inference:
         return None
     if not oauth_hosts_match(config, provider.host_suffixes):
         msg = (
