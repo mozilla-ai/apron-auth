@@ -427,9 +427,11 @@ needs no consent beyond the `User.Read` scope already in the preset's
 #### Refusing incapable providers at startup
 
 `ProviderConfig.can_assert_domain_ownership` declares whether a
-preset's tokens can *in principle* carry a domain-owning tenancy.
-Consumers building a domain-gated tenancy flow can reject incapable
-providers at startup, rather than discovering the gap at login time:
+provider's tokens can *in principle* carry a domain-owning tenancy. A
+config that names a provider takes the answer from that provider, and a
+config that names none carries its own. Consumers building a
+domain-gated tenancy flow can reject incapable providers at startup,
+rather than discovering the gap at login time:
 
 ```python
 config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
@@ -779,6 +781,8 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - A config that names a provider whose host suffixes do not cover both its authorization and token endpoints raises `ConfigurationError` from `fetch_identity`, where it used to raise `IdentityNotSupportedError`. Pass your own `identity_handler` for a deployment on other hosts.
 - `ProviderConfig.allow_identity_inference` is now `use_builtin_identity_handler`, because a config names its provider rather than having one inferred from its hosts. It still refuses that provider's handler when `False`.
 - `apron_auth.providers.identity`, each provider module's `maybe_identity_handler` and `IDENTITY_RESOLVER`, and `apron_auth.protocols.IdentityResolver` are gone. `apron_auth.providers.identity_handler_for(config)` returns the handler a config resolves to.
+- A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
+- `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
 
 ## Logging
 
