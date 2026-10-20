@@ -213,6 +213,17 @@ class TestProviderConfig:
         else:
             build()
 
+    def test_a_dump_carries_the_auth_method_as_the_member_and_as_its_name_in_json_mode(self) -> None:
+        config = ProviderConfig(
+            client_id="c",
+            client_secret=SecretStr("s"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            token_endpoint_auth_method="client_secret_basic",
+        )
+        assert config.model_dump()["token_endpoint_auth_method"] is TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
+        assert config.model_dump(mode="json")["token_endpoint_auth_method"] == "client_secret_basic"
+
     def test_an_auth_method_this_library_cannot_perform_is_refused(self) -> None:
         """A method outside the closed set would be sent to the token endpoint and rejected there."""
         with pytest.raises(ValidationError):
