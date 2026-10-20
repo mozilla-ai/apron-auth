@@ -1,8 +1,9 @@
-"""Every URL rule states where its value came from.
+"""A refused URL is classified by where its value came from.
 
-The class a refused URL raises follows the source of its value.
 A value this library's caller passed is a configuration fault,
 and one read out of a fetched document is a refusal of what the other side sent.
+Each call to a URL rule therefore names its value's source, which a guard over the library's
+own source reads syntactically: it holds every call to the convention, not to a correct answer.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from apron_auth.errors import FailureKind, OidcDiscoveryError
 from apron_auth.mcp import _validate_url
 from apron_auth.providers._openid_documents import require_url
 
@@ -24,8 +26,8 @@ if TYPE_CHECKING:
 SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 # Every module of that tree, one parametrized case each.
 MODULES = sorted(SRC.rglob("*.py"))
-# The URL rules whose refusal follows the source, so every call to one names it.
-URL_RULES = {"_validate_url", "require_url"}
+# The URL rules whose refusal follows the source, named so a rename cannot leave the guard passing.
+URL_RULES = {rule.__name__ for rule in (_validate_url, require_url)}
 
 
 def _called_name(func: ast.expr) -> str | None:
@@ -82,3 +84,33 @@ def test_a_url_rule_takes_no_default_for_the_source(rule: Callable[..., object])
 
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+@pytest.mark.parametrize("is_issuer", [False, True], ids=["endpoint", "issuer"])
+@pytest.mark.parametrize(
+    ("caller_supplied", "expected"),
+    [(False, FailureKind.REFUSED), (True, FailureKind.CONFIGURATION)],
+    ids=["document", "caller"],
+)
+def test_the_source_alone_decides_the_kind(caller_supplied: bool, expected: FailureKind, is_issuer: bool) -> None:
+    with pytest.raises(OidcDiscoveryError) as exc_info:
+        require_url(
+            "http://idp.example/endpoint",
+            field="endpoint",
+            allow_insecure_http=False,
+            caller_supplied=caller_supplied,
+            is_issuer=is_issuer,
+        )
+
+    assert exc_info.value.kind is expected
+
+
+def test_the_issuer_flag_selects_rules_and_not_a_source() -> None:
+    """An issuer carries no query, and a value the caller passed stays the caller's either way."""
+    with_a_query = "https://idp.example/endpoint?tenant=acme"
+    require_url(with_a_query, field="endpoint", allow_insecure_http=False, caller_supplied=True)
+
+    with pytest.raises(OidcDiscoveryError, match="must not carry a query") as exc_info:
+        require_url(with_a_query, field="issuer", allow_insecure_http=False, caller_supplied=True, is_issuer=True)
+
+    assert exc_info.value.kind is FailureKind.CONFIGURATION
