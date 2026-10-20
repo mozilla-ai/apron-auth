@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore
@@ -76,6 +77,27 @@ class TestMemoryStateStore:
         pending = _make_pending(age=300.0)
         await store.save(pending)
         _freeze_store_clock(monkeypatch, pending.created_at + 300.001)
+
+        assert await store.consume(pending.state) is None
+
+    async def test_consume_a_state_at_the_clock_difference_ahead_returns_state(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A creation time the allowed clock difference ahead is still current, because clocks differ."""
+        store = MemoryStateStore(max_age=300.0)
+        pending = _make_pending()
+        await store.save(pending)
+        _freeze_store_clock(monkeypatch, pending.created_at - CLOCK_SKEW_SECONDS)
+
+        assert await store.consume(pending.state) == pending
+
+    async def test_consume_a_state_past_the_clock_difference_ahead_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        store = MemoryStateStore(max_age=300.0)
+        pending = _make_pending()
+        await store.save(pending)
+        _freeze_store_clock(monkeypatch, pending.created_at - CLOCK_SKEW_SECONDS - 0.001)
 
         assert await store.consume(pending.state) is None
 
