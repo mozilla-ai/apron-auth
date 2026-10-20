@@ -1163,6 +1163,28 @@ class TestRegisterClient:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert exc_info.value.kind is FailureKind.REFUSED
 
+    @pytest.mark.parametrize("stated", ["", 7, ["s"], {"value": "s"}])
+    async def test_stated_secret_this_library_cannot_use_raises(self, httpx_mock: HTTPXMock, stated: object) -> None:
+        """The response states the secret, so it meets the test its client_id meets, where the response is read.
+
+        An empty secret authenticates nothing, so a response stating one states a credential that cannot be
+        used, as a response stating a secret that is not text does.
+        """
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "client_secret": stated},
+        )
+        with pytest.raises(McpRegistrationError, match="client secret") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_secret_stated_as_null_states_a_public_client(self, httpx_mock: HTTPXMock) -> None:
+        """A member stated as null states no value, as an absent member does."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "pub", "client_secret": None})
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_secret is None
+
     async def test_a_stated_method_is_the_enum_member(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url=_REGISTER_URL,
@@ -1185,6 +1207,8 @@ class TestRegisterClient:
             # A body refused for its stated method carries the issued secret too.
             # That refusal also sits next to a ValueError that repeats the stated method.
             {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "private_key_jwt"},
+            # A secret this library cannot use can still hold one, nested where it cannot be read.
+            {"client_id": "x", "client_secret": {"value": _LEAKED_SECRET}},
         ],
     )
     async def test_registration_error_never_leaks_client_secret(

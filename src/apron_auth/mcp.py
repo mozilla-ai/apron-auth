@@ -329,10 +329,11 @@ async def register_client(
         ConfigurationError: If ``registration_url`` is rejected.
         McpRegistrationError: If the request fails in transit, the endpoint returns
             a non-success status, its response is not a JSON object with a usable
-            ``client_id``, or the response states a token-endpoint authentication
-            method this library cannot perform. That last one leaves a
-            registration standing at the authorization server, because the server
-            issued the credentials this call then discards.
+            ``client_id``, or the response states a client secret this library
+            cannot use or a token-endpoint authentication method it cannot
+            perform. Either of those last two leaves a registration standing at
+            the authorization server, because the server issued the credentials
+            this call then discards.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
@@ -380,6 +381,12 @@ async def register_client(
         msg = "client registration response is missing client_id"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = data.get("client_secret")
+    if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
+        msg = (
+            "client registration states a client secret this library cannot use, "
+            "so the issued credentials were discarded"
+        )
+        raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     stated_method = data.get("token_endpoint_auth_method")
     registered_method = None
     if stated_method is not None:
@@ -392,7 +399,7 @@ async def register_client(
             raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     return ClientRegistration(
         client_id=client_id,
-        client_secret=SecretStr(client_secret) if isinstance(client_secret, str) else None,
+        client_secret=SecretStr(client_secret) if client_secret is not None else None,
         token_endpoint_auth_method=registered_method,
     )
 
