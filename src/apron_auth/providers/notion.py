@@ -189,12 +189,14 @@ class NotionRevocationHandler:
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
-        auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
+        auth = config.basic_auth()
         try:
             response = await client.post(
                 revocation_url,
                 json={"token": token},
-                auth=auth,
+                # Pass None (not USE_CLIENT_DEFAULT) for a public client so an injected client's default
+                # auth is never sent to the server-supplied revocation URL.
+                auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:
             failure = http_failure(exc)
