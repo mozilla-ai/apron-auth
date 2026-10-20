@@ -136,6 +136,23 @@ class TestCreationTimeThatCannotBeMeasured:
 
         assert await store.consume(pending.state) is None
 
+    async def test_the_pruning_scan_drops_the_entry_and_keeps_the_store_usable(self) -> None:
+        """One unusable entry must not take the whole store down, because every save scans them all."""
+        store = MemoryStateStore(max_age=300.0)
+        unusable = OAuthPendingState.model_construct(
+            state="unusable-state",
+            redirect_uri="https://app.example.com/callback",
+            code_verifier="test-verifier",
+            created_at=10**400,
+        )
+        await store.save(unusable)
+
+        fresh = _make_pending(state="fresh")
+        await store.save(fresh)
+
+        assert await store.consume(fresh.state) == fresh
+        assert await store.consume(unusable.state) is None
+
     async def test_a_creation_time_ahead_of_the_clock_expires_the_entry(self) -> None:
         """A stamp no nearby clock produced is unusable, as the code exchange also treats it."""
         store = MemoryStateStore(max_age=300.0)
