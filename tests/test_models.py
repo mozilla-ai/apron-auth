@@ -442,6 +442,45 @@ class TestProviderConfigUnknownFields:
             )
 
 
+class TestProviderConfigEndpointCredentials:
+    @pytest.mark.parametrize("field", ["authorize_url", "revocation_url", "token_url"])
+    @pytest.mark.parametrize(
+        "authority",
+        [
+            pytest.param("operator:sesame@", id="a user and a password"),  # pragma: allowlist secret
+            pytest.param("operator@", id="a user alone"),
+            pytest.param("@", id="an empty user"),
+        ],
+    )
+    def test_rejects_a_credential_in_an_endpoint_authority(self, field: str, authority: str) -> None:
+        """A public client states no credential of its own, so a request would present the one the URL carries."""
+        endpoints = {
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+        }
+        endpoints[field] = f"https://{authority}provider.example.com/endpoint"
+
+        with pytest.raises(ValidationError, match="must not carry userinfo"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                **endpoints,
+            )
+
+    def test_the_refusal_message_repeats_neither_the_user_nor_the_password(self) -> None:
+        """The message is what this model controls, and it reaches a log naming only the field."""
+        with pytest.raises(ValidationError) as exc_info:
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://operator:sesame@provider.example.com/token",  # pragma: allowlist secret
+            )
+
+        messages = " ".join(error["msg"] for error in exc_info.value.errors())
+        assert messages == "Value error, token_url must not carry userinfo"
+
+
 class TestProviderConfigKeepsTheCallersMapping:
     def test_validation_adds_no_key_to_the_mapping_it_was_given(self) -> None:
         """A caller that reuses or re-persists its mapping must not find a provider's facts in it."""

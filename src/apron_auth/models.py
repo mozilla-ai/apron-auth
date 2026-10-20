@@ -310,6 +310,9 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
     one cannot be dropped silently and leave the config weaker than the caller asked for.
 
+    An endpoint carries no userinfo, because a request would present that as a credential and a log
+    could record it.
+
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
             and the one a granted scope string is split on.
@@ -466,6 +469,34 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         if not is_public and self.client_secret is None:
             msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _endpoint_urls_carry_no_userinfo(self) -> ProviderConfig:
+        """Reject an endpoint whose authority carries a credential this client would present.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If an endpoint URL carries userinfo.
+        """
+        for field, url in (
+            ("authorize_url", self.authorize_url),
+            ("revocation_url", self.revocation_url),
+            ("token_url", self.token_url),
+        ):
+            if url is None:
+                continue
+            try:
+                username = urlparse(url).username
+            except ValueError as exc:
+                # The parser states no field, so the refusal names the one that failed.
+                msg = f"{field} is malformed"
+                raise ValueError(msg) from exc
+            if username is not None:
+                msg = f"{field} must not carry userinfo"
+                raise ValueError(msg)
         return self
 
     @model_validator(mode="after")
