@@ -93,15 +93,16 @@ class MemoryStateStore:
     def _is_expired(self, state: OAuthPendingState) -> bool:
         """Report whether ``state`` is no longer current against the system clock.
 
-        A creation time further ahead of the clock than the allowed clock difference is not current
-        either, because no nearby clock produced it.
+        A creation time further ahead of the clock than the allowed clock difference is not current either,
+        because no nearby clock produced it.
 
         Args:
             state: The pending state to test.
 
         Returns:
-            ``True`` when the creation time is not a finite number, lies further ahead of the clock
-            than the allowed clock difference, or is older than this store's maximum age.
+            ``True`` when the creation time is not a finite number,
+            lies further ahead of the clock than the allowed clock difference,
+            or is older than this store's maximum age.
         """
         created_at = finite_number(state.created_at)
         if created_at is None:
