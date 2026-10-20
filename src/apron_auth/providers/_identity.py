@@ -16,19 +16,19 @@ if TYPE_CHECKING:
 def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
     """Build the identity handler of the provider ``config`` names.
 
-    The provider's endpoint hosts are a condition rather than a selector: a config that names a
-    provider its endpoints do not belong to is refused, because a handler may derive the endpoint
-    it sends the access token to from the config.
+    The provider's endpoint hosts are a condition rather than a selector.
+    A config that names a provider its endpoints do not belong to is refused, because a handler may
+    derive the endpoint it sends the access token to from the config.
 
     Args:
-        config: The provider configuration identity is established under.
+        config: The provider configuration to establish identity under.
 
     Returns:
         A new handler for the named provider, or ``None`` when the config names no provider or
         allows no handler of its own.
 
     Raises:
-        ConfigurationError: If the config's authorization and token endpoints are not hosts of
+        ConfigurationError: If either the config's authorization or token endpoint is not a host of
             the provider it names.
     """
     provider = config.provider
@@ -36,10 +36,9 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
         return None
     if not oauth_hosts_match(config, provider.host_suffixes):
         msg = (
-            f"The authorization and token endpoints must both be {provider.display_name} hosts for the "
-            f"built-in {provider.display_name} identity handler to apply. Pass an identity handler that "
-            f"accepts the configured endpoints, or name no provider for a server that is not "
-            f"{provider.display_name}'s."
+            f"The authorization and token endpoints must both be {provider.display_name} hosts for its "
+            f"built-in identity handler to apply. Pass an identity handler that accepts these endpoints, "
+            f"or name no provider for a server that is not {provider.display_name}'s."
         )
         raise ConfigurationError(msg)
     # A registry would import every provider module. Resolving by name imports only the named one.

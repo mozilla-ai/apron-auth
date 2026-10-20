@@ -64,9 +64,9 @@ class Provider(StrEnum):
             :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences, and the
             provider's module docstring records how the value was verified.
         scope_separator: The string the provider's scope parameter is joined with.
-        identity_handler_class_name: The name of the class in the member's module that fetches identity,
-            which takes no constructor arguments.
-            It is a name rather than the class itself, because every provider module imports this one.
+        identity_handler_class_name: The name of the class in the member's module that fetches identity.
+            The class takes no constructor arguments.
+            The member names it rather than holding it, because every provider module imports this one.
     """
 
     display_name: str

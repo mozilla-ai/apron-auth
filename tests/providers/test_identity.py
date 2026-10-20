@@ -45,7 +45,7 @@ def test_endpoints_outside_the_named_provider_are_refused(provider: Provider) ->
     ],
 )
 def test_one_endpoint_on_the_provider_is_not_enough(authorize_host: str, token_host: str) -> None:
-    """Either endpoint off the provider's hosts is a config the handler must not be given."""
+    """A config with either endpoint off the provider's hosts must not reach the handler."""
     config = ProviderConfig(
         provider=Provider.GOOGLE,
         client_id="cid",
