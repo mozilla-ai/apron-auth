@@ -1257,7 +1257,7 @@ class TestRegisterClient:
         ],
     )
     async def test_registration_error_never_leaks_client_secret(
-        self, httpx_mock: HTTPXMock, body: dict[str, str]
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
     ) -> None:
         """A registration failure must not surface the issued secret anywhere.
 
