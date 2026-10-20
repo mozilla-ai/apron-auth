@@ -445,8 +445,11 @@ def cimd_client_id(url: str) -> str:
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
-    """Return the token-endpoint auth method a document states, or None when it names none this library performs."""
-    return next((method for method in TokenEndpointAuthMethod if method == value), None)
+    """Return the token-endpoint auth method a document states, or None when it is not one this library performs."""
+    try:
+        return TokenEndpointAuthMethod(value)
+    except ValueError:
+        return None
 
 
 def _select_auth_method(
