@@ -21,7 +21,7 @@ from apron_auth.errors import FailureKind, OidcDiscoveryError
 if TYPE_CHECKING:
     from apron_auth.protocols import TransportFactory
 
-# The documented logger for OpenID discovery, kept although these helpers moved out of that module.
+# The logger name is part of the documented interface, so it does not follow __name__.
 logger = logging.getLogger("apron_auth.providers.oidc")
 
 
@@ -108,7 +108,7 @@ def require_openid_issuer(document: dict[str, Any], expected: str) -> None:
         raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
 
 
-def optional_url(document: dict[str, Any], key: str, field: str, allow_insecure_http: bool) -> str | None:
+def optional_url(document: dict[str, Any], *, key: str, field: str, allow_insecure_http: bool) -> str | None:
     """Validate an optional endpoint when the document names one.
 
     The endpoint is a member of a fetched document, so an unacceptable one is a refusal of what
