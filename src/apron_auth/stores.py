@@ -38,15 +38,15 @@ class MemoryStateStore:
 
     Expiry is based on wall-clock time (time.time) to match
     OAuthPendingState.created_at, which stores epoch seconds.
-    A state is considered expired when its age >= max_age.
+    A state exactly ``max_age`` old is still current, which is where the code exchange draws the line too.
     """
 
     def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
         """Create the store.
 
         Args:
-            max_age: Maximum age in seconds before a stored state is
-                treated as expired.
+            max_age: The age, in seconds, past which a stored state is treated as expired.
+                A state exactly this old is still current.
         """
         self._states: dict[str, OAuthPendingState] = {}
         self._max_age = max_age
@@ -90,13 +90,13 @@ class MemoryStateStore:
 
         Returns:
             ``True`` when the creation time is not a finite number, lies too far ahead of the clock,
-            or is at least ``max_age`` old.
+            or is older than ``max_age``.
         """
         created_at = finite_number(state.created_at)
         if created_at is None:
             return True
         now = time.time()
-        return created_at > now + CLOCK_SKEW_SECONDS or created_at <= now - self._max_age
+        return created_at > now + CLOCK_SKEW_SECONDS or created_at < now - self._max_age
 
     def _prune(self) -> None:
         """Drop every stored state that has expired."""

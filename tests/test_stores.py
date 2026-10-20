@@ -6,6 +6,7 @@ import time
 
 import pytest
 
+from apron_auth import stores
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore
 from apron_auth.stores import MemoryStateStore
@@ -51,12 +52,23 @@ class TestMemoryStateStore:
         result = await store.consume(pending.state)
         assert result is None
 
-    async def test_consume_state_at_boundary_returns_none(self):
+    async def test_consume_state_at_boundary_returns_state(self, monkeypatch: pytest.MonkeyPatch):
+        """Exactly the limit is still current, which is where the code exchange draws the line too."""
         store = MemoryStateStore(max_age=300.0)
         pending = _make_pending(age=300.0)
         await store.save(pending)
-        result = await store.consume(pending.state)
-        assert result is None
+        # The clock is frozen, because the microseconds a live clock advances would carry the age past the limit.
+        monkeypatch.setattr(stores.time, "time", lambda: pending.created_at + 300.0)
+
+        assert await store.consume(pending.state) == pending
+
+    async def test_consume_state_past_the_boundary_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        store = MemoryStateStore(max_age=300.0)
+        pending = _make_pending(age=300.0)
+        await store.save(pending)
+        monkeypatch.setattr(stores.time, "time", lambda: pending.created_at + 300.001)
+
+        assert await store.consume(pending.state) is None
 
     async def test_consume_fresh_state_returns_state(self):
         store = MemoryStateStore(max_age=300.0)
