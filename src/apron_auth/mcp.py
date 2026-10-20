@@ -775,6 +775,7 @@ async def _fetch_first_metadata(
     """
     # Nothing has failed yet, and this seed is not retryable, so the first candidate's outcome replaces it.
     outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+    unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
         _validate_url(url, url_validator, caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
@@ -799,7 +800,6 @@ async def _fetch_first_metadata(
                 fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
                 outcome = _reported_outcome(outcome, _MetadataOutcome(fault, status.kind))
                 continue
-            unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
             try:
                 payload = decode_json_body(response)
             except ValueError:
