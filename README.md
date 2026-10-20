@@ -544,7 +544,7 @@ await client.revoke_token(tokens.access_token)
 
 ### State management
 
-If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one at its `max_age`, ten minutes by default, so with it the shorter of the two limits applies.
+If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one past its `max_age`, ten minutes by default, drawing the boundary where the exchange draws it, so with it the shorter of the two limits applies.
 
 ```python
 from apron_auth import StateStore, OAuthPendingState
@@ -785,6 +785,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `apron_auth.providers.identity`, each provider module's `maybe_identity_handler` and `IDENTITY_RESOLVER`, and `apron_auth.protocols.IdentityResolver` are gone. `apron_auth.providers.identity_handler_for(config)` returns the handler a config resolves to.
 - A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
 - `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
+- `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
 
 ## Logging
 
