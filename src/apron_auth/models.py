@@ -497,21 +497,6 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _scope_separator_is_not_empty(self) -> ProviderConfig:
-        """Reject a separator that no scope string can be split on.
-
-        Returns:
-            The validated config, unchanged.
-
-        Raises:
-            ValueError: If ``scope_separator`` is empty, which splitting a scope string refuses.
-        """
-        if not self.scope_separator:
-            msg = "scope_separator must not be empty"
-            raise ValueError(msg)
-        return self
-
-    @model_validator(mode="after")
     def _resource_is_absolute_uri(self) -> ProviderConfig:
         """Reject a resource indicator that is not an absolute URI without a fragment.
 
@@ -536,6 +521,21 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             raise ValueError(msg)
         if not urlparse(self.resource).scheme:
             msg = "resource must be an absolute URI when set"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _scope_separator_is_not_empty(self) -> ProviderConfig:
+        """Reject a separator that no scope string can be split on.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``scope_separator`` is empty, which splitting a scope string refuses.
+        """
+        if not self.scope_separator:
+            msg = "scope_separator must not be empty"
             raise ValueError(msg)
         return self
 
