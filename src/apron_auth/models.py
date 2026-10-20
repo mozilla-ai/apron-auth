@@ -309,9 +309,10 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     one cannot be dropped silently and leave the config weaker than the caller asked for.
 
     Attributes:
-        scope_separator: The delimiter the ``scope`` request parameter is joined with, and the one a
-            granted scope string is split on. Must not be empty, and an empty value is refused at
-            construction. Defaults to a single space (RFC 6749 section 3.3).
+        scope_separator: The delimiter the ``scope`` request parameter is joined with,
+            and the one a granted scope string is split on.
+            An empty value is refused at construction.
+            Defaults to a single space (RFC 6749 section 3.3).
         extra_params: Fixed parameters added to every authorization request.
             A reserved parameter is refused at construction, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
