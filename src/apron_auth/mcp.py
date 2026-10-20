@@ -448,13 +448,13 @@ def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
         The registration the response issued.
 
     Raises:
-        McpRegistrationError: If the response is missing its client identifier, states a client secret this
+        McpRegistrationError: If the response names no usable client identifier, states a client secret this
             library cannot use, states a token-endpoint authentication method it cannot perform, or states a
             method that contradicts the secret.
     """
     client_id = document.get("client_id")
     if not isinstance(client_id, str) or not client_id:
-        msg = "client registration response is missing client_id"
+        msg = "client registration response names no usable client_id"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = document.get("client_secret")
     if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):

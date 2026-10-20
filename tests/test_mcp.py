@@ -1232,10 +1232,15 @@ class TestRegisterClient:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
 
-    async def test_missing_client_id_raises(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": "s"})
-        with pytest.raises(McpRegistrationError):
+    @pytest.mark.parametrize("body", [{"client_secret": "s"}, {"client_id": ""}, {"client_id": 7}])
+    async def test_a_response_with_no_usable_client_id_raises(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """An identifier that is absent, empty or not text names no client, so none of the three is usable."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
+        with pytest.raises(McpRegistrationError, match="client_id") as exc_info:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     @pytest.mark.parametrize(
         "body",
