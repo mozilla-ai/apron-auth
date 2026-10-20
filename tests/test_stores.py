@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+import math
 import time
+
+import pytest
 
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore
@@ -85,3 +89,52 @@ class TestMemoryStateStore:
         fresh = _make_pending(state="fresh", age=599.0)
         await store.save(fresh)
         assert await store.consume(fresh.state) == fresh
+
+
+class TestCreationTimeThatCannotBeMeasured:
+    """Test that a creation time no clock produced expires the entry instead of raising."""
+
+    @pytest.mark.parametrize(
+        "created_at",
+        [
+            pytest.param(10**400, id="beyond the float range"),
+            pytest.param(math.inf, id="infinite"),
+            pytest.param(-math.inf, id="negatively infinite"),
+            pytest.param(math.nan, id="not a number"),
+        ],
+    )
+    async def test_an_unusable_creation_time_expires_the_entry(self, created_at: float) -> None:
+        store = MemoryStateStore(max_age=300.0)
+        pending = OAuthPendingState.model_construct(
+            state="test-state",
+            redirect_uri="https://app.example.com/callback",
+            code_verifier="test-verifier",
+            created_at=created_at,
+        )
+        await store.save(pending)
+
+        assert await store.consume(pending.state) is None
+
+    async def test_a_creation_time_ahead_of_the_clock_expires_the_entry(self) -> None:
+        """A stamp no nearby clock produced is unusable, as the code exchange also treats it."""
+        store = MemoryStateStore(max_age=300.0)
+        pending = _make_pending(age=-3600.0)
+        await store.save(pending)
+
+        assert await store.consume(pending.state) is None
+
+
+class TestExpiryLogLine:
+    """Test that dropping an entry reports why without carrying the state it dropped."""
+
+    async def test_the_line_carries_no_part_of_the_state_key(self, caplog: pytest.LogCaptureFixture) -> None:
+        store = MemoryStateStore(max_age=300.0)
+        pending = _make_pending(state="s3cr3t-state-key-value", age=301.0)
+        await store.save(pending)
+
+        with caplog.at_level(logging.DEBUG, logger="apron_auth.stores"):
+            assert await store.consume(pending.state) is None
+
+        assert caplog.text
+        for length in range(4, len(pending.state) + 1):
+            assert pending.state[:length] not in caplog.text

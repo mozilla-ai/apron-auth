@@ -6,6 +6,9 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
+from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._numbers import finite_number
+
 if TYPE_CHECKING:
     from apron_auth.models import OAuthPendingState
 
@@ -70,26 +73,30 @@ class MemoryStateStore:
         if pending is None:
             return None
         if self._is_expired(pending):
-            age = time.time() - pending.created_at
-            logger.debug(
-                "State %.8s… expired (age=%.1fs, max_age=%.1fs)",
-                state_key,
-                age,
-                self._max_age,
-            )
+            # NOTE: A state key identifies one user's authorization attempt, so no part of it is logged.
+            logger.debug("Dropped a pending authorization request that is no longer current")
             return None
         return pending
 
     def _is_expired(self, state: OAuthPendingState) -> bool:
-        """Report whether ``state`` has reached the configured maximum age.
+        """Report whether ``state`` is no longer current against the system clock.
+
+        The creation time is compared against thresholds taken from the clock, so a value outside the
+        float range is answered rather than raising. A creation time further ahead of the clock than the
+        allowed difference is not current either, because no nearby clock produced it.
 
         Args:
             state: The pending state to test.
 
         Returns:
-            ``True`` when the state's age is at least ``max_age``.
+            ``True`` when the creation time is not a finite number, lies too far ahead of the clock,
+            or is at least ``max_age`` old.
         """
-        return time.time() - state.created_at >= self._max_age
+        created_at = finite_number(state.created_at)
+        if created_at is None:
+            return True
+        now = time.time()
+        return created_at > now + CLOCK_SKEW_SECONDS or created_at <= now - self._max_age
 
     def _prune(self) -> None:
         """Drop every stored state that has expired."""
