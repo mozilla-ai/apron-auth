@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import Any, Literal, NoReturn
@@ -511,7 +512,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             A mapping with each stated fact filled in where it was left out, leaving the caller's own
             mapping as it was.
         """
-        if not isinstance(data, dict):
+        if not isinstance(data, Mapping):
             return data
         try:
             member = Provider(data["provider"])
