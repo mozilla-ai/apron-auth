@@ -37,6 +37,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
+from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import ConfigurationError, FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
@@ -254,8 +255,9 @@ def to_provider_config(
     Raises:
         McpDiscoveryError: If the registration's method disagrees with its
             secret, or the server advertises no method the client can satisfy.
-        ValidationError: If the effective ``resource`` — supplied or discovered —
-            is not a valid absolute URI without a fragment.
+        ValidationError: If a URL the metadata states carries a credential in its
+            authority, or the effective ``resource`` — supplied or discovered — is
+            not a valid absolute URI without a fragment.
     """
     secret = registration.client_secret
     methods = metadata.code_challenge_methods
@@ -417,7 +419,7 @@ def cimd_client_id(url: str) -> str:
     if not parsed.hostname:
         msg = "CIMD client_id must be an https URL with a host"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
-    if parsed.username is not None or parsed.password is not None:
+    if authority_credential(url) is not AuthorityCredential.ABSENT:
         msg = "CIMD client_id must not contain a username or password"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     # The delimiter is checked, so an empty fragment counts, as it does for a declared issuer.
@@ -713,10 +715,14 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg, kind=kind)
-    # Userinfo would be sent as credentials with the request, and could reach a log through the URL.
-    if parsed.username is not None:
-        msg = "MCP OAuth refused a URL that carries userinfo"
-        raise error_cls(msg, kind=kind)
+    match authority_credential(url):
+        case AuthorityCredential.ABSENT:
+            pass
+        case AuthorityCredential.MALFORMED:
+            raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind)
+        case AuthorityCredential.PRESENT:
+            msg = "MCP OAuth refused a URL that carries userinfo"
+            raise error_cls(msg, kind=kind)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
         raise error_cls(msg, kind=kind)

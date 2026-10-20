@@ -165,7 +165,7 @@ def test_the_issuer_rules_refuse_a_query() -> None:
 def test_every_url_refuses_a_credential_in_its_authority(
     value: str, caller_supplied: bool, expected: FailureKind, is_issuer: bool
 ) -> None:
-    """A public client states no credential of its own, so the request would present the URL's."""
+    """A delimiter in the authority is refused whether or not it carries a value, so the rule stays one rule."""
     with pytest.raises(OidcDiscoveryError, match="must not carry userinfo") as exc_info:
         require_url(
             value,
@@ -202,3 +202,20 @@ def test_a_url_that_cannot_be_requested_is_refused_by_its_source(value: str) -> 
         require_url(value, field="document URL", allow_insecure_http=False, caller_supplied=True)
 
     assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+
+# The one module allowed to decide whether an authority carries a credential.
+CREDENTIAL_RULE = "_urls.py"
+
+
+@pytest.mark.parametrize("module", MODULES, ids=lambda path: path.name)
+def test_only_one_module_decides_whether_an_authority_carries_a_credential(module: Path) -> None:
+    """Five rules refuse a credential in an authority, and a sixth definition of one would not be checked."""
+    if module.name == CREDENTIAL_RULE:
+        return
+    tree = ast.parse(module.read_text(), filename=str(module))
+    reads = [
+        node for node in ast.walk(tree) if isinstance(node, ast.Attribute) and node.attr in {"username", "password"}
+    ]
+
+    assert reads == [], f"{module.name} reads the authority itself; call authority_credential instead"

@@ -443,7 +443,7 @@ class TestProviderConfigUnknownFields:
 
 
 class TestProviderConfigEndpointCredentials:
-    @pytest.mark.parametrize("field", ["authorize_url", "revocation_url", "token_url"])
+    @pytest.mark.parametrize("field", ["authorize_url", "redirect_uri", "revocation_url", "token_url"])
     @pytest.mark.parametrize(
         "authority",
         [
@@ -453,7 +453,7 @@ class TestProviderConfigEndpointCredentials:
         ],
     )
     def test_rejects_a_credential_in_an_endpoint_authority(self, field: str, authority: str) -> None:
-        """A public client states no credential of its own, so a request would present the one the URL carries."""
+        """A delimiter in the authority is refused whether or not it carries a value, so the rule stays one rule."""
         endpoints = {
             "authorize_url": "https://provider.example.com/authorize",
             "token_url": "https://provider.example.com/token",
@@ -467,8 +467,8 @@ class TestProviderConfigEndpointCredentials:
                 **endpoints,
             )
 
-    def test_the_refusal_message_repeats_neither_the_user_nor_the_password(self) -> None:
-        """The message is what this model controls, and it reaches a log naming only the field."""
+    def test_the_refusal_message_names_only_the_field(self) -> None:
+        """The message is what this model controls. The surrounding error is the framework's and echoes the input."""
         with pytest.raises(ValidationError) as exc_info:
             ProviderConfig(
                 client_id="cid",

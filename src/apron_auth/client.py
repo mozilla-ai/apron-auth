@@ -21,6 +21,7 @@ from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
+from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import (
     SERVER_ERROR,
     TEMPORARILY_UNAVAILABLE,
@@ -346,11 +347,14 @@ class OAuthClient:
             A tuple of the authorization URL and the pending state.
 
         Raises:
-            ConfigurationError: If no redirect URI is available.
+            ConfigurationError: If no redirect URI is available, or the one in force carries userinfo.
         """
         effective_redirect_uri = redirect_uri or self._config.redirect_uri
         if not effective_redirect_uri:
             msg = "redirect_uri must be provided either in the method call or in ProviderConfig"
+            raise ConfigurationError(msg)
+        if authority_credential(effective_redirect_uri) is not AuthorityCredential.ABSENT:
+            msg = "redirect_uri must not carry userinfo"
             raise ConfigurationError(msg)
 
         state = secrets.token_urlsafe(32)

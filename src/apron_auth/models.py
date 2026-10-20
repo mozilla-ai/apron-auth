@@ -6,12 +6,13 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, assert_never
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
+from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -36,6 +37,9 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
         "state",
     }
 )
+
+# Every URL field, none of which may carry a credential in its authority, because each one leaves this library.
+URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
 
 
 @unique
@@ -310,8 +314,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
     one cannot be dropped silently and leave the config weaker than the caller asked for.
 
-    An endpoint carries no userinfo, because a request would present that as a credential and a log
-    could record it.
+    No URL field carries userinfo, because every one of them leaves this library.
 
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
@@ -472,34 +475,6 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _endpoint_urls_carry_no_userinfo(self) -> ProviderConfig:
-        """Reject an endpoint whose authority carries a credential this client would present.
-
-        Returns:
-            The validated config, unchanged.
-
-        Raises:
-            ValueError: If an endpoint URL carries userinfo.
-        """
-        for field, url in (
-            ("authorize_url", self.authorize_url),
-            ("revocation_url", self.revocation_url),
-            ("token_url", self.token_url),
-        ):
-            if url is None:
-                continue
-            try:
-                username = urlparse(url).username
-            except ValueError as exc:
-                # The parser states no field, so the refusal names the one that failed.
-                msg = f"{field} is malformed"
-                raise ValueError(msg) from exc
-            if username is not None:
-                msg = f"{field} must not carry userinfo"
-                raise ValueError(msg)
-        return self
-
-    @model_validator(mode="after")
     def _extra_params_do_not_set_reserved_parameters(self) -> ProviderConfig:
         """Reject an extra parameter that is reserved for the authorization request itself.
 
@@ -574,6 +549,34 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         if not self.scope_separator:
             msg = "scope_separator must not be empty"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _urls_carry_no_userinfo(self) -> ProviderConfig:
+        """Reject a URL whose authority carries a credential, naming the field that carries it.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If a URL field carries userinfo, or its authority cannot be read.
+        """
+        for field in URL_FIELDS:
+            url = getattr(self, field)
+            if url is None:
+                continue
+            credential = authority_credential(url)
+            match credential:
+                case AuthorityCredential.ABSENT:
+                    continue
+                case AuthorityCredential.MALFORMED:
+                    msg = f"{field} is malformed"
+                    raise ValueError(msg)
+                case AuthorityCredential.PRESENT:
+                    msg = f"{field} must not carry userinfo"
+                    raise ValueError(msg)
+                case _:
+                    assert_never(credential)
         return self
 
     @model_validator(mode="before")

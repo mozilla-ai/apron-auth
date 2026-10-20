@@ -2764,3 +2764,20 @@ class TestFetchIdentity:
             await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+
+class TestAuthorizationUrlRedirectCredential:
+    async def test_refuses_an_override_whose_authority_carries_a_credential(self) -> None:
+        """The override reaches no model, so the request would carry the credential into the provider's log."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="https://app.example.com/cb",
+        )
+
+        with pytest.raises(ConfigurationError, match="must not carry userinfo"):
+            await OAuthClient(config).get_authorization_url(
+                redirect_uri="https://operator:sesame@app.example.com/cb"  # pragma: allowlist secret
+            )
