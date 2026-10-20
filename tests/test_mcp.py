@@ -46,6 +46,7 @@ from apron_auth.models import (
 
 _REGISTER_URL = "https://auth.example.com/register"
 _REDIRECT_URI = "https://app.example.com/callback"
+_LEAKED_SECRET = "top-secret-value"  # pragma: allowlist secret
 
 _PRM_ROOT = "https://mcp.example.com/.well-known/oauth-protected-resource"
 _PRM_PATH = "https://mcp.example.com/.well-known/oauth-protected-resource/mcp"
@@ -1176,22 +1177,34 @@ class TestRegisterClient:
         with pytest.raises(McpRegistrationError):
             await register_client(_REGISTER_URL, _REDIRECT_URI)
 
-    async def test_registration_error_never_leaks_client_secret(self, httpx_mock: HTTPXMock) -> None:
+    @pytest.mark.parametrize(
+        "body",
+        [
+            # A malformed success body can carry client_secret while lacking client_id.
+            {"client_secret": _LEAKED_SECRET},
+            # A body this library refuses for its stated method carries the issued secret too, and the
+            # refusal sits next to a ValueError that repeats the stated method.
+            {"client_id": "x", "client_secret": _LEAKED_SECRET, "token_endpoint_auth_method": "private_key_jwt"},
+        ],
+    )
+    async def test_registration_error_never_leaks_client_secret(
+        self, httpx_mock: HTTPXMock, body: dict[str, str]
+    ) -> None:
         """A registration failure must not surface the issued secret anywhere.
 
-        A malformed success body can still carry ``client_secret`` while lacking
-        ``client_id``; neither the error's message nor its rendered traceback
-        (which walks the ``__cause__``/``__context__`` chain) may expose it.
+        Neither the error's message nor its rendered traceback (which walks the
+        ``__cause__``/``__context__`` chain) may expose it.
         """
-        leaked = "top-secret-value"  # pragma: allowlist secret
-        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_secret": leaked})
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json=body)
         with pytest.raises(McpRegistrationError) as exc_info:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
         rendered = "".join(
             traceback.format_exception(type(exc_info.value), exc_info.value, exc_info.value.__traceback__)
         )
-        assert leaked not in str(exc_info.value)
-        assert leaked not in rendered
+        assert _LEAKED_SECRET not in str(exc_info.value)
+        assert _LEAKED_SECRET not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
 
     @pytest.mark.parametrize("status", [400, 401, 403, 500])
     async def test_non_success_status_raises(self, httpx_mock: HTTPXMock, status: int) -> None:

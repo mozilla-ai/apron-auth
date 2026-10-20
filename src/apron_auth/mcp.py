@@ -299,14 +299,14 @@ async def register_client(
 ) -> ClientRegistration:
     """Dynamically register an OAuth client (RFC 7591) and return its credentials.
 
-    POSTs a registration request to ``registration_url`` (an authorization
-    server's registration endpoint) and returns the issued ``client_id`` plus,
-    for a confidential client, a ``client_secret``. Any
-    ``token_endpoint_auth_method`` the response states is captured too — it is
-    authoritative for this client and may differ from the requested method. The
-    URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the request
-    goes through ``transport_factory`` when supplied. An error never echoes the
-    response body, which carries the issued secret.
+    POSTs a registration request to ``registration_url`` (an authorization server's registration endpoint) and
+    returns the issued ``client_id`` plus, for a confidential client, a ``client_secret``.
+    A ``token_endpoint_auth_method`` the response states is captured too when this library can perform it,
+    because it is authoritative for this client and may differ from the requested method, and is refused
+    otherwise.
+    The URL is validated (HTTPS, no userinfo, host not blocked as non-public, ``url_validator``) and the
+    request goes through ``transport_factory`` when supplied.
+    An error never echoes the response body, which carries the issued secret.
 
     Args:
         registration_url: The authorization server's registration endpoint.
@@ -330,7 +330,9 @@ async def register_client(
         McpRegistrationError: If the request fails in transit, the endpoint returns
             a non-success status, its response is not a JSON object with a usable
             ``client_id``, or the response states a token-endpoint authentication
-            method this library cannot perform.
+            method this library cannot perform. That last one leaves a
+            registration standing at the authorization server, because the server
+            issued the credentials this call then discards.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
     _validate_url(registration_url, url_validator, caller_supplied=True)
@@ -381,7 +383,10 @@ async def register_client(
     stated_method = data.get("token_endpoint_auth_method")
     registered_method = _stated_auth_method(stated_method)
     if stated_method is not None and registered_method is None:
-        msg = "client registration states an unsupported client authentication method"
+        msg = (
+            "client registration states a client authentication method this library cannot perform, "
+            "so the issued credentials were discarded"
+        )
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     return ClientRegistration(
         client_id=client_id,
