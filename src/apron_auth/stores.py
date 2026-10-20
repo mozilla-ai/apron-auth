@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from apron_auth._jwt import CLOCK_SKEW_SECONDS
 from apron_auth._numbers import finite_number
+from apron_auth.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from apron_auth.models import OAuthPendingState
@@ -47,7 +48,14 @@ class MemoryStateStore:
         Args:
             max_age: The age, in seconds, past which a stored state is treated as expired.
                 A state exactly this old is still current.
+
+        Raises:
+            ConfigurationError: If ``max_age`` is not a positive finite number, because no stored state
+                would ever reach a limit it cannot be compared against.
         """
+        if finite_number(max_age) is None or max_age <= 0:
+            msg = "max_age must be a positive finite number"
+            raise ConfigurationError(msg)
         self._states: dict[str, OAuthPendingState] = {}
         self._max_age = max_age
 

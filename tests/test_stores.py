@@ -7,6 +7,7 @@ import time
 import pytest
 
 from apron_auth import stores
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore
 from apron_auth.stores import MemoryStateStore
@@ -150,3 +151,27 @@ class TestExpiryLogLine:
         assert caplog.text
         for length in range(4, len(pending.state) + 1):
             assert pending.state[:length] not in caplog.text
+
+
+class TestMaximumAgeArgument:
+    """Test that a limit no entry could exceed is refused where it is set."""
+
+    @pytest.mark.parametrize(
+        "max_age",
+        [
+            pytest.param(math.inf, id="infinite"),
+            pytest.param(math.nan, id="not a number"),
+            pytest.param(0.0, id="zero"),
+            pytest.param(-1.0, id="negative"),
+        ],
+    )
+    def test_a_limit_that_expires_nothing_is_refused(self, max_age: float) -> None:
+        with pytest.raises(ConfigurationError, match="positive finite number"):
+            MemoryStateStore(max_age=max_age)
+
+    async def test_a_usable_limit_is_accepted(self) -> None:
+        store = MemoryStateStore(max_age=1.0)
+        pending = _make_pending()
+        await store.save(pending)
+
+        assert await store.consume(pending.state) == pending
