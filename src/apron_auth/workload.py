@@ -18,7 +18,8 @@ from joserfc.errors import ExpiredTokenError, JoseError
 from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason, parse_compact
+from apron_auth._clock import CLOCK_SKEW_SECONDS
+from apron_auth._jwt import claim_refusal_reason, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth.errors import (
     ConfigurationError,

@@ -44,10 +44,11 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, claim_refusal_reason
+from apron_auth._jwt import claim_refusal_reason
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,

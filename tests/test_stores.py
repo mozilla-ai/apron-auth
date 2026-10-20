@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import OAuthPendingState
 from apron_auth.protocols import StateStore

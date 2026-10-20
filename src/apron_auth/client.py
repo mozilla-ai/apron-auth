@@ -16,9 +16,10 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
 
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._jwt import CLOCK_SKEW_SECONDS, unverified_claims
+from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
 from apron_auth.errors import (
     SERVER_ERROR,

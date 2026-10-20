@@ -7,7 +7,7 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._numbers import finite_number
 from apron_auth.errors import ConfigurationError
 

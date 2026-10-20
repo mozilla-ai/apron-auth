@@ -14,7 +14,7 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth._jwt import CLOCK_SKEW_SECONDS
+from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth.client import OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
