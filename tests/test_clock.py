@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import inspect
 import math
 from types import SimpleNamespace
 
 import pytest
 
-from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
+from apron_auth._clock import (
+    CLOCK_SKEW_SECONDS,
+    DEFAULT_MAX_AGE_SECONDS,
+    PendingAgeRefusalReason,
+    pending_age_refusal,
+)
 from apron_auth.client import _check_pending_age
 from apron_auth.errors import StateError
-from apron_auth.models import OAuthPendingState
+from apron_auth.models import OAuthPendingState, ProviderConfig
 from apron_auth.stores import MemoryStateStore
 
 _LIMIT = 300.0
@@ -99,3 +105,11 @@ class TestTheStoreAndTheAgeCheckAgree:
         assert set(wordings) == set(PendingAgeRefusalReason)
         assert all(wordings.values())
         assert len(set(wordings.values())) == len(PendingAgeRefusalReason)
+
+    def test_the_store_and_the_exchange_default_to_one_limit(self) -> None:
+        """Two independent defaults let a caller raise one limit and have the other drop the states."""
+        store_default = inspect.signature(MemoryStateStore.__init__).parameters["max_age"].default
+        exchange_default = ProviderConfig.model_fields["max_pending_age_seconds"].default
+
+        assert store_default == DEFAULT_MAX_AGE_SECONDS
+        assert exchange_default == DEFAULT_MAX_AGE_SECONDS

@@ -5,16 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from apron_auth._clock import pending_age_refusal, usable_max_age
+from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS, pending_age_refusal, usable_max_age
 from apron_auth.errors import ConfigurationError
 
 if TYPE_CHECKING:
     from apron_auth.models import OAuthPendingState
 
 logger = logging.getLogger(__name__)
-
-# The default age, in seconds, after which a stored pending state expires.
-DEFAULT_MAX_AGE = 600.0
 
 
 class MemoryStateStore:
@@ -39,7 +36,7 @@ class MemoryStateStore:
     system clock than the allowed difference, or cannot be measured at all.
     """
 
-    def __init__(self, max_age: float = DEFAULT_MAX_AGE) -> None:
+    def __init__(self, max_age: float = DEFAULT_MAX_AGE_SECONDS) -> None:
         """Create the store.
 
         Args:

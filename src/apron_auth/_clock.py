@@ -11,6 +11,9 @@ from apron_auth._numbers import finite_number
 # The clock difference, in seconds, allowed between this client and another host wherever a time is checked.
 CLOCK_SKEW_SECONDS = 60
 
+# The default age, in seconds, past which a pending authorization request is no longer current.
+DEFAULT_MAX_AGE_SECONDS = 600.0
+
 # The widest maximum age, in seconds, that can be subtracted from a clock reading.
 _WIDEST_MAX_AGE = sys.float_info.max
 

@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
 
+from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -439,7 +440,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     require_iss: bool = False
     resource: str | None = None
     use_builtin_identity_handler: bool = True
-    max_pending_age_seconds: float = 600.0
+    max_pending_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
     provider: Provider | None = None
 
     @model_validator(mode="after")

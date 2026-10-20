@@ -788,6 +788,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
 - `MemoryStateStore` raises `ConfigurationError` for a `max_age` that is not a positive number of seconds that can be subtracted from a clock reading, as the provider config already refuses such a `max_pending_age_seconds`. A store built with `0` to expire every state at once no longer constructs.
 - `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. After the system clock steps backwards, a state younger than the step less that difference is expired, so a step beyond the difference plus `max_age` expires every state the store holds.
+- `stores.DEFAULT_MAX_AGE` is gone, and was never exported from the package. `MemoryStateStore` and `max_pending_age_seconds` now default to one ten-minute limit, so omit `max_age` to take it or pass your own.
 
 ## Logging
 
