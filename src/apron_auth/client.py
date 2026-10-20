@@ -697,7 +697,8 @@ class OAuthClient:
                 "A token set reloaded from storage cannot be used for identity."
             )
             raise ConfigurationError(msg)
-        handler = self._identity_handler or self._provider_identity_handler
+        configured = self._identity_handler
+        handler = configured if configured is not None else self._provider_identity_handler
         if handler is None:
             msg = "No identity handler is available for this provider configuration"
             raise IdentityNotSupportedError(msg)

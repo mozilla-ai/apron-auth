@@ -2341,6 +2341,27 @@ class TestFetchIdentity:
 
         assert identity.email == "custom@example.com"
 
+    async def test_a_configured_handler_that_is_falsy_is_still_used(self) -> None:
+        """A handler is taken when it is present, so one that is falsy is not passed over."""
+
+        class EmptyIdentityHandler:
+            def __bool__(self) -> bool:
+                return False
+
+            async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
+                return IdentityProfile(email="falsy@example.com")
+
+        config = _make_config(
+            provider=Provider.GOOGLE,
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+        )
+        client = OAuthClient(config=config, identity_handler=EmptyIdentityHandler())
+
+        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+
+        assert identity.email == "falsy@example.com"
+
     async def test_fetch_identity_custom_handler(self):
         class DummyIdentityHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
