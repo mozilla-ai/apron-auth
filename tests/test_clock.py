@@ -63,8 +63,8 @@ class TestPendingAgeRefusal:
         assert pending_age_refusal(created_at, max_age=_LIMIT) is reason
 
 
-class TestTheStoreAndTheExchangeAgree:
-    """Test that one creation time means the same thing to the reference store and to the code exchange."""
+class TestTheStoreAndTheAgeCheckAgree:
+    """Test that one creation time means the same thing to the reference store and to the age check."""
 
     @pytest.mark.parametrize(("created_at", "reason"), _CREATION_TIMES)
     async def test_the_store_drops_what_the_exchange_refuses(
