@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # The default age, in seconds, after which a stored pending state expires.
 DEFAULT_MAX_AGE = 600.0
 
-# The widest maximum age, in seconds, that an age can still be compared against.
+# The widest maximum age, in seconds, that can be subtracted from a clock reading.
 _WIDEST_MAX_AGE = sys.float_info.max
 
 
@@ -54,8 +54,7 @@ class MemoryStateStore:
                 A state exactly this old is still current.
 
         Raises:
-            ConfigurationError: If ``max_age`` is not a positive finite number that an age can be
-                compared against.
+            ConfigurationError: If ``max_age`` is not a positive finite number.
         """
         limit = finite_number(max_age)
         if limit is None or limit <= 0 or limit > _WIDEST_MAX_AGE:
