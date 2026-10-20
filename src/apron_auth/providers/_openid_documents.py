@@ -39,9 +39,9 @@ def require_url(
         value: The raw value to check.
         field: What the value is, for the error and the warning.
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
-        is_issuer: Apply the stricter issuer rules, which forbid a query and userinfo.
-        caller_supplied: The value is an argument of this library's caller, not a member of a fetched document.
-            It has no default, so a call site cannot leave the source for this rule to guess.
+        caller_supplied: The value is an argument of this library's caller, or derives from one,
+            not a member of a fetched document.
+        is_issuer: Apply the stricter issuer rules.
 
     Returns:
         ``value``, once it passes.
@@ -49,7 +49,7 @@ def require_url(
     Raises:
         OidcDiscoveryError: If ``value`` is not an acceptable URL.
     """
-    # The source decides the class: a caller's own URL is a configuration fault, a provider's is refused.
+    # The source decides the kind: a caller's own URL is a configuration fault, a provider's is refused.
     kind = FailureKind.CONFIGURATION if caller_supplied else FailureKind.REFUSED
     if not isinstance(value, str) or not value:
         msg = f"OpenID {field} is not an absolute URL"
