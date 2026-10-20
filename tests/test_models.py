@@ -1223,7 +1223,7 @@ class TestProviderFactsAreDerived:
 
 
 class TestScopeSeparator:
-    """Test that a separator no scope string can be split on is refused where it is set."""
+    """Test that a config refuses an empty separator and that no provider member states one."""
 
     def test_an_empty_separator_is_refused(self) -> None:
         with pytest.raises(ValidationError, match="scope_separator must not be empty"):
