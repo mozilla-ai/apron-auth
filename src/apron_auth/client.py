@@ -564,6 +564,9 @@ class OAuthClient:
     async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
         """Revoke one token of a refused token response, and log a failure instead of raising it.
 
+        A configuration that cannot revoke is logged like any other failure, because the refusal
+        this cleanup follows is what the caller must see.
+
         Args:
             label: The token's name for the log line, such as ``refresh token``.
             token: The token to revoke.
@@ -571,7 +574,7 @@ class OAuthClient:
         """
         try:
             await self.revoke_token(token)
-        except RevocationError:
+        except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
@@ -623,8 +626,9 @@ class OAuthClient:
             ``True`` when the provider confirms revocation.
 
         Raises:
-            ConfigurationError: If the provider has no revocation endpoint
-                configured.
+            ConfigurationError: If the provider has no revocation endpoint configured, or if the
+                handler refuses the configuration.
+                It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
                 It chains nothing from the handler.
@@ -645,12 +649,17 @@ class OAuthClient:
             exc.__cause__ = None
             exc.__context__ = None
             raise exc.with_traceback(None) from None
+        except ConfigurationError as exc:
+            # A fault in the configuration keeps its class, because the caller's configuration is its source.
+            failure_class, failure_message, failure_kind = ConfigurationError, str(exc), exc.kind
         except OAuthError as exc:
-            failure_message, failure_kind = str(exc), exc.kind
+            failure_class, failure_message, failure_kind = RevocationError, str(exc), exc.kind
         except httpx.HTTPError as exc:
             failure = http_failure(exc)
+            failure_class = RevocationError
             failure_message, failure_kind = f"Failed to revoke token: {failure.description}", failure.kind
         except Exception:
+            failure_class = RevocationError
             failure_message, failure_kind = "Failed to revoke token", FailureKind.UNEXPECTED
         else:
             if not result:
@@ -659,7 +668,7 @@ class OAuthClient:
             return True
         # NOTE: The caught error can hold the request, which carries the token, so this error must not reference it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message, kind=failure_kind)
+        raise failure_class(failure_message, kind=failure_kind)
 
     async def fetch_identity(self, tokens: FreshTokenSet) -> IdentityProfile:
         """Fetch normalized user identity fields from the provider API.

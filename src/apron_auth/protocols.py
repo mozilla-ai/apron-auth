@@ -74,6 +74,9 @@ class RevocationHandler(Protocol):
             ``True`` if revocation succeeded.
 
         Raises:
+            ConfigurationError: If the configuration cannot be used to revoke.
+                A caller's configuration is the source of that fault, so it is not a revocation
+                failure.
             RevocationError: If the request cannot be sent or the provider refuses it.
                 Implementations should pass ``kind``, because only they know whether the provider
                 was unreachable, answered a server error, or rejected the request.

@@ -302,15 +302,19 @@ class TestHandlerErrors:
         assert str(exc_info.value) == "Failed to fetch identity"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
-    async def test_library_error_from_a_revocation_handler_keeps_its_message(self) -> None:
+    async def test_configuration_error_from_a_revocation_handler_keeps_its_class_and_message(self) -> None:
         class MisconfiguredHandler:
             async def revoke(self, token: str, config: ProviderConfig) -> bool:
                 raise ConfigurationError("revocation needs client authentication")
 
         client = OAuthClient(_config(), revocation_handler=MisconfiguredHandler())
-        with pytest.raises(RevocationError) as exc_info:
+        with pytest.raises(ConfigurationError) as exc_info:
             await client.revoke_token(ACCESS_TOKEN)
 
+        assert not isinstance(exc_info.value, RevocationError)
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
         assert str(exc_info.value) == "revocation needs client authentication"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 

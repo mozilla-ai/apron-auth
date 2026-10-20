@@ -1484,6 +1484,33 @@ class TestExchangeCodeNonceRevocation:
         assert "access-abc" not in caplog.text
         assert "could not be revoked" in caplog.text
 
+    async def test_a_misconfigured_revocation_handler_still_raises_the_nonce_error(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Revoking a refused response's tokens is best effort, so a config fault there is logged, not raised."""
+
+        class MisconfiguredHandler:
+            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+                msg = "revocation needs client authentication"
+                raise ConfigurationError(msg)
+
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer"},
+        )
+        client = OAuthClient(
+            config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=MisconfiguredHandler()
+        )
+
+        with pytest.raises(IdTokenValidationError) as exc_info:
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+
+        assert str(exc_info.value) == "Token response carries no ID token for the OpenID request"
+        assert "could not be revoked" in caplog.text
+        assert "client authentication" not in caplog.text
+
     async def test_a_transport_failure_while_revoking_still_raises_the_nonce_error(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
