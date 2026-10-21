@@ -332,6 +332,40 @@ def _refuse_a_change_without_repeating_the_value(model: BaseModel, name: str, va
     raise ConfigurationError(refusals)
 
 
+def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
+    """Refuse a URL field whose authority carries a credential, naming the field that carries it.
+
+    A field named in :data:`URL_FIELDS` and absent from the model is skipped, so one rule covers
+    models that hold different subsets of those fields.
+
+    Args:
+        model: The model to read the URL fields of.
+
+    Returns:
+        The model, unchanged.
+
+    Raises:
+        ValueError: If a URL field carries userinfo, or its authority cannot be read.
+    """
+    for field in URL_FIELDS:
+        url = getattr(model, field, None)
+        if url is None:
+            continue
+        credential = authority_credential(url)
+        match credential:
+            case AuthorityCredential.ABSENT:
+                continue
+            case AuthorityCredential.MALFORMED:
+                msg = f"{field} is malformed"
+                raise ValueError(msg)
+            case AuthorityCredential.PRESENT:
+                msg = f"{field} must not carry userinfo"
+                raise ValueError(msg)
+            case _:
+                assert_never(credential)
+    return model
+
+
 def _refuse_without_repeating_the_value(
     cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler[Any]
 ) -> Any:
@@ -369,6 +403,9 @@ def _refuse_without_repeating_the_value(
 
 # Attach this as a credential-bearing model's last validator, so it wraps the others. The validator is
 # shared rather than written in each model, so it types against the base and not each concrete model.
+# Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
+_URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
+
 _REPEATS_NO_VALUE = model_validator(mode="wrap")(
     classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
 )
@@ -660,34 +697,6 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             raise ValueError(msg)
         return self
 
-    @model_validator(mode="after")
-    def _urls_carry_no_userinfo(self) -> ProviderConfig:
-        """Reject a URL whose authority carries a credential, naming the field that carries it.
-
-        Returns:
-            The validated config, unchanged.
-
-        Raises:
-            ValueError: If a URL field carries userinfo, or its authority cannot be read.
-        """
-        for field in URL_FIELDS:
-            url = getattr(self, field)
-            if url is None:
-                continue
-            credential = authority_credential(url)
-            match credential:
-                case AuthorityCredential.ABSENT:
-                    continue
-                case AuthorityCredential.MALFORMED:
-                    msg = f"{field} is malformed"
-                    raise ValueError(msg)
-                case AuthorityCredential.PRESENT:
-                    msg = f"{field} must not carry userinfo"
-                    raise ValueError(msg)
-                case _:
-                    assert_never(credential)
-        return self
-
     @model_validator(mode="before")
     @classmethod
     def _take_provider_facts_from_member(cls, data: Any) -> Any:
@@ -807,6 +816,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1288,5 +1298,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     metadata: dict[str, Any] = {}
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE

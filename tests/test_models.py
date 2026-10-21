@@ -1300,6 +1300,15 @@ class TestIdentityProfile:
 
 
 class TestOAuthPendingState:
+    def test_a_redirect_uri_carrying_a_credential_is_refused(self) -> None:
+        """A pending state is persisted and replayed, so a credential in its URI outlives the request."""
+        with pytest.raises(ConfigurationError, match="redirect_uri must not carry userinfo"):
+            OAuthPendingState(
+                state="random-state-token",
+                redirect_uri="https://operator:" + "sesame@app.example.com/callback",
+                created_at=1.0,
+            )
+
     def test_with_pkce(self) -> None:
         now = time.time()
         state = OAuthPendingState(
