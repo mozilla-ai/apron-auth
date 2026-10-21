@@ -31,7 +31,11 @@ tests = [
 ]
 
 [tool.uv]
-exclude-newer = "7 days"
+exclude-newer = "3 days"
+# The trust store decides which certificates this library's HTTP client accepts, so a release that
+# withdraws a compromised certificate authority is taken sooner than the cooldown above allows. The
+# value is a duration and not a date, because a date would also cap every later release.
+exclude-newer-package = { certifi = "1 day" }
 
 [build-system]
 requires = ["setuptools>=48", "setuptools_scm[toml]>=6.3.1"]
