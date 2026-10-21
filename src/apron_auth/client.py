@@ -61,6 +61,9 @@ logger = logging.getLogger(__name__)
 # NOTE: The exchange_code docstring states this value.
 _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
+# The grant fields of a token request that hold a secret.
+_SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
+
 
 class _TokenEndpointError(Exception):
     """Internal exception carrying the OAuth error code from the token endpoint."""
@@ -881,6 +884,36 @@ class OAuthClient:
             words.update(value.split())
         return "openid" in words
 
+    def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
+        """Return the secret values a token request sends, which are the client secret and the grant's own.
+
+        Args:
+            sent: The form fields the request sent.
+
+        Returns:
+            The values, without any the request left empty.
+        """
+        values = {sent[field] for field in _SENT_SECRET_FIELDS if field in sent}
+        if self._config.client_secret is not None:
+            values.add(self._config.client_secret.get_secret_value())
+        return frozenset(value for value in values if value)
+
+    def _stated_error_code(self, response: httpx.Response | None, sent: dict[str, str]) -> str:
+        """Return the error code a token response states, or an empty string when it states none to report.
+
+        A value the request sent as a secret is not reported.
+        An endpoint may echo what it was sent, and a secret can take the shape a code takes.
+
+        Args:
+            response: The response the endpoint sent, or ``None`` when none was received.
+            sent: The form fields the request sent.
+
+        Returns:
+            The error code, or an empty string.
+        """
+        code = recognized_error_code(_stated_error_member(response))
+        return "" if code in self._sent_secrets(sent) else code
+
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.
 
@@ -898,7 +931,7 @@ class OAuthClient:
             _TokenEndpointError: If the endpoint returns an OAuth error,
                 fails with a non-success status, or the request otherwise
                 errors; its ``error_code`` carries the OAuth error code
-                when one is available.
+                when the endpoint states one that this request did not send as a secret.
                 The caught error is not attached as its cause or context.
                 Its message is this library's own text and states nothing the endpoint sent.
         """
@@ -926,7 +959,7 @@ class OAuthClient:
         except AuthlibOAuthError:
             # A response with an OAuth error body, which an endpoint may send with any status.
             response = responses[-1] if responses else None
-            error_code = recognized_error_code(_stated_error_member(response))
+            error_code = self._stated_error_code(response, data)
             status_code = response.status_code if response is not None else None
             kind = self._kind_for_token_response(status_code, error_code)
             if status_code is not None and httpx.codes.is_error(status_code):
@@ -938,7 +971,7 @@ class OAuthClient:
         except httpx.HTTPStatusError as exc:
             # An error status without an OAuth error body that the token client recognized.
             # The body may still carry an OAuth error code, which then decides the kind.
-            error_code = recognized_error_code(_stated_error_member(exc.response))
+            error_code = self._stated_error_code(exc.response, data)
             kind = self._kind_for_token_response(exc.response.status_code, error_code)
             status = status_failure(exc.response.status_code)
             failure = _TokenEndpointError(status.description, kind, error_code=error_code)

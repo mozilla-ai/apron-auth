@@ -50,11 +50,11 @@ def _config(**overrides: object) -> ProviderConfig:
     return ProviderConfig(**defaults)
 
 
-def _pending_state(nonce: str | None = None) -> OAuthPendingState:
+def _pending_state(nonce: str | None = None, code_verifier: str = VERIFIER) -> OAuthPendingState:
     return OAuthPendingState(
         state="pending-state",
         redirect_uri="https://app.example.com/callback",
-        code_verifier=VERIFIER,
+        code_verifier=code_verifier,
         nonce=nonce,
         created_at=time.time(),
     )
@@ -96,8 +96,10 @@ def _assert_carries_no_secret(error: OAuthError, *secrets: str) -> None:
             request = None
         assert request is None, f"{type(linked).__name__} holds a request"
     formatted = "".join(traceback.format_exception(error))
+    stated_code = getattr(error, "error_code", "")
     for secret in secrets:
         assert secret not in formatted
+        assert stated_code != secret, "the error code repeats a sent secret"
     assert RAW_TEXT not in formatted
 
 
@@ -291,6 +293,89 @@ class TestTokenRequestErrors:
 
         assert exc_info.value.error_code == "invalid_grant"
         assert exc_info.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
+        "secret",
+        [
+            pytest.param("mysecret", id="one lowercase word"),  # pragma: allowlist secret
+            pytest.param("my_secret_v2", id="words joined by underscores"),  # pragma: allowlist secret
+        ],
+    )
+    async def test_a_client_secret_echoed_as_the_code_is_reported_as_absent(
+        self, httpx_mock: HTTPXMock, secret: str
+    ) -> None:
+        """A client secret can take the shape of a code, so the shape alone does not separate it."""
+        httpx_mock.add_response(status_code=400, json={"error": secret})
+        client = OAuthClient(_config(client_secret=SecretStr(secret)))
+
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(REFRESH_TOKEN)
+
+        assert exc_info.value.error_code == ""
+        _assert_carries_no_secret(exc_info.value, secret, REFRESH_TOKEN)
+
+    @pytest.mark.parametrize(
+        "token",
+        [
+            pytest.param("myrefreshtoken", id="one lowercase word"),  # pragma: allowlist secret
+            pytest.param("refresh_token_abc", id="words joined by underscores"),  # pragma: allowlist secret
+        ],
+    )
+    async def test_a_refresh_token_echoed_as_the_code_is_reported_as_absent(
+        self, httpx_mock: HTTPXMock, token: str
+    ) -> None:
+        """A grant's secret can take the shape of a code as readily as the client secret can."""
+        httpx_mock.add_response(status_code=400, json={"error": token})
+        client = OAuthClient(_config())
+
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(token)
+
+        assert exc_info.value.error_code == ""
+        _assert_carries_no_secret(exc_info.value, token)
+
+    @pytest.mark.parametrize(
+        ("code", "verifier", "echoed"),
+        [
+            pytest.param("mycode", VERIFIER, "mycode", id="the authorization code"),
+            pytest.param(CODE, "myverifier", "myverifier", id="the code verifier"),
+        ],
+    )
+    async def test_an_exchange_secret_echoed_as_the_code_is_reported_as_absent(
+        self, httpx_mock: HTTPXMock, code: str, verifier: str, echoed: str
+    ) -> None:
+        """An exchange sends two secrets of its own, and either can take the shape of a code."""
+        httpx_mock.add_response(status_code=400, json={"error": echoed})
+        client = OAuthClient(_config())
+
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(
+                code=code, state="pending-state", pending_state=_pending_state(code_verifier=verifier)
+            )
+
+        assert exc_info.value.error_code == ""
+        _assert_carries_no_secret(exc_info.value, echoed)
+
+    @pytest.mark.parametrize(
+        ("secret", "echoed"),
+        [
+            pytest.param("s3cr/t+=x", "s3cr%2ft%2b%3dx", id="percent encoded"),  # pragma: allowlist secret
+            pytest.param("s3cr/t+=x", "s3cr%252ft%252b%253dx", id="twice percent encoded"),  # pragma: allowlist secret
+            pytest.param("my secret", "my+secret", id="a space as a plus"),  # pragma: allowlist secret
+        ],
+    )
+    async def test_an_encoded_echo_of_a_sent_secret_states_no_code(
+        self, httpx_mock: HTTPXMock, secret: str, echoed: str
+    ) -> None:
+        """A provider chooses the encoding it echoes a sent value in, and no encoding of one is a code."""
+        httpx_mock.add_response(status_code=400, json={"error": echoed})
+        client = OAuthClient(_config(client_secret=SecretStr(secret)))
+
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(REFRESH_TOKEN)
+
+        assert exc_info.value.error_code == ""
+        _assert_carries_no_secret(exc_info.value, secret, REFRESH_TOKEN)
 
 
 class TestHandlerErrors:
