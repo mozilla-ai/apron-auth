@@ -336,6 +336,33 @@ def _refuse_a_change_without_repeating_the_value(model: BaseModel, name: str, va
     raise ConfigurationError(refusals)
 
 
+def _refuse_a_document_without_repeating_the_value(cls: type[BaseModel], json_data: Any, **kwargs: Any) -> Any:
+    """Validate a JSON document, refusing with a configuration error that repeats no value it was given.
+
+    A document that is not valid JSON is refused before any field of it is read, so its refusal carries
+    the whole document, which for a stored model means the refusal carries every credential in it.
+
+    Args:
+        cls: The model to validate the document against.
+        json_data: The document to validate.
+        **kwargs: The validation options, passed on as given.
+
+    Returns:
+        The validated model.
+
+    Raises:
+        ConfigurationError: If validation refuses the document.
+    """
+    refusals: str | None = None
+    try:
+        # NOTE: The base implementation is reached through __func__, so it validates cls and not BaseModel.
+        return BaseModel.model_validate_json.__func__(cls, json_data, **kwargs)
+    except ValidationError as error:
+        refusals = _refusal_text(error)
+    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+    raise ConfigurationError(refusals)
+
+
 def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
     """Refuse a URL field whose authority carries a credential, naming the field that carries it.
 
@@ -407,6 +434,9 @@ def _refuse_without_repeating_the_value(
 
 # Attach this as a credential-bearing model's last validator, so it wraps the others. The validator is
 # shared rather than written in each model, so it types against the base and not each concrete model.
+# Attach this to every model, so a document refused before any field of it is read repeats none of it.
+_REPEATS_NO_DOCUMENT = classmethod(_refuse_a_document_without_repeating_the_value)
+
 # Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
 _URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
 
@@ -448,6 +478,7 @@ class ScopeMetadata(BaseModel, frozen=True):
     required: bool = False
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -820,6 +851,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
@@ -882,6 +914,7 @@ class ServerMetadata(BaseModel, frozen=True):
     jwks_url: str | None = None
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -912,6 +945,7 @@ class ClientRegistration(BaseModel, frozen=True):
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -944,6 +978,7 @@ class TokenSet(BaseModel, frozen=True):
     context: dict[str, Any] = {}
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1075,6 +1110,7 @@ class IdentityMaterial(BaseModel, frozen=True):
         )
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1148,6 +1184,7 @@ class TenancyContext(BaseModel, frozen=True):
         return self.domain.strip().lower() or None
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1277,6 +1314,7 @@ class IdentityProfile(BaseModel, frozen=True):
         return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1302,6 +1340,7 @@ class OAuthPendingState(BaseModel, frozen=True):
     metadata: dict[str, Any] = {}
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
+    model_validate_json = _REPEATS_NO_DOCUMENT
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE

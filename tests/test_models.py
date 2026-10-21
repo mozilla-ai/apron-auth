@@ -623,6 +623,24 @@ class TestARefusalRepeatsNoValue:
         with pytest.raises(ConfigurationError):
             model.model_validate(object())
 
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_refuses_a_malformed_document(self, model: type[BaseModel]) -> None:
+        """A document that is not valid JSON is refused before any field is read, and carries all of it."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate_json("{")
+
+    def test_a_malformed_document_repeats_no_value(self) -> None:
+        token = "THE_" + "REAL_TOKEN"  # pragma: allowlist secret
+        document = json.dumps({"access_token": token, "token_type": "Bearer"})
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            TokenSet.model_validate_json(document[:-3])
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert token not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
     def test_identity_material_repeats_no_token_it_was_given(self) -> None:
         token = "THE_" + "REAL_ID_TOKEN"  # pragma: allowlist secret
 
