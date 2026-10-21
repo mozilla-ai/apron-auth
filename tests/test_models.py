@@ -465,8 +465,19 @@ class TestUrlFields:
         names = list(URL_FIELDS)
         assert names == sorted(names)
 
+    @pytest.mark.parametrize(
+        "model",
+        [model for model in MODELS if set(URL_FIELDS) & set(model.model_fields)],
+        ids=lambda model: model.__name__,
+    )
+    def test_every_model_holding_a_named_field_refuses_a_credential_in_it(self, model: type[BaseModel]) -> None:
+        """Naming a field here gives it no rule. The model holding it has to attach the rule as well."""
+        attached = {holder.func for holder in model.__pydantic_decorators__.model_validators.values()}
+
+        assert models._refuse_a_url_carrying_a_credential in attached
+
     def test_every_url_field_of_every_model_is_named(self) -> None:
-        """A URL field named nowhere here carries a credential with no rule to refuse it."""
+        """A field whose name reads as a URL and is named nowhere here has no rule to refuse a credential."""
         # A provider's profile image is the one URL this library neither requests nor sends.
         uncovered = {"avatar_url"}
         held = {
@@ -662,8 +673,13 @@ class TestARefusalRepeatsNoValue:
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
     def test_every_model_scrubs_the_entry_points_it_owns(self, model: type[BaseModel]) -> None:
-        """A model that states its own base refuses a change and a document with the framework's error."""
+        """A model stating the framework's base refuses a change, a document and strings with its error."""
         assert issubclass(model, models._RefusesWithoutRepeating)
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_keeps_the_shared_rule_for_a_change(self, model: type[BaseModel]) -> None:
+        """Stating the base is not keeping its rule, and this module overrides these entry points."""
+        assert model.__setattr__ is models._RefusesWithoutRepeating.__setattr__
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
     def test_every_model_refuses_a_malformed_mapping_of_strings(self, model: type[BaseModel]) -> None:
