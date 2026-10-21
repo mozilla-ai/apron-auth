@@ -33,12 +33,15 @@ from apron_auth.models import (
     TokenSet,
 )
 
-# Every model the library defines, so a new one cannot be added without the refusal rules below.
+# Every model the library offers, so a new one cannot be added without the refusal rules below.
 MODELS = sorted(
     (
         value
         for value in vars(models).values()
-        if isinstance(value, type) and issubclass(value, BaseModel) and value.__module__ == models.__name__
+        if isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == models.__name__
+        and not value.__name__.startswith("_")
     ),
     key=lambda model: model.__name__,
 )
@@ -633,15 +636,21 @@ class TestARefusalRepeatsNoValue:
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
     def test_every_model_scrubs_after_its_own_rules(self, model: type[BaseModel]) -> None:
-        """A rule attached before a model's own rules runs inside them, so their refusals escape unscrubbed."""
-        modes = [holder.info.mode for holder in model.__pydantic_decorators__.model_validators.values()]
+        """An after or wrap rule of a model's own escapes unscrubbed unless the scrub is attached last."""
+        last = list(model.__pydantic_decorators__.model_validators.values())[-1].func
 
-        assert modes[-1] == "wrap"
+        assert getattr(last, "__func__", last) is models._refuse_without_repeating_the_value
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
-    def test_every_model_scrubs_a_change(self, model: type[BaseModel]) -> None:
-        """A model without this refuses a change with the framework's error, which carries the value."""
-        assert model.__setattr__ is models._refuse_a_change_without_repeating_the_value
+    def test_every_model_scrubs_the_entry_points_it_owns(self, model: type[BaseModel]) -> None:
+        """A model that states its own base refuses a change and a document with the framework's error."""
+        assert issubclass(model, models._RefusesWithoutRepeating)
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_refuses_a_malformed_mapping_of_strings(self, model: type[BaseModel]) -> None:
+        """A value that is not a mapping is refused before any field of it is read, and carries all of it."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate_strings(b"{")
 
     def test_identity_material_repeats_no_token_it_was_given(self) -> None:
         token = "THE_" + "REAL_ID_TOKEN"  # pragma: allowlist secret

@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn, assert_never
+from typing import Any, Literal, NoReturn, Self, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -321,61 +321,6 @@ def _refusal_text(error: ValidationError) -> str:
     return "; ".join(refusals)
 
 
-def _refuse_a_change_without_repeating_the_value(model: BaseModel, name: str, value: Any) -> None:
-    """Change a model, refusing with a configuration error that repeats no value it was given.
-
-    A refused change carries the raw value it was given, which for a model that holds a credential
-    means a caller recording the refusal records the credential with it.
-
-    NOTE: Only a validation refusal is scrubbed. A model that is not frozen can refuse a change with
-    another error class, which passes through as the framework wrote it.
-
-    Args:
-        model: The model to change.
-        name: The name of the attribute to change.
-        value: The value to change it to.
-
-    Raises:
-        ConfigurationError: If the change is refused.
-    """
-    refusals: str | None = None
-    try:
-        BaseModel.__setattr__(model, name, value)
-    except ValidationError as error:
-        refusals = _refusal_text(error)
-    else:
-        return
-    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
-    raise ConfigurationError(refusals)
-
-
-def _refuse_a_document_without_repeating_the_value(cls: type[BaseModel], json_data: Any, **kwargs: Any) -> Any:
-    """Validate a JSON document, refusing with a configuration error that repeats no value it was given.
-
-    A document that is not valid JSON is refused before any field of it is read, so its refusal carries
-    the whole document, which for a stored model means the refusal carries every credential in it.
-
-    Args:
-        cls: The model to validate the document against.
-        json_data: The document to validate.
-        **kwargs: The validation options, passed on as given.
-
-    Returns:
-        The validated model.
-
-    Raises:
-        ConfigurationError: If validation refuses the document.
-    """
-    refusals: str | None = None
-    try:
-        # NOTE: The base implementation is reached through __func__, so it validates cls and not BaseModel.
-        return BaseModel.model_validate_json.__func__(cls, json_data, **kwargs)
-    except ValidationError as error:
-        refusals = _refusal_text(error)
-    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
-    raise ConfigurationError(refusals)
-
-
 def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
     """Refuse a URL field whose authority carries a credential, naming the field that carries it.
 
@@ -445,9 +390,6 @@ def _refuse_without_repeating_the_value(
     raise ConfigurationError(refusals)
 
 
-# Attach this to every model, so a document refused before any field of it is read repeats none of it.
-_REPEATS_NO_DOCUMENT = classmethod(_refuse_a_document_without_repeating_the_value)
-
 # Attach this as a model's last validator, so it wraps the others. It is shared rather than written in
 # each model, so it types against the base and not each concrete model.
 _REPEATS_NO_VALUE = model_validator(mode="wrap")(
@@ -458,7 +400,92 @@ _REPEATS_NO_VALUE = model_validator(mode="wrap")(
 _URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
 
 
-class ScopeMetadata(BaseModel, frozen=True):
+class _RefusesWithoutRepeating(BaseModel):
+    """A model that refuses without repeating the value it was given, at each entry point of its own.
+
+    A framework refusal carries the raw value it was given, which for a model that holds a credential
+    means a caller recording the refusal records the credential with it. Each entry point here raises a
+    configuration error naming the field and the condition instead.
+
+    NOTE: A model must also attach the shared wrap validator as its last member, which covers the entry
+    points the framework owns. A wrap validator attached here would not wrap a subclass's own validators.
+    """
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Set an attribute, refusing without repeating the value it was given.
+
+        NOTE: Only a validation refusal is scrubbed. A model that is not frozen can refuse a change with
+        another error class, which passes through as the framework wrote it.
+
+        Args:
+            name: The name of the attribute to set.
+            value: The value to set it to.
+
+        Raises:
+            ConfigurationError: If the change is refused.
+        """
+        refusals: str | None = None
+        try:
+            super().__setattr__(name, value)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        else:
+            return
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+    @classmethod
+    def model_validate_json(cls, json_data: str | bytes | bytearray, **kwargs: Any) -> Self:
+        """Validate a JSON document, refusing without repeating the value it was given.
+
+        A document the parser refuses is refused before any field of it is read, so the framework's
+        refusal carries the whole document rather than one field's value.
+
+        Args:
+            json_data: The document to validate.
+            **kwargs: The validation options, passed on as given.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ConfigurationError: If validation refuses the document.
+        """
+        refusals: str | None = None
+        try:
+            return super().model_validate_json(json_data, **kwargs)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+    @classmethod
+    def model_validate_strings(cls, obj: Any, **kwargs: Any) -> Self:
+        """Validate a mapping of strings, refusing without repeating the value it was given.
+
+        A value that is not a mapping is refused before any field of it is read, so the framework's
+        refusal carries the whole value rather than one field's.
+
+        Args:
+            obj: The value to validate.
+            **kwargs: The validation options, passed on as given.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ConfigurationError: If validation refuses the value.
+        """
+        refusals: str | None = None
+        try:
+            return super().model_validate_strings(obj, **kwargs)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+
+class ScopeMetadata(_RefusesWithoutRepeating, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
 
     Field shape mirrors apron-tools' ``ScopeMetadata`` so a consumer can
@@ -490,13 +517,11 @@ class ScopeMetadata(BaseModel, frozen=True):
     access_type: AccessType
     required: bool = False
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
+class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
@@ -863,14 +888,12 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ServerMetadata(BaseModel, frozen=True):
+class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
     """OAuth metadata discovered for an authorization server.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
@@ -926,14 +949,12 @@ class ServerMetadata(BaseModel, frozen=True):
     userinfo_url: str | None = None
     jwks_url: str | None = None
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ClientRegistration(BaseModel, frozen=True):
+class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
     """A client's credentials at one authorization server.
 
     RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
@@ -958,13 +979,11 @@ class ClientRegistration(BaseModel, frozen=True):
     client_secret: SecretStr | None = None
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class TokenSet(BaseModel, frozen=True):
+class TokenSet(_RefusesWithoutRepeating, frozen=True):
     """Token data returned from code exchange or refresh.
 
     Attributes:
@@ -991,8 +1010,6 @@ class TokenSet(BaseModel, frozen=True):
     metadata: dict[str, Any] = {}
     context: dict[str, Any] = {}
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1066,7 +1083,7 @@ class FreshTokenSet(TokenSet):
     _repeats_no_value_last = _REPEATS_NO_VALUE
 
 
-class IdentityMaterial(BaseModel, frozen=True):
+class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
     """The material an identity handler establishes a user's identity from.
 
     Constructed from a :class:`FreshTokenSet` immediately before dispatching
@@ -1123,13 +1140,11 @@ class IdentityMaterial(BaseModel, frozen=True):
             scope=tokens.scope,
         )
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class TenancyContext(BaseModel, frozen=True):
+class TenancyContext(_RefusesWithoutRepeating, frozen=True):
     """Scoping container an OAuth access token operates within.
 
     The generic name covers SaaS vernacular variants — workspace,
@@ -1197,13 +1212,11 @@ class TenancyContext(BaseModel, frozen=True):
             return None
         return self.domain.strip().lower() or None
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class IdentityProfile(BaseModel, frozen=True):
+class IdentityProfile(_RefusesWithoutRepeating, frozen=True):
     """Normalized identity fields fetched from a provider.
 
     ``IdentityProfile`` answers "who authenticated?". The companion
@@ -1327,13 +1340,11 @@ class IdentityProfile(BaseModel, frozen=True):
             return False
         return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class OAuthPendingState(BaseModel, frozen=True):
+class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
     """State stored during the OAuth authorization flow.
 
     Attributes:
@@ -1353,8 +1364,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     created_at: float
     metadata: dict[str, Any] = {}
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    model_validate_json = _REPEATS_NO_DOCUMENT
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
