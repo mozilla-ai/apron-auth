@@ -287,39 +287,6 @@ class Provider(StrEnum):
     )
 
 
-class ScopeMetadata(BaseModel, frozen=True):
-    """Consent-UI metadata for a single OAuth scope.
-
-    Field shape mirrors apron-tools' ``ScopeMetadata`` so a consumer can
-    concatenate ``CapabilityGroup.metadata()`` from apron-tools with
-    :attr:`ProviderConfig.scope_metadata` to produce a complete
-    ``list[ScopeMetadata]`` for a consent picker. apron-auth declares
-    metadata only for the cross-cutting scopes its presets inject;
-    apron-tools owns metadata for tool-level scopes.
-
-    Attributes:
-        scope: The OAuth scope string sent to the provider, exactly as it
-            appears in :attr:`ProviderConfig.scopes`.
-        label: Short human-readable name for the consent picker.
-        description: Longer explanation of what granting this scope does;
-            should match the provider's authorize-page wording where
-            possible so the consent picker stays in sync with what the
-            user sees at the provider.
-        access_type: Coarse classification used for visual grouping in
-            the consent picker.
-        required: When ``True``, the consumer's UI should not allow the
-            user to deselect the scope — typically because the OAuth
-            flow itself depends on it (e.g. ``openid`` for identity,
-            ``offline_access`` for refresh tokens).
-    """
-
-    scope: str
-    label: str
-    description: str
-    access_type: AccessType
-    required: bool = False
-
-
 def _refusal_text(error: ValidationError) -> str:
     """Return a model's refusals as one line, dropping the value the framework attached to each.
 
@@ -338,6 +305,31 @@ def _refusal_text(error: ValidationError) -> str:
         field = ".".join(str(part) for part in entry["loc"] if part != _DICT_KEY_MARKER)
         refusals.append(f"{field}: {reason}" if field else reason)
     return "; ".join(refusals)
+
+
+def _refuse_a_change_without_repeating_the_value(model: BaseModel, name: str, value: Any) -> None:
+    """Change a model, refusing with a configuration error that repeats no value it was given.
+
+    A refused change carries the raw value it was given, which for a model that holds a credential
+    means a caller recording the refusal records the credential with it.
+
+    Args:
+        model: The model to change.
+        name: The name of the attribute to change.
+        value: The value to change it to.
+
+    Raises:
+        ConfigurationError: If the change is refused.
+    """
+    refusals: str | None = None
+    try:
+        BaseModel.__setattr__(model, name, value)
+    except ValidationError as error:
+        refusals = _refusal_text(error)
+    else:
+        return
+    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+    raise ConfigurationError(refusals)
 
 
 def _refuse_without_repeating_the_value(
@@ -380,6 +372,43 @@ def _refuse_without_repeating_the_value(
 _REPEATS_NO_VALUE = model_validator(mode="wrap")(
     classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
 )
+
+
+class ScopeMetadata(BaseModel, frozen=True):
+    """Consent-UI metadata for a single OAuth scope.
+
+    Field shape mirrors apron-tools' ``ScopeMetadata`` so a consumer can
+    concatenate ``CapabilityGroup.metadata()`` from apron-tools with
+    :attr:`ProviderConfig.scope_metadata` to produce a complete
+    ``list[ScopeMetadata]`` for a consent picker. apron-auth declares
+    metadata only for the cross-cutting scopes its presets inject;
+    apron-tools owns metadata for tool-level scopes.
+
+    Attributes:
+        scope: The OAuth scope string sent to the provider, exactly as it
+            appears in :attr:`ProviderConfig.scopes`.
+        label: Short human-readable name for the consent picker.
+        description: Longer explanation of what granting this scope does;
+            should match the provider's authorize-page wording where
+            possible so the consent picker stays in sync with what the
+            user sees at the provider.
+        access_type: Coarse classification used for visual grouping in
+            the consent picker.
+        required: When ``True``, the consumer's UI should not allow the
+            user to deselect the scope — typically because the OAuth
+            flow itself depends on it (e.g. ``openid`` for identity,
+            ``offline_access`` for refresh tokens).
+    """
+
+    scope: str
+    label: str
+    description: str
+    access_type: AccessType
+    required: bool = False
+
+    __setattr__ = _refuse_a_change_without_repeating_the_value
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
@@ -777,6 +806,7 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -837,6 +867,10 @@ class ServerMetadata(BaseModel, frozen=True):
     userinfo_url: str | None = None
     jwks_url: str | None = None
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
 
 class ClientRegistration(BaseModel, frozen=True):
     """A client's credentials at one authorization server.
@@ -863,6 +897,7 @@ class ClientRegistration(BaseModel, frozen=True):
     client_secret: SecretStr | None = None
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -894,6 +929,7 @@ class TokenSet(BaseModel, frozen=True):
     metadata: dict[str, Any] = {}
     context: dict[str, Any] = {}
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -962,6 +998,7 @@ class FreshTokenSet(TokenSet):
         msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
         return ConfigurationError(msg)
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1022,6 +1059,10 @@ class IdentityMaterial(BaseModel, frozen=True):
             id_token=id_token if isinstance(id_token, str) else None,
             scope=tokens.scope,
         )
+
+    __setattr__ = _refuse_a_change_without_repeating_the_value
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class TenancyContext(BaseModel, frozen=True):
@@ -1091,6 +1132,10 @@ class TenancyContext(BaseModel, frozen=True):
         if not self.owns_email_domain or self.domain is None:
             return None
         return self.domain.strip().lower() or None
+
+    __setattr__ = _refuse_a_change_without_repeating_the_value
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class IdentityProfile(BaseModel, frozen=True):
@@ -1217,6 +1262,10 @@ class IdentityProfile(BaseModel, frozen=True):
             return False
         return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
 
 class OAuthPendingState(BaseModel, frozen=True):
     """State stored during the OAuth authorization flow.
@@ -1238,5 +1287,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     created_at: float
     metadata: dict[str, Any] = {}
 
+    __setattr__ = _refuse_a_change_without_repeating_the_value
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE

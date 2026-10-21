@@ -11,9 +11,9 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import BaseModel, SecretStr
 
-from apron_auth import providers
+from apron_auth import models, providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
@@ -30,6 +30,16 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
     TokenSet,
+)
+
+# Every model the library defines, so a new one cannot be added without the refusal rules below.
+MODELS = sorted(
+    (
+        value
+        for value in vars(models).values()
+        if isinstance(value, type) and issubclass(value, BaseModel) and value.__module__ == models.__name__
+    ),
+    key=lambda model: model.__name__,
 )
 
 
@@ -330,7 +340,7 @@ class TestProviderConfig:
             authorize_url="https://provider.example.com/authorize",
             token_url="https://provider.example.com/token",
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             config.client_id = "other"
 
     def test_secret_not_leaked_in_repr(self) -> None:
@@ -584,6 +594,52 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_refuses_without_repeating_the_value(self, model: type[BaseModel]) -> None:
+        """An unscrubbed model repeats every value it was given, and some of them hold a credential."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate(object())
+
+    def test_identity_material_repeats_no_token_it_was_given(self) -> None:
+        token = "THE_" + "REAL_ID_TOKEN"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            IdentityMaterial.model_validate({"id_token": token})
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert token not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        ("model", "payload", "field"),
+        [
+            pytest.param(ClientRegistration, {"client_id": "cid"}, "client_id", id="a registration"),
+            pytest.param(IdentityMaterial, {"access_token": "at"}, "id_token", id="identity material"),
+            pytest.param(
+                OAuthPendingState,
+                {"state": "s", "redirect_uri": "https://app.example.com/callback", "created_at": 1.0},
+                "code_verifier",
+                id="a pending state",
+            ),
+            pytest.param(TokenSet, {"access_token": "at"}, "refresh_token", id="a token set"),
+        ],
+    )
+    def test_a_refused_change_repeats_no_value(
+        self, model: type[BaseModel], payload: dict[str, object], field: str
+    ) -> None:
+        """Every model refuses a change, and the refusal must repeat no more than a construction does."""
+        instance = model.model_validate(payload)
+        value = "THE_" + "REAL_VALUE"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            setattr(instance, field, value)
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert value not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
 
 class TestProviderConfigKeepsTheCallersMapping:
     def test_validation_adds_no_key_to_the_mapping_it_was_given(self) -> None:
@@ -680,7 +736,7 @@ class TestScopeMetadata:
         assert meta.required is True
 
     def test_invalid_access_type_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ScopeMetadata(
                 scope="openid",
                 label="OpenID",
@@ -695,7 +751,7 @@ class TestScopeMetadata:
             description="Sign you in",
             access_type="read",
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             meta.scope = "other"
 
 
@@ -748,7 +804,7 @@ class TestTokenSet:
 
     def test_frozen(self) -> None:
         token = TokenSet(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             token.access_token = "other"
 
 
@@ -770,7 +826,7 @@ class TestFreshTokenSet:
 
     def test_frozen(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             tokens.access_token = "other"
 
     def test_model_validate_is_refused(self) -> None:
@@ -832,7 +888,7 @@ class TestIdentityMaterial:
 
     def test_frozen(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
     def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
@@ -897,7 +953,7 @@ class TestTenancyContext:
 
     def test_frozen(self) -> None:
         ctx = TenancyContext(id="T1")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ctx.id = "other"
 
     def test_raw_isolated_from_caller_mutation(self) -> None:
@@ -1239,7 +1295,7 @@ class TestIdentityProfile:
 
     def test_frozen(self) -> None:
         identity = IdentityProfile()
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             identity.tenancies = (TenancyContext(id="T1"),)
 
 
@@ -1300,7 +1356,7 @@ class TestOAuthPendingState:
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             state.state = "other"
 
 
