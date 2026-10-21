@@ -608,7 +608,7 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__context__ is None
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
-    def test_every_model_refuses_without_repeating_the_value(self, model: type[BaseModel]) -> None:
+    def test_every_model_scrubs_a_refusal(self, model: type[BaseModel]) -> None:
         """An unscrubbed model repeats every value it was given, and some of them hold a credential."""
         with pytest.raises(ConfigurationError):
             model.model_validate(object())
