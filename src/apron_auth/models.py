@@ -405,7 +405,7 @@ class _RefusesWithoutRepeating(BaseModel):
 
     A framework refusal carries the raw value it was given, which for a model that holds a credential
     means a caller recording the refusal records the credential with it. Each entry point here raises a
-    configuration error naming the field and the condition instead.
+    configuration error stating what it refused, naming the field where the refusal names one.
 
     NOTE: A model must also attach the shared wrap validator as its last member, which covers the entry
     points the framework owns. A wrap validator attached here would not wrap a subclass's own validators.
