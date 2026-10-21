@@ -55,9 +55,6 @@ logger = logging.getLogger(__name__)
 # The response statuses that say the server serves no such document: not found and gone.
 _ABSENT_DOCUMENT_STATUSES = (404, 410)
 
-# The one wording for a URL this library cannot read or send, wherever the fault is caught.
-_MALFORMED_URL_MESSAGE = "MCP OAuth received a malformed URL"
-
 # The well-known paths of the discovery documents: authorization server (RFC 8414),
 # OpenID provider (OpenID Connect Discovery 1.0) and protected resource (RFC 9728).
 _WELL_KNOWN_ASM = "/.well-known/oauth-authorization-server"
@@ -131,7 +128,7 @@ async def discover(
             trying the next candidate URL.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
-    _validate_url(server_url, url_validator, caller_supplied=True)
+    _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
     resource_meta = await _fetch_first_metadata(
         _prm_candidate_urls(resource_metadata_url, server_url),
@@ -147,7 +144,7 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-    _validate_url(auth_server, url_validator, caller_supplied=False)
+    _validate_url(auth_server, url_validator, subject="authorization_servers", caller_supplied=False)
     # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
     # The delimiters are checked, so an empty query or fragment counts.
     if "?" in auth_server or "#" in auth_server:
@@ -183,13 +180,19 @@ async def discover(
     revocation = server_meta.get("revocation_endpoint")
     registration_url = registration if isinstance(registration, str) else None
     revocation_url = revocation if isinstance(revocation, str) else None
-    for url in (authorize_url, token_url, registration_url, revocation_url):
+    declared = (
+        ("authorize_url", authorize_url),
+        ("token_url", token_url),
+        ("registration_url", registration_url),
+        ("revocation_url", revocation_url),
+    )
+    for subject, url in declared:
         if url is not None:
-            _validate_url(url, url_validator, caller_supplied=False)
+            _validate_url(url, url_validator, subject=subject, caller_supplied=False)
 
     resource = resource_meta.get("resource")
     if isinstance(resource, str):
-        _require_no_authority_credential(resource, field="resource", caller_supplied=False)
+        _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
@@ -343,8 +346,8 @@ async def register_client(
             then discards.
         OAuthError: As raised by ``url_validator``, unchanged.
     """
-    _validate_url(registration_url, url_validator, caller_supplied=True)
-    _require_no_authority_credential(redirect_uri, field="redirect_uri", caller_supplied=True)
+    _validate_url(registration_url, url_validator, subject="registration_url", caller_supplied=True)
+    _require_no_authority_credential(redirect_uri, subject="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -362,7 +365,7 @@ async def register_client(
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
-            raise error_cls(_MALFORMED_URL_MESSAGE, kind=error_kind) from exc
+            raise error_cls(_malformed_url_message("registration_url"), kind=error_kind) from exc
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
@@ -690,12 +693,24 @@ def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     return None
 
 
-def _require_no_authority_credential(url: str, *, field: str, caller_supplied: bool) -> None:
+def _malformed_url_message(subject: str) -> str:
+    """Return the one wording for a URL this library cannot read or send, naming what the URL is.
+
+    Args:
+        subject: What the URL is, which the caller names so a refusal says which URL failed.
+
+    Returns:
+        The refusal text.
+    """
+    return f"MCP OAuth received a malformed URL ({subject})"
+
+
+def _require_no_authority_credential(url: str, *, subject: str, caller_supplied: bool) -> None:
     """Refuse a URL whose authority carries a credential, by the fault class its source decides.
 
     Args:
         url: The URL to check.
-        field: What the URL is, for the refusal.
+        subject: What the URL is, for the refusal.
         caller_supplied: The URL is an argument of this library's caller, or derives
             from one, not a member of a fetched document.
 
@@ -709,9 +724,9 @@ def _require_no_authority_credential(url: str, *, field: str, caller_supplied: b
         case AuthorityCredential.ABSENT:
             return
         case AuthorityCredential.MALFORMED:
-            raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind)
+            raise error_cls(_malformed_url_message(subject), kind=kind)
         case AuthorityCredential.PRESENT:
-            msg = f"MCP OAuth refused a {field} that carries userinfo"
+            msg = f"MCP OAuth refused a URL that carries userinfo ({subject})"
             raise error_cls(msg, kind=kind)
         case _:
             assert_never(credential)
@@ -730,7 +745,7 @@ def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]
     return McpDiscoveryError, FailureKind.REFUSED
 
 
-def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_supplied: bool) -> None:
+def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str, caller_supplied: bool) -> None:
     """Validate an MCP OAuth URL before it is requested.
 
     A URL is rejected when it is malformed, not HTTPS, carries userinfo, or targets
@@ -741,6 +756,7 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     Args:
         url: The URL to check.
         url_validator: Optional policy invoked on a URL that passed the checks.
+        subject: What the URL is, for a refusal.
         caller_supplied: The URL is an argument of this library's caller, or derives
             from one, not a member of a fetched document.
 
@@ -753,11 +769,11 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, caller_suppli
     try:
         parsed = _parse_url(url)
     except ValueError as exc:
-        raise error_cls(_MALFORMED_URL_MESSAGE, kind=kind) from exc
+        raise error_cls(_malformed_url_message(subject), kind=kind) from exc
     if parsed.scheme != "https":
         msg = "MCP OAuth requires HTTPS URLs"
         raise error_cls(msg, kind=kind)
-    _require_no_authority_credential(url, field="URL", caller_supplied=caller_supplied)
+    _require_no_authority_credential(url, subject=subject, caller_supplied=caller_supplied)
     if _is_blocked_host(parsed.hostname or ""):
         msg = "MCP OAuth blocked a non-public host"
         raise error_cls(msg, kind=kind)
@@ -857,14 +873,14 @@ async def _fetch_first_metadata(
     outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
-        _validate_url(url, url_validator, caller_supplied=caller_supplied)
+        _validate_url(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
         async with discovery_client(url, transport_factory) as client:
             try:
                 response = await client.get(url)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
                 error_cls, error_kind = _url_fault(caller_supplied=caller_supplied)
-                raise error_cls(_MALFORMED_URL_MESSAGE, kind=error_kind) from exc
+                raise error_cls(_malformed_url_message(f"{what} URL"), kind=error_kind) from exc
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
