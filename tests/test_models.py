@@ -492,17 +492,6 @@ class TestProviderConfigUrlCredentials:
                 token_url="https://provider.example.com/token",
             )
 
-    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
-        """The parser states no field, and its own wording names an internal rather than the condition."""
-        with pytest.raises(ConfigurationError, match="resource is malformed"):
-            ProviderConfig(
-                client_id="cid",
-                client_secret=SecretStr("csec"),  # pragma: allowlist secret
-                authorize_url="https://provider.example.com/authorize",
-                token_url="https://provider.example.com/token",
-                resource="https://[::1/resource",
-            )
-
     def test_the_refusal_message_names_only_the_field(self) -> None:
         """The refusal names the field that failed and nothing else, so a log of it carries no value."""
         with pytest.raises(ConfigurationError) as exc_info:
@@ -693,6 +682,20 @@ class TestARefusalRepeatsNoValue:
         assert value not in rendered
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+
+class TestProviderConfigResource:
+    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
+        """The resource rule reads the resource first, and the parser names an internal rather than the
+        condition it refused."""
+        with pytest.raises(ConfigurationError, match="resource is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                resource="https://[::1/resource",
+            )
 
 
 class TestProviderConfigKeepsTheCallersMapping:

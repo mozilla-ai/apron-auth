@@ -312,7 +312,7 @@ def _refusal_text(error: ValidationError) -> str:
     refusals: list[str] = []
     for entry in error.errors(include_url=False, include_input=False, include_context=False):
         reason = entry["msg"].removeprefix("Value error, ")
-        # NOTE: A mapping key of the marker's own text is indistinguishable from it, and is dropped too.
+        # NOTE: A mapping key of the marker's own text in the marker's own position is dropped with it.
         path = entry["loc"]
         if path and path[-1] == _DICT_KEY_MARKER:
             path = path[:-1]
@@ -326,6 +326,9 @@ def _refuse_a_change_without_repeating_the_value(model: BaseModel, name: str, va
 
     A refused change carries the raw value it was given, which for a model that holds a credential
     means a caller recording the refusal records the credential with it.
+
+    NOTE: Only a validation refusal is scrubbed. A model that is not frozen can refuse a change with
+    another error class, which passes through as the framework wrote it.
 
     Args:
         model: The model to change.
@@ -442,17 +445,17 @@ def _refuse_without_repeating_the_value(
     raise ConfigurationError(refusals)
 
 
-# Attach this as a credential-bearing model's last validator, so it wraps the others. The validator is
-# shared rather than written in each model, so it types against the base and not each concrete model.
 # Attach this to every model, so a document refused before any field of it is read repeats none of it.
 _REPEATS_NO_DOCUMENT = classmethod(_refuse_a_document_without_repeating_the_value)
 
-# Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
-_URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
-
+# Attach this as a model's last validator, so it wraps the others. It is shared rather than written in
+# each model, so it types against the base and not each concrete model.
 _REPEATS_NO_VALUE = model_validator(mode="wrap")(
     classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
 )
+
+# Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
+_URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
 
 
 class ScopeMetadata(BaseModel, frozen=True):

@@ -181,10 +181,10 @@ async def discover(
     registration_url = registration if isinstance(registration, str) else None
     revocation_url = revocation if isinstance(revocation, str) else None
     declared = (
-        ("authorize_url", authorize_url),
-        ("token_url", token_url),
-        ("registration_url", registration_url),
-        ("revocation_url", revocation_url),
+        ("authorization_endpoint", authorize_url),
+        ("token_endpoint", token_url),
+        ("registration_endpoint", registration_url),
+        ("revocation_endpoint", revocation_url),
     )
     for subject, url in declared:
         if url is not None:
@@ -432,7 +432,7 @@ def cimd_client_id(url: str) -> str:
         case AuthorityCredential.ABSENT:
             pass
         case AuthorityCredential.MALFORMED:
-            # NOTE: Unreachable. The parse above refuses an authority this cannot read.
+            # NOTE: This arm is unreachable, because the parse above refuses an authority it cannot read.
             msg = "CIMD client_id must be a valid URL"
             raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         case AuthorityCredential.PRESENT:

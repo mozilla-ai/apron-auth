@@ -673,7 +673,7 @@ class TestDiscover:
         token_url = "https://user:pw@auth.example.com/token"  # pragma: allowlist secret
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint=token_url))
-        with pytest.raises(McpDiscoveryError, match=r"userinfo \(token_url\)") as exc_info:
+        with pytest.raises(McpDiscoveryError, match=r"userinfo \(token_endpoint\)") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
 
