@@ -641,6 +641,18 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_scrubs_after_its_own_rules(self, model: type[BaseModel]) -> None:
+        """A rule attached before a model's own rules runs inside them, so their refusals escape unscrubbed."""
+        modes = [holder.info.mode for holder in model.__pydantic_decorators__.model_validators.values()]
+
+        assert modes[-1] == "wrap"
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_scrubs_a_change(self, model: type[BaseModel]) -> None:
+        """A model without this refuses a change with the framework's error, which carries the value."""
+        assert model.__setattr__ is models._refuse_a_change_without_repeating_the_value
+
     def test_identity_material_repeats_no_token_it_was_given(self) -> None:
         token = "THE_" + "REAL_ID_TOKEN"  # pragma: allowlist secret
 

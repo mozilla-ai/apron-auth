@@ -1047,9 +1047,9 @@ class FreshTokenSet(TokenSet):
         msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
         return ConfigurationError(msg)
 
-    __setattr__ = _refuse_a_change_without_repeating_the_value
-    # Attached last, so it wraps every validator above it.
-    _repeats_no_value = _REPEATS_NO_VALUE
+    # NOTE: The name differs from the base's. Re-using that name keeps the base's place in the chain,
+    # which is ahead of this model's own rules, whose refusals would then escape unscrubbed.
+    _repeats_no_value_last = _REPEATS_NO_VALUE
 
 
 class IdentityMaterial(BaseModel, frozen=True):
