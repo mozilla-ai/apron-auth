@@ -144,7 +144,7 @@ async def discover(
     if not auth_server:
         msg = "protected resource metadata declares no authorization server"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-    _validate_url(auth_server, url_validator, subject="authorization_servers", caller_supplied=False)
+    _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=False)
     # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
     # The delimiters are checked, so an empty query or fragment counts.
     if "?" in auth_server or "#" in auth_server:
@@ -771,11 +771,11 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     except ValueError as exc:
         raise error_cls(_malformed_url_message(subject), kind=kind) from exc
     if parsed.scheme != "https":
-        msg = "MCP OAuth requires HTTPS URLs"
+        msg = f"MCP OAuth requires HTTPS URLs ({subject})"
         raise error_cls(msg, kind=kind)
     _require_no_authority_credential(url, subject=subject, caller_supplied=caller_supplied)
     if _is_blocked_host(parsed.hostname or ""):
-        msg = "MCP OAuth blocked a non-public host"
+        msg = f"MCP OAuth blocked a non-public host ({subject})"
         raise error_cls(msg, kind=kind)
     if url_validator is None:
         return

@@ -641,7 +641,7 @@ class TestDiscover:
         declared = "https://user:pw@auth.example.com"  # pragma: allowlist secret
         seen: list[str] = []
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
-        with pytest.raises(McpDiscoveryError, match=r"userinfo \(authorization_servers\)"):
+        with pytest.raises(McpDiscoveryError, match=r"userinfo \(authorization server\)"):
             await discover("https://mcp.example.com", url_validator=seen.append)
         assert len(httpx_mock.get_requests()) == 1
         assert declared not in seen
@@ -1099,7 +1099,7 @@ class TestValidateUrl:
     )
     def test_a_caller_supplied_url_is_a_configuration_fault(self, url: str) -> None:
         """The same conditions on the caller's own argument need a fix in the caller, not a retry."""
-        with pytest.raises(ConfigurationError) as exc_info:
+        with pytest.raises(ConfigurationError, match=r"\(server_url\)") as exc_info:
             _validate_url(url, None, subject="server_url", caller_supplied=True)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert exc_info.value.retryable is False
