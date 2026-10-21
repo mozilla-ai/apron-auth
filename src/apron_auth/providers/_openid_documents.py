@@ -16,6 +16,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
+from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import FailureKind, OidcDiscoveryError
 
 if TYPE_CHECKING:
@@ -34,7 +35,8 @@ def require_url(
     The value must be a string with a scheme, a host and no fragment.
     A URL that cannot be requested as written is refused here rather than at the fetch.
     It must use ``https`` unless ``allow_insecure_http`` is set.
-    An issuer also has no query and no userinfo (OpenID Connect Discovery 1.0 section 4.1).
+    It carries no userinfo, because a request would present that as a credential.
+    An issuer also has no query (OpenID Connect Discovery 1.0 section 4.1).
 
     Args:
         value: The raw value to check.
@@ -76,11 +78,20 @@ def require_url(
     if "#" in value:
         msg = f"OpenID {field} must not carry a fragment"
         raise OidcDiscoveryError(msg, kind=kind)
+    credential = authority_credential(value)
+    match credential:
+        case AuthorityCredential.ABSENT:
+            pass
+        case AuthorityCredential.MALFORMED:
+            msg = f"OpenID {field} is malformed"
+            raise OidcDiscoveryError(msg, kind=kind)
+        case AuthorityCredential.PRESENT:
+            msg = f"OpenID {field} must not carry userinfo"
+            raise OidcDiscoveryError(msg, kind=kind)
+        case _:
+            assert_never(credential)
     if is_issuer and "?" in value:
         msg = f"OpenID {field} must not carry a query"
-        raise OidcDiscoveryError(msg, kind=kind)
-    if is_issuer and "@" in parsed.netloc:
-        msg = f"OpenID {field} must not carry userinfo"
         raise OidcDiscoveryError(msg, kind=kind)
     return value
 

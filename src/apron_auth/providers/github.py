@@ -250,11 +250,13 @@ class GitHubRevocationHandler:
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
-        auth = config.basic_auth() or httpx.USE_CLIENT_DEFAULT
+        auth = config.basic_auth()
         try:
             response = await client.request(
                 "DELETE",
                 revocation_url,
+                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an injected client's own
+                # auth flow is not applied to the server-supplied revocation URL.
                 auth=auth,
                 headers=_GITHUB_API_HEADERS,
                 json={"access_token": token},

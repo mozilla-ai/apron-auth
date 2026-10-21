@@ -6,12 +6,21 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn
+from typing import Any, Literal, NoReturn, assert_never
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field, SecretStr, ValidationInfo, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    ModelWrapValidatorHandler,
+    SecretStr,
+    ValidationError,
+    ValidationInfo,
+    model_validator,
+)
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
+from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -36,6 +45,13 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
         "state",
     }
 )
+
+# The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
+_DICT_KEY_MARKER = "[key]"
+
+# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
+# handed to a browser, or recorded wherever the config is.
+URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
 
 
 @unique
@@ -304,11 +320,76 @@ class ScopeMetadata(BaseModel, frozen=True):
     required: bool = False
 
 
+def _refusal_text(error: ValidationError) -> str:
+    """Return a model's refusals as one line, dropping the value the framework attached to each.
+
+    NOTE: A refusal written by this model's own validators is passed through as it stands, so a
+    validator that interpolates a value into its message still carries that value here.
+
+    Args:
+        error: The refusal raised while validating the model.
+
+    Returns:
+        One line naming each refused field and why, or the model-level reason when a refusal names no field.
+    """
+    refusals: list[str] = []
+    for entry in error.errors(include_url=False, include_input=False, include_context=False):
+        reason = entry["msg"].removeprefix("Value error, ")
+        field = ".".join(str(part) for part in entry["loc"] if part != _DICT_KEY_MARKER)
+        refusals.append(f"{field}: {reason}" if field else reason)
+    return "; ".join(refusals)
+
+
+def _refuse_without_repeating_the_value(
+    cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler[Any]
+) -> Any:
+    """Validate a model, refusing with a configuration error that repeats no value it was given.
+
+    A validation refusal carries the raw value it was given, which for a model that holds a
+    credential means a caller recording the refusal records the credential with it.
+
+    NOTE: Attach this as a model's last validator, so it wraps the others. One attached to a base
+    class does not wrap a subclass's own validators, whose refusals would then escape unscrubbed.
+
+    NOTE: A model validated as a field of another model refuses with this error rather than one the
+    outer model can collect, so the refusal names the field inside this model and not the path to
+    it, and any other refusal the outer model would have reported is lost.
+
+    Args:
+        cls: The model being validated.
+        data: The value to validate, as it arrived.
+        handler: The validation this wraps.
+
+    Returns:
+        The validated model.
+
+    Raises:
+        ConfigurationError: If validation refuses the value.
+    """
+    refusals: str | None = None
+    try:
+        return handler(data)
+    except ValidationError as error:
+        refusals = _refusal_text(error)
+    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+    raise ConfigurationError(refusals)
+
+
+# Attach this as a credential-bearing model's last validator, so it wraps the others. The validator is
+# shared rather than written in each model, so it types against the base and not each concrete model.
+_REPEATS_NO_VALUE = model_validator(mode="wrap")(
+    classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
+)
+
+
 class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
     one cannot be dropped silently and leave the config weaker than the caller asked for.
+
+    No URL field carries userinfo, because each one is sent to the provider, handed to a browser,
+    or recorded wherever the config is.
 
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
@@ -525,7 +606,12 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         if "#" in self.resource:
             msg = "resource must not contain a fragment"
             raise ValueError(msg)
-        if not urlparse(self.resource).scheme:
+        try:
+            scheme = urlparse(self.resource).scheme
+        except ValueError as exc:
+            msg = "resource is malformed"
+            raise ValueError(msg) from exc
+        if not scheme:
             msg = "resource must be an absolute URI when set"
             raise ValueError(msg)
         return self
@@ -543,6 +629,34 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         if not self.scope_separator:
             msg = "scope_separator must not be empty"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _urls_carry_no_userinfo(self) -> ProviderConfig:
+        """Reject a URL whose authority carries a credential, naming the field that carries it.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If a URL field carries userinfo, or its authority cannot be read.
+        """
+        for field in URL_FIELDS:
+            url = getattr(self, field)
+            if url is None:
+                continue
+            credential = authority_credential(url)
+            match credential:
+                case AuthorityCredential.ABSENT:
+                    continue
+                case AuthorityCredential.MALFORMED:
+                    msg = f"{field} is malformed"
+                    raise ValueError(msg)
+                case AuthorityCredential.PRESENT:
+                    msg = f"{field} must not carry userinfo"
+                    raise ValueError(msg)
+                case _:
+                    assert_never(credential)
         return self
 
     @model_validator(mode="before")
@@ -663,6 +777,9 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
 
 class ServerMetadata(BaseModel, frozen=True):
     """OAuth metadata discovered for an authorization server.
@@ -746,6 +863,9 @@ class ClientRegistration(BaseModel, frozen=True):
     client_secret: SecretStr | None = None
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
 
 class TokenSet(BaseModel, frozen=True):
     """Token data returned from code exchange or refresh.
@@ -773,6 +893,9 @@ class TokenSet(BaseModel, frozen=True):
     scope: str | None = None
     metadata: dict[str, Any] = {}
     context: dict[str, Any] = {}
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class FreshTokenSet(TokenSet):
@@ -838,6 +961,9 @@ class FreshTokenSet(TokenSet):
     def _stored_data_refusal() -> ConfigurationError:
         msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
         return ConfigurationError(msg)
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class IdentityMaterial(BaseModel, frozen=True):
@@ -1111,3 +1237,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     nonce: str | None = None
     created_at: float
     metadata: dict[str, Any] = {}
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
