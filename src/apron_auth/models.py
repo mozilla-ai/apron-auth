@@ -46,9 +46,19 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
-# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
-# handed to a browser, or recorded wherever the model is.
-URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
+# Every URL field this library requests, hands to a browser, or records. None may carry a credential in
+# its authority. A provider's profile image is not one of them, because this library never requests it.
+URL_FIELDS = (
+    "authorize_url",
+    "issuer",
+    "jwks_url",
+    "redirect_uri",
+    "registration_url",
+    "resource",
+    "revocation_url",
+    "token_url",
+    "userinfo_url",
+)
 
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
@@ -915,6 +925,7 @@ class ServerMetadata(BaseModel, frozen=True):
 
     __setattr__ = _refuse_a_change_without_repeating_the_value
     model_validate_json = _REPEATS_NO_DOCUMENT
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 

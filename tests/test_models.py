@@ -27,6 +27,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    ServerMetadata,
     TenancyContext,
     TokenEndpointAuthMethod,
     TokenSet,
@@ -457,7 +458,7 @@ class TestProviderConfigUnknownFields:
 
 
 class TestProviderConfigUrlCredentials:
-    @pytest.mark.parametrize("field", list(URL_FIELDS))
+    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ProviderConfig.model_fields])
     @pytest.mark.parametrize(
         "authority",
         [
@@ -764,6 +765,25 @@ class TestProviderConfigValidateIssuer:
     def test_missing_iss_allowed_when_not_required(self) -> None:
         config = self._config(issuer="https://auth.example.com", require_iss=False)
         config.validate_issuer(None)
+
+
+class TestServerMetadata:
+    def test_a_url_carrying_a_credential_is_refused(self) -> None:
+        """Metadata can be built by hand, so the model decides what its URLs may carry."""
+        with pytest.raises(ConfigurationError, match="authorize_url must not carry userinfo"):
+            ServerMetadata(
+                authorize_url="https://operator:" + "sesame@auth.example.com/authorize",
+                token_url="https://auth.example.com/token",
+            )
+
+    def test_a_key_set_url_carrying_a_credential_is_refused(self) -> None:
+        """A key set URL is requested like the endpoints, so the rule covers it too."""
+        with pytest.raises(ConfigurationError, match="jwks_url must not carry userinfo"):
+            ServerMetadata(
+                authorize_url="https://auth.example.com/authorize",
+                token_url="https://auth.example.com/token",
+                jwks_url="https://operator:" + "sesame@auth.example.com/jwks",
+            )
 
 
 class TestScopeMetadata:
