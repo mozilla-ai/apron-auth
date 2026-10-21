@@ -570,6 +570,19 @@ class TestARefusalRepeatsNoValue:
                 resource="https://[::1/resource",
             )
 
+    def test_a_refusal_keeps_a_mapping_key_that_reads_like_the_marker(self) -> None:
+        """A key a caller chose is the caller's, and dropping it names a path the model does not have."""
+        with pytest.raises(ConfigurationError) as exc_info:
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                implicit_scopes={"[key]": {7}},  # ty: ignore[invalid-argument-type]
+            )
+
+        assert "implicit_scopes.[key].0" in str(exc_info.value)
+
     def test_a_refusal_names_no_marker_the_framework_uses_for_a_mapping_key(self) -> None:
         """A path the framework builds for a mapping key names no field of this model."""
         with pytest.raises(ConfigurationError) as exc_info:

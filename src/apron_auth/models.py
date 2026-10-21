@@ -302,7 +302,11 @@ def _refusal_text(error: ValidationError) -> str:
     refusals: list[str] = []
     for entry in error.errors(include_url=False, include_input=False, include_context=False):
         reason = entry["msg"].removeprefix("Value error, ")
-        field = ".".join(str(part) for part in entry["loc"] if part != _DICT_KEY_MARKER)
+        # NOTE: A mapping key of the marker's own text is indistinguishable from it, and is dropped too.
+        path = entry["loc"]
+        if path and path[-1] == _DICT_KEY_MARKER:
+            path = path[:-1]
+        field = ".".join(str(part) for part in path)
         refusals.append(f"{field}: {reason}" if field else reason)
     return "; ".join(refusals)
 
