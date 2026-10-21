@@ -6,7 +6,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn, assert_never
+from typing import Any, Literal, NoReturn, Self, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -46,12 +46,22 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# Every URL field this library requests or hands to a browser. None may carry a credential in its
+# authority. A provider's profile image is not one of them, because it is only ever read back out.
+URL_FIELDS = (
+    "authorize_url",
+    "issuer",
+    "jwks_url",
+    "redirect_uri",
+    "registration_url",
+    "resource",
+    "revocation_url",
+    "token_url",
+    "userinfo_url",
+)
+
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
-
-# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
-# handed to a browser, or recorded wherever the config is.
-URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
 
 
 @unique
@@ -287,7 +297,195 @@ class Provider(StrEnum):
     )
 
 
-class ScopeMetadata(BaseModel, frozen=True):
+def _refusal_text(error: ValidationError) -> str:
+    """Return a model's refusals as one line, dropping the value the framework attached to each.
+
+    NOTE: A refusal a model's own validator wrote is passed through as it stands, so a validator
+    that interpolates a value into its message still carries that value here.
+
+    Args:
+        error: The refusal raised while validating the model.
+
+    Returns:
+        One line naming each refused field and why, or the model-level reason when a refusal names no field.
+    """
+    refusals: list[str] = []
+    for entry in error.errors(include_url=False, include_input=False, include_context=False):
+        reason = entry["msg"].removeprefix("Value error, ")
+        # NOTE: A mapping key of the marker's own text in the marker's own position is dropped with it.
+        path = entry["loc"]
+        if path and path[-1] == _DICT_KEY_MARKER:
+            path = path[:-1]
+        field = ".".join(str(part) for part in path)
+        refusals.append(f"{field}: {reason}" if field else reason)
+    return "; ".join(refusals)
+
+
+def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
+    """Refuse a URL field whose authority carries a credential, naming the field that carries it.
+
+    A field named in :data:`URL_FIELDS` and absent from the model is skipped, so one rule covers
+    models that hold different subsets of those fields.
+
+    Args:
+        model: The model to read the URL fields of.
+
+    Returns:
+        The model, unchanged.
+
+    Raises:
+        ValueError: If a URL field carries userinfo, or its authority cannot be read.
+    """
+    for field in URL_FIELDS:
+        url = getattr(model, field, None)
+        if url is None:
+            continue
+        credential = authority_credential(url)
+        match credential:
+            case AuthorityCredential.ABSENT:
+                continue
+            case AuthorityCredential.MALFORMED:
+                msg = f"{field} is malformed"
+                raise ValueError(msg)
+            case AuthorityCredential.PRESENT:
+                msg = f"{field} must not carry userinfo"
+                raise ValueError(msg)
+            case _:
+                assert_never(credential)
+    return model
+
+
+def _refuse_without_repeating_the_value(
+    cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler[Any]
+) -> Any:
+    """Validate a model, refusing with a configuration error that repeats no value it was given.
+
+    A validation refusal carries the raw value it was given, which for a model that holds a
+    credential means a caller recording the refusal records the credential with it.
+
+    NOTE: Attach this as a model's last validator, so it wraps the others. One attached to a base
+    class does not wrap a subclass's own validators, whose refusals would then escape unscrubbed.
+
+    NOTE: A model validated as a field of another model refuses with this error rather than one the
+    outer model can collect. The refusal names the field inside this model and not the path to it.
+    Any other refusal the outer model would have reported is lost.
+
+    Args:
+        cls: The model being validated.
+        data: The value to validate, as it arrived.
+        handler: The validation this wraps.
+
+    Returns:
+        The validated model.
+
+    Raises:
+        ConfigurationError: If validation refuses the value.
+    """
+    refusals: str | None = None
+    try:
+        return handler(data)
+    except ValidationError as error:
+        refusals = _refusal_text(error)
+    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+    raise ConfigurationError(refusals)
+
+
+# Attach this as a model's last validator, so it wraps the others. It is shared rather than written in
+# each model, so it types against the base and not each concrete model.
+_REPEATS_NO_VALUE = model_validator(mode="wrap")(
+    classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
+)
+
+# Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
+_URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
+
+
+class _RefusesWithoutRepeating(BaseModel):
+    """A model that refuses without repeating the value it was given, at each entry point of its own.
+
+    A framework refusal carries the raw value it was given, which for a model that holds a credential
+    means a caller recording the refusal records the credential with it. Each entry point here raises a
+    configuration error stating what it refused, naming the field where the refusal names one.
+
+    NOTE: A model must also attach the shared wrap validator as its last member, which covers the entry
+    points the framework owns. A wrap validator attached here would not wrap a subclass's own validators.
+    """
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        """Set an attribute, refusing without repeating the value it was given.
+
+        NOTE: Only a validation refusal is scrubbed. A model that is not frozen can refuse a change with
+        another error class, which passes through as the framework wrote it.
+
+        Args:
+            name: The name of the attribute to set.
+            value: The value to set it to.
+
+        Raises:
+            ConfigurationError: If the change is refused.
+        """
+        refusals: str | None = None
+        try:
+            super().__setattr__(name, value)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        else:
+            return
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+    @classmethod
+    def model_validate_json(cls, json_data: str | bytes | bytearray, **kwargs: Any) -> Self:
+        """Validate a JSON document, refusing without repeating the value it was given.
+
+        A document the parser refuses is refused before any field of it is read, so the framework's
+        refusal carries the whole document rather than one field's value.
+
+        Args:
+            json_data: The document to validate.
+            **kwargs: The validation options, passed on as given.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ConfigurationError: If validation refuses the document.
+        """
+        refusals: str | None = None
+        try:
+            return super().model_validate_json(json_data, **kwargs)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+    @classmethod
+    def model_validate_strings(cls, obj: Any, **kwargs: Any) -> Self:
+        """Validate a mapping of strings, refusing without repeating the value it was given.
+
+        A value that is not a mapping is refused before any field of it is read, so the framework's
+        refusal carries the whole value rather than one field's.
+
+        Args:
+            obj: The value to validate.
+            **kwargs: The validation options, passed on as given.
+
+        Returns:
+            The validated model.
+
+        Raises:
+            ConfigurationError: If validation refuses the value.
+        """
+        refusals: str | None = None
+        try:
+            return super().model_validate_strings(obj, **kwargs)
+        except ValidationError as error:
+            refusals = _refusal_text(error)
+        # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
+        raise ConfigurationError(refusals)
+
+
+class ScopeMetadata(_RefusesWithoutRepeating, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
 
     Field shape mirrors apron-tools' ``ScopeMetadata`` so a consumer can
@@ -319,70 +517,11 @@ class ScopeMetadata(BaseModel, frozen=True):
     access_type: AccessType
     required: bool = False
 
-
-def _refusal_text(error: ValidationError) -> str:
-    """Return a model's refusals as one line, dropping the value the framework attached to each.
-
-    NOTE: A refusal written by this model's own validators is passed through as it stands, so a
-    validator that interpolates a value into its message still carries that value here.
-
-    Args:
-        error: The refusal raised while validating the model.
-
-    Returns:
-        One line naming each refused field and why, or the model-level reason when a refusal names no field.
-    """
-    refusals: list[str] = []
-    for entry in error.errors(include_url=False, include_input=False, include_context=False):
-        reason = entry["msg"].removeprefix("Value error, ")
-        field = ".".join(str(part) for part in entry["loc"] if part != _DICT_KEY_MARKER)
-        refusals.append(f"{field}: {reason}" if field else reason)
-    return "; ".join(refusals)
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
-def _refuse_without_repeating_the_value(
-    cls: type[BaseModel], data: Any, handler: ModelWrapValidatorHandler[Any]
-) -> Any:
-    """Validate a model, refusing with a configuration error that repeats no value it was given.
-
-    A validation refusal carries the raw value it was given, which for a model that holds a
-    credential means a caller recording the refusal records the credential with it.
-
-    NOTE: Attach this as a model's last validator, so it wraps the others. One attached to a base
-    class does not wrap a subclass's own validators, whose refusals would then escape unscrubbed.
-
-    NOTE: A model validated as a field of another model refuses with this error rather than one the
-    outer model can collect, so the refusal names the field inside this model and not the path to
-    it, and any other refusal the outer model would have reported is lost.
-
-    Args:
-        cls: The model being validated.
-        data: The value to validate, as it arrived.
-        handler: The validation this wraps.
-
-    Returns:
-        The validated model.
-
-    Raises:
-        ConfigurationError: If validation refuses the value.
-    """
-    refusals: str | None = None
-    try:
-        return handler(data)
-    except ValidationError as error:
-        refusals = _refusal_text(error)
-    # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
-    raise ConfigurationError(refusals)
-
-
-# Attach this as a credential-bearing model's last validator, so it wraps the others. The validator is
-# shared rather than written in each model, so it types against the base and not each concrete model.
-_REPEATS_NO_VALUE = model_validator(mode="wrap")(
-    classmethod(_refuse_without_repeating_the_value)  # ty: ignore[invalid-argument-type]
-)
-
-
-class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
+class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """OAuth provider configuration — endpoints, credentials, behavior.
 
     Construction and validation refuse a field this model does not define, so a renamed or mistyped
@@ -631,34 +770,6 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
             raise ValueError(msg)
         return self
 
-    @model_validator(mode="after")
-    def _urls_carry_no_userinfo(self) -> ProviderConfig:
-        """Reject a URL whose authority carries a credential, naming the field that carries it.
-
-        Returns:
-            The validated config, unchanged.
-
-        Raises:
-            ValueError: If a URL field carries userinfo, or its authority cannot be read.
-        """
-        for field in URL_FIELDS:
-            url = getattr(self, field)
-            if url is None:
-                continue
-            credential = authority_credential(url)
-            match credential:
-                case AuthorityCredential.ABSENT:
-                    continue
-                case AuthorityCredential.MALFORMED:
-                    msg = f"{field} is malformed"
-                    raise ValueError(msg)
-                case AuthorityCredential.PRESENT:
-                    msg = f"{field} must not carry userinfo"
-                    raise ValueError(msg)
-                case _:
-                    assert_never(credential)
-        return self
-
     @model_validator(mode="before")
     @classmethod
     def _take_provider_facts_from_member(cls, data: Any) -> Any:
@@ -777,11 +888,12 @@ class ProviderConfig(BaseModel, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ServerMetadata(BaseModel, frozen=True):
+class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
     """OAuth metadata discovered for an authorization server.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
@@ -837,8 +949,12 @@ class ServerMetadata(BaseModel, frozen=True):
     userinfo_url: str | None = None
     jwks_url: str | None = None
 
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
-class ClientRegistration(BaseModel, frozen=True):
+
+class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
     """A client's credentials at one authorization server.
 
     RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
@@ -867,7 +983,7 @@ class ClientRegistration(BaseModel, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class TokenSet(BaseModel, frozen=True):
+class TokenSet(_RefusesWithoutRepeating, frozen=True):
     """Token data returned from code exchange or refresh.
 
     Attributes:
@@ -962,11 +1078,12 @@ class FreshTokenSet(TokenSet):
         msg = "A fresh token set cannot be built from stored data. Only a code exchange or a refresh produces one."
         return ConfigurationError(msg)
 
-    # Attached last, so it wraps every validator above it.
-    _repeats_no_value = _REPEATS_NO_VALUE
+    # NOTE: The name differs from the base's. Re-using that name keeps the base's place in the chain,
+    # which is ahead of any after or wrap rule of this model's own, whose refusals would then escape.
+    _repeats_no_value_last = _REPEATS_NO_VALUE
 
 
-class IdentityMaterial(BaseModel, frozen=True):
+class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
     """The material an identity handler establishes a user's identity from.
 
     Constructed from a :class:`FreshTokenSet` immediately before dispatching
@@ -1023,8 +1140,11 @@ class IdentityMaterial(BaseModel, frozen=True):
             scope=tokens.scope,
         )
 
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
-class TenancyContext(BaseModel, frozen=True):
+
+class TenancyContext(_RefusesWithoutRepeating, frozen=True):
     """Scoping container an OAuth access token operates within.
 
     The generic name covers SaaS vernacular variants — workspace,
@@ -1092,8 +1212,11 @@ class TenancyContext(BaseModel, frozen=True):
             return None
         return self.domain.strip().lower() or None
 
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
-class IdentityProfile(BaseModel, frozen=True):
+
+class IdentityProfile(_RefusesWithoutRepeating, frozen=True):
     """Normalized identity fields fetched from a provider.
 
     ``IdentityProfile`` answers "who authenticated?". The companion
@@ -1217,8 +1340,11 @@ class IdentityProfile(BaseModel, frozen=True):
             return False
         return any(tenancy._verified_domain() == target for tenancy in self.tenancies)
 
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
-class OAuthPendingState(BaseModel, frozen=True):
+
+class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
     """State stored during the OAuth authorization flow.
 
     Attributes:
@@ -1238,5 +1364,6 @@ class OAuthPendingState(BaseModel, frozen=True):
     created_at: float
     metadata: dict[str, Any] = {}
 
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE

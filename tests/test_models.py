@@ -11,9 +11,9 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
-from pydantic import BaseModel, SecretStr, ValidationError
+from pydantic import BaseModel, SecretStr
 
-from apron_auth import providers
+from apron_auth import models, providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
@@ -27,9 +27,23 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    ServerMetadata,
     TenancyContext,
     TokenEndpointAuthMethod,
     TokenSet,
+)
+
+# Every model the library offers, so a new one cannot be added without the refusal rules below.
+MODELS = sorted(
+    (
+        value
+        for value in vars(models).values()
+        if isinstance(value, type)
+        and issubclass(value, BaseModel)
+        and value.__module__ == models.__name__
+        and not value.__name__.startswith("_")
+    ),
+    key=lambda model: model.__name__,
 )
 
 
@@ -330,7 +344,7 @@ class TestProviderConfig:
             authorize_url="https://provider.example.com/authorize",
             token_url="https://provider.example.com/token",
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             config.client_id = "other"
 
     def test_secret_not_leaked_in_repr(self) -> None:
@@ -446,8 +460,38 @@ class TestProviderConfigUnknownFields:
             )
 
 
+class TestUrlFields:
+    def test_members_are_in_alphabetical_order(self) -> None:
+        names = list(URL_FIELDS)
+        assert names == sorted(names)
+
+    @pytest.mark.parametrize(
+        "model",
+        [model for model in MODELS if set(URL_FIELDS) & set(model.model_fields)],
+        ids=lambda model: model.__name__,
+    )
+    def test_every_model_holding_a_named_field_refuses_a_credential_in_it(self, model: type[BaseModel]) -> None:
+        """Naming a field here gives it no rule. The model holding it has to attach the rule as well."""
+        attached = {holder.func for holder in model.__pydantic_decorators__.model_validators.values()}
+
+        assert models._refuse_a_url_carrying_a_credential in attached
+
+    def test_every_url_field_of_every_model_is_named(self) -> None:
+        """A field whose name reads as a URL and is named nowhere here has no rule to refuse a credential."""
+        # A provider's profile image is the one URL this library neither requests nor sends.
+        uncovered = {"avatar_url"}
+        held = {
+            field
+            for model in MODELS
+            for field in model.model_fields
+            if field.endswith(("_uri", "_url")) or field in {"issuer", "resource"}
+        }
+
+        assert held - uncovered == set(URL_FIELDS)
+
+
 class TestProviderConfigUrlCredentials:
-    @pytest.mark.parametrize("field", list(URL_FIELDS))
+    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ProviderConfig.model_fields])
     @pytest.mark.parametrize(
         "authority",
         [
@@ -471,6 +515,16 @@ class TestProviderConfigUrlCredentials:
                 **endpoints,
             )
 
+    def test_a_url_the_parser_cannot_read_is_refused(self) -> None:
+        """A URL the parser cannot read states nothing about its authority, so no field may hold one."""
+        with pytest.raises(ConfigurationError, match="authorize_url is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://[::1/authorize",
+                token_url="https://provider.example.com/token",
+            )
+
     def test_the_refusal_message_names_only_the_field(self) -> None:
         """The refusal names the field that failed and nothing else, so a log of it carries no value."""
         with pytest.raises(ConfigurationError) as exc_info:
@@ -491,7 +545,7 @@ class _Settings(BaseModel):
 
 
 class TestARefusalRepeatsNoValue:
-    """A framework refusal carries the constructor's raw input, which for these models holds a credential."""
+    """A framework refusal carries the raw input and a path of its own, and neither is this library's."""
 
     def test_a_config_refusal_repeats_no_secret_and_no_url(self) -> None:
         secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
@@ -549,16 +603,18 @@ class TestARefusalRepeatsNoValue:
         assert secret not in rendered
         assert "operator" not in rendered
 
-    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
-        """The parser states no field, and its own wording names an internal rather than the condition."""
-        with pytest.raises(ConfigurationError, match="resource is malformed"):
+    def test_a_refusal_keeps_a_mapping_key_that_reads_like_the_marker(self) -> None:
+        """A key a caller chose is the caller's, and dropping it names a path the model does not have."""
+        with pytest.raises(ConfigurationError) as exc_info:
             ProviderConfig(
                 client_id="cid",
                 client_secret=SecretStr("csec"),  # pragma: allowlist secret
                 authorize_url="https://provider.example.com/authorize",
                 token_url="https://provider.example.com/token",
-                resource="https://[::1/resource",
+                implicit_scopes={"[key]": {7}},  # ty: ignore[invalid-argument-type]
             )
+
+        assert "implicit_scopes.[key].0" in str(exc_info.value)
 
     def test_a_refusal_names_no_marker_the_framework_uses_for_a_mapping_key(self) -> None:
         """A path the framework builds for a mapping key names no field of this model."""
@@ -583,6 +639,107 @@ class TestARefusalRepeatsNoValue:
         assert verifier not in rendered
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_scrubs_a_refusal(self, model: type[BaseModel]) -> None:
+        """An unscrubbed model repeats every value it was given, and some of them hold a credential."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate(object())
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_refuses_a_malformed_document(self, model: type[BaseModel]) -> None:
+        """A document that is not valid JSON is refused before any field is read, and carries all of it."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate_json("{")
+
+    def test_a_malformed_document_repeats_no_value(self) -> None:
+        token = "THE_" + "REAL_TOKEN"  # pragma: allowlist secret
+        document = json.dumps({"access_token": token, "token_type": "Bearer"})
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            TokenSet.model_validate_json(document[:-3])
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert token not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_scrubs_after_its_own_rules(self, model: type[BaseModel]) -> None:
+        """An after or wrap rule of a model's own escapes unscrubbed unless the scrub is attached last."""
+        last = list(model.__pydantic_decorators__.model_validators.values())[-1].func
+
+        assert getattr(last, "__func__", last) is models._refuse_without_repeating_the_value
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_scrubs_the_entry_points_it_owns(self, model: type[BaseModel]) -> None:
+        """A model stating the framework's base refuses a change, a document and strings with its error."""
+        assert issubclass(model, models._RefusesWithoutRepeating)
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_keeps_the_shared_rule_for_a_change(self, model: type[BaseModel]) -> None:
+        """Stating the base is not keeping its rule, and this module overrides these entry points."""
+        assert model.__setattr__ is models._RefusesWithoutRepeating.__setattr__
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_refuses_a_malformed_mapping_of_strings(self, model: type[BaseModel]) -> None:
+        """A value that is not a mapping is refused before any field of it is read, and carries all of it."""
+        with pytest.raises(ConfigurationError):
+            model.model_validate_strings(b"{")
+
+    def test_identity_material_repeats_no_token_it_was_given(self) -> None:
+        token = "THE_" + "REAL_ID_TOKEN"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            IdentityMaterial.model_validate({"id_token": token})
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert token not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        ("model", "payload", "field"),
+        [
+            pytest.param(ClientRegistration, {"client_id": "cid"}, "client_id", id="a registration"),
+            pytest.param(IdentityMaterial, {"access_token": "at"}, "id_token", id="identity material"),
+            pytest.param(
+                OAuthPendingState,
+                {"state": "s", "redirect_uri": "https://app.example.com/callback", "created_at": 1.0},
+                "code_verifier",
+                id="a pending state",
+            ),
+            pytest.param(TokenSet, {"access_token": "at"}, "refresh_token", id="a token set"),
+        ],
+    )
+    def test_a_refused_change_repeats_no_value(
+        self, model: type[BaseModel], payload: dict[str, object], field: str
+    ) -> None:
+        """Every model refuses a change, and the refusal must repeat no more than a construction does."""
+        instance = model.model_validate(payload)
+        value = "THE_" + "REAL_VALUE"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            setattr(instance, field, value)
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert value not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+
+class TestProviderConfigResource:
+    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
+        """The resource rule reads the resource first, and the parser names an internal rather than the
+        condition it refused."""
+        with pytest.raises(ConfigurationError, match="resource is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                resource="https://[::1/resource",
+            )
 
 
 class TestProviderConfigKeepsTheCallersMapping:
@@ -657,6 +814,28 @@ class TestProviderConfigValidateIssuer:
         config.validate_issuer(None)
 
 
+class TestServerMetadata:
+    def test_a_url_carrying_a_credential_is_refused(self) -> None:
+        """Metadata can be built by hand, so the model decides what its URLs may carry."""
+        with pytest.raises(ConfigurationError, match="authorize_url must not carry userinfo"):
+            ServerMetadata(
+                authorize_url="https://operator:" + "sesame@auth.example.com/authorize",
+                token_url="https://auth.example.com/token",
+            )
+
+    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ServerMetadata.model_fields])
+    def test_rejects_a_credential_in_any_url_it_holds(self, field: str) -> None:
+        """This model holds every URL field but the redirect URI, so one rule covers the whole list."""
+        urls = {
+            "authorize_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+        }
+        urls[field] = "https://operator:" + f"sesame@auth.example.com/{field}"
+
+        with pytest.raises(ConfigurationError, match=f"{field} must not carry userinfo"):
+            ServerMetadata(**urls)
+
+
 class TestScopeMetadata:
     def test_minimal_fields(self) -> None:
         meta = ScopeMetadata(
@@ -680,7 +859,7 @@ class TestScopeMetadata:
         assert meta.required is True
 
     def test_invalid_access_type_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ScopeMetadata(
                 scope="openid",
                 label="OpenID",
@@ -695,7 +874,7 @@ class TestScopeMetadata:
             description="Sign you in",
             access_type="read",
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             meta.scope = "other"
 
 
@@ -748,7 +927,7 @@ class TestTokenSet:
 
     def test_frozen(self) -> None:
         token = TokenSet(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             token.access_token = "other"
 
 
@@ -770,7 +949,7 @@ class TestFreshTokenSet:
 
     def test_frozen(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             tokens.access_token = "other"
 
     def test_model_validate_is_refused(self) -> None:
@@ -832,7 +1011,7 @@ class TestIdentityMaterial:
 
     def test_frozen(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
     def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
@@ -897,7 +1076,7 @@ class TestTenancyContext:
 
     def test_frozen(self) -> None:
         ctx = TenancyContext(id="T1")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             ctx.id = "other"
 
     def test_raw_isolated_from_caller_mutation(self) -> None:
@@ -1239,11 +1418,20 @@ class TestIdentityProfile:
 
     def test_frozen(self) -> None:
         identity = IdentityProfile()
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             identity.tenancies = (TenancyContext(id="T1"),)
 
 
 class TestOAuthPendingState:
+    def test_a_redirect_uri_carrying_a_credential_is_refused(self) -> None:
+        """A pending state is persisted and replayed, so a credential in its URI outlives the request."""
+        with pytest.raises(ConfigurationError, match="redirect_uri must not carry userinfo"):
+            OAuthPendingState(
+                state="random-state-token",
+                redirect_uri="https://operator:" + "sesame@app.example.com/callback",
+                created_at=1.0,
+            )
+
     def test_with_pkce(self) -> None:
         now = time.time()
         state = OAuthPendingState(
@@ -1300,7 +1488,7 @@ class TestOAuthPendingState:
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
         )
-        with pytest.raises(ValidationError):
+        with pytest.raises(ConfigurationError):
             state.state = "other"
 
 
