@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import socket
 from collections.abc import Callable, Sequence
 from enum import Enum, unique
 from typing import Any, NamedTuple, assert_never
@@ -37,7 +36,15 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._urls import AuthorityCredential, authority_credential
+from apron_auth._urls import (
+    AuthorityCredential,
+    authority_credential,
+    host_name,
+    is_localhost_name,
+    is_loopback_host,
+    parse_ip,
+    uses_secure_transport,
+)
 from apron_auth.errors import ConfigurationError, FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
 from apron_auth.models import (
     ApplicationType,
@@ -335,6 +342,8 @@ async def register_client(
     Raises:
         ConfigurationError: If ``registration_url`` is rejected, or ``redirect_uri`` carries
             a credential in its authority.
+            It is also raised when ``redirect_uri`` states no ``https`` and names no loopback host,
+            because a configuration built from the issued registration would refuse that URI.
         McpRegistrationError: If the request fails in transit, the endpoint returns
             a non-success status, its response is not a JSON object with a usable
             ``client_id``, or the response states a client secret this library
@@ -347,6 +356,7 @@ async def register_client(
     """
     _validate_url(registration_url, url_validator, subject="registration_url", caller_supplied=True)
     _require_no_authority_credential(redirect_uri, subject="redirect_uri", caller_supplied=True)
+    _require_secure_transport(redirect_uri, subject="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
     payload = {
@@ -611,26 +621,6 @@ def _honor_registered_auth_method(
     raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
 
 
-def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
-    """Return host as an IP address, accepting legacy numeric IPv4 forms, else None.
-
-    ``ipaddress.ip_address`` accepts only canonical dotted-quad and IPv6 text, so
-    decimal (``2130706433``), hex (``0x7f000001``), octal, and short-form
-    (``127.1``) literals slip through it as "hostnames" even though a resolver
-    dials them as addresses. ``socket.inet_aton`` canonicalizes those IPv4 forms
-    so they cannot bypass a host check; genuine hostnames fail it and return None.
-    """
-    try:
-        return ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    try:
-        packed = socket.inet_aton(host)
-    except OSError:
-        return None
-    return ipaddress.ip_address(packed)
-
-
 def _parse_url(url: str) -> ParseResult:
     """Parse a URL and validate its port.
 
@@ -643,11 +633,6 @@ def _parse_url(url: str) -> ParseResult:
     return parsed
 
 
-def _host_name(host: str) -> str:
-    """Return the host without trailing dots, which name the same host."""
-    return host.rstrip(".")
-
-
 def _is_blocked_host(host: str) -> bool:
     """Return whether host is empty, localhost, or an IP address that is not globally reachable.
 
@@ -657,10 +642,10 @@ def _is_blocked_host(host: str) -> bool:
     them as global, such as the NAT64 prefix that embeds any IPv4 address.
     An IPv4-mapped IPv6 address is classified as the IPv4 address it maps.
     """
-    host = _host_name(host)
-    if not host or _is_localhost_name(host):
+    host = host_name(host)
+    if not host or is_localhost_name(host):
         return True
-    address = _parse_ip(host)
+    address = parse_ip(host)
     if address is None:
         return False
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
@@ -668,29 +653,18 @@ def _is_blocked_host(host: str) -> bool:
     return not address.is_global or address.is_reserved or address.is_multicast
 
 
-def _is_localhost_name(host: str) -> bool:
-    """Return whether host is ``localhost`` or a name under it."""
-    return host == "localhost" or host.endswith(".localhost")
-
-
 def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     """Return ``native`` for a loopback redirect URI, else ``None``.
 
-    A loopback host (``localhost`` or a loopback IP literal) is the RFC 8252 signature of a native or CLI
-    client.
-    Any other redirect leaves the value unset, so the registration request is byte-identical to one that
-    never considered it.
+    A loopback host is the RFC 8252 signature of a native or command-line client.
+    Any other redirect leaves the value unset, so the registration request is byte-identical to one
+    that never considered it.
     """
     try:
-        host = _host_name(urlparse(redirect_uri).hostname or "")
+        host = urlparse(redirect_uri).hostname or ""
     except ValueError:
         return None
-    if _is_localhost_name(host):
-        return ApplicationType.NATIVE
-    address = _parse_ip(host)
-    if address is not None and address.is_loopback:
-        return ApplicationType.NATIVE
-    return None
+    return ApplicationType.NATIVE if is_loopback_host(host) else None
 
 
 def _malformed_url_message(subject: str) -> str:
@@ -730,6 +704,28 @@ def _require_no_authority_credential(url: str, *, subject: str, caller_supplied:
             raise error_cls(msg, kind=kind)
         case _:
             assert_never(credential)
+
+
+def _require_secure_transport(url: str, *, subject: str, caller_supplied: bool) -> None:
+    """Refuse a URL that states no protection for what a request carries.
+
+    The fault class is decided by where the URL came from.
+
+    Args:
+        url: The URL to check.
+        subject: What the URL is, for the refusal.
+        caller_supplied: The URL is an argument of this library's caller, or derives
+            from one, not a member of a fetched document.
+
+    Raises:
+        ConfigurationError: If a caller-supplied URL states no protection.
+        McpDiscoveryError: If a document-supplied URL states no protection.
+    """
+    if uses_secure_transport(url):
+        return
+    error_cls, kind = _url_fault(caller_supplied=caller_supplied)
+    msg = f"MCP OAuth requires HTTPS, or HTTP on a loopback host ({subject})"
+    raise error_cls(msg, kind=kind)
 
 
 def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]:

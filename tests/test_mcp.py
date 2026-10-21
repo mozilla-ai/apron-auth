@@ -1384,10 +1384,6 @@ class TestRegisterClient:
             "http://127.0.0.1:8080/callback",
             "http://localhost:8080/callback",
             "http://[::1]:8080/callback",
-            "http://127.1:8080/callback",
-            "http://2130706433:8080/callback",
-            "http://0x7f000001:8080/callback",
-            "http://0177.0.0.1:8080/callback",
             "http://localhost.:8080/callback",
             "http://127.0.0.1.:8080/callback",
         ],
@@ -1401,21 +1397,34 @@ class TestRegisterClient:
         assert request is not None
         assert json.loads(request.content)["application_type"] == "native"
 
-    @pytest.mark.parametrize(
-        "redirect_uri",
-        [
-            "https://app.example.com/callback",
-            "http://10.0.0.5:8080/callback",
-        ],
-    )
-    async def test_application_type_omitted_for_non_loopback_redirect(
-        self, httpx_mock: HTTPXMock, redirect_uri: str
-    ) -> None:
+    async def test_application_type_omitted_for_a_non_loopback_redirect(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
-        await register_client(_REGISTER_URL, redirect_uri)
+        await register_client(_REGISTER_URL, "https://app.example.com/callback")
         request = httpx_mock.get_request()
         assert request is not None
         assert "application_type" not in json.loads(request.content)
+
+    @pytest.mark.parametrize(
+        "redirect_uri",
+        [
+            pytest.param("http://10.0.0.5:8080/callback", id="plain http on the network"),
+            pytest.param("http://127.1:8080/callback", id="short form"),
+            pytest.param("http://2130706433:8080/callback", id="decimal form"),
+            pytest.param("http://0x7f000001:8080/callback", id="hex form"),
+            pytest.param("http://foo.localhost:8080/callback", id="name under localhost"),
+            pytest.param("com.example.app:/callback", id="private-use scheme"),
+            pytest.param("ws://app.example.com/callback", id="another scheme"),
+        ],
+    )
+    async def test_a_redirect_uri_a_configuration_would_refuse_is_refused_before_registering(
+        self, httpx_mock: HTTPXMock, redirect_uri: str
+    ) -> None:
+        """A refusal after the server issued credentials would leave a registration standing."""
+        with pytest.raises(ConfigurationError, match=r"loopback host \(redirect_uri\)") as exc_info:
+            await register_client(_REGISTER_URL, redirect_uri)
+
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
 
     async def test_registration_url_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         registration_url = "https://user:pw@auth.example.com/register"  # pragma: allowlist secret

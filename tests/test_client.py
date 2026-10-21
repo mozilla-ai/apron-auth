@@ -2782,6 +2782,74 @@ class TestAuthorizationUrlRedirectCredential:
                 redirect_uri="https://operator:sesame@app.example.com/cb"  # pragma: allowlist secret
             )
 
+    async def test_refuses_an_override_that_states_no_tls(self) -> None:
+        """The authorization code arrives at this URI, so a public network must not carry it in the clear."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="https://app.example.com/cb",
+        )
+
+        with pytest.raises(ConfigurationError, match="redirect_uri must use https"):
+            await OAuthClient(config).get_authorization_url(redirect_uri="http://app.example.com/cb")
+
+    async def test_accepts_a_loopback_override_over_plain_http(self) -> None:
+        """A native client listens on the loopback interface, where no network carries the code."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="https://app.example.com/cb",
+        )
+
+        url, pending = await OAuthClient(config).get_authorization_url(redirect_uri="http://127.0.0.1:8080/cb")
+
+        assert pending.redirect_uri == "http://127.0.0.1:8080/cb"
+        assert "127.0.0.1" in url
+
+    async def test_accepts_an_override_the_config_accepts_plain_http_for(self) -> None:
+        """A config that states the waiver covers the field, whichever URI the call supplies for it."""
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "redirect_uri",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="http://app.example.com/cb",
+        )
+
+        _, pending = await OAuthClient(config).get_authorization_url(redirect_uri="http://other.example.com/cb")
+
+        assert pending.redirect_uri == "http://other.example.com/cb"
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            pytest.param("javascript:alert(document.cookie)", id="javascript"),
+            pytest.param("file:///etc/passwd", id="file"),
+            pytest.param("ws://app.example.com/cb", id="websocket"),
+            pytest.param("data:text/html,<script></script>", id="data"),
+            pytest.param("com.example.app:/cb", id="private-use scheme"),
+            pytest.param("not a url at all", id="no scheme"),
+        ],
+    )
+    async def test_a_waiver_for_the_field_accepts_plain_http_and_nothing_else(self, override: str) -> None:
+        """The waiver names plain http, and this URI is the one the library hands to a browser."""
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "redirect_uri",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri="http://app.example.com/cb",
+        )
+
+        with pytest.raises(ConfigurationError, match="redirect_uri must use https"):
+            await OAuthClient(config).get_authorization_url(redirect_uri=override)
+
     async def test_reports_a_malformed_override_as_malformed(self) -> None:
         """A URL with no credential at all must not be reported as carrying one."""
         config = ProviderConfig(

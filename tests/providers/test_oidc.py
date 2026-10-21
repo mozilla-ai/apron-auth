@@ -26,7 +26,14 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import FreshTokenSet, IdentityMaterial, ProviderConfig, ServerMetadata, TokenEndpointAuthMethod
+from apron_auth.models import (
+    FreshTokenSet,
+    IdentityMaterial,
+    ProviderConfig,
+    ServerMetadata,
+    TokenEndpointAuthMethod,
+    UrlField,
+)
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
@@ -111,8 +118,17 @@ async def _userinfo_app(scope: Any, receive: Any, send: Any) -> None:
     await send({"type": "http.response.body", "body": json.dumps({"sub": "u-1"}).encode()})
 
 
-def metadata(**overrides: Any) -> ServerMetadata:
-    """Build discovered metadata for the test issuer, with ``overrides`` applied."""
+def metadata(*, waive: tuple[UrlField, ...] = (), **overrides: Any) -> ServerMetadata:
+    """Build discovered metadata for the test issuer, with ``overrides`` applied.
+
+    Args:
+        waive: The URL fields the metadata accepts plain HTTP for. A test that passes a plain-HTTP
+            URL states the waiver it needs, so a test that states none still meets the rule.
+        **overrides: The field values to replace.
+
+    Returns:
+        The built metadata.
+    """
     base: dict[str, Any] = {
         "authorize_url": AUTHORIZE_URL,
         "token_url": TOKEN_URL,
@@ -121,6 +137,8 @@ def metadata(**overrides: Any) -> ServerMetadata:
         "issuer": ISSUER,
     }
     base.update(overrides)
+    if waive:
+        return ServerMetadata.unsafe.allow_plain_http(*waive, **base)
     return ServerMetadata(**base)
 
 
@@ -450,51 +468,98 @@ class TestHttpsRequirement:
         assert caplog.text == ""
 
     @pytest.mark.parametrize(
-        ("field", "label"),
-        [
-            ("issuer", "issuer"),
-            ("authorize_url", "authorization endpoint"),
-            ("token_url", "token endpoint"),
-            ("revocation_url", "revocation endpoint"),
-            ("registration_url", "registration endpoint"),
-            ("userinfo_url", "userinfo endpoint"),
-        ],
+        "field",
+        ["issuer", "authorize_url", "token_url", "revocation_url", "registration_url", "userinfo_url"],
     )
-    def test_preset_refuses_http_metadata_built_without_discovery(self, field: str, label: str) -> None:
-        """Metadata that never passed through ``discover`` gets the same scheme rule.
+    def test_metadata_built_without_discovery_states_its_own_waiver(self, field: str) -> None:
+        """Metadata that never passed through ``discover`` is held to the rule where it is built."""
+        base: dict[str, Any] = {"authorize_url": AUTHORIZE_URL, "token_url": TOKEN_URL, "issuer": ISSUER}
+        base[field] = "http://idp.example/endpoint"
 
-        The refusal underneath agrees with the class the caller catches, whose kind is a
-        configuration fault by definition, so the chain does not contradict itself.
-        """
-        with pytest.raises(ConfigurationError, match=f"{label} must use https") as exc_info:
+        with pytest.raises(ConfigurationError, match=f"{field} must use https"):
+            ServerMetadata(**base)
+
+    @pytest.mark.parametrize(
+        ("field", "value", "label"),
+        [
+            ("issuer", "https://issuer.example.com/?q=1", "issuer"),
+            ("jwks_url", "https://issuer.example.com/jwks#fragment", "signing key set"),
+        ],
+        ids=["issuer with a query", "key set with a fragment"],
+    )
+    def test_preset_states_the_url_rules_the_models_do_not(self, field: str, value: str, label: str) -> None:
+        """A model states what a scheme must say. The shape of the URL is stated here."""
+        with pytest.raises(ConfigurationError, match=label):
             preset(
                 client_id=CLIENT_ID,
                 client_secret=CLIENT_SECRET,
                 scopes=[],
-                metadata=metadata(**{field: "http://idp.example/endpoint"}),
+                metadata=metadata(**{field: value}),
             )
 
-        assert isinstance(exc_info.value.__cause__, OidcDiscoveryError)
-        assert exc_info.value.__cause__.kind is FailureKind.CONFIGURATION
-
-    def test_preset_accepts_http_metadata_with_the_explicit_opt_in(self, caplog: pytest.LogCaptureFixture) -> None:
-        """The opt-in on ``preset`` matches the one on ``discover``."""
-        with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
-            config, _ = preset(
+    def test_preset_waives_nothing_without_the_opt_in(self) -> None:
+        """A waiver follows the caller's opt-in, never the fact that a URL happens to be plain http."""
+        with pytest.raises(ConfigurationError, match="redirect_uri must use https"):
+            preset(
                 client_id=CLIENT_ID,
                 client_secret=CLIENT_SECRET,
                 scopes=[],
-                metadata=metadata(token_url="http://localhost:8080/token"),
-                allow_insecure_http=True,
+                metadata=metadata(),
+                redirect_uri="http://app.example.com/callback",
             )
 
-        assert config.token_url == "http://localhost:8080/token"
-        assert "token endpoint is plain http" in caplog.text
+    def test_preset_carries_a_waiver_from_the_metadata_into_the_config(self) -> None:
+        """The config sends the client's secret to the token endpoint, so it records the waiver too."""
+        config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(token_url="http://idp.example/token", waive=(UrlField.TOKEN_URL,)),
+            allow_insecure_http=True,
+        )
+
+        assert config.token_url == "http://idp.example/token"
+        assert config.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+
+    def test_preset_waives_a_plain_http_redirect_uri_with_the_opt_in(self) -> None:
+        """The redirect URI is the config's own field, so the opt-in has to reach it."""
+        config, _ = preset(
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            scopes=[],
+            metadata=metadata(),
+            redirect_uri="http://app.example.com/callback",
+            allow_insecure_http=True,
+        )
+
+        assert config.redirect_uri == "http://app.example.com/callback"
+        assert config.allow_insecure_http_for == frozenset({UrlField.REDIRECT_URI})
+
+    async def test_discover_waives_a_plain_http_issuer_off_loopback(self, httpx_mock: HTTPXMock) -> None:
+        """A loopback issuer needs no waiver, so only one off loopback holds the opt-in to its field."""
+        issuer = "http://idp.example/realms/dev"
+        httpx_mock.add_response(
+            url=f"{issuer}/.well-known/openid-configuration",
+            json=document(
+                issuer=issuer,
+                authorization_endpoint=f"{issuer}/auth",
+                token_endpoint=f"{issuer}/token",
+                userinfo_endpoint=f"{issuer}/userinfo",
+                jwks_uri=f"{issuer}/certs",
+            ),
+        )
+
+        discovered = await discover(issuer, allow_insecure_http=True)
+
+        assert discovered.issuer == issuer
+        assert discovered.allow_insecure_http_for == frozenset(
+            {UrlField.AUTHORIZE_URL, UrlField.ISSUER, UrlField.JWKS_URL, UrlField.TOKEN_URL, UrlField.USERINFO_URL}
+        )
 
     def test_identity_handler_refuses_an_http_userinfo_endpoint(self) -> None:
-        """The handler sends the access token to userinfo, so it applies the scheme rule too."""
+        """A waiver on the metadata is not a waiver on the handler, which states its own."""
         with pytest.raises(ConfigurationError, match="userinfo endpoint must use https"):
-            identity_handler(metadata(userinfo_url="http://idp.example/userinfo"))
+            identity_handler(metadata(userinfo_url="http://idp.example/userinfo", waive=(UrlField.USERINFO_URL,)))
 
     def test_identity_handler_accepts_http_userinfo_with_the_explicit_opt_in(
         self, caplog: pytest.LogCaptureFixture
@@ -805,11 +870,10 @@ class TestPreset:
                 metadata=metadata(token_endpoint_auth_methods=["private_key_jwt"]),
             )
 
-    @pytest.mark.parametrize("jwks_url", [None, ""])
-    def test_refuses_metadata_naming_no_signing_key_set(self, jwks_url: str | None) -> None:
+    def test_refuses_metadata_naming_no_signing_key_set(self) -> None:
         """A config whose ID tokens could not be verified is not built."""
         with pytest.raises(ConfigurationError, match="names no signing key set"):
-            preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata(jwks_url=jwks_url))
+            preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata(jwks_url=None))
 
     def test_refuses_metadata_naming_no_issuer(self):
         """An issuer-less config would silently skip every ``iss`` check.
@@ -870,16 +934,15 @@ class TestIdentityHandlerFactory:
         with pytest.raises(ConfigurationError, match="names no issuer"):
             identity_handler(metadata(issuer=None))
 
-    @pytest.mark.parametrize("jwks_url", [None, ""])
-    def test_refuses_metadata_without_a_signing_key_set(self, jwks_url: str | None) -> None:
+    def test_refuses_metadata_without_a_signing_key_set(self) -> None:
         """A handler that cannot verify ID tokens is not built."""
         with pytest.raises(ConfigurationError, match="names no signing key set"):
-            identity_handler(metadata(jwks_url=jwks_url))
+            identity_handler(metadata(jwks_url=None))
 
     def test_refuses_an_insecure_signing_key_set_url(self) -> None:
         """The key set URL meets the same rule as every other endpoint."""
         with pytest.raises(ConfigurationError, match="signing key set must use https"):
-            identity_handler(metadata(jwks_url="http://sso.example.com/certs"))
+            identity_handler(metadata(jwks_url="http://sso.example.com/certs", waive=(UrlField.JWKS_URL,)))
 
 
 class TestHandlerInference:
