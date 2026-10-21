@@ -133,6 +133,47 @@ class TestTokenEndpointErrors:
     def test_token_endpoint_error_without_a_kind_is_unexpected(self) -> None:
         assert TokenEndpointError("boom").kind is FailureKind.UNEXPECTED
 
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param("invalid_grant", id="a registered code"),
+            pytest.param("slow_down", id="two words"),
+            pytest.param("expired", id="one word"),
+            pytest.param("insufficient_user_authentication", id="the longest registered code"),
+            pytest.param("invalid_dpop_proof", id="a code with an initialism"),
+            pytest.param("invalid_grant2", id="a digit in a later word"),
+            pytest.param("a" * 64, id="the greatest length a code may have"),
+        ],
+    )
+    def test_a_code_in_the_shape_a_code_takes_is_kept(self, code: str) -> None:
+        assert TokenExchangeError("boom", kind=FailureKind.REJECTED, error_code=code).error_code == code
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param("invalid code", id="a space"),
+            pytest.param("Invalid_Grant", id="capitals"),
+            pytest.param("the code you sent was already used", id="a sentence"),
+            pytest.param("9f8c2a1b4e7d6039f8c2a1b4e7d60391", id="hex of sixteen bytes"),  # pragma: allowlist secret
+            pytest.param("abcdefghijklmnopqrstuvwxyz234567", id="lowercase base32"),  # pragma: allowlist secret
+            pytest.param("xY3-_aB", id="a URL-safe form"),
+            pytest.param("_leading", id="a leading underscore"),
+            pytest.param("trailing_", id="a trailing underscore"),
+            pytest.param("a" * 65, id="longer than any code"),
+            pytest.param("", id="empty"),
+        ],
+    )
+    def test_a_value_of_another_shape_is_reported_as_absent(self, code: str) -> None:
+        """The type owns this rule, so no raise site can put the endpoint's own text on a public error."""
+        assert TokenExchangeError("boom", kind=FailureKind.REJECTED, error_code=code).error_code == ""
+
+    def test_the_type_refuses_what_a_raise_site_would_have_published(self) -> None:
+        """A raise that passed the endpoint's description straight through must not publish it."""
+        description = "the refresh token 'rt-SECRET-xyz' is no longer valid"  # pragma: allowlist secret
+        err = TokenRefreshError("HTTP 400", kind=FailureKind.REJECTED, error_code=description)
+        assert err.error_code == ""
+        assert "SECRET" not in str(err)
+
 
 def test_well_known_error_code_constants() -> None:
     from apron_auth import (
@@ -205,6 +246,11 @@ class TestClassificationIsReadOnly:
         err = TokenValidationError("boom", reason=TokenValidationReason.SIGNATURE)
         with pytest.raises(AttributeError):
             err.reason = TokenValidationReason.CLAIMS  # type: ignore[misc]
+
+    def test_an_error_code_cannot_be_changed_after_construction(self) -> None:
+        err = TokenExchangeError("boom", kind=FailureKind.REJECTED, error_code="invalid_grant")
+        with pytest.raises(AttributeError):
+            err.error_code = "invalid_client"  # type: ignore[misc]
 
     def test_retryable_cannot_be_changed_on_a_member(self) -> None:
         with pytest.raises(AttributeError):

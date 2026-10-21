@@ -852,7 +852,7 @@ class TestExchangeCode:
             )
         assert exc_info.value.error_code == "invalid_grant"
 
-    async def test_exchange_string_error_description_rendered_in_message(self, httpx_mock: HTTPXMock) -> None:
+    async def test_exchange_error_description_is_not_rendered_in_the_message(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             status_code=400,
@@ -865,7 +865,7 @@ class TestExchangeCode:
                 state="pending-state",
                 pending_state=_pending_state(),
             )
-        assert str(exc_info.value) == "invalid_grant: Code expired"
+        assert str(exc_info.value) == "HTTP 400"
 
     async def test_exchange_non_string_error_description_omitted_from_message(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -884,7 +884,7 @@ class TestExchangeCode:
                 pending_state=_pending_state(),
             )
         assert exc_info.value.error_code == "invalid_grant"
-        assert str(exc_info.value) == "invalid_grant"
+        assert str(exc_info.value) == "HTTP 400"
         assert "SECRET-ISH-DATA" not in str(exc_info.value)
 
     async def test_exchange_extra_fields_in_token_set(self, httpx_mock):
@@ -1853,8 +1853,9 @@ class TestRefreshToken:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=status, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
-        with pytest.raises(TokenRefreshError, match=code) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="bad-refresh")
+        assert exc_info.value.error_code == code
         assert exc_info.value.kind is FailureKind.REJECTED
         assert exc_info.value.retryable is False
 
@@ -1875,8 +1876,9 @@ class TestRefreshToken:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=status, json={"error": code})
         config = _make_config()
         client = OAuthClient(config=config)
-        with pytest.raises(TokenRefreshError, match=code) as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == code
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
@@ -1913,18 +1915,19 @@ class TestRefreshToken:
         )
         config = _make_config()
         client = OAuthClient(config=config, retryable_error_codes={"try_later"})
-        with pytest.raises(TokenRefreshError, match="try_later") as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.retryable is True
 
     async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
-            url="https://provider.example.com/token", status_code=503, json={"error": "server_error"}
+            url="https://provider.example.com/token", status_code=400, json={"error": "server_error"}
         )
         config = _make_config()
         client = OAuthClient(config=config, retryable_error_codes={"try_later"})
-        with pytest.raises(TokenRefreshError, match="server_error") as exc_info:
+        with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.error_code == "server_error"
         assert exc_info.value.retryable is True
 
     async def test_exchange_classifies_a_rejection_like_refresh(self, httpx_mock: HTTPXMock) -> None:
@@ -2066,11 +2069,9 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == "server_error"
-        assert str(exc_info.value) == "server_error"
+        assert str(exc_info.value) == "HTTP 500"
 
-    async def test_refresh_error_description_without_error_code_keeps_status_prefix(
-        self, httpx_mock: HTTPXMock
-    ) -> None:
+    async def test_refresh_error_description_without_error_code_states_the_status(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             status_code=500,
@@ -2080,7 +2081,7 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
-        assert str(exc_info.value) == "HTTP 500: backend unavailable"
+        assert str(exc_info.value) == "HTTP 500"
 
     async def test_refresh_permanent_error_non_string_description_omitted_from_message(
         self, httpx_mock: HTTPXMock
@@ -2097,7 +2098,7 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="revoked-refresh")
         assert exc_info.value.error_code == "invalid_grant"
-        assert str(exc_info.value) == "invalid_grant"
+        assert str(exc_info.value) == "HTTP 400"
         assert "SECRET-ISH-DATA" not in str(exc_info.value)
 
     async def test_refresh_non_string_error_in_oauth_error_body_has_empty_error_code(
@@ -2113,7 +2114,7 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
         assert "SECRET-ISH-DATA" not in str(exc_info.value)
-        assert str(exc_info.value) == "unspecified token endpoint error"
+        assert str(exc_info.value) == "HTTP 400"
 
     async def test_refresh_empty_error_code_keeps_a_descriptive_message(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -2125,11 +2126,9 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
-        assert str(exc_info.value) == "unspecified token endpoint error"
+        assert str(exc_info.value) == "HTTP 400"
 
-    async def test_refresh_empty_error_code_with_description_keeps_a_descriptive_prefix(
-        self, httpx_mock: HTTPXMock
-    ) -> None:
+    async def test_refresh_empty_error_code_with_a_description_states_the_status(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             status_code=400,
@@ -2139,7 +2138,7 @@ class TestRefreshToken:
         with pytest.raises(TokenRefreshError) as exc_info:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.error_code == ""
-        assert str(exc_info.value) == "unspecified token endpoint error: authorization code expired"
+        assert str(exc_info.value) == "HTTP 400"
 
 
 class TestRevokeToken:

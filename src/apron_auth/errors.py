@@ -10,6 +10,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
+from apron_auth._error_codes import recognized_error_code
+
 # Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in
 # token-endpoint responses. ``error_code`` is a plain ``str`` because a provider
 # may return codes outside this set; these names let callers and this library
@@ -177,12 +179,20 @@ class StateError(OAuthError):
 class TokenEndpointError(OAuthError):
     """A token-endpoint request failed. Base of the exchange and refresh errors, never raised itself.
 
-    ``error_code`` holds the OAuth error code (RFC 6749) when the endpoint sent one, and is the empty string otherwise.
+    This class owns the shape of ``error_code``, so no raise decides it.
+    It holds the OAuth error code (RFC 6749) when one is given as a lowercase identifier, and is the
+    empty string otherwise.
+    The field a code arrives in admits any printable text, so a value of another shape is reported as absent.
     """
 
     def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
         super().__init__(*args, kind=kind)
-        self.error_code = error_code
+        self._error_code = recognized_error_code(error_code)
+
+    @property
+    def error_code(self) -> str:
+        """The OAuth error code of the failure, fixed when the error is raised."""
+        return self._error_code
 
 
 # NonceValidationError and TokenExpiredError follow their base classes instead of A-Z order, because Python needs
