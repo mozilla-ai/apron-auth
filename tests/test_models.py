@@ -481,6 +481,27 @@ class TestProviderConfigUrlCredentials:
                 **endpoints,
             )
 
+    def test_a_url_the_parser_cannot_read_is_refused(self) -> None:
+        """A URL the parser cannot read states nothing about its authority, so no field may hold one."""
+        with pytest.raises(ConfigurationError, match="authorize_url is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://[::1/authorize",
+                token_url="https://provider.example.com/token",
+            )
+
+    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
+        """The parser states no field, and its own wording names an internal rather than the condition."""
+        with pytest.raises(ConfigurationError, match="resource is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                resource="https://[::1/resource",
+            )
+
     def test_the_refusal_message_names_only_the_field(self) -> None:
         """The refusal names the field that failed and nothing else, so a log of it carries no value."""
         with pytest.raises(ConfigurationError) as exc_info:
@@ -501,7 +522,7 @@ class _Settings(BaseModel):
 
 
 class TestARefusalRepeatsNoValue:
-    """A framework refusal carries the constructor's raw input, which for these models holds a credential."""
+    """A framework refusal carries the raw input and a path of its own, and neither is this library's."""
 
     def test_a_config_refusal_repeats_no_secret_and_no_url(self) -> None:
         secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
@@ -558,17 +579,6 @@ class TestARefusalRepeatsNoValue:
         rendered = "".join(traceback.format_exception(exc_info.value))
         assert secret not in rendered
         assert "operator" not in rendered
-
-    def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
-        """The parser states no field, and its own wording names an internal rather than the condition."""
-        with pytest.raises(ConfigurationError, match="resource is malformed"):
-            ProviderConfig(
-                client_id="cid",
-                client_secret=SecretStr("csec"),  # pragma: allowlist secret
-                authorize_url="https://provider.example.com/authorize",
-                token_url="https://provider.example.com/token",
-                resource="https://[::1/resource",
-            )
 
     def test_a_refusal_keeps_a_mapping_key_that_reads_like_the_marker(self) -> None:
         """A key a caller chose is the caller's, and dropping it names a path the model does not have."""
