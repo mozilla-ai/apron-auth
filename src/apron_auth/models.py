@@ -46,8 +46,8 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
-# Every URL field this library requests, hands to a browser, or records. None may carry a credential in
-# its authority. A provider's profile image is not one of them, because this library never requests it.
+# Every URL field this library requests or hands to a browser. None may carry a credential in its
+# authority. A provider's profile image is not one of them, because it is only ever read back out.
 URL_FIELDS = (
     "authorize_url",
     "issuer",
@@ -1079,7 +1079,7 @@ class FreshTokenSet(TokenSet):
         return ConfigurationError(msg)
 
     # NOTE: The name differs from the base's. Re-using that name keeps the base's place in the chain,
-    # which is ahead of this model's own rules, whose refusals would then escape unscrubbed.
+    # which is ahead of any after or wrap rule of this model's own, whose refusals would then escape.
     _repeats_no_value_last = _REPEATS_NO_VALUE
 
 
