@@ -669,12 +669,19 @@ class TestDiscover:
 
         assert exc_info.value.kind is FailureKind.REFUSED
 
-    async def test_discovered_endpoint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        token_url = "https://user:pw@auth.example.com/token"  # pragma: allowlist secret
+    @pytest.mark.parametrize(
+        "member",
+        ["authorization_endpoint", "token_endpoint", "registration_endpoint", "revocation_endpoint"],
+    )
+    async def test_discovered_endpoint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock, member: str) -> None:
+        """The refusal names the member the document states, which is the name an operator reads there."""
+        endpoint = "https://user:pw@auth.example.com/endpoint"  # pragma: allowlist secret
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
-        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint=token_url))
-        with pytest.raises(McpDiscoveryError, match=r"userinfo \(token_endpoint\)") as exc_info:
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(**{member: endpoint}))
+
+        with pytest.raises(McpDiscoveryError, match=rf"userinfo \({member}\)") as exc_info:
             await discover("https://mcp.example.com")
+
         assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_issuer_is_checked_before_any_other_member_is_read(self, httpx_mock: HTTPXMock) -> None:

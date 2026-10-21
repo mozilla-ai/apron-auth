@@ -460,6 +460,25 @@ class TestProviderConfigUnknownFields:
             )
 
 
+class TestUrlFields:
+    def test_members_are_in_alphabetical_order(self) -> None:
+        names = list(URL_FIELDS)
+        assert names == sorted(names)
+
+    def test_every_url_field_of_every_model_is_named(self) -> None:
+        """A URL field named nowhere here carries a credential with no rule to refuse it."""
+        # A provider's profile image is the one URL this library neither requests nor sends.
+        uncovered = {"avatar_url"}
+        held = {
+            field
+            for model in MODELS
+            for field in model.model_fields
+            if field.endswith(("_uri", "_url")) or field in {"issuer", "resource"}
+        }
+
+        assert held - uncovered == set(URL_FIELDS)
+
+
 class TestProviderConfigUrlCredentials:
     @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ProviderConfig.model_fields])
     @pytest.mark.parametrize(
@@ -788,14 +807,17 @@ class TestServerMetadata:
                 token_url="https://auth.example.com/token",
             )
 
-    def test_a_key_set_url_carrying_a_credential_is_refused(self) -> None:
-        """A key set URL is requested like the endpoints, so the rule covers it too."""
-        with pytest.raises(ConfigurationError, match="jwks_url must not carry userinfo"):
-            ServerMetadata(
-                authorize_url="https://auth.example.com/authorize",
-                token_url="https://auth.example.com/token",
-                jwks_url="https://operator:" + "sesame@auth.example.com/jwks",
-            )
+    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ServerMetadata.model_fields])
+    def test_rejects_a_credential_in_any_url_it_holds(self, field: str) -> None:
+        """This model holds every URL field but the redirect URI, so one rule covers the whole list."""
+        urls = {
+            "authorize_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+        }
+        urls[field] = "https://operator:" + f"sesame@auth.example.com/{field}"
+
+        with pytest.raises(ConfigurationError, match=f"{field} must not carry userinfo"):
+            ServerMetadata(**urls)
 
 
 class TestScopeMetadata:
