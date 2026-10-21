@@ -414,12 +414,13 @@ class TestSlackRevocationHandler:
         assert exc_info.value.__context__ is None
 
     async def test_invalid_revocation_url_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
+        """A validated config refuses such a URL, so this holds the handler to its own guard."""
         httpx_mock.add_response(is_optional=True)
         from apron_auth.providers.slack import SlackRevocationHandler
 
-        config = ProviderConfig(
+        config = ProviderConfig.model_construct(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             authorize_url="https://slack.com/oauth/v2/authorize",
             token_url="https://slack.com/api/oauth.v2.access",
             revocation_url="https://slack.com/api/auth.revoke\x00",

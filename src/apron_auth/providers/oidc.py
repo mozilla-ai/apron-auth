@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any
 
@@ -49,6 +50,7 @@ from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
+from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -66,6 +68,7 @@ from apron_auth.models import (
     ScopeMetadata,
     ServerMetadata,
     TokenEndpointAuthMethod,
+    UrlField,
 )
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
@@ -196,20 +199,52 @@ async def discover(
         document, key="registration_endpoint", field="registration endpoint", allow_insecure_http=allow_insecure_http
     )
 
-    return ServerMetadata(
-        authorize_url=authorize_url,
-        token_url=token_url,
-        registration_url=registration_url,
-        revocation_url=revocation_url,
+    values: dict[str, Any] = {
+        "authorize_url": authorize_url,
+        "token_url": token_url,
+        "registration_url": registration_url,
+        "revocation_url": revocation_url,
         # An advisory list that a provider malforms should not fail discovery, so it is read leniently.
-        scopes_supported=str_list(document.get("scopes_supported")),
-        code_challenge_methods=_strict_str_list(document, "code_challenge_methods_supported"),
-        token_endpoint_auth_methods=_strict_str_list(document, "token_endpoint_auth_methods_supported"),
-        issuer=issuer,
-        iss_parameter_supported=document.get("authorization_response_iss_parameter_supported") is True,
-        userinfo_url=userinfo_url,
-        jwks_url=jwks_url,
+        "scopes_supported": str_list(document.get("scopes_supported")),
+        "code_challenge_methods": _strict_str_list(document, "code_challenge_methods_supported"),
+        "token_endpoint_auth_methods": _strict_str_list(document, "token_endpoint_auth_methods_supported"),
+        "issuer": issuer,
+        "iss_parameter_supported": document.get("authorization_response_iss_parameter_supported") is True,
+        "userinfo_url": userinfo_url,
+        "jwks_url": jwks_url,
+    }
+    # NOTE: This is redundant while require_url refuses plain http itself. It states the rule here as
+    # well, so a waiver is recorded only when the caller asked for one.
+    waived = (
+        _fields_needing_a_waiver(
+            {
+                UrlField.AUTHORIZE_URL: authorize_url,
+                UrlField.ISSUER: issuer,
+                UrlField.JWKS_URL: jwks_url,
+                UrlField.REGISTRATION_URL: registration_url,
+                UrlField.REVOCATION_URL: revocation_url,
+                UrlField.TOKEN_URL: token_url,
+                UrlField.USERINFO_URL: userinfo_url,
+            }
+        )
+        if allow_insecure_http
+        else ()
     )
+    if waived:
+        return ServerMetadata.unsafe.allow_plain_http(*waived, **values)
+    return ServerMetadata(**values)
+
+
+def _fields_needing_a_waiver(urls: Mapping[UrlField, str | None]) -> tuple[UrlField, ...]:
+    """Return the URL fields whose value states no protection for what a request carries.
+
+    Args:
+        urls: The URL values to read, by the field each one belongs to.
+
+    Returns:
+        The fields a model would refuse without a waiver, in the order given.
+    """
+    return tuple(field for field, url in urls.items() if url is not None and not uses_secure_transport(url))
 
 
 def preset(
@@ -284,24 +319,38 @@ def preset(
             metadata.issuer,
         )
 
-    config = ProviderConfig(
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url=metadata.authorize_url,
-        token_url=metadata.token_url,
-        revocation_url=metadata.revocation_url,
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        use_pkce=True,
-        token_endpoint_auth_method=_select_auth_method(metadata.token_endpoint_auth_methods),
-        extra_params=dict(extra_params) if extra_params else {},
-        scope_metadata=BASE_SCOPE_METADATA,
-        issuer=metadata.issuer,
-        require_iss=metadata.iss_parameter_supported,
+    values: dict[str, Any] = {
+        "client_id": client_id,
+        "client_secret": SecretStr(client_secret),
+        "authorize_url": metadata.authorize_url,
+        "token_url": metadata.token_url,
+        "revocation_url": metadata.revocation_url,
+        "redirect_uri": redirect_uri,
+        "scopes": merged_scopes,
+        "use_pkce": True,
+        "token_endpoint_auth_method": _select_auth_method(metadata.token_endpoint_auth_methods),
+        "extra_params": dict(extra_params) if extra_params else {},
+        "scope_metadata": BASE_SCOPE_METADATA,
+        "issuer": metadata.issuer,
+        "require_iss": metadata.iss_parameter_supported,
         # OpenID Connect standardizes no claim for an organization owning an email domain.
-        can_assert_domain_ownership=False,
-        use_builtin_identity_handler=False,
+        "can_assert_domain_ownership": False,
+        "use_builtin_identity_handler": False,
+    }
+    waived = (
+        _fields_needing_a_waiver(
+            {
+                UrlField.AUTHORIZE_URL: metadata.authorize_url,
+                UrlField.ISSUER: metadata.issuer,
+                UrlField.REDIRECT_URI: redirect_uri,
+                UrlField.REVOCATION_URL: metadata.revocation_url,
+                UrlField.TOKEN_URL: metadata.token_url,
+            }
+        )
+        if allow_insecure_http
+        else ()
     )
+    config = ProviderConfig.unsafe.allow_plain_http(*waived, **values) if waived else ProviderConfig(**values)
     # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
     return config, StandardRevocationHandler() if metadata.revocation_url else None
 
@@ -832,8 +881,10 @@ def _select_auth_method(advertised: Sequence[str]) -> TokenEndpointAuthMethod:
 def _require_metadata_urls(metadata: ServerMetadata, *, allow_insecure_http: bool) -> None:
     """Require every URL in ``metadata`` to pass :func:`require_url`.
 
-    The metadata is the caller's own argument, whatever produced it,
-    so a URL it holds is a configuration fault rather than a refusal of what a provider sent.
+    The metadata is the caller's own argument, whatever produced it, so a URL it holds is a
+    configuration fault rather than a refusal of what a provider sent.
+    This requires an absolute URL with no fragment, and an issuer with neither a query nor a
+    fragment.
 
     Args:
         metadata: The metadata to check.

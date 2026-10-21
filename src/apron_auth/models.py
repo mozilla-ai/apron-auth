@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
-from enum import StrEnum, unique
-from typing import Any, Literal, NoReturn, Self, assert_never
+from enum import Enum, StrEnum, auto, unique
+from typing import Any, Literal, NoReturn, Self, TypeVar, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -20,11 +21,15 @@ from pydantic import (
 )
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
-from apron_auth._urls import AuthorityCredential, authority_credential
+from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
+logger = logging.getLogger(__name__)
+
 AccessType = Literal["read", "write", "admin"]
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 # The facts a config takes from the provider it names, rather than repeating them.
 FACTS_TAKEN_FROM_PROVIDER = ("can_assert_domain_ownership", "disconnect_fully_revokes", "scope_separator")
@@ -46,22 +51,62 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
-# Every URL field this library requests or hands to a browser. None may carry a credential in its
-# authority. A provider's profile image is not one of them, because it is only ever read back out.
-URL_FIELDS = (
-    "authorize_url",
-    "issuer",
-    "jwks_url",
-    "redirect_uri",
-    "registration_url",
-    "resource",
-    "revocation_url",
-    "token_url",
-    "userinfo_url",
-)
-
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
+
+# The field that records which URL fields a model was built accepting plain HTTP for.
+_PLAIN_HTTP_WAIVER = "allow_insecure_http_for"
+
+# The token that states a plain-HTTP waiver was built in code. It is compared by identity, so a
+# waiver arriving as data cannot state it.
+_WAIVER_SENTINEL = object()
+
+
+@unique
+class UrlTransport(Enum):
+    """Each member is one rule for what a URL field's scheme has to state about its transport."""
+
+    # The field names an endpoint a request is sent to, and what travels there needs TLS.
+    TLS_REQUIRED = auto()
+    # The field identifies something rather than naming an endpoint, so its scheme states no transport.
+    UNCHECKED = auto()
+
+
+@unique
+class UrlField(StrEnum):
+    """Every URL field of this library's models, named by the field it stands for.
+
+    None may carry a credential in its authority.
+    A member's transport is required of it on a model that declares endpoints, and nowhere else.
+    A provider's profile image is no member, because this library only ever reads it back out.
+
+    Attributes:
+        transport: What this field's scheme has to state about its transport.
+    """
+
+    _transport: UrlTransport
+
+    def __new__(cls, value: str, transport: UrlTransport) -> UrlField:
+        """Create a member from its field name and what that field's scheme has to state."""
+        member = str.__new__(cls, value)
+        member._value_ = value
+        member._transport = transport
+        return member
+
+    @property
+    def transport(self) -> UrlTransport:
+        """What this field's scheme has to state about its transport."""
+        return self._transport
+
+    AUTHORIZE_URL = ("authorize_url", UrlTransport.TLS_REQUIRED)
+    ISSUER = ("issuer", UrlTransport.TLS_REQUIRED)
+    JWKS_URL = ("jwks_url", UrlTransport.TLS_REQUIRED)
+    REDIRECT_URI = ("redirect_uri", UrlTransport.TLS_REQUIRED)
+    REGISTRATION_URL = ("registration_url", UrlTransport.TLS_REQUIRED)
+    RESOURCE = ("resource", UrlTransport.UNCHECKED)
+    REVOCATION_URL = ("revocation_url", UrlTransport.TLS_REQUIRED)
+    TOKEN_URL = ("token_url", UrlTransport.TLS_REQUIRED)
+    USERINFO_URL = ("userinfo_url", UrlTransport.TLS_REQUIRED)
 
 
 @unique
@@ -297,6 +342,30 @@ class Provider(StrEnum):
     )
 
 
+def _build_allowing_plain_http(
+    cls: type[_ModelT], fields: tuple[UrlField | str, ...], values: dict[str, Any]
+) -> _ModelT:
+    """Build a model that accepts plain HTTP for the named URL fields, and say so in the log.
+
+    NOTE: Nothing is logged for a build that is refused, so a line in the log names a waiver in force.
+
+    Args:
+        cls: The model to build.
+        fields: The URL fields plain HTTP is accepted for.
+        values: The field values to build from.
+
+    Returns:
+        The built model, recording the fields it accepts plain HTTP for.
+
+    Raises:
+        ConfigurationError: If the values are refused, or a name is no URL field.
+    """
+    waiver = frozenset(fields)
+    model = cls.model_validate({**values, _PLAIN_HTTP_WAIVER: waiver}, context={_PLAIN_HTTP_WAIVER: _WAIVER_SENTINEL})
+    logger.warning("plain http accepted for %s; use this for local development only", sorted(str(f) for f in waiver))
+    return model
+
+
 def _refusal_text(error: ValidationError) -> str:
     """Return a model's refusals as one line, dropping the value the framework attached to each.
 
@@ -324,8 +393,8 @@ def _refusal_text(error: ValidationError) -> str:
 def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
     """Refuse a URL field whose authority carries a credential, naming the field that carries it.
 
-    A field named in :data:`URL_FIELDS` and absent from the model is skipped, so one rule covers
-    models that hold different subsets of those fields.
+    A field of :class:`UrlField` that the model does not hold is skipped, so one rule covers models
+    holding different subsets of them.
 
     Args:
         model: The model to read the URL fields of.
@@ -336,8 +405,8 @@ def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
     Raises:
         ValueError: If a URL field carries userinfo, or its authority cannot be read.
     """
-    for field in URL_FIELDS:
-        url = getattr(model, field, None)
+    for field in UrlField:
+        url = getattr(model, field.value, None)
         if url is None:
             continue
         credential = authority_credential(url)
@@ -352,6 +421,73 @@ def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
                 raise ValueError(msg)
             case _:
                 assert_never(credential)
+    return model
+
+
+def _refuse_a_url_without_tls(model: BaseModel) -> BaseModel:
+    """Refuse a URL field stating a transport this model does not accept.
+
+    A field naming an endpoint must state ``https``, the only scheme that protects what a request
+    carries.
+    A loopback host is accepted over ``http`` with no waiver, because a request to it reaches no
+    network.
+    Every other scheme is refused, including one this library cannot send, and so is an empty value.
+    A field of :class:`UrlField` that the model does not hold is skipped, so one rule covers models
+    holding different subsets of them.
+
+    Args:
+        model: The model to read the URL fields of.
+
+    Returns:
+        The model, unchanged.
+
+    Raises:
+        ValueError: If a URL field states a transport this model does not accept, or is empty, or a
+            recorded waiver names a field that needs none.
+    """
+    waived: frozenset[UrlField] = getattr(model, _PLAIN_HTTP_WAIVER, frozenset())
+    for field in sorted(waived):
+        if field.value not in type(model).model_fields or field.transport is UrlTransport.UNCHECKED:
+            msg = f"{field} needs no waiver"
+            raise ValueError(msg)
+    for field in UrlField:
+        url = getattr(model, field.value, None)
+        if url is None or field.transport is UrlTransport.UNCHECKED:
+            continue
+        if not url:
+            msg = f"{field} must not be empty"
+            raise ValueError(msg)
+        if uses_allowed_transport(url, plain_http_allowed=field in waived):
+            continue
+        msg = f"{field} must use https, or http on a loopback host"
+        raise ValueError(msg)
+    return model
+
+
+def _refuse_a_waiver_that_did_not_come_from_code(model: BaseModel, info: ValidationInfo) -> BaseModel:
+    """Refuse a plain-HTTP waiver that was not stated in code.
+
+    A waiver read back out of storage would carry one machine's exception to wherever the data was
+    moved.
+
+    NOTE: The waiver is read off the built model, because an input validated from attributes states
+    no mapping to read.
+
+    Args:
+        model: The model to read the waiver of.
+        info: The validation this runs within.
+
+    Returns:
+        The model, unchanged.
+
+    Raises:
+        ValueError: If the model records a waiver that was not stated in code.
+    """
+    waived = getattr(model, _PLAIN_HTTP_WAIVER, frozenset())
+    context = info.context if isinstance(info.context, Mapping) else {}
+    if waived and context.get(_PLAIN_HTTP_WAIVER) is not _WAIVER_SENTINEL:
+        msg = f"{_PLAIN_HTTP_WAIVER} is stated through unsafe.allow_plain_http, not as data"
+        raise ValueError(msg)
     return model
 
 
@@ -399,6 +535,12 @@ _REPEATS_NO_VALUE = model_validator(mode="wrap")(
 # Attach this to every model that holds a URL field, so one rule decides what any of them may carry.
 _URLS_CARRY_NO_USERINFO = model_validator(mode="after")(_refuse_a_url_carrying_a_credential)
 
+# Attach this to every model that declares endpoints, so one rule decides what their schemes must state.
+_URLS_STATE_THEIR_TRANSPORT = model_validator(mode="after")(_refuse_a_url_without_tls)
+
+# Attach this to every model that records a plain-HTTP waiver, so only code can state one.
+_WAIVER_COMES_FROM_CODE = model_validator(mode="after")(_refuse_a_waiver_that_did_not_come_from_code)
+
 
 class _RefusesWithoutRepeating(BaseModel):
     """A model that refuses without repeating the value it was given, at each entry point of its own.
@@ -410,6 +552,22 @@ class _RefusesWithoutRepeating(BaseModel):
     NOTE: A model must also attach the shared wrap validator as its last member, which covers the entry
     points the framework owns. A wrap validator attached here would not wrap a subclass's own validators.
     """
+
+    def __reduce__(self) -> Any:
+        """Reduce for pickling, refusing a model that records a plain-HTTP waiver.
+
+        A waiver states one machine's exception, and pickling carries it to wherever the bytes go.
+
+        Returns:
+            What the framework reduces this model to.
+
+        Raises:
+            ConfigurationError: If the model records a waiver.
+        """
+        if getattr(self, _PLAIN_HTTP_WAIVER, frozenset()):
+            msg = f"a model that accepts plain http cannot be stored; state {_PLAIN_HTTP_WAIVER} in code instead"
+            raise ConfigurationError(msg)
+        return super().__reduce__()
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set an attribute, refusing without repeating the value it was given.
@@ -638,6 +796,14 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             against the member, so a caller must not read this as proof of where the endpoints lead.
             NOTE: Only construction takes and checks a member's facts. A config whose provider is set
             through :meth:`~pydantic.BaseModel.model_copy` keeps the facts it already carried.
+        allow_insecure_http_for: The URL fields this config accepts plain HTTP for. Empty by
+            default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
+            out of storage is refused. A loopback host needs no waiver, because a request to one
+            reaches no network.
+            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
+            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
+            NOTE: A config recording a waiver cannot be validated as a field of another model,
+            because that validation cannot tell a waiver stated in code from one read out of data.
     """
 
     client_id: str
@@ -662,6 +828,34 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
     provider: Provider | None = None
+    allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
+
+    # The name is lowercase because it reads as a namespace at the call site, not as a type.
+    class unsafe:  # noqa: N801
+        """Builders that give up a protection this config otherwise requires."""
+
+        @staticmethod
+        def allow_plain_http(*fields: UrlField | str, **values: Any) -> ProviderConfig:
+            """Build a configuration that accepts plain HTTP for the named URL fields.
+
+            Every other URL field still has to state TLS, so a waiver reaches no field it does not name.
+            A loopback host needs no waiver, because a request to it reaches no network.
+            A waiver states what this configuration accepts, not what its values happen to be, so one
+            naming a field that holds ``https`` is accepted and recorded.
+
+            NOTE: This builds a :class:`ProviderConfig`, including when it is reached through a subclass.
+
+            Args:
+                *fields: The URL fields plain HTTP is accepted for.
+                **values: The field values to build from.
+
+            Returns:
+                The built configuration, recording the fields it accepts plain HTTP for.
+
+            Raises:
+                ConfigurationError: If the values are refused, or a name is no URL field.
+            """
+            return _build_allowing_plain_http(ProviderConfig, fields, values)
 
     @model_validator(mode="after")
     def _client_secret_presence_matches_auth_method(self) -> ProviderConfig:
@@ -889,6 +1083,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
+    _waiver_comes_from_code = _WAIVER_COMES_FROM_CODE
+    _urls_state_their_transport = _URLS_STATE_THEIR_TRANSPORT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -933,6 +1129,14 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
         userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when the metadata omits it.
             An OpenID provider need not advertise one.
         jwks_url: The issuer's JSON Web Key Set (JWKS) URL, or ``None`` when the metadata omits it.
+        allow_insecure_http_for: The URL fields this metadata accepts plain HTTP for. Empty by
+            default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
+            out of storage is refused. A loopback host needs no waiver, because a request to one
+            reaches no network.
+            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
+            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
+            NOTE: A metadata recording a waiver cannot be validated as a field of another model,
+            because that validation cannot tell a waiver stated in code from one read out of data.
     """
 
     authorize_url: str
@@ -948,8 +1152,38 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
     resource: str | None = None
     userinfo_url: str | None = None
     jwks_url: str | None = None
+    allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
+
+    # The name is lowercase because it reads as a namespace at the call site, not as a type.
+    class unsafe:  # noqa: N801
+        """Builders that give up a protection this metadata otherwise requires."""
+
+        @staticmethod
+        def allow_plain_http(*fields: UrlField | str, **values: Any) -> ServerMetadata:
+            """Build a metadata that accepts plain HTTP for the named URL fields.
+
+            Every other URL field still has to state TLS, so a waiver reaches no field it does not name.
+            A loopback host needs no waiver, because a request to it reaches no network.
+            A waiver states what this metadata accepts, not what its values happen to be, so one naming
+            a field that holds ``https`` is accepted and recorded.
+
+            NOTE: This builds a :class:`ServerMetadata`, including when it is reached through a subclass.
+
+            Args:
+                *fields: The URL fields plain HTTP is accepted for.
+                **values: The field values to build from.
+
+            Returns:
+                The built metadata, recording the fields it accepts plain HTTP for.
+
+            Raises:
+                ConfigurationError: If the values are refused, or a name is no URL field.
+            """
+            return _build_allowing_plain_http(ServerMetadata, fields, values)
 
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
+    _waiver_comes_from_code = _WAIVER_COMES_FROM_CODE
+    _urls_state_their_transport = _URLS_STATE_THEIR_TRANSPORT
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
@@ -1364,6 +1598,8 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
     created_at: float
     metadata: dict[str, Any] = {}
 
+    # No transport rule: the redirect URI is the one a config already stated, and a config that
+    # accepts plain HTTP for it records no waiver here to read.
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE

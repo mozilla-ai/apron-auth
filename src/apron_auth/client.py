@@ -21,7 +21,7 @@ from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
-from apron_auth._urls import AuthorityCredential, authority_credential
+from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import (
     SERVER_ERROR,
     TEMPORARILY_UNAVAILABLE,
@@ -37,7 +37,13 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS, FreshTokenSet, IdentityMaterial, OAuthPendingState
+from apron_auth.models import (
+    RESERVED_AUTHORIZATION_PARAMS,
+    FreshTokenSet,
+    IdentityMaterial,
+    OAuthPendingState,
+    UrlField,
+)
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers import identity_handler_for
@@ -349,6 +355,8 @@ class OAuthClient:
         Raises:
             ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
                 or cannot be read.
+                It is also raised when the URI states no ``https`` and names no loopback host, unless
+                the config accepts plain HTTP for its redirect URI.
         """
         effective_redirect_uri = redirect_uri or self._config.redirect_uri
         if not effective_redirect_uri:
@@ -366,6 +374,12 @@ class OAuthClient:
                 raise ConfigurationError(msg)
             case _:
                 assert_never(credential)
+        if not uses_allowed_transport(
+            effective_redirect_uri,
+            plain_http_allowed=UrlField.REDIRECT_URI in self._config.allow_insecure_http_for,
+        ):
+            msg = "redirect_uri must use https, or http on a loopback host"
+            raise ConfigurationError(msg)
 
         state = secrets.token_urlsafe(32)
         code_verifier = None

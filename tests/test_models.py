@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import math
 import pickle
 import time
 import traceback
 from collections.abc import Callable
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import pytest
 from pydantic import BaseModel, SecretStr
@@ -17,7 +18,6 @@ from apron_auth import models, providers
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
-    URL_FIELDS,
     ApplicationType,
     ClientRegistration,
     FreshTokenSet,
@@ -31,6 +31,8 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
     TokenSet,
+    UrlField,
+    UrlTransport,
 )
 
 # Every model the library offers, so a new one cannot be added without the refusal rules below.
@@ -462,12 +464,12 @@ class TestProviderConfigUnknownFields:
 
 class TestUrlFields:
     def test_members_are_in_alphabetical_order(self) -> None:
-        names = list(URL_FIELDS)
+        names = [field.value for field in UrlField]
         assert names == sorted(names)
 
     @pytest.mark.parametrize(
         "model",
-        [model for model in MODELS if set(URL_FIELDS) & set(model.model_fields)],
+        [model for model in MODELS if {field.value for field in UrlField} & set(model.model_fields)],
         ids=lambda model: model.__name__,
     )
     def test_every_model_holding_a_named_field_refuses_a_credential_in_it(self, model: type[BaseModel]) -> None:
@@ -475,6 +477,31 @@ class TestUrlFields:
         attached = {holder.func for holder in model.__pydantic_decorators__.model_validators.values()}
 
         assert models._refuse_a_url_carrying_a_credential in attached
+
+    def test_the_models_declaring_endpoints_are_the_ones_stating_the_rule(self) -> None:
+        """A pending state records a request that was made, so it declares no endpoint and states no rule."""
+        declaring = {model.__name__ for model in MODELS if models._PLAIN_HTTP_WAIVER in model.model_fields}
+
+        assert declaring == {"ProviderConfig", "ServerMetadata"}
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_a_model_recording_a_waiver_states_the_rule_the_waiver_waives(self, model: type[BaseModel]) -> None:
+        """A waiver with no rule to waive would record an exception that nothing ever applied."""
+        attached = {holder.func for holder in model.__pydantic_decorators__.model_validators.values()}
+
+        assert (models._PLAIN_HTTP_WAIVER in model.model_fields) == (models._refuse_a_url_without_tls in attached)
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_the_scrubbing_rule_is_the_last_one_each_model_declares(self, model: type[BaseModel]) -> None:
+        """It has to wrap the others, or a refusal from one of them escapes carrying the raw value."""
+        declared = list(model.__pydantic_decorators__.model_validators.values())
+        last = declared[-1].func
+
+        assert getattr(last, "__func__", last) is models._refuse_without_repeating_the_value
+
+    def test_a_scrubbed_refusal_is_not_the_class_the_framework_re_wraps(self) -> None:
+        """A ValueError raised inside a validator is caught and re-wrapped with the value it was given."""
+        assert not issubclass(ConfigurationError, ValueError)
 
     def test_every_url_field_of_every_model_is_named(self) -> None:
         """A field whose name reads as a URL and is named nowhere here has no rule to refuse a credential."""
@@ -487,11 +514,454 @@ class TestUrlFields:
             if field.endswith(("_uri", "_url")) or field in {"issuer", "resource"}
         }
 
-        assert held - uncovered == set(URL_FIELDS)
+        assert held - uncovered == {field.value for field in UrlField}
+
+
+class TestUrlFieldTransport:
+    def test_each_field_states_what_its_scheme_must_say(self) -> None:
+        """A field added without stating this would be refused or waived by accident."""
+        assert {field.value: field.transport for field in UrlField} == {
+            "authorize_url": UrlTransport.TLS_REQUIRED,
+            "issuer": UrlTransport.TLS_REQUIRED,
+            "jwks_url": UrlTransport.TLS_REQUIRED,
+            "redirect_uri": UrlTransport.TLS_REQUIRED,
+            "registration_url": UrlTransport.TLS_REQUIRED,
+            "resource": UrlTransport.UNCHECKED,
+            "revocation_url": UrlTransport.TLS_REQUIRED,
+            "token_url": UrlTransport.TLS_REQUIRED,
+            "userinfo_url": UrlTransport.TLS_REQUIRED,
+        }
+
+    def test_members_are_in_alphabetical_order(self) -> None:
+        names = [member.name for member in UrlTransport]
+        assert names == sorted(names)
+
+
+class TestUnsafeAllowPlainHttp:
+    """The one way to accept plain http where it would cross a network."""
+
+    def _values(self, **overrides: str) -> dict[str, str]:
+        values = {
+            "client_id": "cid",
+            "client_secret": "csec",  # pragma: allowlist secret
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+        }
+        values.update(overrides)
+        return values
+
+    def test_it_accepts_plain_http_for_the_field_it_names(self) -> None:
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "token_url", **self._values(token_url="http://keycloak:8080/token")
+        )
+
+        assert config.token_url == "http://keycloak:8080/token"
+        assert config.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+
+    def test_it_waives_no_field_it_does_not_name(self) -> None:
+        """A waiver that spread would turn one accepted endpoint into a blanket exception."""
+        with pytest.raises(ConfigurationError, match="authorize_url must use https"):
+            ProviderConfig.unsafe.allow_plain_http(
+                "token_url",
+                **self._values(authorize_url="http://keycloak:8080/authorize", token_url="http://keycloak:8080/token"),
+            )
+
+    def test_it_refuses_a_name_that_is_no_url_field(self) -> None:
+        with pytest.raises(ConfigurationError, match="allow_insecure_http_for"):
+            ProviderConfig.unsafe.allow_plain_http("toekn_url", **self._values(token_url="http://keycloak:8080/token"))
+
+    def test_it_says_so_in_the_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        """An exception nobody can see is an exception nobody reviews."""
+        with caplog.at_level(logging.WARNING, logger="apron_auth.models"):
+            ProviderConfig.unsafe.allow_plain_http("token_url", **self._values(token_url="http://keycloak:8080/token"))
+
+        assert "plain http accepted for ['token_url']" in caplog.text
+
+    def test_a_refused_build_logs_no_waiver(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A line in the log names a waiver in force, so a build that was refused writes none."""
+        with (
+            caplog.at_level(logging.WARNING, logger="apron_auth.models"),
+            pytest.raises(ConfigurationError, match="authorize_url must use https"),
+        ):
+            ProviderConfig.unsafe.allow_plain_http(
+                "token_url",
+                **self._values(
+                    authorize_url="http://keycloak:8080/authorize",
+                    token_url="http://keycloak:8080/token",
+                ),
+            )
+
+        assert "plain http accepted" not in caplog.text
+
+    def test_the_metadata_model_states_a_waiver_the_same_way(self) -> None:
+        metadata = ServerMetadata.unsafe.allow_plain_http(
+            "token_url",
+            authorize_url="https://auth.example.com/authorize",
+            token_url="http://keycloak:8080/token",
+        )
+
+        assert metadata.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+
+    def test_a_waiver_stated_as_a_keyword_is_refused(self) -> None:
+        """A waiver that any caller could set would be no statement in code at all."""
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            ProviderConfig(
+                **self._values(token_url="http://keycloak:8080/token"),
+                allow_insecure_http_for={"token_url"},
+            )
+
+    def test_a_waiver_read_back_out_of_storage_is_refused(self) -> None:
+        """A waiver is a statement about one machine, and storage carries it to another."""
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "token_url", **self._values(token_url="http://keycloak:8080/token")
+        )
+
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            ProviderConfig.model_validate_json(config.model_dump_json())
+
+    @pytest.mark.parametrize(
+        ("model", "data"),
+        [
+            pytest.param(
+                ProviderConfig,
+                {
+                    "client_id": "cid",
+                    "client_secret": "csec",  # pragma: allowlist secret
+                    "authorize_url": "https://provider.example.com/authorize",
+                    "token_url": "http://keycloak:8080/token",
+                    "allow_insecure_http_for": ["token_url"],
+                },
+                id="a config",
+            ),
+            pytest.param(
+                ServerMetadata,
+                {
+                    "authorize_url": "https://auth.example.com/authorize",
+                    "token_url": "http://keycloak:8080/token",
+                    "allow_insecure_http_for": ["token_url"],
+                },
+                id="metadata",
+            ),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda model, data, context: model.model_validate(data, context=context), id="a mapping"),
+            pytest.param(
+                lambda model, data, context: model.model_validate_json(json.dumps(data), context=context), id="json"
+            ),
+            pytest.param(
+                lambda model, data, context: model.model_validate(
+                    SimpleNamespace(**data), context=context, from_attributes=True
+                ),
+                id="from attributes",
+            ),
+        ],
+    )
+    def test_a_waiver_cannot_be_stated_through_a_validation_context(
+        self, model: type[BaseModel], data: dict[str, object], build: Callable[..., object]
+    ) -> None:
+        """Validation context is a public argument, so a waiver that trusted it could arrive as data."""
+        forged = (
+            {"allow_insecure_http_for": True},
+            {"allow_insecure_http_for": 1},
+            {"allow_insecure_http_for": copy.deepcopy(models._WAIVER_SENTINEL)},
+            "anything",
+            None,
+        )
+
+        for context in forged:
+            with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+                build(model, data, context)
+
+    @pytest.mark.parametrize(
+        "field",
+        ["resource", "jwks_url"],
+        ids=["a field that states no transport", "a field the config does not hold"],
+    )
+    def test_it_refuses_a_waiver_that_waives_nothing(self, field: str) -> None:
+        """A recorded waiver names what it covers, so one that covers nothing would misstate the config."""
+        with pytest.raises(ConfigurationError, match=f"{field} needs no waiver"):
+            ProviderConfig.unsafe.allow_plain_http(field, **self._values())
+
+    def test_the_config_namespace_builds_a_config(self) -> None:
+        """A nested namespace cannot see which model it was reached through, so each states its own."""
+        built = ProviderConfig.unsafe.allow_plain_http(
+            "token_url", **self._values(token_url="http://keycloak:8080/token")
+        )
+
+        assert type(built) is ProviderConfig
+
+    def test_the_metadata_namespace_builds_metadata(self) -> None:
+        built = ServerMetadata.unsafe.allow_plain_http(
+            "token_url",
+            authorize_url="https://auth.example.com/authorize",
+            token_url="http://keycloak:8080/token",
+        )
+
+        assert type(built) is ServerMetadata
+
+    @pytest.mark.parametrize(
+        "token_url",
+        ["ws://keycloak:8080/token", "javascript:alert(1)", "//keycloak:8080/token", "http:///token"],
+        ids=["websocket", "javascript", "scheme relative", "no host"],
+    )
+    def test_it_accepts_plain_http_and_nothing_else(self, token_url: str) -> None:
+        """A waiver names plain http to a host, so a field it covers refuses everything else."""
+        with pytest.raises(ConfigurationError, match="token_url must use https"):
+            ProviderConfig.unsafe.allow_plain_http("token_url", **self._values(token_url=token_url))
+
+    def test_a_waived_field_still_refuses_an_empty_value(self) -> None:
+        """An empty value names no host to reach, whatever a waiver says."""
+        with pytest.raises(ConfigurationError, match="token_url must not be empty"):
+            ProviderConfig.unsafe.allow_plain_http("token_url", **self._values(token_url=""))
+
+    def test_a_context_that_only_compares_equal_is_refused(self) -> None:
+        """The token is compared by identity, so a value that claims equality states nothing."""
+
+        class _EqualToAnything:
+            def __eq__(self, other: object) -> bool:
+                return True
+
+            def __hash__(self) -> int:
+                return 0
+
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            ProviderConfig.model_validate(
+                {**self._values(token_url="http://keycloak:8080/token"), "allow_insecure_http_for": ["token_url"]},
+                context={"allow_insecure_http_for": _EqualToAnything()},
+            )
+
+    def test_a_waiver_that_came_from_data_is_named_as_such_before_what_it_waives(self) -> None:
+        """Where a waiver came from is settled before what it covers, so forging it is what gets named."""
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            ProviderConfig.model_validate({**self._values(), "allow_insecure_http_for": ["resource"]})
+
+    def test_a_waived_config_cannot_be_validated_as_a_field_of_another_model(self) -> None:
+        """Validating a model as a field states no context, so a waiver cannot be told from data there."""
+
+        class Settings(BaseModel):
+            oauth: ProviderConfig
+
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "token_url", **self._values(token_url="http://keycloak:8080/token")
+        )
+
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            Settings(oauth=config)
+
+    @pytest.mark.parametrize("model", [ProviderConfig, ServerMetadata], ids=["a config", "metadata"])
+    def test_the_schema_states_that_a_waiver_is_not_settable(self, model: type[BaseModel]) -> None:
+        """A consumer generating a validator from the schema would otherwise send a document we refuse."""
+        field = model.model_json_schema()["properties"]["allow_insecure_http_for"]
+
+        assert field["readOnly"] is True
+
+    def test_a_waived_model_cannot_be_pickled(self) -> None:
+        """Pickling is storage, and a waiver states an exception for the machine that stated it."""
+        config = ProviderConfig.unsafe.allow_plain_http(
+            "token_url", **self._values(token_url="http://keycloak:8080/token")
+        )
+
+        with pytest.raises(ConfigurationError, match="cannot be stored"):
+            pickle.dumps(config)
+
+    def test_a_config_with_no_waiver_round_trips(self) -> None:
+        """Only a waiver blocks a reload, so an ordinary stored config still loads."""
+        config = ProviderConfig(**self._values())
+
+        reloaded = ProviderConfig.model_validate_json(config.model_dump_json())
+
+        assert reloaded.token_url == config.token_url
+        assert reloaded.allow_insecure_http_for == frozenset()
+
+
+class TestUrlSchemes:
+    @pytest.mark.parametrize("field", ["authorize_url", "issuer", "revocation_url", "token_url"])
+    def test_a_config_endpoint_must_use_https(self, field: str) -> None:
+        """This library sends the client's secret and the user's tokens to these, so TLS is not optional."""
+        endpoints = {
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+        }
+        endpoints[field] = f"http://provider.example.com/{field}"
+
+        with pytest.raises(ConfigurationError, match=f"{field} must use https"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                **endpoints,
+            )
+
+    @pytest.mark.parametrize(
+        "field", ["authorize_url", "issuer", "jwks_url", "registration_url", "revocation_url", "userinfo_url"]
+    )
+    def test_a_discovered_endpoint_must_use_https(self, field: str) -> None:
+        """A document states these, and a document is not a reason to send a token in the clear."""
+        urls = {
+            "authorize_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+        }
+        urls[field] = f"http://auth.example.com/{field}"
+
+        with pytest.raises(ConfigurationError, match=f"{field} must use https"):
+            ServerMetadata(**urls)
+
+    def test_a_redirect_uri_off_loopback_must_use_https(self) -> None:
+        """A code arrives at the redirect URI, so a public network must not carry it in the clear."""
+        with pytest.raises(ConfigurationError, match="redirect_uri must use https"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                redirect_uri="http://app.example.com/callback",
+            )
+
+    @pytest.mark.parametrize(
+        "host",
+        ["localhost", "127.0.0.1", "127.9.9.9", "[::1]", "localhost."],
+        ids=["by name", "dotted quad", "elsewhere in the range", "ipv6", "trailing dot"],
+    )
+    def test_a_loopback_redirect_uri_may_use_plain_http(self, host: str) -> None:
+        """A native client listens on the loopback interface, where no network carries the code."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            redirect_uri=f"http://{host}:8080/callback",
+        )
+
+        assert config.redirect_uri == f"http://{host}:8080/callback"
+
+    @pytest.mark.parametrize(
+        "token_url",
+        [
+            "ws://provider.example.com/token",
+            "ftp://provider.example.com/token",
+            "file:///etc/passwd",
+            "provider.example.com/token",
+            "//provider.example.com/token",
+            "https:///token",
+        ],
+        ids=["websocket", "ftp", "file", "no scheme", "scheme relative", "no host"],
+    )
+    def test_only_https_states_the_protection_an_endpoint_needs(self, token_url: str) -> None:
+        """A rule that only refused http would accept a scheme that carries the secret in the clear."""
+        with pytest.raises(ConfigurationError, match="token_url must use https"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url=token_url,
+            )
+
+    @pytest.mark.parametrize(
+        "field",
+        ["authorize_url", "issuer", "redirect_uri", "revocation_url", "token_url"],
+    )
+    def test_an_empty_endpoint_is_refused(self, field: str) -> None:
+        """An empty value names no endpoint, so a config holding one is a misconfiguration, not a default."""
+        values = {
+            "client_id": "cid",
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+            field: "",
+        }
+
+        with pytest.raises(ConfigurationError, match=f"{field} must not be empty"):
+            ProviderConfig(**values)
+
+    @pytest.mark.parametrize(
+        "token_url",
+        [
+            pytest.param("https://provider.example.com:not-a-port/token", id="a port that is not a number"),
+            pytest.param("https://provider.example.com:99999/token", id="a port out of range"),
+        ],
+    )
+    def test_an_endpoint_whose_port_cannot_be_read_is_refused(self, token_url: str) -> None:
+        """An HTTP client refuses such a URL, so accepting it would move the refusal to the request."""
+        with pytest.raises(ConfigurationError, match="token_url is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url=token_url,
+            )
+
+    def test_metadata_accepts_a_loopback_endpoint_over_plain_http(self) -> None:
+        """A request to a loopback host reaches no network, so it needs no waiver on either model."""
+        built = ServerMetadata(
+            authorize_url="http://localhost:8080/authorize",
+            token_url="http://127.0.0.1:8080/token",
+        )
+
+        assert built.allow_insecure_http_for == frozenset()
+
+    @pytest.mark.parametrize(
+        "host",
+        ["2130706433", "0x7f000001", "127.1", "sub.localhost"],
+        ids=["decimal", "hexadecimal", "short form", "a name under localhost"],
+    )
+    def test_a_host_resolvers_disagree_about_is_not_read_as_loopback(self, host: str) -> None:
+        """Only the reserved name and a canonical address are read as loopback, because the rest differ."""
+        with pytest.raises(ConfigurationError, match="token_url must use https"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url=f"http://{host}:8080/token",
+            )
+
+    def test_an_octal_loopback_form_is_refused_as_unreadable(self) -> None:
+        """An HTTP client refuses this form outright, so it never reaches the loopback question."""
+        with pytest.raises(ConfigurationError, match="token_url is malformed"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="http://0177.0.0.1:8080/token",
+            )
+
+    def test_a_private_use_scheme_redirect_uri_is_refused(self) -> None:
+        """A native client's own scheme states no transport this library can check, so it is refused."""
+        with pytest.raises(ConfigurationError, match="redirect_uri must use https"):
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+                redirect_uri="com.example.app:/callback",
+            )
+
+    def test_a_pending_state_states_no_transport_of_its_own(self) -> None:
+        """A pending state records a request that was made, rather than declaring an endpoint."""
+        pending = OAuthPendingState(
+            state="random-state-token",
+            redirect_uri="http://app.example.com/callback",
+            created_at=1.0,
+        )
+
+        assert pending.redirect_uri == "http://app.example.com/callback"
+
+    def test_a_resource_states_no_transport(self) -> None:
+        """The resource identifies an API rather than naming an endpoint this library requests."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            resource="http://api.example.com/",
+        )
+
+        assert config.resource == "http://api.example.com/"
 
 
 class TestProviderConfigUrlCredentials:
-    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ProviderConfig.model_fields])
+    @pytest.mark.parametrize("field", [f.value for f in UrlField if f.value in ProviderConfig.model_fields])
     @pytest.mark.parametrize(
         "authority",
         [
@@ -823,7 +1293,7 @@ class TestServerMetadata:
                 token_url="https://auth.example.com/token",
             )
 
-    @pytest.mark.parametrize("field", [field for field in URL_FIELDS if field in ServerMetadata.model_fields])
+    @pytest.mark.parametrize("field", [f.value for f in UrlField if f.value in ServerMetadata.model_fields])
     def test_rejects_a_credential_in_any_url_it_holds(self, field: str) -> None:
         """This model holds every URL field but the redirect URI, so one rule covers the whole list."""
         urls = {
