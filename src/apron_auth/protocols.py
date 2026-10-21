@@ -204,10 +204,9 @@ class StandardRevocationHandler:
             response = await client.post(
                 revocation_url,
                 data=data,
-                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an
-                # injected client's own auth flow is not applied to the
-                # server-supplied revocation URL. The client accepts None at
-                # runtime. Its type stub omits it, so the ignore below is needed.
+                # Pass None for a public client, so an injected HTTP client's own auth
+                # flow is not applied to the server-supplied revocation URL. The HTTP
+                # client accepts None at runtime, and only its type stub omits it.
                 auth=auth,  # ty: ignore[invalid-argument-type]
             )
         except httpx.RequestError as exc:

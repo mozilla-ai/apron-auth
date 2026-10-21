@@ -46,12 +46,12 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
+# handed to a browser, or recorded wherever the model is.
+URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
+
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
-
-# Every URL field. None may carry a credential in its authority, because each is sent to the provider,
-# handed to a browser, or recorded wherever the config is.
-URL_FIELDS = ("authorize_url", "issuer", "redirect_uri", "resource", "revocation_url", "token_url")
 
 
 @unique
@@ -290,8 +290,8 @@ class Provider(StrEnum):
 def _refusal_text(error: ValidationError) -> str:
     """Return a model's refusals as one line, dropping the value the framework attached to each.
 
-    NOTE: A refusal written by this model's own validators is passed through as it stands, so a
-    validator that interpolates a value into its message still carries that value here.
+    NOTE: A refusal a model's own validator wrote is passed through as it stands, so a validator
+    that interpolates a value into its message still carries that value here.
 
     Args:
         error: The refusal raised while validating the model.
@@ -382,8 +382,8 @@ def _refuse_without_repeating_the_value(
     class does not wrap a subclass's own validators, whose refusals would then escape unscrubbed.
 
     NOTE: A model validated as a field of another model refuses with this error rather than one the
-    outer model can collect, so the refusal names the field inside this model and not the path to
-    it, and any other refusal the outer model would have reported is lost.
+    outer model can collect. The refusal names the field inside this model and not the path to it.
+    Any other refusal the outer model would have reported is lost.
 
     Args:
         cls: The model being validated.

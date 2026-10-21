@@ -261,8 +261,7 @@ def to_provider_config(
         ConfigurationError: If a URL the metadata states carries a credential in its
             authority, or the effective ``resource`` — supplied or discovered — is
             not a valid absolute URI without a fragment. Metadata reaching here is
-            treated as the caller's, because ``discover`` screens what it reads out
-            of a document before it builds the metadata.
+            treated as the caller's, whatever produced it.
         McpDiscoveryError: If the registration's method disagrees with its
             secret, or the server advertises no method the client can satisfy.
     """
@@ -433,6 +432,7 @@ def cimd_client_id(url: str) -> str:
         case AuthorityCredential.ABSENT:
             pass
         case AuthorityCredential.MALFORMED:
+            # NOTE: Unreachable. The parse above refuses an authority this cannot read.
             msg = "CIMD client_id must be a valid URL"
             raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         case AuthorityCredential.PRESENT:
