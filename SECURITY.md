@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-We at [Mozilla AI](https://www.mozilla.ai/) take the security of our projects seriously. We appreciate your efforts to responsibly disclose security vulnerabilities. 
+We at [Mozilla AI](https://www.mozilla.ai/) take the security of our projects seriously. We appreciate your efforts to responsibly disclose security vulnerabilities.
 
 This document outlines the process for reporting vulnerabilities in `apron-auth`.
 
@@ -41,7 +41,7 @@ Please include the following information in your report:
 
 ### Public Disclosure
 
-Please allow us a reasonable amount of time to address the vulnerability before public disclosure. We request that you do not disclose the vulnerability publicly until we have confirmed a fix is available and have agreed on a disclosure timeline. 
+Please allow us a reasonable amount of time to address the vulnerability before public disclosure. We request that you do not disclose the vulnerability publicly until we have confirmed a fix is available and have agreed on a disclosure timeline.
 
 Our typical disclosure timeline for critical issues is up to 30 days from the initial report, but this may vary depending on complexity.
 
