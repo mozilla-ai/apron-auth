@@ -11,10 +11,11 @@ import time
 from collections.abc import Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, assert_never
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
 
+from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
 from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, status_failure
@@ -38,7 +39,6 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
-    RESERVED_AUTHORIZATION_PARAMS,
     FreshTokenSet,
     IdentityMaterial,
     OAuthPendingState,
@@ -47,7 +47,6 @@ from apron_auth.models import (
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers import identity_handler_for
-from apron_auth.scopes import join_scopes, scope_words
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -776,35 +775,13 @@ class OAuthClient:
     def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
         """Return the query of an authorization URL that sends ``params``.
 
-        The authorization URL's own query is overridden by ``params``, then by ``extra_params``, then by the resource.
-        A reserved parameter is dropped from the URL's own query and from ``extra_params``, so only this client sets it.
-
         Args:
             params: The request parameters this client sets.
 
         Returns:
             The query, with each parameter's value or values.
         """
-        # A reserved parameter binds the request to this client, or replaces the request as a whole,
-        # so the config must not set one, even when it was built without validation.
-        query: dict[str, str | list[str]] = {
-            name: values[0] if len(values) == 1 else values
-            for name, values in parse_qs(urlparse(self._config.authorize_url).query).items()
-            if name not in RESERVED_AUTHORIZATION_PARAMS
-        }
-        query.update(params)
-        query.update(
-            {
-                name: value
-                for name, value in self._config.extra_params.items()
-                if name not in RESERVED_AUTHORIZATION_PARAMS
-            }
-        )
-        # The resource indicator (RFC 8707) is authoritative for audience binding,
-        # so extra_params must not be able to suppress or redirect it.
-        if self._config.resource is not None:
-            query["resource"] = self._config.resource
-        return query
+        return authorization_query(self._config, params)
 
     def _requests_openid(self) -> bool:
         """Return whether this client's authorization request asks for the ``openid`` scope.
@@ -856,9 +833,7 @@ class OAuthClient:
         Returns:
             The parameter, or no parameter when no scopes are configured.
         """
-        if not self._config.scopes:
-            return {}
-        return {"scope": join_scopes(self._config.scopes, self._config.scope_separator)}
+        return scope_param(self._config)
 
     def _sends_openid(self, query: Mapping[str, str | list[str]]) -> bool:
         """Return whether an authorization query asks for the ``openid`` scope.
@@ -869,9 +844,7 @@ class OAuthClient:
         Returns:
             ``True`` when a scope word in ``query`` is ``openid``.
         """
-        scope = query.get("scope")
-        values = [scope] if isinstance(scope, str) else scope or []
-        return "openid" in scope_words(values, self._config.scope_separator)
+        return "openid" in sent_scope_words(query, "scope", self._config.scope_separator)
 
     def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
         """Return the secret values a token request sends, which are the client secret and the grant's own.
