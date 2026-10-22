@@ -419,6 +419,21 @@ class TestSlackSignInPreset:
         config, _ = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
         assert config.scopes == expected
 
+    def test_a_scope_entry_holding_the_sign_in_scope_is_not_duplicated(self) -> None:
+        """The scope parameter is read word by word, so a multi-word entry already asks for openid."""
+        from apron_auth.providers.slack import sign_in_preset
+
+        config, _ = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["openid email"])
+        assert config.scopes == ["openid email"]
+
+    def test_the_injected_scope_carries_consent_metadata(self) -> None:
+        """A consent picker reads the metadata of every scope the preset injects."""
+        from apron_auth.providers.slack import sign_in_preset
+
+        config, _ = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        assert [meta.scope for meta in config.scope_metadata] == ["openid"]
+        assert config.scope_metadata[0].required is True
+
     def test_the_requested_scopes_are_one_required_family(self) -> None:
         from apron_auth.providers.slack import sign_in_preset
 
@@ -545,6 +560,57 @@ class TestSlackFlowMismatchIsRefused:
         from apron_auth.providers.slack import SlackIdentityHandler
 
         return SlackIdentityHandler(), IdentityMaterial(access_token="token-abc")
+
+    async def test_the_sign_in_scope_as_a_user_scope_does_not_satisfy_the_sign_in_endpoint(self) -> None:
+        """Slack's user_scope parameter carries no nonce, so it cannot stand in for the scope parameter."""
+        handler, material = self._handler_and_material()
+        config = ProviderConfig(
+            client_id="sid",
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
+            authorize_url="https://slack.com/openid/connect/authorize",
+            token_url="https://slack.com/api/openid.connect.token",
+            scopes=["profile"],
+            extra_params={"user_scope": "openid"},
+        )
+
+        with pytest.raises(ConfigurationError, match="must ask for the openid scope"):
+            await handler.fetch_identity(material, config)
+
+    @pytest.mark.parametrize(
+        ("scopes", "authorize_url", "extra_params"),
+        [
+            pytest.param(
+                [],
+                "https://slack.com/openid/connect/authorize",
+                {"scope": "openid,email"},
+                id="through the extra parameters",
+            ),
+            pytest.param(
+                [],
+                "https://slack.com/openid/connect/authorize?scope=openid,email",
+                {},
+                id="through the authorization URL's own query",
+            ),
+        ],
+    )
+    async def test_every_source_of_the_scope_parameter_satisfies_the_sign_in_endpoint(
+        self, httpx_mock: HTTPXMock, scopes: list[str], authorize_url: str, extra_params: dict[str, str]
+    ) -> None:
+        """The client builds the scope parameter from three sources, and a nonce follows any of them."""
+        handler, material = self._handler_and_material()
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, json={"ok": True, "sub": "U1"})
+        config = ProviderConfig(
+            client_id="sid",
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
+            authorize_url=authorize_url,
+            token_url="https://slack.com/api/openid.connect.token",
+            scopes=scopes,
+            extra_params=extra_params,
+        )
+
+        identity = await handler.fetch_identity(material, config)
+
+        assert identity.subject == "U1"
 
     async def test_the_sign_in_endpoint_without_the_sign_in_scope_is_refused(self) -> None:
         """Without openid Slack returns no ID token, so no nonce is sent and no person is verified."""

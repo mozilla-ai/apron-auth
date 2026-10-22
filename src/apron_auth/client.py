@@ -47,7 +47,7 @@ from apron_auth.models import (
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers import identity_handler_for
-from apron_auth.scopes import join_scopes
+from apron_auth.scopes import join_scopes, scope_words
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -863,9 +863,6 @@ class OAuthClient:
     def _sends_openid(self, query: Mapping[str, str | list[str]]) -> bool:
         """Return whether an authorization query asks for the ``openid`` scope.
 
-        A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma, or the configured separator.
-        A wider set of delimiters treats more scope strings as OpenID requests, which must then return an ID token.
-
         Args:
             query: The query of an authorization URL.
 
@@ -874,15 +871,7 @@ class OAuthClient:
         """
         scope = query.get("scope")
         values = [scope] if isinstance(scope, str) else scope or []
-        # NOTE: ProviderConfig refuses an empty separator, so no delimiter here is empty. An empty one
-        # would split every character into its own word, and a request for openid would read as asking for none.
-        delimiters = {",", self._config.scope_separator}
-        words: set[str] = set()
-        for value in values:
-            for delimiter in delimiters:
-                value = value.replace(delimiter, " ")
-            words.update(value.split())
-        return "openid" in words
+        return "openid" in scope_words(values, self._config.scope_separator)
 
     def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
         """Return the secret values a token request sends, which are the client secret and the grant's own.

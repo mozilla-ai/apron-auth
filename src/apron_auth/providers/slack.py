@@ -37,7 +37,7 @@ References:
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from pydantic import SecretStr
@@ -51,14 +51,31 @@ from apron_auth.errors import (
     IdentityScopeNotGrantedError,
     RevocationError,
 )
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    Provider,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+)
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.scopes import scope_words
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from apron_auth.protocols import RevocationHandler
 
+
+# The scope the sign-in preset always requests, with the label a consent screen shows.
+SIGN_IN_SCOPE_METADATA = [
+    ScopeMetadata(
+        scope="openid",
+        label="OpenID",
+        description="Authenticate your Slack identity",
+        access_type="read",
+        required=True,
+    )
+]
 
 # The endpoint that identifies the token's user and workspace.
 _SLACK_AUTH_TEST_URL = "https://slack.com/api/auth.test"
@@ -108,30 +125,36 @@ _SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 _SLACK_USER_ID_CLAIM = "https://slack.com/user_id"
 
 
-def _asks_for_the_sign_in_scope(scopes: Sequence[str], user_scope: str, separator: str) -> bool:
-    """Return True when an authorization request would ask Slack for the sign-in scope.
+def _sends_the_sign_in_scope(config: ProviderConfig) -> bool:
+    """Return True when the authorization request's ``scope`` parameter asks for the sign-in scope.
 
-    Slack's install flow carries bot scopes and user scopes in two parameters, so the scope can
-    land in either one. A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma,
-    or the given separator. Reading a wider set of delimiters finds the scope in more strings,
-    which is the safe direction for a refusal.
+    That parameter decides whether a nonce is sent and an ID token required, and it is built from
+    the configured scopes, the authorization URL's own query and the extra parameters.
 
     Args:
-        scopes: The scopes the request sends as its ``scope`` parameter.
-        user_scope: The scopes the request sends as its ``user_scope`` parameter, joined.
-        separator: The separator that joins each parameter.
+        config: The provider configuration to inspect.
 
     Returns:
-        ``True`` when either parameter asks for the sign-in scope.
+        ``True`` when the ``scope`` parameter carries the sign-in scope.
     """
-    delimiters = {",", separator} - {""}
-    words: set[str] = set()
-    for scope in (*scopes, user_scope):
-        value = scope
-        for delimiter in delimiters:
-            value = value.replace(delimiter, " ")
-        words.update(value.split())
-    return _SLACK_SIGN_IN_SCOPE in words
+    url_query = parse_qs(urlparse(config.authorize_url).query).get("scope", [])
+    values = [*config.scopes, *url_query, config.extra_params.get("scope", "")]
+    return _SLACK_SIGN_IN_SCOPE in scope_words(values, config.scope_separator)
+
+
+def _sends_the_sign_in_scope_as_a_user_scope(config: ProviderConfig) -> bool:
+    """Return True when the request's ``user_scope`` parameter asks Slack for the sign-in scope.
+
+    Slack's install flow carries user scopes in a parameter of their own, which no nonce follows.
+
+    Args:
+        config: The provider configuration to inspect.
+
+    Returns:
+        ``True`` when the ``user_scope`` parameter carries the sign-in scope.
+    """
+    user_scope = config.extra_params.get("user_scope", "")
+    return _SLACK_SIGN_IN_SCOPE in scope_words([user_scope], config.scope_separator)
 
 
 def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str, str]:
@@ -274,17 +297,15 @@ class SlackIdentityHandler:
         """
         access_token = material.access_token
         sign_in_endpoint = _is_sign_in_flow(config)
-        asks_for_sign_in = _asks_for_the_sign_in_scope(
-            config.scopes, config.extra_params.get("user_scope", ""), config.scope_separator
-        )
-        if sign_in_endpoint and not asks_for_sign_in:
+        sends_sign_in_scope = _sends_the_sign_in_scope(config)
+        if sign_in_endpoint and not sends_sign_in_scope:
             msg = (
                 "A Slack configuration naming Slack's OpenID token endpoint must ask for the openid scope, "
                 "because without it Slack returns no ID token and no nonce is sent or checked. "
                 "Build it with sign_in_preset."
             )
             raise ConfigurationError(msg)
-        if asks_for_sign_in and not sign_in_endpoint:
+        if not sign_in_endpoint and (sends_sign_in_scope or _sends_the_sign_in_scope_as_a_user_scope(config)):
             msg = (
                 "A Slack configuration asking for the openid scope must name Slack's OpenID token endpoint, "
                 "because no other Slack endpoint returns an ID token. Build it with sign_in_preset."
@@ -635,7 +656,8 @@ def preset(
     if user_scopes:
         merged_extra["user_scope"] = scope_separator.join(user_scopes)
 
-    if _asks_for_the_sign_in_scope(scopes, merged_extra.get("user_scope", ""), scope_separator):
+    requested = scope_words([*scopes, merged_extra.get("user_scope", "")], scope_separator)
+    if _SLACK_SIGN_IN_SCOPE in requested:
         msg = (
             "Slack serves Sign in with Slack from its own endpoints and returns no ID token from this "
             "flow, so the openid scope cannot be requested here. Use sign_in_preset for Sign in with Slack."
@@ -696,7 +718,7 @@ def sign_in_preset(
     merged_extra = _extra_params_without_scope(extra_params)
 
     requested = list(scopes or [])
-    if _SLACK_SIGN_IN_SCOPE not in requested:
+    if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
     config = ProviderConfig(
@@ -710,6 +732,7 @@ def sign_in_preset(
         redirect_uri=redirect_uri,
         scopes=requested,
         extra_params=merged_extra,
+        scope_metadata=SIGN_IN_SCOPE_METADATA,
         required_scope_families=[list(requested)],
     )
     return config, SlackRevocationHandler()
