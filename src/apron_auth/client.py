@@ -6,17 +6,17 @@ import asyncio
 import hmac
 import json
 import logging
-import re
 import secrets
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, assert_never
-from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
+from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
@@ -73,45 +73,13 @@ class _TokenEndpointError(Exception):
 
         Args:
             message: Human-readable description of the failure.
-            kind: What went wrong. For an OAuth error code it is decided before the code is redacted,
-                so redaction cannot change it.
+            kind: What went wrong.
             error_code: The OAuth error code from the token endpoint when
                 one is available, else an empty string.
         """
         super().__init__(message)
         self.kind = kind
         self.error_code = error_code
-
-
-def _redact(text: str, values: Iterable[str]) -> str:
-    """Return ``text`` with each exact or form-encoded copy of a secret value replaced by a placeholder.
-
-    NOTE: Other encodings and truncated copies are not found.
-
-    Args:
-        text: Text from a provider that may echo a value it was sent.
-        values: The secret values to remove.
-
-    Returns:
-        The text without an exact or form-encoded copy of any of the values.
-    """
-    copies = {copy for value in values if value for copy in (value, quote_plus(value))}
-    if not copies:
-        return text
-    pattern = "|".join(re.escape(copy) for copy in sorted(copies, key=len, reverse=True))
-    return re.sub(pattern, "[redacted]", text)
-
-
-async def _cancel_and_wait(tasks: Sequence[asyncio.Task[None]]) -> None:
-    """Cancel the tasks that are still running, and wait until every task has finished.
-
-    Args:
-        tasks: The tasks to cancel and wait for.
-    """
-    for task in tasks:
-        task.cancel()
-    if tasks:
-        await asyncio.wait(tasks)
 
 
 def _audience_names(audience: object) -> set[str] | None:
@@ -124,6 +92,18 @@ def _audience_names(audience: object) -> set[str] | None:
     if isinstance(audience, list) and all(isinstance(name, str) for name in audience):
         return set(audience)
     return None
+
+
+async def _cancel_and_wait(tasks: Sequence[asyncio.Task[None]]) -> None:
+    """Cancel the tasks that are still running, and wait until every task has finished.
+
+    Args:
+        tasks: The tasks to cancel and wait for.
+    """
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.wait(tasks)
 
 
 def _check_claims(claims: Mapping[str, Any], *, client_id: str, issuer: str | None) -> None:
@@ -293,6 +273,24 @@ def _same_secret(given: str, expected: str) -> bool:
         ``True`` when the strings are equal.
     """
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
+
+
+def _stated_error_member(response: httpx.Response | None) -> object:
+    """Return the ``error`` member of a token-endpoint response, as it arrived.
+
+    Args:
+        response: The response the endpoint sent, or ``None`` when none was received.
+
+    Returns:
+        The member, or an empty string when the response carries no JSON object or no such member.
+    """
+    if response is None:
+        return ""
+    try:
+        body = decode_json_body(response)
+    except ValueError:
+        return ""
+    return body.get("error", "") if isinstance(body, dict) else ""
 
 
 class OAuthClient:
@@ -483,7 +481,7 @@ class OAuthClient:
                 carries no usable creation time,
                 or was created further ahead of this client's clock than the allowed difference.
             TokenExchangeError: If the token endpoint rejects the exchange.
-                It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
+                It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
         self._config.validate_issuer(iss)
         pending = await self._resolve_pending_state(state, pending_state)
@@ -611,7 +609,7 @@ class OAuthClient:
             TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
-                It does not chain the failed request's error or repeat a sent secret, exact or form-encoded.
+                It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
         data = {
             "grant_type": "refresh_token",
@@ -886,6 +884,36 @@ class OAuthClient:
             words.update(value.split())
         return "openid" in words
 
+    def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
+        """Return the secret values a token request sends, which are the client secret and the grant's own.
+
+        Args:
+            sent: The form fields the request sent.
+
+        Returns:
+            The values, without any the request left empty.
+        """
+        values = {sent[field] for field in _SENT_SECRET_FIELDS if field in sent}
+        if self._config.client_secret is not None:
+            values.add(self._config.client_secret.get_secret_value())
+        return frozenset(value for value in values if value)
+
+    def _stated_error_code(self, response: httpx.Response | None, sent: dict[str, str]) -> str:
+        """Return the error code a token response states, or an empty string when it states none to report.
+
+        A value the request sent as a secret is not reported.
+        An endpoint may echo what it was sent, and a secret can take the shape a code takes.
+
+        Args:
+            response: The response the endpoint sent, or ``None`` when none was received.
+            sent: The form fields the request sent.
+
+        Returns:
+            The error code, or an empty string.
+        """
+        code = recognized_error_code(_stated_error_member(response))
+        return "" if code in self._sent_secrets(sent) else code
+
     async def _token_request(self, data: dict[str, str]) -> dict:
         """Send a token request via authlib's AsyncOAuth2Client.
 
@@ -903,18 +931,18 @@ class OAuthClient:
             _TokenEndpointError: If the endpoint returns an OAuth error,
                 fails with a non-success status, or the request otherwise
                 errors; its ``error_code`` carries the OAuth error code
-                when one is available.
+                when the endpoint states one that this request did not send as a secret.
                 The caught error is not attached as its cause or context.
-                Its message and ``error_code`` repeat no exact or form-encoded secret that the request sent.
+                Its message is this library's own text and states nothing the endpoint sent.
         """
         from authlib.integrations.base_client.errors import OAuthError as AuthlibOAuthError
         from authlib.integrations.httpx_client import AsyncOAuth2Client
 
-        # The token client reports a 4xx with an OAuth error body without its status, so the status is recorded here.
-        statuses: list[int] = []
+        # The token client reports an OAuth error body without the response it came from, so it is recorded here.
+        responses: list[httpx.Response] = []
 
-        async def record_status(response: httpx.Response) -> None:
-            statuses.append(response.status_code)
+        async def record_response(response: httpx.Response) -> None:
+            responses.append(response)
 
         try:
             client_secret = self._config.client_secret
@@ -924,40 +952,29 @@ class OAuthClient:
                 client_secret=client_secret.get_secret_value() if client_secret is not None else None,
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
                 transport=transport,
-                event_hooks={"response": [record_status]},
+                event_hooks={"response": [record_response]},
             ) as client:
                 token = await client.fetch_token(self._config.token_url, **data)
             return dict(token)
-        except AuthlibOAuthError as exc:
-            # A response with an OAuth error body. The kind is decided before the code is redacted.
-            raw_error_code = exc.error if isinstance(exc.error, str) else ""
-            error_code = self._redact_sent(raw_error_code, data)
-            description = self._redact_sent(exc.description, data) if isinstance(exc.description, str) else ""
-            prefix = error_code or "unspecified token endpoint error"
-            msg = f"{prefix}: {description}" if description else prefix
-            kind = self._kind_for_token_response(statuses[-1] if statuses else None, raw_error_code)
-            failure = _TokenEndpointError(msg, kind, error_code=error_code)
+        except AuthlibOAuthError:
+            # A response with an OAuth error body, which an endpoint may send with any status.
+            response = responses[-1] if responses else None
+            error_code = self._stated_error_code(response, data)
+            status_code = response.status_code if response is not None else None
+            kind = self._kind_for_token_response(status_code, error_code)
+            if status_code is not None and httpx.codes.is_error(status_code):
+                description = status_failure(status_code).description
+            else:
+                # An error body can arrive with a status that describes no failure of its own.
+                description = "token endpoint returned an error"
+            failure = _TokenEndpointError(description, kind, error_code=error_code)
         except httpx.HTTPStatusError as exc:
             # An error status without an OAuth error body that the token client recognized.
             # The body may still carry an OAuth error code, which then decides the kind.
-            raw_error_code = ""
-            error_code = ""
+            error_code = self._stated_error_code(exc.response, data)
+            kind = self._kind_for_token_response(exc.response.status_code, error_code)
             status = status_failure(exc.response.status_code)
-            msg = status.description
-            try:
-                body = decode_json_body(exc.response)
-            except ValueError:
-                body = None
-            if isinstance(body, dict):
-                raw_value = body.get("error", "")
-                raw_error_code = raw_value if isinstance(raw_value, str) else ""
-                error_code = self._redact_sent(raw_error_code, data)
-                raw_description = body.get("error_description", "")
-                description = self._redact_sent(raw_description, data) if isinstance(raw_description, str) else ""
-                prefix = error_code or msg
-                msg = f"{prefix}: {description}" if description else prefix
-            kind = self._kind_for_token_response(exc.response.status_code, raw_error_code)
-            failure = _TokenEndpointError(msg, kind, error_code=error_code)
+            failure = _TokenEndpointError(status.description, kind, error_code=error_code)
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             failure = _TokenEndpointError(transport.description, transport.kind)
@@ -980,30 +997,16 @@ class OAuthClient:
 
         Args:
             status: The response status, or ``None`` when it is not known.
-            error_code: The code as the endpoint sent it, before any redaction, or an empty string.
+            error_code: The error code the response stated, or an empty string when it stated none
+                in the shape a code takes.
 
         Returns:
             The kind.
         """
         status_kind = status_failure(status).kind if status is not None else None
         if status_kind is FailureKind.SERVER_ERROR or not error_code:
-            return status_kind or FailureKind.REJECTED
+            return FailureKind.REJECTED if status_kind is None else status_kind
         return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED
-
-    def _redact_sent(self, text: str, data: dict[str, str]) -> str:
-        """Return provider text with each secret that a token request sent replaced by a placeholder.
-
-        Args:
-            text: Text from the token endpoint.
-            data: The grant-specific form fields the request sent.
-
-        Returns:
-            The text without the client secret or the grant's secret fields.
-        """
-        values = [data[field] for field in _SENT_SECRET_FIELDS if field in data]
-        if self._config.client_secret is not None:
-            values.append(self._config.client_secret.get_secret_value())
-        return _redact(text, values)
 
     def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> FreshTokenSet:
         """Parse a token endpoint response into a fresh token set.
