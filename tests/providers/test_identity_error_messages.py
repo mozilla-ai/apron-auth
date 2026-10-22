@@ -65,7 +65,7 @@ HANDLERS: dict[str, _HandlerCase] = {
         partial(oidc.identity_handler, _OIDC_METADATA),
     ),
     "salesforce": _HandlerCase(salesforce.preset, ["openid"], salesforce.SalesforceIdentityHandler),
-    "slack-oidc": _HandlerCase(slack.preset, ["openid"], slack.SlackIdentityHandler),
+    "slack-oidc": _HandlerCase(slack.sign_in_preset, ["openid"], slack.SlackIdentityHandler),
     "slack-workspace": _HandlerCase(slack.preset, ["channels:read"], slack.SlackIdentityHandler),
     "typeform": _HandlerCase(typeform.preset, ["accounts:read"], typeform.TypeformIdentityHandler),
 }

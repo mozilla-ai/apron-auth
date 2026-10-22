@@ -5,14 +5,20 @@ the token but does not uninstall the app or remove workspace-level
 authorization. For full grant removal, Slack requires uninstalling the
 app from workspace settings (or org admin removal for org-wide apps).
 
-The identity handler covers two distinct Slack OAuth flows:
+Slack serves Sign in with Slack and a workspace installation from separate
+endpoints, and says each set of scopes must be requested in its own OAuth
+flow. :func:`sign_in_preset` configures the first and :func:`preset` the
+second. Only Slack's OpenID token endpoint returns an ID token, so only a
+Sign in with Slack response can carry the nonce the request sent.
 
-- Sign-in-with-Slack (``openid`` in scopes) → OIDC ``userInfo`` for
-  full person identity plus single-workspace tenancy.
-- Workspace-bot installation (no ``openid``) → ``team.info`` (with
-  ``auth.test`` as the universal fallback) for workspace tenancy
-  only; person fields stay ``None`` because workspace-bot tokens do
-  not represent a single human.
+The identity handler covers both flows, selected by the token endpoint the
+configuration names:
+
+- Sign in with Slack → OIDC ``userInfo`` for full person identity plus
+  single-workspace tenancy.
+- Workspace-bot installation → ``team.info`` (with ``auth.test`` as the
+  universal fallback) for workspace tenancy only; person fields stay
+  ``None`` because workspace-bot tokens do not represent a single human.
 
 ``openid.connect.userInfo`` is a tier-3 method (50+ requests/minute);
 ``team.info`` and ``auth.test`` are likewise rate-limited per Slack's
@@ -21,6 +27,8 @@ fanning out heavily should add their own rate-limiting.
 
 References:
 - https://api.slack.com/methods/auth.revoke
+- https://docs.slack.dev/authentication/sign-in-with-slack/
+- https://docs.slack.dev/reference/methods/openid.connect.token
 - https://docs.slack.dev/reference/methods/auth.test
 - https://docs.slack.dev/reference/methods/openid.connect.userInfo
 - https://docs.slack.dev/reference/methods/team.info
@@ -45,9 +53,10 @@ from apron_auth.errors import (
 )
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
-from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from apron_auth.protocols import RevocationHandler
 
 
@@ -59,6 +68,21 @@ _SLACK_HOST_SUFFIX = ".slack.com"
 
 # The error code Slack returns when the token lacks a scope the method needs.
 _SLACK_MISSING_SCOPE_ERROR = "missing_scope"
+
+# The authorize endpoint for Sign in with Slack.
+_SLACK_OPENID_AUTHORIZE_URL = "https://slack.com/openid/connect/authorize"
+
+# The issuer Slack states in its OpenID discovery document.
+_SLACK_OPENID_ISSUER = "https://slack.com"
+
+# The token endpoint for Sign in with Slack, which is the only Slack endpoint that returns an ID token.
+_SLACK_OPENID_TOKEN_URL = "https://slack.com/api/openid.connect.token"
+
+# The endpoint that revokes a token.
+_SLACK_REVOKE_URL = "https://slack.com/api/auth.revoke"
+
+# The scope that asks Slack for an ID token. Slack issues it to a user token only.
+_SLACK_SIGN_IN_SCOPE = "openid"
 
 # The error codes Slack returns, with HTTP 200 and ``ok=false``, for its own outages and rate limits.
 _SLACK_TRANSIENT_ERRORS = frozenset(
@@ -84,26 +108,67 @@ _SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 _SLACK_USER_ID_CLAIM = "https://slack.com/user_id"
 
 
-def _has_openid_scope(config: ProviderConfig) -> bool:
-    """Return True when ``openid`` appears in bot or user scopes.
+def _asks_for_the_sign_in_scope(scopes: Sequence[str], user_scope: str, separator: str) -> bool:
+    """Return True when an authorization request would ask Slack for the sign-in scope.
 
-    Slack's Sign-in-with-Slack flow can request ``openid`` either as a
-    bot scope (pure SiwS) or as a user scope (combined bot + SiwS via
-    Slack's ``user_scope`` query parameter, which the preset stores in
-    ``extra_params["user_scope"]``). Either placement selects the
-    Sign-in-with-Slack identity path.
+    Slack's install flow carries bot scopes and user scopes in two parameters, so the scope can
+    land in either one. A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma,
+    or the given separator. Reading a wider set of delimiters finds the scope in more strings,
+    which is the safe direction for a refusal.
+
+    Args:
+        scopes: The scopes the request sends as its ``scope`` parameter.
+        user_scope: The scopes the request sends as its ``user_scope`` parameter, joined.
+        separator: The separator that joins each parameter.
+
+    Returns:
+        ``True`` when either parameter asks for the sign-in scope.
+    """
+    delimiters = {",", separator} - {""}
+    words: set[str] = set()
+    for scope in (*scopes, user_scope):
+        value = scope
+        for delimiter in delimiters:
+            value = value.replace(delimiter, " ")
+        words.update(value.split())
+    return _SLACK_SIGN_IN_SCOPE in words
+
+
+def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str, str]:
+    """Return the extra authorization parameters a preset was given, refusing one that sets the scope.
+
+    A preset builds the ``scope`` parameter from the scopes it was given, and an extra parameter of
+    the same name replaces it in the authorization request.
+
+    Args:
+        extra_params: The extra authorization-request parameters, if any.
+
+    Returns:
+        The parameters, as a dict of their own.
+
+    Raises:
+        ValueError: If the parameters set ``scope``.
+    """
+    without_scope = dict(extra_params or {})
+    if "scope" in without_scope:
+        msg = "Slack scopes are set through this preset's scope parameters, so extra_params cannot set scope"
+        raise ValueError(msg)
+    return without_scope
+
+
+def _is_sign_in_flow(config: ProviderConfig) -> bool:
+    """Return True when the configuration signs a person in rather than installing a workspace app.
+
+    Slack returns an ID token from its OpenID token endpoint alone, so a token from any other
+    Slack endpoint stands for a workspace and not for a person.
 
     Args:
         config: The provider configuration to inspect.
 
     Returns:
-        ``True`` when ``openid`` appears in the bot scopes or the
-        ``user_scope`` extra parameter.
+        ``True`` when the configuration takes its tokens from Slack's OpenID token endpoint.
     """
-    if "openid" in config.scopes:
-        return True
-    user_scope = config.extra_params.get("user_scope", "")
-    return "openid" in parse_scope(user_scope, config.scope_separator)
+    return config.token_url == _SLACK_OPENID_TOKEN_URL
 
 
 def _parse_team_domain_from_url(url: str | None) -> str | None:
@@ -160,23 +225,21 @@ class SlackIdentityHandler:
     Slack has two distinct OAuth shapes that both produce useful
     identity data:
 
-    - Sign-in-with-Slack (``openid`` in scopes) issues a user token
-      and exposes a person-shaped OIDC ``userInfo`` response with
-      Slack-namespaced ``team_*`` claims using full-URL JSON keys
+    - Sign in with Slack issues a user token and exposes a
+      person-shaped OIDC ``userInfo`` response with Slack-namespaced
+      ``team_*`` claims using full-URL JSON keys
       (e.g. ``https://slack.com/user_id``) read as ordinary dict
       keys.
-    - Workspace-bot installation (no ``openid``) issues bot/user
-      tokens with workspace scopes; ``team.info`` is the rich source
-      of workspace identity (``team:read``-gated) and ``auth.test``
-      is the universal fallback when ``team:read`` was not granted.
+    - Workspace-bot installation issues bot/user tokens with
+      workspace scopes; ``team.info`` is the rich source of workspace
+      identity (``team:read``-gated) and ``auth.test`` is the
+      universal fallback when ``team:read`` was not granted.
 
-    One handler serves both flows and branches internally on
-    ``openid`` presence, because a provider has one identity handler
-    and the two flows are one provider. The branching mirrors how
-    Slack itself layers user-vs-workspace identity over the same
-    OAuth surface. Tokens granted both ``openid`` and bot scopes
-    route to the OIDC path because it is strictly richer (full person
-    identity plus tenancy).
+    One handler serves both flows and branches internally on the token
+    endpoint the configuration names, because a provider has one
+    identity handler and the two flows are one provider. Slack serves
+    each flow from its own endpoints, so the endpoint states which
+    identity a token carries and a scope word does not.
 
     For workspace-bot tokens, person-identity fields
     (:attr:`IdentityProfile.subject`, ``email``, ``name``, ``username``,
@@ -193,8 +256,8 @@ class SlackIdentityHandler:
 
         Args:
             material: The token material to establish identity from.
-            config: The provider configuration; its scopes select the
-                Sign-in-with-Slack (OIDC) or workspace-bot identity path.
+            config: The provider configuration; its token endpoint selects the
+                Sign in with Slack (OIDC) or workspace-bot identity path.
 
         Returns:
             The identity profile: full person identity plus a
@@ -202,13 +265,32 @@ class SlackIdentityHandler:
             tenancy only for a workspace-bot token.
 
         Raises:
+            ConfigurationError: If the configuration's token endpoint and its
+                requested scopes name different flows.
             IdentityScopeNotGrantedError: If the Sign-in-with-Slack token
                 lacks a scope the userInfo endpoint requires.
             IdentityFetchError: If the selected Slack request fails, its
                 response cannot be parsed, or Slack reports an error.
         """
         access_token = material.access_token
-        if _has_openid_scope(config):
+        sign_in_endpoint = _is_sign_in_flow(config)
+        asks_for_sign_in = _asks_for_the_sign_in_scope(
+            config.scopes, config.extra_params.get("user_scope", ""), config.scope_separator
+        )
+        if sign_in_endpoint and not asks_for_sign_in:
+            msg = (
+                "A Slack configuration naming Slack's OpenID token endpoint must ask for the openid scope, "
+                "because without it Slack returns no ID token and no nonce is sent or checked. "
+                "Build it with sign_in_preset."
+            )
+            raise ConfigurationError(msg)
+        if asks_for_sign_in and not sign_in_endpoint:
+            msg = (
+                "A Slack configuration asking for the openid scope must name Slack's OpenID token endpoint, "
+                "because no other Slack endpoint returns an ID token. Build it with sign_in_preset."
+            )
+            raise ConfigurationError(msg)
+        if sign_in_endpoint:
             return await self._fetch_via_oidc(access_token)
         return await self._fetch_workspace_only(access_token)
 
@@ -509,7 +591,11 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
-    """Create a Slack OAuth provider configuration.
+    """Create a Slack OAuth provider configuration for installing an app in a workspace.
+
+    Signing a person in is :func:`sign_in_preset` instead. Slack says each set of scopes must be
+    requested in its own OAuth flow, and this flow's token endpoint returns no ID token, so the
+    ``openid`` scope is refused here in either scope parameter.
 
     Slack's OAuth v2 uses separate query parameters for bot scopes
     (``scope``) and user scopes (``user_scope``). Pass ``user_scopes``
@@ -536,7 +622,8 @@ def preset(
         The provider configuration paired with its revocation handler.
 
     Raises:
-        ValueError: If both ``scopes`` and ``user_scopes`` are empty.
+        ValueError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter asks for
+            the ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
     if not scopes and not user_scopes:
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
@@ -544,9 +631,16 @@ def preset(
 
     scope_separator = Provider.SLACK.scope_separator
 
-    merged_extra: dict[str, str] = dict(extra_params or {})
+    merged_extra = _extra_params_without_scope(extra_params)
     if user_scopes:
         merged_extra["user_scope"] = scope_separator.join(user_scopes)
+
+    if _asks_for_the_sign_in_scope(scopes, merged_extra.get("user_scope", ""), scope_separator):
+        msg = (
+            "Slack serves Sign in with Slack from its own endpoints and returns no ID token from this "
+            "flow, so the openid scope cannot be requested here. Use sign_in_preset for Sign in with Slack."
+        )
+        raise ValueError(msg)
 
     required_scope_families: list[list[str]] = []
     if scopes:
@@ -560,10 +654,62 @@ def preset(
         client_secret=SecretStr(client_secret),
         authorize_url="https://slack.com/oauth/v2/authorize",
         token_url="https://slack.com/api/oauth.v2.access",
-        revocation_url="https://slack.com/api/auth.revoke",
+        revocation_url=_SLACK_REVOKE_URL,
         redirect_uri=redirect_uri,
         scopes=scopes,
         extra_params=merged_extra,
         required_scope_families=required_scope_families,
+    )
+    return config, SlackRevocationHandler()
+
+
+def sign_in_preset(
+    client_id: str,
+    client_secret: str,
+    scopes: list[str] | None = None,
+    redirect_uri: str | None = None,
+    extra_params: dict[str, str] | None = None,
+) -> tuple[ProviderConfig, RevocationHandler]:
+    """Create a Slack OAuth provider configuration for Sign in with Slack.
+
+    Installing an app in a workspace is :func:`preset` instead. Slack serves this flow from its
+    OpenID endpoints, which are the only Slack endpoints that return an ID token, so this is the
+    only Slack flow whose response can carry the nonce the request sent.
+
+    ``openid`` is requested whether or not ``scopes`` asks for it, because Slack returns no ID
+    token without it. The configuration names the issuer Slack states in its OpenID discovery
+    document.
+
+    Args:
+        client_id: The OAuth client identifier.
+        client_secret: The OAuth client secret.
+        scopes: The further scopes to request beside ``openid``, such as ``email`` and ``profile``.
+        redirect_uri: The redirect URI for the authorization flow.
+        extra_params: Extra authorization-request parameters.
+
+    Returns:
+        The provider configuration paired with its revocation handler.
+
+    Raises:
+        ValueError: If ``extra_params`` sets ``scope``, which would replace the requested scopes.
+    """
+    merged_extra = _extra_params_without_scope(extra_params)
+
+    requested = list(scopes or [])
+    if _SLACK_SIGN_IN_SCOPE not in requested:
+        requested.insert(0, _SLACK_SIGN_IN_SCOPE)
+
+    config = ProviderConfig(
+        provider=Provider.SLACK,
+        client_id=client_id,
+        client_secret=SecretStr(client_secret),
+        authorize_url=_SLACK_OPENID_AUTHORIZE_URL,
+        token_url=_SLACK_OPENID_TOKEN_URL,
+        revocation_url=_SLACK_REVOKE_URL,
+        issuer=_SLACK_OPENID_ISSUER,
+        redirect_uri=redirect_uri,
+        scopes=requested,
+        extra_params=merged_extra,
+        required_scope_families=[list(requested)],
     )
     return config, SlackRevocationHandler()

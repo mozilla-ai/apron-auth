@@ -3,7 +3,9 @@ from __future__ import annotations
 import base64
 import json
 import time
+from urllib.parse import parse_qs, urlparse
 
+import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
@@ -14,6 +16,7 @@ from apron_auth import (
     IdentityNotSupportedError,
     IdentityProfile,
     MemoryStateStore,
+    NonceValidationError,
     OAuthClient,
     OAuthError,
     OAuthPendingState,
@@ -29,10 +32,12 @@ from apron_auth import (
 )
 
 
-def _id_token(nonce: str | None) -> str:
+def _id_token(nonce: str | None, *, audience: str = "test-client", issuer: str | None = None) -> str:
     """Return a compact token carrying ``nonce``, with a signature nothing here checks."""
     assert nonce, "an OpenID authorization request always carries a nonce"
-    claims = {"sub": "u-1", "aud": "test-client", "exp": int(time.time()) + 300, "nonce": nonce}
+    claims: dict[str, object] = {"sub": "u-1", "aud": audience, "exp": int(time.time()) + 300, "nonce": nonce}
+    if issuer is not None:
+        claims["iss"] = issuer
     segments = [{"alg": "RS256"}, claims]
     encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
     return ".".join([*encoded, "c2ln"])
@@ -179,11 +184,73 @@ class TestSlackUserScopesInAuthorizationUrl:
         url, _ = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
-        from urllib.parse import parse_qs, urlparse
 
         params = parse_qs(urlparse(url).query)
         assert params["user_scope"] == ["users:read,channels:history"]
         assert params["scope"] == ["channels:read"]
+
+
+class TestSlackSignInFlow:
+    """Sign in with Slack runs on Slack's OpenID endpoints, which are the ones that return an ID token."""
+
+    @staticmethod
+    def _client() -> OAuthClient:
+        from apron_auth.providers.slack import sign_in_preset
+
+        config, _ = sign_in_preset(
+            client_id="slack-id",
+            client_secret="slack-secret",  # pragma: allowlist secret
+            scopes=["email"],
+        )
+        return OAuthClient(config=config, state_store=MemoryStateStore())
+
+    async def test_the_authorization_url_is_slacks_openid_endpoint_and_carries_a_nonce(self) -> None:
+        client = self._client()
+
+        url, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+
+        params = parse_qs(urlparse(url).query)
+        assert url.startswith("https://slack.com/openid/connect/authorize")
+        assert params["scope"] == ["openid,email"]
+        assert pending_state.nonce is not None
+        assert params["nonce"] == [pending_state.nonce]
+
+    async def test_a_token_response_without_an_id_token_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """Slack's install endpoint returns no ID token, so a response without one cannot be signed in with."""
+        client = self._client()
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        httpx_mock.add_response(
+            url="https://slack.com/api/openid.connect.token",
+            json={"ok": True, "access_token": "xoxp-user-token", "token_type": "Bearer"},
+        )
+        # The client revokes the tokens of a refused response before it raises.
+        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
+
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(code="authorization-code", state=pending_state.state)
+
+    async def test_a_token_response_carrying_the_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        client = self._client()
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        httpx_mock.add_response(
+            url="https://slack.com/api/openid.connect.token",
+            json={
+                "ok": True,
+                "access_token": "xoxp-user-token",
+                "token_type": "Bearer",
+                "id_token": _id_token(pending_state.nonce, audience="slack-id", issuer="https://slack.com"),
+            },
+        )
+
+        tokens = await client.exchange_code(code="authorization-code", state=pending_state.state)
+
+        assert tokens.access_token == "xoxp-user-token"
 
 
 class TestPublicApiExports:
