@@ -703,10 +703,17 @@ def sign_in_preset(
         The provider configuration paired with its revocation handler.
 
     Raises:
-        ValueError: If ``scopes`` asks for a scope outside this flow, or if ``extra_params`` sets
-            ``scope``, which would replace the requested scopes.
+        ValueError: If ``scopes`` asks for a scope outside this flow, if ``extra_params`` sets
+            ``scope``, which would replace the requested scopes, or if it sets ``user_scope``,
+            which this flow does not send.
     """
     merged_extra = _extra_params_without_scope(extra_params)
+    if "user_scope" in merged_extra:
+        msg = (
+            "Sign in with Slack sends no user_scope parameter, so extra_params cannot set one. "
+            "Use preset to install a workspace app."
+        )
+        raise ValueError(msg)
 
     requested = list(scopes or [])
     outside_this_flow = sorted(scope_words(requested, Provider.SLACK.scope_separator) - _SLACK_SIGN_IN_SCOPES)

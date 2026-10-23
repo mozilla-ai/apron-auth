@@ -481,6 +481,17 @@ class TestSlackSignInPreset:
         with pytest.raises(ValueError, match="cannot be requested here"):
             sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
 
+    def test_extra_params_cannot_ask_for_a_user_scope(self) -> None:
+        """This flow sends no user_scope, so one set here would reach Slack unchecked by the scope rules."""
+        from apron_auth.providers.slack import sign_in_preset
+
+        with pytest.raises(ValueError, match="sends no user_scope parameter"):
+            sign_in_preset(
+                client_id="sid",
+                client_secret="ssecret",  # pragma: allowlist secret
+                extra_params={"user_scope": "channels:read"},
+            )
+
     def test_no_user_scope_parameter_is_sent(self) -> None:
         """Slack splits bot and user scopes only on its install endpoint."""
         from apron_auth.providers.slack import sign_in_preset

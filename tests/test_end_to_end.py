@@ -15,6 +15,7 @@ from apron_auth import (
     IdentityHandler,
     IdentityNotSupportedError,
     IdentityProfile,
+    IdTokenValidationError,
     MemoryStateStore,
     NonceValidationError,
     OAuthClient,
@@ -251,6 +252,48 @@ class TestSlackSignInFlow:
         tokens = await client.exchange_code(code="authorization-code", state=pending_state.state)
 
         assert tokens.access_token == "xoxp-user-token"
+
+    async def test_an_id_token_from_another_issuer_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """The preset names Slack's issuer, so a token minted elsewhere cannot sign a person in."""
+        client = self._client()
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        httpx_mock.add_response(
+            url="https://slack.com/api/openid.connect.token",
+            json={
+                "ok": True,
+                "access_token": "xoxp-user-token",
+                "token_type": "Bearer",
+                "id_token": _id_token(pending_state.nonce, audience="slack-id", issuer="https://evil.example.com"),
+            },
+        )
+        # The client revokes the tokens of a refused response before it raises.
+        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
+
+        with pytest.raises(IdTokenValidationError):
+            await client.exchange_code(code="authorization-code", state=pending_state.state)
+
+    async def test_an_id_token_carrying_another_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A replayed ID token carries the nonce of the request it was minted for, not this one."""
+        client = self._client()
+        _, pending_state = await client.get_authorization_url(
+            redirect_uri="https://app.example.com/callback",
+        )
+        httpx_mock.add_response(
+            url="https://slack.com/api/openid.connect.token",
+            json={
+                "ok": True,
+                "access_token": "xoxp-user-token",
+                "token_type": "Bearer",
+                "id_token": _id_token("another-request-nonce", audience="slack-id", issuer="https://slack.com"),
+            },
+        )
+        # The client revokes the tokens of a refused response before it raises.
+        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
+
+        with pytest.raises(NonceValidationError):
+            await client.exchange_code(code="authorization-code", state=pending_state.state)
 
 
 class TestPublicApiExports:

@@ -685,7 +685,7 @@ Every preset sets `ProviderConfig.provider` to its `Provider` member, which carr
 |------------|--------------------------|------------------------|----------------------------|
 | Google     | `google.preset(...)`     | POST with query param  | `True`                     |
 | GitHub     | `github.preset(...)`     | DELETE with Basic auth | `True`                     |
-| Slack      | `slack.preset(...)`, `slack.sign_in_preset(...)` | GET with query param | `False`          |
+| Slack      | `slack.preset(...)`, `slack.sign_in_preset(...)` | POST with Bearer header | `False`       |
 | Notion     | `notion.preset(...)`     | POST with Basic auth   | `False`                    |
 | Microsoft  | `microsoft.preset(...)`  | —                      | `False`                    |
 | Atlassian  | `atlassian.preset(...)`  | RFC 7009 POST          | `False`                    |
