@@ -14,6 +14,7 @@ from apron_auth._urls import (
     is_loopback_host,
     is_plain_http,
     parse_ip,
+    query_parameters,
     uses_allowed_transport,
     uses_secure_transport,
 )
@@ -100,7 +101,37 @@ class TestParseIp:
         assert parse_ip(host) is None
 
 
-class TestUsesSecureTransport:
+class TestQueryParameters:
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            pytest.param("https://sso.example.com/auth", {}, id="no query"),
+            pytest.param("https://sso.example.com/auth?", {}, id="an empty query"),
+            pytest.param("https://sso.example.com/auth?prompt=consent", {"prompt": "consent"}, id="one parameter"),
+            pytest.param(
+                "https://sso.example.com/auth?prompt=consent&access_type=offline",
+                {"prompt": "consent", "access_type": "offline"},
+                id="two parameters",
+            ),
+            pytest.param(
+                "https://sso.example.com/auth?ui_locales=en&ui_locales=fr",
+                {"ui_locales": ["en", "fr"]},
+                id="a repeated name keeps every value",
+            ),
+            pytest.param(
+                "https://sso.example.com/auth?scope=openid+email",
+                {"scope": "openid email"},
+                id="a value is decoded",
+            ),
+        ],
+    )
+    def test_reads_what_the_query_states(self, url: str, expected: dict[str, str | list[str]]) -> None:
+        assert query_parameters(url) == expected
+
+    def test_a_url_the_parser_cannot_read_states_no_parameters(self) -> None:
+        """A caller deciding on the parameters must not see this reader's own failure instead."""
+        assert query_parameters("https://[::1/auth?state=injected") == {}
+
     @pytest.mark.parametrize(
         "url",
         [

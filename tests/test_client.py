@@ -58,6 +58,25 @@ def _make_config(**overrides: object) -> ProviderConfig:
     return ProviderConfig(**defaults)
 
 
+def _make_unvalidated_config(**overrides: object) -> ProviderConfig:
+    """Return a config built without validation, for a value the validators refuse."""
+    defaults: dict[str, object] = {
+        "client_id": "test-client",
+        "client_secret": SecretStr("test-secret"),
+        "authorize_url": "https://provider.example.com/authorize",
+        "token_url": "https://provider.example.com/token",
+        "scopes": ["openid", "email"],
+        "scope_separator": " ",
+        "extra_params": {},
+        "resource": None,
+        "use_pkce": True,
+        "redirect_uri": None,
+        "allow_insecure_http_for": frozenset(),
+    }
+    defaults.update(overrides)
+    return ProviderConfig.model_construct(**defaults)
+
+
 def _make_oauth_config(**overrides: object) -> ProviderConfig:
     """Return a config whose authorization request asks for no ``openid`` scope, so no nonce is checked."""
     return _make_config(scopes=["email"], **overrides)
@@ -339,9 +358,9 @@ class TestGetAuthorizationUrl:
         assert name not in parse_qs(urlparse(url).query)
 
     async def test_reserved_parameters_are_dropped_from_the_authorize_url_query(self) -> None:
-        """A reserved parameter in the URL's own query is dropped, whether or not the client sets it."""
+        """A validated config holds no such parameter, so the drop protects a config built without validation."""
         authorize_url = "https://provider.example.com/authorize?state=chosen-value&request_uri=chosen-value"
-        client = OAuthClient(config=_make_config(authorize_url=authorize_url))
+        client = OAuthClient(config=_make_unvalidated_config(authorize_url=authorize_url))
         url, pending_state = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
         params = parse_qs(urlparse(url).query)
         assert params["state"] == [pending_state.state]
@@ -349,7 +368,7 @@ class TestGetAuthorizationUrl:
 
     async def test_nonce_not_overridden_by_authorize_url_query(self) -> None:
         client = OAuthClient(
-            config=_make_config(
+            config=_make_unvalidated_config(
                 scopes=["openid", "email"], authorize_url="https://provider.example.com/authorize?nonce=fixed"
             )
         )

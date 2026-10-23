@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, urlparse
 
+from apron_auth._urls import query_parameters
 from apron_auth.models import RESERVED_AUTHORIZATION_PARAMS
 from apron_auth.scopes import join_scopes, scope_words
 
@@ -31,8 +31,8 @@ def authorization_query(config: ProviderConfig, params: dict[str, str]) -> dict[
     # A reserved parameter binds the request to one client, or replaces the request as a whole,
     # so the config must not set one, even when it was built without validation.
     query: dict[str, str | list[str]] = {
-        name: values[0] if len(values) == 1 else values
-        for name, values in parse_qs(urlparse(config.authorize_url).query).items()
+        name: value
+        for name, value in query_parameters(config.authorize_url).items()
         if name not in RESERVED_AUTHORIZATION_PARAMS
     }
     query.update(params)

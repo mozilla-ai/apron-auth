@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from enum import Enum, auto
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -154,6 +154,24 @@ def parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     except (OSError, ValueError):
         return None
     return ipaddress.ip_address(packed)
+
+
+def query_parameters(url: str) -> dict[str, str | list[str]]:
+    """Return the parameters ``url`` states in its query.
+
+    A URL with no query, and one that cannot be read at all, both state no parameters.
+
+    Args:
+        url: The URL to read.
+
+    Returns:
+        The parameters, each with its value, or with its values where the query repeats the name.
+    """
+    try:
+        query = urlparse(url).query
+    except ValueError:
+        return {}
+    return {name: values[0] if len(values) == 1 else values for name, values in parse_qs(query).items()}
 
 
 def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:
