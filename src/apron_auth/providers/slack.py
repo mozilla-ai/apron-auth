@@ -129,20 +129,19 @@ _SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 _SLACK_USER_ID_CLAIM = "https://slack.com/user_id"
 
 
-def _asks_for_the_sign_in_scope(config: ProviderConfig, parameter: str) -> bool:
-    """Return True when the authorization request ``config`` sends asks for the sign-in scope in ``parameter``.
+def _sent_authorization_params(config: ProviderConfig) -> dict[str, str | list[str]]:
+    """Return the authorization-request parameters ``config`` sends.
 
-    Slack carries bot scopes and user scopes in separate authorization-request parameters.
+    Slack carries bot scopes and user scopes in separate parameters, so which flow a request asks
+    for is read from the parameters themselves rather than from the configured scopes alone.
 
     Args:
         config: The provider configuration the request is built from.
-        parameter: The name of the scope parameter to read.
 
     Returns:
-        ``True`` when that parameter carries the sign-in scope.
+        The parameters, with each one's value or values.
     """
-    sent = authorization_query(config, scope_param(config))
-    return _SLACK_SIGN_IN_SCOPE in sent_scope_words(sent, parameter, config.scope_separator)
+    return authorization_query(config, scope_param(config))
 
 
 def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str, str]:
@@ -278,7 +277,8 @@ class SlackIdentityHandler:
 
         Raises:
             ConfigurationError: If the configuration's token endpoint and its
-                requested scopes name different flows.
+                requested scopes name different flows, or if it sends a scope
+                parameter the named flow does not use.
             IdentityScopeNotGrantedError: If the Sign-in-with-Slack token
                 lacks a scope the userInfo endpoint requires.
             IdentityFetchError: If the selected Slack request fails, its
@@ -286,7 +286,9 @@ class SlackIdentityHandler:
         """
         access_token = material.access_token
         sign_in_endpoint = _is_sign_in_flow(config)
-        sends_sign_in_scope = _asks_for_the_sign_in_scope(config, "scope")
+        sent = _sent_authorization_params(config)
+        separator = config.scope_separator
+        sends_sign_in_scope = _SLACK_SIGN_IN_SCOPE in sent_scope_words(sent, "scope", separator)
         if sign_in_endpoint and not sends_sign_in_scope:
             msg = (
                 "A Slack configuration naming Slack's OpenID token endpoint must ask for the openid scope, "
@@ -294,7 +296,16 @@ class SlackIdentityHandler:
                 "Build it with sign_in_preset."
             )
             raise ConfigurationError(msg)
-        if not sign_in_endpoint and (sends_sign_in_scope or _asks_for_the_sign_in_scope(config, "user_scope")):
+        if sign_in_endpoint and "user_scope" in sent:
+            msg = (
+                "A Slack configuration naming Slack's OpenID token endpoint must send no user_scope "
+                "parameter, because Slack grants its user scopes from its own endpoints and in a flow "
+                "of their own. Build it with sign_in_preset."
+            )
+            raise ConfigurationError(msg)
+        if not sign_in_endpoint and (
+            sends_sign_in_scope or _SLACK_SIGN_IN_SCOPE in sent_scope_words(sent, "user_scope", separator)
+        ):
             msg = (
                 "A Slack configuration asking for the openid scope must name Slack's OpenID token endpoint "
                 "exactly, because no other Slack endpoint returns an ID token. Build it with sign_in_preset."

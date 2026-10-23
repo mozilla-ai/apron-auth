@@ -740,6 +740,43 @@ class TestSlackFlowMismatchIsRefused:
 
         assert identity.tenancies[0].id == "T1"
 
+    @pytest.mark.parametrize(
+        ("authorize_url", "extra_params"),
+        [
+            pytest.param(
+                "https://slack.com/openid/connect/authorize",
+                {"user_scope": "channels:read"},
+                id="a workspace scope through the extra parameters",
+            ),
+            pytest.param(
+                "https://slack.com/openid/connect/authorize?user_scope=channels:read",
+                {},
+                id="a workspace scope through the authorization URL's own query",
+            ),
+            pytest.param(
+                "https://slack.com/openid/connect/authorize",
+                {"user_scope": "openid"},
+                id="the sign-in scope itself",
+            ),
+        ],
+    )
+    async def test_a_user_scope_is_refused_on_the_sign_in_endpoint(
+        self, authorize_url: str, extra_params: dict[str, str]
+    ) -> None:
+        """Slack grants its user scopes in a flow of their own, so this endpoint sends no such parameter."""
+        handler, material = self._handler_and_material()
+        config = ProviderConfig(
+            client_id="sid",
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
+            authorize_url=authorize_url,
+            token_url="https://slack.com/api/openid.connect.token",
+            scopes=["openid"],
+            extra_params=extra_params,
+        )
+
+        with pytest.raises(ConfigurationError, match="must send no user_scope"):
+            await handler.fetch_identity(material, config)
+
     async def test_the_sign_in_scope_in_the_authorization_url_user_scope_refuses_the_install_endpoint(self) -> None:
         """user_scope is not a reserved parameter, so one in the authorization URL is sent as written."""
         handler, material = self._handler_and_material()
