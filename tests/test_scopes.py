@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from apron_auth.scopes import join_scopes, parse_scope, resolve_implicit_scopes
+from apron_auth.scopes import join_scopes, parse_scope, resolve_implicit_scopes, scope_words
 
 # Synthetic implicit-scope map used to exercise the helper independently of
 # any provider's real data: ``a`` -> ``b`` -> ``c`` is a transitive chain and
@@ -104,3 +104,28 @@ class TestParseScope:
     @pytest.mark.parametrize("scope", ["", "   "], ids=["empty", "blank"])
     def test_an_empty_separator_does_not_refuse_a_blank_scope(self, scope: str) -> None:
         assert parse_scope(scope, separator="") == []
+
+
+class TestScopeWords:
+    """The words a scope value carries, which decide whether a request asks for a scope."""
+
+    @pytest.mark.parametrize(
+        ("values", "separator", "expected"),
+        [
+            pytest.param(["openid email"], " ", {"openid", "email"}, id="split on a space"),
+            pytest.param(["openid,email"], ",", {"openid", "email"}, id="split on the separator"),
+            pytest.param(["openid,email"], " ", {"openid", "email"}, id="a comma is always a delimiter"),
+            pytest.param(["openid email"], ",", {"openid", "email"}, id="whitespace is always a delimiter"),
+            pytest.param(["openid", "email"], ",", {"openid", "email"}, id="several values"),
+            pytest.param(["  openid  "], ",", {"openid"}, id="surrounding whitespace is dropped"),
+            pytest.param([""], ",", set(), id="an empty value carries no word"),
+            pytest.param([], ",", set(), id="no values"),
+            pytest.param(["openid:read"], ",", {"openid:read"}, id="a colon does not delimit"),
+        ],
+    )
+    def test_the_words_a_value_carries(self, values: list[str], separator: str, expected: set[str]) -> None:
+        assert scope_words(values, separator) == expected
+
+    def test_an_empty_separator_is_ignored_rather_than_splitting_every_character(self) -> None:
+        """Splitting on an empty string would find no scope at all, which is the unsafe direction."""
+        assert scope_words(["openid email"], separator="") == {"openid", "email"}

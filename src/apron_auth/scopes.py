@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
 
 def resolve_implicit_scopes(granted: set[str], implicit_scopes: dict[str, frozenset[str]]) -> set[str]:
     """Return ``granted`` scopes, expanded with every scope it transitively implies.
@@ -66,3 +71,30 @@ def parse_scope(scope: str | list[str], separator: str = " ") -> list[str]:
     if not scope or not scope.strip():
         return []
     return [s.strip() for s in scope.split(separator) if s.strip()]
+
+
+def scope_words(values: Iterable[str], separator: str = " ") -> set[str]:
+    """Return every scope word the given scope values carry.
+
+    A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma, or ``separator``.
+    Reading a wider set of delimiters finds a word in more strings, which is the safe direction
+    for a caller deciding whether a request asks for a scope.
+
+    NOTE: An empty ``separator`` is ignored rather than splitting every character into its own
+    word, which would find no scope at all.
+
+    Args:
+        values: The scope values to read, each holding one or more words.
+        separator: A further delimiter the provider joins its scopes with.
+
+    Returns:
+        The words, without the delimiters that separated them.
+    """
+    delimiters = {",", separator} - {""}
+    words: set[str] = set()
+    for value in values:
+        spaced = value
+        for delimiter in delimiters:
+            spaced = spaced.replace(delimiter, " ")
+        words.update(spaced.split())
+    return words
