@@ -1319,9 +1319,13 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             provider's scope separator.
         user_token: The token the provider issued for the authorizing person, where it issues one
             beside the application's own. Populated automatically.
-        extras: Additional fields from the provider's token endpoint
-            response that are not captured by the named attributes above
-            (e.g. Slack's ``team_id``).  Populated automatically.
+        extras: Fields of the provider's token-endpoint response that the named attributes above do not
+            capture, such as Slack's ``team_id``, including one whose value is not of the type its own
+            field states. Populated automatically.
+            NOTE: An attribute above states what this library read, and takes precedence over a
+            field of the same name here, which states only what the provider sent.
+            NOTE: A field carried here can hold credential material, such as a refresh token a
+            provider sent as a list, so it is as sensitive as the named attributes above.
         context: Caller-supplied context carried opaquely from ``OAuthPendingState.context``.
             It is empty for a token set that does not come from a code exchange.
     """

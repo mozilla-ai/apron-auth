@@ -68,7 +68,7 @@ _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
-# The number fields a token-endpoint response states: a lifetime in seconds and a Unix timestamp.
+# The number fields a token-endpoint response states: a Unix timestamp and a lifetime in seconds.
 _TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
 
 # The string fields a token-endpoint response states, beside the access token.
@@ -250,7 +250,8 @@ def _expires_at(token: Mapping[str, Any]) -> float | None:
         token: A token-endpoint response, or a member of one that carries a token of its own.
 
     Returns:
-        The expiry as a Unix timestamp, or ``None`` where the token states neither an expiry nor a lifetime.
+        The expiry as a Unix timestamp, or ``None`` where the token states neither an expiry nor a
+        lifetime as a finite number.
     """
     expires_at = finite_number(token.get("expires_at"))
     expires_in = finite_number(token.get("expires_in"))
