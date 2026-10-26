@@ -21,7 +21,13 @@ from pydantic import (
 )
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
-from apron_auth._urls import AuthorityCredential, authority_credential, query_parameters, uses_allowed_transport
+from apron_auth._urls import (
+    AuthorityCredential,
+    authority_credential,
+    matches_suffix,
+    query_parameters,
+    uses_allowed_transport,
+)
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -1073,6 +1079,40 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
                 msg = f"{fact} must be {stated!r} for provider {self.provider.display_name}, got {carried!r}"
                 raise ValueError(msg)
         return self
+
+    @model_validator(mode="after")
+    def _revocation_endpoint_sits_with_the_token_endpoint(self) -> ProviderConfig:
+        """Reject a config that revokes a token somewhere other than where it was issued.
+
+        A revocation request carries a bearer token to ``revocation_url``. A token is revoked at the
+        host that issued it, or at another of the named provider's own hosts, so any other host
+        would be sent a token it never issued.
+        NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``provider`` is set and the revocation and token endpoints name
+                neither one host nor two of the named provider's. The message names the hosts
+                alone, because a rejected authority can carry a credential.
+        """
+        if self.provider is None or self.revocation_url is None:
+            return self
+        token_host = urlparse(self.token_url).hostname or ""
+        revocation_host = urlparse(self.revocation_url).hostname or ""
+        if matches_suffix(revocation_host, (token_host,)):
+            return self
+        suffixes = self.provider.host_suffixes
+        if matches_suffix(revocation_host, suffixes) and matches_suffix(token_host, suffixes):
+            return self
+        display_name = self.provider.display_name
+        msg = (
+            f"revocation_url names {revocation_host} and token_url names {token_host}. A token is "
+            f"revoked where it was issued, so both must name one host, or both must name "
+            f"{display_name} hosts."
+        )
+        raise ValueError(msg)
 
     def basic_auth(self) -> tuple[str, str] | None:
         """Return the client's HTTP Basic credential, or None for a public client.
