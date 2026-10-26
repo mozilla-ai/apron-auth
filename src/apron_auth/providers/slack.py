@@ -180,7 +180,7 @@ def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str
         The parameters, as a dict of their own.
 
     Raises:
-        ValueError: If the parameters set ``scope``.
+        ConfigurationError: If the parameters set ``scope``.
     """
     without_scope = dict(extra_params or {})
     if "scope" in without_scope:
@@ -667,8 +667,8 @@ def preset(
         The provider configuration paired with its revocation handler.
 
     Raises:
-        ValueError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter asks for
-            the ``openid`` scope, or if ``extra_params`` sets ``scope``.
+        ConfigurationError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter
+            asks for the ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
     if not scopes and not user_scopes:
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
@@ -739,8 +739,8 @@ def sign_in_preset(
         The provider configuration paired with its revocation handler.
 
     Raises:
-        ValueError: If ``scopes`` asks for a scope outside this flow, if ``extra_params`` sets
-            ``scope``, which would replace the requested scopes, or if it sets ``user_scope``,
+        ConfigurationError: If ``scopes`` asks for a scope outside this flow, if ``extra_params``
+            sets ``scope``, which would replace the requested scopes, or if it sets ``user_scope``,
             which this flow does not send.
     """
     merged_extra = _extra_params_without_scope(extra_params)

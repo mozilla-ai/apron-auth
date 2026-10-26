@@ -12,6 +12,7 @@ import pytest
 from support import VaryFacts
 
 from apron_auth import providers as providers_pkg
+from apron_auth.errors import ConfigurationError
 from apron_auth.mcp import to_provider_config
 from apron_auth.models import ClientRegistration, Provider, ProviderConfig, ProviderFacts, ServerMetadata
 from apron_auth.protocols import IdentityHandler
@@ -160,6 +161,17 @@ _GENERIC_METADATA = ServerMetadata(
     issuer="https://issuer.example",
 )
 
+# Values each preset accepts, so a test can vary one thing at a time against all of them.
+_VALID_KWARGS: dict[str, dict[str, Any]] = {
+    "oidc.preset": {"scopes": ["dummy"], "metadata": _GENERIC_METADATA},
+    "slack.sign_in_preset": {"scopes": ["email"]},
+}
+
+
+def _valid_kwargs(name: str) -> dict[str, Any]:
+    """Return the keywords a preset accepts, so only the value under test differs between them."""
+    return _VALID_KWARGS.get(name, {"scopes": ["dummy"]})
+
 
 def _named_provider_module_names() -> list[str]:
     names = []
@@ -223,6 +235,39 @@ def test_every_preset_takes_two_positionals_and_the_rest_by_keyword(name: str) -
 
     assert positional == ["client_id", "client_secret"]
     assert {"scopes", "redirect_uri", "extra_params"} <= keyword_only
+
+
+# A value each provider-specific keyword refuses, so one class covers a fault in any of them.
+_REFUSED_SPECIFIC_KWARGS: dict[str, dict[str, Any]] = {
+    "salesforce.preset": {"host": "https://login.salesforce.com/"},
+    "slack.preset": {"user_scopes": ["openid"]},
+    "slack.sign_in_preset": {"scopes": ["chat:write"]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_REFUSED_SPECIFIC_KWARGS))
+def test_a_fault_in_a_provider_specific_keyword_is_a_configuration_error(name: str) -> None:
+    """A provider-specific keyword is still something a caller passed, so its fault is the same class."""
+    with pytest.raises(ConfigurationError):
+        PRESETS[name]("cid", "csecret", **{**_valid_kwargs(name), **_REFUSED_SPECIFIC_KWARGS[name]})
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_refuses_a_reserved_authorization_parameter_as_a_configuration_error(name: str) -> None:
+    """A fault in what a caller passed is one class, so one except clause covers every preset."""
+    with pytest.raises(ConfigurationError):
+        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_no_preset_raises_a_value_error_for_a_fault_in_what_it_was_passed(name: str) -> None:
+    """ConfigurationError does not inherit from ValueError, so a caller catching one misses the other."""
+    try:
+        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+    except ConfigurationError:
+        return
+    except ValueError as error:  # pragma: no cover - the assertion reports the class
+        pytest.fail(f"{name} raised {type(error).__name__}, not ConfigurationError")
 
 
 def test_the_fact_tables_cover_every_member() -> None:

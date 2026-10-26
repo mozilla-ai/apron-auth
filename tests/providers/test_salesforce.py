@@ -47,14 +47,26 @@ class TestSalesforcePreset:
             "test .salesforce.com",
         ],
     )
-    def test_malformed_host_raises_value_error(self, bad_host: str):
-        with pytest.raises(ValueError, match="bare hostname"):
+    def test_a_malformed_host_is_refused(self, bad_host: str):
+        with pytest.raises(ConfigurationError, match="bare hostname"):
             preset(
                 client_id="sfid",
                 client_secret="sfsecret",  # pragma: allowlist secret
                 scopes=["api"],
                 host=bad_host,
             )
+
+    def test_a_refused_host_is_not_repeated(self):
+        """A rejected authority can carry a credential, which a caller recording the refusal would record."""
+        with pytest.raises(ConfigurationError) as refusal:
+            preset(
+                client_id="sfid",
+                client_secret="sfsecret",  # pragma: allowlist secret
+                scopes=["api"],
+                host="operator:" + "sesame@login.salesforce.com",
+            )
+
+        assert "sesame" not in str(refusal.value)
 
     def test_base_scopes_merged_with_caller_scopes(self):
         config, _ = preset(

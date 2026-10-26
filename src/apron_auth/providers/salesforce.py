@@ -176,9 +176,7 @@ def preset(
     ``host`` selects the Salesforce login host. Use
     ``test.salesforce.com`` for sandboxes, or a My Domain host (e.g.
     ``acme.my.salesforce.com``) for orgs that require it. It must be a
-    bare hostname — no scheme, path, query, or whitespace — and is
-    rejected with :class:`ValueError` otherwise so misconfiguration
-    fails fast rather than producing a malformed OAuth endpoint.
+    bare hostname, with no scheme, path, query, or whitespace.
 
     Args:
         client_id: The OAuth client identifier.
@@ -193,11 +191,15 @@ def preset(
         The provider configuration paired with its revocation handler.
 
     Raises:
-        ValueError: If ``host`` is empty or not a bare hostname.
+        ConfigurationError: If ``host`` is empty or is not a bare hostname. It does not repeat the
+            value it refused, because a rejected authority can carry a credential.
     """
     if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
-        msg = f"host must be a bare hostname like 'login.salesforce.com' (no scheme, path, or whitespace); got {host!r}"
-        raise ValueError(msg)
+        msg = (
+            "host must be a bare hostname such as 'login.salesforce.com', "
+            "with no scheme, path, credential or whitespace"
+        )
+        raise ConfigurationError(msg)
 
     # Every endpoint names the org's own login host, so this preset states them per call.
     declared = Preset(
