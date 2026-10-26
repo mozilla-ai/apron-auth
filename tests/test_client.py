@@ -15,7 +15,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth.client import OAuthClient
+from apron_auth.client import _USER_TOKEN_STRINGS, OAuthClient
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -39,6 +39,7 @@ from apron_auth.models import (
     ProviderConfig,
     TenancyContext,
     TokenSet,
+    UserToken,
 )
 from apron_auth.pkce import generate_code_challenge
 
@@ -2880,3 +2881,264 @@ class TestAuthorizationUrlRedirectCredential:
 
         with pytest.raises(ConfigurationError, match="redirect_uri is malformed"):
             await OAuthClient(config).get_authorization_url(redirect_uri="https://[::1/cb")
+
+
+class TestAResponseThatStatesNoAccessToken:
+    """RFC 6749 section 5.1 requires the field, so a response without it carries no token to return."""
+
+    async def test_an_exchange_refuses_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"ok": True, "authed_user": {"id": "U1", "access_token": "xoxp-USER"}},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        assert "xoxp-USER" not in str(exc_info.value)
+
+    async def test_a_refresh_refuses_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"ok": True})
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("refresh-xyz")
+
+    async def test_a_refused_refresh_keeps_the_grant_the_caller_still_holds(self, httpx_mock: HTTPXMock) -> None:
+        """A refresh response can repeat the token it was sent, so revoking it would end a usable grant."""
+        revoke_url = "https://provider.example.com/revoke"
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"ok": True, "refresh_token": "callers-own-refresh"}
+        )
+        client = OAuthClient(config=_make_oauth_config(revocation_url=revoke_url))
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert httpx_mock.get_requests(url=revoke_url) == []
+
+    async def test_the_refusal_revokes_the_refresh_token_it_cannot_use(self, httpx_mock: HTTPXMock) -> None:
+        """A refused response must leave no token valid, so the refusal runs where revocation can."""
+        revoke_url = "https://provider.example.com/revoke"
+        httpx_mock.add_response(url=revoke_url)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"ok": True, "refresh_token": "refresh-xyz"}
+        )
+        client = OAuthClient(config=_make_oauth_config(revocation_url=revoke_url))
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        revoked = [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=revoke_url)
+        ]
+        assert revoked == ["refresh-xyz"]
+
+
+class TestTheUserTokenAProviderNests:
+    """Slack issues the person's token inside ``authed_user``, where nothing generic reads or revokes it."""
+
+    SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
+    REVOKE_URL = "https://slack.com/api/auth.revoke"
+
+    BOT_AND_USER = {
+        "ok": True,
+        "access_token": "xoxb-BOT",
+        "token_type": "bot",
+        "scope": "channels:read",
+        "team": {"id": "T1"},
+        "authed_user": {"id": "U1", "scope": "chat:write", "access_token": "xoxp-USER", "token_type": "user"},
+    }
+
+    def _config(self, **overrides: object) -> ProviderConfig:
+        return _make_config(
+            provider=Provider.SLACK,
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            scopes=["channels:read"],
+            **overrides,
+        )
+
+    async def _exchanged(
+        self, httpx_mock: HTTPXMock, response: dict[str, object], created_at: float | None = None
+    ) -> TokenSet:
+        httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json=response)
+        client = OAuthClient(config=self._config())
+        pending = _pending_state() if created_at is None else _pending_state(created_at=created_at)
+        return await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=pending)
+
+    async def test_it_is_read_into_a_typed_field(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchanged(httpx_mock, self.BOT_AND_USER)
+
+        assert tokens.access_token == "xoxb-BOT"
+        assert tokens.user_token == UserToken(
+            access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
+        )
+
+    async def test_it_is_kept_out_of_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+        """A token in a free dict is a token nothing names, so nothing revokes it."""
+        tokens = await self._exchanged(httpx_mock, self.BOT_AND_USER)
+
+        assert "authed_user" not in tokens.metadata
+        assert "xoxp-USER" not in json.dumps(tokens.metadata)
+
+    async def test_a_rotating_user_token_keeps_its_refresh_token_and_expiry(
+        self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _freeze_client_clock(monkeypatch)
+        response = {
+            **self.BOT_AND_USER,
+            "authed_user": {
+                "id": "U1",
+                "access_token": "xoxe.xoxp-USER",
+                "token_type": "user",
+                "refresh_token": "xoxe-1-REFRESH",
+                "expires_in": 43200,
+            },
+        }
+
+        tokens = await self._exchanged(httpx_mock, response, created_at=_NOW)
+
+        assert tokens.user_token is not None
+        assert tokens.user_token.refresh_token == "xoxe-1-REFRESH"
+        assert tokens.user_token.expires_in == 43200
+        assert tokens.user_token.expires_at == _NOW + 43200
+
+    async def test_a_nested_field_the_model_does_not_name_is_kept(self, httpx_mock: HTTPXMock) -> None:
+        """Nothing the provider sent is dropped, so a field added later is still reachable."""
+        response = {**self.BOT_AND_USER, "authed_user": {**self.BOT_AND_USER["authed_user"], "enterprise_id": "E1"}}
+
+        tokens = await self._exchanged(httpx_mock, response)
+
+        assert tokens.user_token is not None
+        assert tokens.user_token.metadata == {"enterprise_id": "E1"}
+
+    @pytest.mark.parametrize(
+        "member",
+        [
+            pytest.param({"token_type": None}, id="a null where a string belongs"),
+            pytest.param({"scope": ["channels:read"]}, id="a list where a string belongs"),
+            pytest.param({"id": {"nested": 1}}, id="an object where a string belongs"),
+            pytest.param({"expires_in": "43200s"}, id="a lifetime that is not a number"),
+            pytest.param({"expires_at": "2026-10-26T00:00:00Z"}, id="an expiry that is not a number"),
+        ],
+    )
+    async def test_a_nested_member_of_the_wrong_type_does_not_refuse_the_exchange(
+        self, httpx_mock: HTTPXMock, member: dict[str, object]
+    ) -> None:
+        """The response carries a usable access token, so a member this library cannot read must not lose it."""
+        response = {**self.BOT_AND_USER, "authed_user": {"access_token": "xoxp-USER", **member}}
+
+        tokens = await self._exchanged(httpx_mock, response)
+
+        assert tokens.access_token == "xoxb-BOT"
+        assert tokens.user_token is not None
+        assert tokens.user_token.access_token == "xoxp-USER"
+        assert tokens.user_token.metadata == member
+
+    def test_every_named_string_member_maps_to_a_field_the_model_states(self) -> None:
+        """A name that matches no field would send its value to the metadata without anyone noticing."""
+        assert set(_USER_TOKEN_STRINGS.values()) <= set(UserToken.model_fields)
+
+    async def test_a_nested_object_with_no_token_stays_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+        """A bot-only install names the installer without issuing a token for them."""
+        response = {**self.BOT_AND_USER, "authed_user": {"id": "U1"}}
+
+        tokens = await self._exchanged(httpx_mock, response)
+
+        assert tokens.user_token is None
+        assert tokens.metadata["authed_user"] == {"id": "U1"}
+
+    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url="https://provider.example.com/token", json=self.BOT_AND_USER)
+        client = OAuthClient(config=_make_oauth_config())
+
+        tokens = await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        assert tokens.user_token is None
+        assert tokens.metadata["authed_user"]["access_token"] == "xoxp-USER"
+
+    async def test_a_refused_response_revokes_the_nested_user_token_too(self, httpx_mock: HTTPXMock) -> None:
+        """A token the library refuses must not stay valid, wherever the response carried it."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json={**self.BOT_AND_USER, "id_token": "not-a-token"})
+        client = OAuthClient(config=self._config(revocation_url=self.REVOKE_URL))
+
+        with pytest.raises(IdTokenValidationError):
+            await client.exchange_code(
+                code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
+            )
+
+        revoked = [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+        ]
+        assert sorted(revoked) == ["xoxb-BOT", "xoxp-USER"]
+
+
+class TestARefusedResponseLeavesNoTokenValid:
+    """A token the library refuses must not stay valid, whatever the config says and wherever it sits."""
+
+    SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
+    REVOKE_URL = "https://slack.com/api/auth.revoke"
+
+    def _revoked(self, httpx_mock: HTTPXMock) -> list[str]:
+        return [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+        ]
+
+    async def test_a_nested_token_is_revoked_without_a_named_provider(self, httpx_mock: HTTPXMock) -> None:
+        """A config built by hand names no provider, and the refusal must not depend on one."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            json={"ok": True, "app_id": "A1", "authed_user": {"id": "U1", "access_token": "xoxp-USER"}},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        assert self._revoked(httpx_mock) == ["xoxp-USER"]
+
+    async def test_a_refused_refresh_revokes_a_token_the_caller_never_held(self, httpx_mock: HTTPXMock) -> None:
+        """Sparing the token the caller presented does not justify sparing one it was just issued."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json={"ok": True, "refresh_token": "rotated-refresh"})
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert self._revoked(httpx_mock) == ["rotated-refresh"]
+
+    async def test_a_refused_refresh_still_spares_the_token_it_was_given(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            json={"ok": True, "refresh_token": "callers-own-refresh", "authed_user": {"access_token": "xoxp-NEW"}},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert self._revoked(httpx_mock) == ["xoxp-NEW"]

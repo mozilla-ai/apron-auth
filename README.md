@@ -705,6 +705,43 @@ Neither preset accepts a `scope` key in `extra_params`, because each builds that
 
 Run the two flows separately. The install yields a bot token for workspace work, and the sign-in yields a user token that identifies the person.
 
+An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`.
+
+```python
+config, revocation_handler = slack.preset(
+    client_id="...",
+    client_secret="...",
+    scopes=["channels:read"],
+    user_scopes=["chat:write"],
+    redirect_uri="https://app.example.com/callback",
+)
+client = OAuthClient(config=config, revocation_handler=revocation_handler)
+url, pending_state = await client.get_authorization_url()
+tokens = await client.exchange_code(
+    code="authorization-code-from-callback",
+    state="state-from-callback",
+    pending_state=pending_state,
+)
+```
+
+Each token is revoked on its own, so disconnecting the install revokes both, and the refresh token beside each one where the install rotates its tokens:
+
+```python
+await client.revoke_token(tokens.access_token)
+if tokens.refresh_token is not None:
+    await client.revoke_token(tokens.refresh_token)
+if tokens.user_token is not None:
+    await client.revoke_token(tokens.user_token.access_token)
+    if tokens.user_token.refresh_token is not None:
+        await client.revoke_token(tokens.user_token.refresh_token)
+```
+
+`OAuthClient.refresh_token` refreshes the token in `token_set.access_token`, so it cannot refresh the user token: Slack returns a refreshed user token nested as well, and a response carrying no token at the top level is refused. Passing `token_set.user_token.refresh_token` to it spends that token at Slack and then fails, though the refusal revokes whatever the response issued, so nothing is left valid and unreachable. Refresh a rotating user token with Slack's own endpoint for now.
+
+Revoking the bot token alone leaves the person's token valid. Slack does not document whether revoking an access token affects the refresh token paired with it, so revoke every refresh token you hold and treat each revocation as best effort. Slack's own `apps.uninstall` removes every token of an installation, which no single revocation here promises.
+
+`slack.preset(...)` refuses an install that asks for user scopes alone, because Slack then returns no token for the app itself and a token response carrying no access token is refused. Sign a person in with `slack.sign_in_preset(...)` instead, whose token endpoint returns the person's token as `token_set.access_token`.
+
 ## Scope reduction tiers
 
 Some providers' revocation endpoints fully remove the user's portal-level OAuth grant; others only invalidate the current token while the grant lingers. apron-auth surfaces this difference as `ProviderConfig.disconnect_fully_revokes` so consumers can offer the right scope-reduction UX without rebuilding the per-provider truth table inline.
@@ -790,6 +827,10 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 - A URL carrying userinfo is refused wherever this library validates one, not only as an issuer, and `ProviderConfig` and `OAuthPendingState` refuse one in every URL field they hold. A public client states no credential of its own, so the HTTP client would have presented the URL's to the provider. Move such a credential out of the URL and onto the config.
 - Every endpoint URL on `ProviderConfig` and `ServerMetadata` must use `https`. A loopback host is accepted over plain HTTP with no opt-in, because a request to one reaches no network, so a config that already pointed at `localhost` needs no change. An empty string is refused where it used to pass as an unset endpoint. Anywhere else, plain HTTP needs `ProviderConfig.unsafe.allow_plain_http("token_url", ...)` or `ServerMetadata.unsafe.allow_plain_http(...)`, which names each field it accepts it for, takes a field name or a `UrlField` member, and records the set on the model. The waiver cannot be passed as a keyword or read back out of storage, so it stays a statement made in code about one machine; a model recording one also cannot be pickled, nor validated as a field of another model. A copy made with `model_copy`, `copy.replace` or `copy.deepcopy` runs no validator and carries whatever it was given. `oidc.discover` and `oidc.preset` keep their `allow_insecure_http` parameter and state the waiver for you; `oidc.discovery_url` and `oidc.identity_handler` keep theirs too and build no model, so they state none. `resource` is exempt, because it identifies an API rather than naming an endpoint this library requests. `get_authorization_url` applies the same rule to a `redirect_uri` passed per call, which a config waiving `redirect_uri` covers. A redirect URI stating a native client's own scheme, such as `com.example.app:/callback`, is refused with no waiver available, because no scheme but `https` states a transport this library can check: use the RFC 8252 loopback redirect instead. `mcp.register_client` refuses such a URI before it registers, so a refusal never leaves credentials standing at the server. `apron_auth.models.URL_FIELDS` is now the `UrlField` enum, exported as `apron_auth.UrlField`.
 - An `authorize_url` whose own query sets a reserved authorization request parameter is refused when the config is built, as `extra_params` already was. The request has always dropped such a parameter and set its own, so a config that stated one never sent it, and the drop stays in place for a config built without validation. A name written with no value, as in `?state=` or `?state`, sets that parameter and is refused with the rest. Move the value to the typed field where one exists, and otherwise take it out of the URL. A parameter that is not reserved and is written with no value is now sent as the URL states it, where it used to be dropped. RFC 6749 section 3.1 has a provider treat a parameter sent with no value as omitted, so the request asks for the same thing either way.
+- A token-endpoint response that states no access token is refused, with `TokenExchangeError` from a code exchange and `TokenRefreshError` from a refresh, where it used to raise a `KeyError` from inside this library. RFC 6749 section 5.1 requires the field, so such a response carries no token this library can use. Any other token the refused response carried is revoked first, so a refusal leaves nothing valid. A Slack app asking for user scopes alone takes this path, because Slack then returns no top-level token: sign a person in with `slack.sign_in_preset(...)` instead.
+- A token a provider issues for the person who authorized the application, beside the application's own, is read onto `TokenSet.user_token` as a typed `UserToken` and is no longer left in `TokenSet.metadata`. For Slack that moves the user token from `metadata["authed_user"]["access_token"]` to `token_set.user_token.access_token`, with its refresh token, expiry, scope and user ID beside it, so it can be refreshed and revoked by name rather than dug out of a free dict. Any member of the nested object that `UserToken` does not name is kept on `UserToken.metadata`, so nothing the provider sent is dropped. A nested object carrying no access token, such as the `authed_user` of a bot-only install, stays in `TokenSet.metadata` as it was. A refused token response now revokes a nested token too. Read `apron_auth.UserToken` for the shape; `Provider.user_token_response_field` states which member a provider uses, and only Slack uses one.
+- `slack.preset(...)` and `slack.sign_in_preset(...)` raise `ConfigurationError` where they raised `ValueError`, as every other provider module already did. `ConfigurationError` does not inherit from `ValueError`, so code catching `ValueError` around a Slack preset must catch `ConfigurationError`, or `OAuthError` for every fault this library raises.
+- A refused token response has its tokens revoked wherever the response carried them, including inside a member a provider issues a second token in, and whether or not the configuration names a provider. A refused refresh spares only the refresh token the call presented, because the caller still holds that one, and revokes anything the response issued beside it.
 - Errors can be pickled and keep `kind`, `error_code` and `reason`.
 - A built-in identity handler comes from `ProviderConfig.provider`, not from the endpoint hosts. Name the provider on a config you build by hand to keep the handler it used to be given, and expect `IdentityNotSupportedError` from `fetch_identity` for a config that names none. Naming it also takes that provider's stated facts, so a Google or Microsoft config gains `can_assert_domain_ownership=True`, which a domain-gated sign-in gate reads.
 - A config that names a provider whose host suffixes do not cover both its authorization and token endpoints raises `ConfigurationError` from `fetch_identity`, where it used to raise `IdentityNotSupportedError`. Pass your own `identity_handler` for a deployment on other hosts.

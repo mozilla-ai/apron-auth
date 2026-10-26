@@ -10,6 +10,7 @@ import secrets
 import time
 from collections.abc import Sequence
 from functools import cached_property
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
@@ -43,6 +44,7 @@ from apron_auth.models import (
     IdentityMaterial,
     OAuthPendingState,
     UrlField,
+    UserToken,
 )
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
@@ -56,12 +58,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The refusal of a token-endpoint response carrying no access token, which RFC 6749 section 5.1 requires.
+_NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
+
 # The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
 # NOTE: The exchange_code docstring states this value.
 _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
+
+# The string members of a nested user token, each mapped to the UserToken field that states it.
+# NOTE: It decides which member of a response becomes a named credential, so it is read-only.
+_USER_TOKEN_STRINGS = MappingProxyType(
+    {"id": "user_id", "refresh_token": "refresh_token", "scope": "scope", "token_type": "token_type"}
+)
 
 
 class _TokenEndpointError(Exception):
@@ -226,6 +237,22 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     raise StateError(msg)
 
 
+def _expires_at(token: Mapping[str, Any]) -> float | None:
+    """Return the absolute expiry a token states, derived from its lifetime where it states no expiry.
+
+    Args:
+        token: A token-endpoint response, or a member of one that carries a token of its own.
+
+    Returns:
+        The expiry as a Unix timestamp, or ``None`` where the token states neither an expiry nor a lifetime.
+    """
+    expires_at = token.get("expires_at")
+    expires_in = token.get("expires_in")
+    if expires_at is None and expires_in is not None:
+        return time.time() + int(expires_in)
+    return expires_at
+
+
 def _id_token_claims(id_token: object) -> dict[str, Any]:
     """Return the claims of an ID token from a token response, without checking its signature.
 
@@ -259,6 +286,23 @@ def _read_task_exception(task: asyncio.Task[None]) -> None:
         task.exception()
 
 
+def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
+    """Return the tokens a token-endpoint response or one of its members carries.
+
+    Args:
+        token: A token-endpoint response, or a member of one that carries a token of its own.
+        label_prefix: A word placed before each label, to tell one member's tokens from another's.
+
+    Returns:
+        Each token with the kind a log line names it by, the refresh token first.
+    """
+    return [
+        (f"{label_prefix}{label}", value)
+        for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
+        if isinstance(value := token.get(field), str) and value
+    ]
+
+
 def _same_secret(given: str, expected: str) -> bool:
     """Return whether two secret strings are equal, in time that does not depend on where they differ.
 
@@ -290,6 +334,52 @@ def _stated_error_member(response: httpx.Response | None) -> object:
     except ValueError:
         return ""
     return body.get("error", "") if isinstance(body, dict) else ""
+
+
+def _states_an_access_token(response: Mapping[str, Any]) -> bool:
+    """Report whether a token-endpoint response carries the access token RFC 6749 section 5.1 requires.
+
+    Args:
+        response: The token-endpoint response to read.
+
+    Returns:
+        Whether the response states a non-empty access token.
+    """
+    return isinstance(access_token := response.get("access_token"), str) and bool(access_token)
+
+
+def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
+    """Return the user token a nested member of a token response carries.
+
+    Args:
+        nested: The member the provider issues the authorizing person's token in.
+
+    Returns:
+        The token, or ``None`` where the member states no access token.
+    """
+    access_token = nested.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return None
+    # A member is read onto its field only where it holds what that field states. One of any other
+    # type is carried as it arrived, because the token beside it is usable either way and a refusal
+    # here would lose a token the response issued.
+    named: dict[str, Any] = {"access_token": access_token}
+    metadata: dict[str, Any] = {}
+    for member, value in nested.items():
+        if member == "access_token":
+            continue
+        field = _USER_TOKEN_STRINGS.get(member)
+        lifetime = finite_number(value) if member in {"expires_at", "expires_in"} else None
+        if field is not None and isinstance(value, str):
+            named[field] = value
+        elif member == "expires_in" and lifetime is not None:
+            named["expires_in"] = int(lifetime)
+        elif member == "expires_at" and lifetime is not None:
+            named["expires_at"] = lifetime
+        else:
+            metadata[member] = value
+    named["expires_at"] = _expires_at(named)
+    return UserToken(**named, metadata=metadata)
 
 
 class OAuthClient:
@@ -479,7 +569,9 @@ class OAuthClient:
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
                 or was created further ahead of this client's clock than the allowed difference.
-            TokenExchangeError: If the token endpoint rejects the exchange.
+            TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
+                access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
+                its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
         self._config.validate_issuer(iss)
@@ -518,13 +610,19 @@ class OAuthClient:
             # NOTE: A response whose ID token fails a check may answer a request the client never made.
             await self._revoke_refused_tokens(response)
             raise
+        if not _states_an_access_token(response):
+            # The response issued these tokens to this exchange, so nothing else holds them.
+            await self._revoke_refused_tokens(response)
+            raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.metadata)
 
-    async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
+    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: str | None = None) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
         Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
-        Both tokens are revoked at once.
+        Every token the response carries is revoked at once, including one a provider issues inside a
+        member of its own.
+        A token given as ``keep`` is left alone, for a caller that still holds it and can still use it.
         Each revocation that fails, is canceled on its own, or is unfinished at the limit is logged.
         A log line names the token kind and the host, never error text.
         The error of a revocation unfinished at the limit is not raised.
@@ -534,16 +632,21 @@ class OAuthClient:
 
         Args:
             response: The refused token-endpoint response.
+            keep: A token the caller presented with the request, which stays valid.
 
         Raises:
             BaseException: If a revocation that finished before the limit raised an error that is not an exception,
                 which revoke_token does not convert.
         """
-        tokens = [
-            (label, token)
-            for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
-            if isinstance(token := response.get(field), str) and token
-        ]
+        tokens = _revocable_tokens(response)
+        # A provider can issue a token inside a member of its own, as Slack does under authed_user.
+        # The sweep reads the response's shape rather than the config, because a config that names no
+        # provider is the one a caller builds by hand and its tokens are no less live.
+        for value in response.values():
+            if isinstance(value, dict):
+                tokens += _revocable_tokens(value, label_prefix="nested ")
+        if keep is not None:
+            tokens = [(label, token) for label, token in tokens if not _same_secret(token, keep)]
         if not tokens:
             return
         revocation_url = self._config.revocation_url
@@ -605,7 +708,9 @@ class OAuthClient:
             The refreshed token set, which identity can be established from.
 
         Raises:
-            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached.
+            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, or if its
+                response states no access token, which RFC 6749 section 5.1 requires. A response refused for
+                stating none has every token revoked except ``refresh_token`` itself, which the caller holds.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
@@ -627,6 +732,11 @@ class OAuthClient:
             # traceback holds the request frame, whose locals carry the refresh token and the client secret.
             message, kind, error_code = failure
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
+        if not _states_an_access_token(response):
+            # A refresh response can repeat the token it was sent, which the caller still holds, so
+            # that one token is spared and everything the response issued beside it is revoked.
+            await self._revoke_refused_tokens(response, keep=refresh_token)
+            raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 
     async def revoke_token(self, token: str) -> bool:
@@ -982,22 +1092,30 @@ class OAuthClient:
             The parsed token set. Response fields with no named slot are
             collected into :attr:`TokenSet.metadata`, and ``expires_at`` is
             derived from ``expires_in`` when the response omits it.
+            A token the provider issues for the authorizing person is read onto
+            :attr:`TokenSet.user_token` and kept out of the metadata.
         """
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
         metadata = {k: v for k, v in data.items() if k not in known_fields}
 
-        expires_at = data.get("expires_at")
+        # A token left in the metadata is a token no caller names, so nothing refreshes or revokes it.
+        user_token = None
+        nested_field = self._config.provider.user_token_response_field if self._config.provider else None
+        if nested_field is not None and isinstance(nested := metadata.get(nested_field), dict):
+            user_token = _user_token(nested)
+            if user_token is not None:
+                del metadata[nested_field]
+
         expires_in = data.get("expires_in")
-        if expires_at is None and expires_in is not None:
-            expires_at = time.time() + int(expires_in)
 
         return FreshTokenSet(
             access_token=data["access_token"],
             token_type=data.get("token_type", "Bearer"),
             refresh_token=data.get("refresh_token"),
             expires_in=int(expires_in) if expires_in is not None else None,
-            expires_at=expires_at,
+            expires_at=_expires_at(data),
             scope=data.get("scope"),
+            user_token=user_token,
             metadata=metadata,
             context=context or {},
         )

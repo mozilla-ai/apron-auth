@@ -52,6 +52,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("auth.atlassian.com",),
         identity_handler_class_name="AtlassianIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.GITHUB: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -60,6 +61,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("github.com",),
         identity_handler_class_name="GitHubIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.GOOGLE: ProviderFacts(
         can_assert_domain_ownership=True,
@@ -68,6 +70,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("google.com", "googleapis.com"),
         identity_handler_class_name="GoogleIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.HUBSPOT: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -76,6 +79,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("api.hubapi.com", "app.hubspot.com"),
         identity_handler_class_name="HubSpotIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.LINEAR: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -84,6 +88,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("linear.app",),
         identity_handler_class_name="LinearIdentityHandler",
         scope_separator=",",
+        user_token_response_field=None,
     ),
     Provider.MICROSOFT: ProviderFacts(
         can_assert_domain_ownership=True,
@@ -92,6 +97,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("login.microsoftonline.com",),
         identity_handler_class_name="MicrosoftIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.NOTION: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -100,6 +106,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("api.notion.com",),
         identity_handler_class_name="NotionIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.SALESFORCE: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -108,6 +115,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("salesforce.com",),
         identity_handler_class_name="SalesforceIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
     Provider.SLACK: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -116,6 +124,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("slack.com",),
         identity_handler_class_name="SlackIdentityHandler",
         scope_separator=",",
+        user_token_response_field="authed_user",
     ),
     Provider.TYPEFORM: ProviderFacts(
         can_assert_domain_ownership=False,
@@ -124,6 +133,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         host_suffixes=("api.typeform.com",),
         identity_handler_class_name="TypeformIdentityHandler",
         scope_separator=" ",
+        user_token_response_field=None,
     ),
 }
 
@@ -223,6 +233,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
         "host_suffixes",
         "identity_handler_class_name",
         "scope_separator",
+        "user_token_response_field",
     ],
 )
 def test_a_members_fact_cannot_be_assigned(provider: Provider, fact: str) -> None:

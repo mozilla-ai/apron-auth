@@ -44,6 +44,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     TokenSet,
     UrlField,
+    UserToken,
 )
 from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler, StateStore
 from apron_auth.stores import MemoryStateStore
@@ -98,4 +99,5 @@ __all__ = [
     "TokenSet",
     "UNAUTHORIZED_CLIENT",
     "UrlField",
+    "UserToken",
 ]

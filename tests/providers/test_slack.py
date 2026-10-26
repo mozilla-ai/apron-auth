@@ -296,7 +296,7 @@ class TestSlackPreset:
     def test_raises_when_bot_and_user_scopes_are_empty(self):
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="at least one scope"):
+        with pytest.raises(ConfigurationError, match="at least one scope"):
             preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=[])
 
     def test_returns_config_and_handler(self):
@@ -403,6 +403,33 @@ class TestSlackPreset:
         assert config.required_scope_families == [["channels:read"]]
 
 
+class TestSlackInstallPresetNeedsABotScope:
+    """Slack returns no token for the app itself without one, and such a response is refused."""
+
+    def test_user_scopes_alone_are_refused(self) -> None:
+        from apron_auth.providers.slack import preset
+
+        with pytest.raises(ConfigurationError, match="at least one bot scope"):
+            preset(
+                client_id="cid",
+                client_secret="csecret",  # pragma: allowlist secret
+                scopes=[],
+                user_scopes=["chat:write"],
+            )
+
+    def test_a_bot_scope_beside_a_user_scope_is_accepted(self) -> None:
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="cid",
+            client_secret="csecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["chat:write"],
+        )
+
+        assert config.extra_params["user_scope"] == "chat:write"
+
+
 class TestSlackSignInPreset:
     """The Sign in with Slack preset, which Slack serves from its OpenID endpoints."""
 
@@ -478,14 +505,14 @@ class TestSlackSignInPreset:
         """Slack says each set of scopes must be requested in its own OAuth flow."""
         from apron_auth.providers.slack import sign_in_preset
 
-        with pytest.raises(ValueError, match="cannot be requested here"):
+        with pytest.raises(ConfigurationError, match="cannot be requested here"):
             sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
 
     def test_extra_params_cannot_ask_for_a_user_scope(self) -> None:
         """This flow sends no user_scope, so one set here would reach Slack unchecked by the scope rules."""
         from apron_auth.providers.slack import sign_in_preset
 
-        with pytest.raises(ValueError, match="sends no user_scope parameter"):
+        with pytest.raises(ConfigurationError, match="sends no user_scope parameter"):
             sign_in_preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -514,7 +541,7 @@ class TestSlackSignInPreset:
         """A scope parameter of the caller's would drop openid, and then no ID token is required."""
         from apron_auth.providers.slack import sign_in_preset
 
-        with pytest.raises(ValueError, match="extra_params cannot set scope"):
+        with pytest.raises(ConfigurationError, match="extra_params cannot set scope"):
             sign_in_preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -538,7 +565,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
     def test_openid_is_refused(self, scopes: list[str], user_scopes: list[str] | None) -> None:
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="openid"):
+        with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -550,7 +577,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         """A caller can set user_scope directly, which is where the preset puts user scopes too."""
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="openid"):
+        with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -561,7 +588,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
     def test_the_user_scope_extra_param_is_read_with_the_declared_separator(self) -> None:
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="openid"):
+        with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -573,7 +600,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         """The client reads the built scope parameter word by word, so this refusal does too."""
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="openid"):
+        with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
@@ -584,7 +611,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         """A scope parameter of the caller's would replace the bot scopes, openid included."""
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ValueError, match="extra_params cannot set scope"):
+        with pytest.raises(ConfigurationError, match="extra_params cannot set scope"):
             preset(
                 client_id="sid",
                 client_secret="ssecret",  # pragma: allowlist secret
