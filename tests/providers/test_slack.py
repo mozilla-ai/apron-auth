@@ -403,6 +403,33 @@ class TestSlackPreset:
         assert config.required_scope_families == [["channels:read"]]
 
 
+class TestSlackInstallPresetNeedsABotScope:
+    """Slack returns no token for the app itself without one, and such a response is refused."""
+
+    def test_user_scopes_alone_are_refused(self) -> None:
+        from apron_auth.providers.slack import preset
+
+        with pytest.raises(ValueError, match="at least one bot scope"):
+            preset(
+                client_id="cid",
+                client_secret="csecret",  # pragma: allowlist secret
+                scopes=[],
+                user_scopes=["chat:write"],
+            )
+
+    def test_a_bot_scope_beside_a_user_scope_is_accepted(self) -> None:
+        from apron_auth.providers.slack import preset
+
+        config, _ = preset(
+            client_id="cid",
+            client_secret="csecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=["chat:write"],
+        )
+
+        assert config.extra_params["user_scope"] == "chat:write"
+
+
 class TestSlackSignInPreset:
     """The Sign in with Slack preset, which Slack serves from its OpenID endpoints."""
 

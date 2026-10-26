@@ -650,6 +650,14 @@ def preset(
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
         raise ValueError(msg)
 
+    if not scopes:
+        msg = (
+            "Slack returns no token for the app itself when a flow asks for user scopes alone, and a "
+            "token response carrying no access token is refused, so this flow needs at least one bot "
+            "scope. Use sign_in_preset to sign a person in."
+        )
+        raise ValueError(msg)
+
     scope_separator = Provider.SLACK.scope_separator
 
     merged_extra = _extra_params_without_scope(extra_params)
