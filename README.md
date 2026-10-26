@@ -807,6 +807,13 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 
 `TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
 
+### Migrating from 0.19
+
+- `OAuthPendingState.metadata` is now `context`, and the `get_authorization_url` keyword that fills it is now `context` as well. The field and the keyword therefore carry one name, and it matches the `TokenSet.context` a code exchange copies the value onto.
+- `TokenSet.metadata` and `UserToken.metadata` are both now `extras`. They hold the fields a provider's token response carried that no attribute names, which is a different thing from `TokenSet.context`, and that field keeps its name and its meaning.
+- `OAuthPendingState`, `TokenSet` and `UserToken` refuse a field they do not define, as `ProviderConfig` already did. The refusal raises `ConfigurationError`, names the field and does not repeat its value. A field these models did not define was dropped silently before, so a document stored under the old name reloaded with that value missing and no error.
+- Taken together, a pending state or a token set you persisted under 0.19 does not reload under 0.20: `model_validate` refuses the stored `metadata` key. Re-key each stored document (`doc["context"] = doc.pop("metadata")` for a pending state, `doc["extras"] = doc.pop("metadata")` for a token set and for a `user_token` nested in one) before you load it, or discard the documents you can afford to lose. Discarding a pending state abandons the flow it records, so drain or expire in-flight authorizations across the upgrade.
+
 ### Migrating from 0.18
 
 - `PermanentOAuthError` is gone. Catch `TokenRefreshError` and read `retryable`; a dead grant has `retryable == False` and `error_code == "invalid_grant"`.
