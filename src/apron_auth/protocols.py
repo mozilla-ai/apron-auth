@@ -27,6 +27,9 @@ class StateStore(Protocol):
     """Caller provides persistence for OAuth state.
 
     NOTE: Implementations must return every field of a saved pending state, including ``created_at`` and ``nonce``.
+    An implementation that rebuilds the state from a stored record must pass the model's own fields alone.
+    A field the model does not define is refused rather than ignored, so a record carrying keys of the store's
+    own, such as a document identifier or an expiry attribute, needs those keys left out.
 
     Enforcing a maximum age is not part of this contract.
     An implementation may still expire stale entries to bound its storage.

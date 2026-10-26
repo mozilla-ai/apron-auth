@@ -15,7 +15,13 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth.client import _USER_TOKEN_STRINGS, OAuthClient
+from apron_auth.client import (
+    _TOKEN_SET_NUMBERS,
+    _TOKEN_SET_STRINGS,
+    _USER_TOKEN_STRINGS,
+    OAuthClient,
+    _expires_at,
+)
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -262,25 +268,25 @@ class TestGetAuthorizationUrl:
         )
         assert pending_state is not None
 
-    async def test_metadata_defaults_to_empty(self):
+    async def test_context_defaults_to_empty(self):
         config = _make_config()
         client = OAuthClient(config=config)
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
-        assert pending_state.metadata == {}
+        assert pending_state.context == {}
 
-    async def test_metadata_attached_to_pending_state(self):
+    async def test_context_attached_to_pending_state(self):
         config = _make_config()
         client = OAuthClient(config=config)
         meta = {"user_id": "U123", "tenant_id": "T456"}
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
-        assert pending_state.metadata == meta
+        assert pending_state.context == meta
 
-    async def test_metadata_saved_to_state_store(self):
+    async def test_context_saved_to_state_store(self):
         config = _make_config()
         store = AsyncMock()
         store.save = AsyncMock()
@@ -288,10 +294,10 @@ class TestGetAuthorizationUrl:
         meta = {"user_id": "U123"}
         await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
         saved_state = store.save.call_args[0][0]
-        assert saved_state.metadata == meta
+        assert saved_state.context == meta
 
     async def test_state_is_unique_per_call(self):
         config = _make_config()
@@ -533,7 +539,7 @@ class TestExchangeCode:
             redirect_uri="https://app.example.com/callback",
             code_verifier="stored-verifier",
             created_at=time.time(),
-            metadata={"user_id": "U123", "tenant_id": "T456"},
+            context={"user_id": "U123", "tenant_id": "T456"},
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=pending)
@@ -542,7 +548,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         assert tokens.context == {"user_id": "U123", "tenant_id": "T456"}
 
-    async def test_exchange_auto_consume_empty_metadata(self, httpx_mock):
+    async def test_exchange_auto_consume_empty_context(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -559,7 +565,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         assert tokens.context == {}
 
-    async def test_exchange_pending_state_without_metadata_has_empty_context(self, httpx_mock: HTTPXMock) -> None:
+    async def test_exchange_pending_state_without_context_has_empty_context(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -573,7 +579,7 @@ class TestExchangeCode:
         )
         assert tokens.context == {}
 
-    async def test_exchange_pending_state_metadata_becomes_context(self, httpx_mock: HTTPXMock) -> None:
+    async def test_exchange_pending_state_context_is_carried_onto_the_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -582,7 +588,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(
             code="auth-code-123",
             state="pending-state",
-            pending_state=_pending_state(metadata={"user_id": "U123"}),
+            pending_state=_pending_state(context={"user_id": "U123"}),
         )
         assert tokens.context == {"user_id": "U123"}
 
@@ -824,14 +830,14 @@ class TestExchangeCode:
             state="stored-state",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata={"user_id": "caller-U"},
+            context={"user_id": "caller-U"},
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=pending)
         config = _make_oauth_config()
         client = OAuthClient(config=config, state_store=store)
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
-        assert tokens.metadata["user_id"] == "provider-U"
+        assert tokens.extras["user_id"] == "provider-U"
         assert tokens.context["user_id"] == "caller-U"
 
     async def test_exchange_state_not_found_raises(self):
@@ -924,8 +930,28 @@ class TestExchangeCode:
             state="pending-state",
             pending_state=_pending_state(),
         )
-        assert tokens.metadata["team_id"] == "T123"
-        assert tokens.metadata["authed_user"] == {"id": "U456"}
+        assert tokens.extras["team_id"] == "T123"
+        assert tokens.extras["authed_user"] == {"id": "U456"}
+
+    @pytest.mark.parametrize("field", ["context", "extras", "user_token"])
+    async def test_a_response_field_named_after_a_model_field_does_not_refuse_the_exchange(
+        self, httpx_mock: HTTPXMock, field: str
+    ) -> None:
+        """A token set refuses a field it does not define, so a provider-chosen name must not reach it as one."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", field: {"sent": "by the provider"}},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(context={"tenant_id": "T456"}),
+        )
+
+        assert tokens.extras[field] == {"sent": "by the provider"}
+        assert tokens.context == {"tenant_id": "T456"}
 
     async def test_exchange_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -2246,7 +2272,7 @@ class TestFetchIdentity:
             token_url="https://oauth2.googleapis.com/token",
         )
         client = OAuthClient(config=config)
-        stored = TokenSet.model_validate({"access_token": "access-abc", "metadata": {"id_token": "id-jwt"}})
+        stored = TokenSet.model_validate({"access_token": "access-abc", "extras": {"id_token": "id-jwt"}})
 
         with pytest.raises(ConfigurationError, match="reloaded from storage"):
             await client.fetch_identity(stored)
@@ -2936,6 +2962,127 @@ class TestAResponseThatStatesNoAccessToken:
         assert revoked == ["refresh-xyz"]
 
 
+class TestTheDerivedExpiry:
+    """Deriving an absolute expiry from what a token states."""
+
+    def test_an_expiry_is_taken_as_stated(self) -> None:
+        assert _expires_at({"expires_at": 1700000000.0}) == 1700000000.0
+
+    def test_a_lifetime_derives_an_expiry_when_none_is_stated(self) -> None:
+        assert _expires_at({"expires_in": 60}) is not None
+
+    def test_a_token_stating_neither_derives_nothing(self) -> None:
+        assert _expires_at({}) is None
+
+    @pytest.mark.parametrize("value", ["one hour", {"seconds": 60}, [60], True, float("inf")])
+    def test_a_lifetime_that_is_not_a_finite_number_derives_nothing(self, value: object) -> None:
+        """The derivation adds the lifetime to a clock reading, which a value of another type cannot enter."""
+        assert _expires_at({"expires_in": value}) is None
+
+    @pytest.mark.parametrize("value", ["soon", {"at": 1.0}, [1.0], True, float("nan")])
+    def test_an_expiry_that_is_not_a_finite_number_states_none(self, value: object) -> None:
+        assert _expires_at({"expires_at": value}) is None
+
+
+class TestATopLevelFieldOfTheWrongType:
+    """A provider's value is read onto its field only where it holds what that field states."""
+
+    WRONG = [
+        ("expires_at", "soon"),
+        ("expires_in", "3600"),
+        ("expires_in", True),
+        ("refresh_token", {"token": "r"}),
+        ("refresh_token", ["r"]),
+        ("scope", {"granted": "chat:write"}),
+        ("scope", ["chat:write"]),
+        ("token_type", 7),
+        ("token_type", {"kind": "Bearer"}),
+    ]
+
+    # A lifetime or expiry of these types is refused by the token client before this library reads the body.
+    REFUSED_BEFORE_PARSING = [
+        ("expires_at", {"at": 1.0}),
+        ("expires_at", [1.0]),
+        ("expires_in", "3600.5"),
+        ("expires_in", "one hour"),
+        ("expires_in", [3600]),
+        ("expires_in", {"seconds": 3600}),
+    ]
+
+    async def _exchanged(self, httpx_mock: HTTPXMock, response: dict[str, object]) -> TokenSet:
+        httpx_mock.add_response(url="https://provider.example.com/token", json=response)
+        client = OAuthClient(config=_make_oauth_config())
+        return await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_it_does_not_refuse_the_exchange(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """The exchange redeemed the code, so a refusal here would strand the access token it issued."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        assert tokens.access_token == "LIVE-TOKEN"
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_it_is_carried_into_the_extras(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """Nothing the provider sent is dropped, so the value arrives as it was sent."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        assert tokens.extras[field] == value
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_the_field_states_no_value(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """An attribute states what this library read, so one it could not read states nothing."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        expected = "Bearer" if field == "token_type" else None
+        assert getattr(tokens, field) == expected
+
+    async def test_a_lifetime_this_library_can_read_still_derives_the_expiry(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": 3600})
+
+        assert tokens.expires_in == 3600
+        assert tokens.expires_at is not None
+        assert "expires_in" not in tokens.extras
+
+    def test_the_named_fields_are_every_field_this_client_reads_from_a_response(self) -> None:
+        """A field named nowhere here is read from no response, so its attribute keeps its default in silence."""
+        # The client fills these three itself rather than reading a scalar of the same name off a response.
+        filled_by_this_client = {"context", "extras", "user_token"}
+
+        named = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
+
+        assert named == set(TokenSet.model_fields) - filled_by_this_client
+
+    async def test_a_numeric_string_lifetime_still_states_an_expiry(self, httpx_mock: HTTPXMock) -> None:
+        """The token client derives the expiry before this library reads the response, so it survives."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": "3600"})
+
+        assert tokens.expires_in is None
+        assert tokens.extras["expires_in"] == "3600"
+        assert tokens.expires_at is not None
+
+    async def test_a_lifetime_that_is_not_a_number_states_no_lifetime(self, httpx_mock: HTTPXMock) -> None:
+        """A boolean reads as a number in Python, so it is refused here rather than taken as one second."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": True})
+
+        assert tokens.expires_in is None
+        assert tokens.extras["expires_in"] is True
+
+    @pytest.mark.parametrize(
+        ("field", "value"), REFUSED_BEFORE_PARSING, ids=[f"{f}={v!r}" for f, v in REFUSED_BEFORE_PARSING]
+    )
+    async def test_a_lifetime_the_token_client_refuses_states_the_documented_failure(
+        self, httpx_mock: HTTPXMock, field: str, value: object
+    ) -> None:
+        """The token client reads the lifetime itself, so this library never reaches these values."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"access_token": "LIVE-TOKEN", field: value}
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+
 class TestTheUserTokenAProviderNests:
     """Slack issues the person's token inside ``authed_user``, where nothing generic reads or revokes it."""
 
@@ -2976,12 +3123,12 @@ class TestTheUserTokenAProviderNests:
             access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
         )
 
-    async def test_it_is_kept_out_of_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_it_is_kept_out_of_the_extras(self, httpx_mock: HTTPXMock) -> None:
         """A token in a free dict is a token nothing names, so nothing revokes it."""
         tokens = await self._exchanged(httpx_mock, self.BOT_AND_USER)
 
-        assert "authed_user" not in tokens.metadata
-        assert "xoxp-USER" not in json.dumps(tokens.metadata)
+        assert "authed_user" not in tokens.extras
+        assert "xoxp-USER" not in json.dumps(tokens.extras)
 
     async def test_a_rotating_user_token_keeps_its_refresh_token_and_expiry(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
@@ -3012,7 +3159,7 @@ class TestTheUserTokenAProviderNests:
         tokens = await self._exchanged(httpx_mock, response)
 
         assert tokens.user_token is not None
-        assert tokens.user_token.metadata == {"enterprise_id": "E1"}
+        assert tokens.user_token.extras == {"enterprise_id": "E1"}
 
     @pytest.mark.parametrize(
         "member",
@@ -3035,29 +3182,42 @@ class TestTheUserTokenAProviderNests:
         assert tokens.access_token == "xoxb-BOT"
         assert tokens.user_token is not None
         assert tokens.user_token.access_token == "xoxp-USER"
-        assert tokens.user_token.metadata == member
+        assert tokens.user_token.extras == member
+
+    async def test_a_top_level_field_named_user_token_does_not_refuse_the_promotion(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The promotion deletes the nested member from the extras, which still hold a provider's own name."""
+        response = {**self.BOT_AND_USER, "user_token": {"sent": "by the provider"}}
+
+        tokens = await self._exchanged(httpx_mock, response)
+
+        assert tokens.user_token is not None
+        assert tokens.user_token.access_token == "xoxp-USER"
+        assert tokens.extras["user_token"] == {"sent": "by the provider"}
+        assert "authed_user" not in tokens.extras
 
     def test_every_named_string_member_maps_to_a_field_the_model_states(self) -> None:
-        """A name that matches no field would send its value to the metadata without anyone noticing."""
+        """A name that matches no field is refused as one, which would abort an exchange that issued a token."""
         assert set(_USER_TOKEN_STRINGS.values()) <= set(UserToken.model_fields)
 
-    async def test_a_nested_object_with_no_token_stays_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_nested_object_with_no_token_stays_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
         """A bot-only install names the installer without issuing a token for them."""
         response = {**self.BOT_AND_USER, "authed_user": {"id": "U1"}}
 
         tokens = await self._exchanged(httpx_mock, response)
 
         assert tokens.user_token is None
-        assert tokens.metadata["authed_user"] == {"id": "U1"}
+        assert tokens.extras["authed_user"] == {"id": "U1"}
 
-    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", json=self.BOT_AND_USER)
         client = OAuthClient(config=_make_oauth_config())
 
         tokens = await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
 
         assert tokens.user_token is None
-        assert tokens.metadata["authed_user"]["access_token"] == "xoxp-USER"
+        assert tokens.extras["authed_user"]["access_token"] == "xoxp-USER"
 
     async def test_a_refused_response_revokes_the_nested_user_token_too(self, httpx_mock: HTTPXMock) -> None:
         """A token the library refuses must not stay valid, wherever the response carried it."""

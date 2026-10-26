@@ -1164,6 +1164,30 @@ class TestRegisterClient:
         assert reg.client_secret.get_secret_value() == "generated-secret"
         assert reg.token_endpoint_auth_method == "client_secret_post"
 
+    async def test_a_response_carrying_members_this_library_does_not_model_still_registers(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A registration refuses a field it does not define, so the response must be read field by field."""
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={
+                "client_id": "generated-id",
+                "client_secret": "generated-secret",  # pragma: allowlist secret
+                "token_endpoint_auth_method": "client_secret_post",
+                "client_id_issued_at": 1799999999,
+                "client_secret_expires_at": 0,
+                "registration_access_token": "reg-token",  # pragma: allowlist secret
+                "registration_client_uri": "https://as.example.com/register/generated-id",
+            },
+        )
+
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+
+        assert reg.client_id == "generated-id"
+        assert reg.client_secret is not None
+        assert reg.client_secret.get_secret_value() == "generated-secret"
+
     async def test_sends_rfc7591_payload(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=200, json={"client_id": "x"})
         await register_client(_REGISTER_URL, _REDIRECT_URI, client_name="MyApp")

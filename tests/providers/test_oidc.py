@@ -177,6 +177,28 @@ class TestDiscoveryUrl:
 class TestDiscover:
     """Fetching and validating an OpenID provider's configuration document."""
 
+    async def test_a_document_carrying_fields_this_library_does_not_model_still_discovers(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """Discovered metadata refuses a field it does not define, so the document must be read field by field."""
+        httpx_mock.add_response(
+            url=DOCUMENT_URL,
+            json=document(
+                response_types_supported=["code"],
+                grant_types_supported=["authorization_code", "refresh_token"],
+                subject_types_supported=["public"],
+                id_token_signing_alg_values_supported=["RS256"],
+                claims_supported=["sub", "email"],
+                request_parameter_supported=False,
+                service_documentation="https://as.example.com/docs",
+            ),
+        )
+
+        discovered = await discover(ISSUER)
+
+        assert discovered.issuer == ISSUER
+        assert discovered.token_url == TOKEN_URL
+
     async def test_reads_every_endpoint_from_the_document(self, httpx_mock: HTTPXMock):
         """Each endpoint the flow needs is read from its documented field."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document())

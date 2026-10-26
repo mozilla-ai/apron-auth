@@ -98,6 +98,19 @@ class TestClientRegistration:
         registration = ClientRegistration(client_id="c", token_endpoint_auth_method="none")
         assert registration.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
 
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A caller persists a registration, and a misspelled secret would load it as a public client."""
+        stored = {"client_id": "c", "clientSecret": "s", "token_endpoint_auth_method": "client_secret_post"}
+        with pytest.raises(ConfigurationError, match="clientSecret"):
+            ClientRegistration.model_validate(stored)
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        stored = {"client_id": "c", "clientSecret": "shared-secret"}
+        with pytest.raises(ConfigurationError) as refusal:
+            ClientRegistration.model_validate(stored)
+
+        assert "shared-secret" not in str(refusal.value)
+
 
 class TestProviderConfig:
     def test_minimal_config(self) -> None:
@@ -515,6 +528,26 @@ class TestProviderConfigUnknownFields:
                 token_url="https://provider.example.com/token",
                 **{field: False},
             )
+
+
+class TestUnknownFieldRefusals:
+    def test_the_models_a_caller_states_are_the_ones_that_refuse_an_unknown_field(self) -> None:
+        """A model a caller writes or reloads refuses an unknown field, so a mistyped one cannot be dropped.
+
+        The rest are built from a provider's response by this library, and every field they drop
+        fails closed, so a refusal there would reject data rather than protect anything.
+        """
+        refusing = {model.__name__ for model in MODELS if model.model_config.get("extra") == "forbid"}
+
+        assert refusing == {
+            "ClientRegistration",
+            "FreshTokenSet",
+            "OAuthPendingState",
+            "ProviderConfig",
+            "ServerMetadata",
+            "TokenSet",
+            "UserToken",
+        }
 
 
 class TestUrlFields:
@@ -1340,6 +1373,17 @@ class TestProviderConfigValidateIssuer:
 
 
 class TestServerMetadata:
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A caller caches discovered metadata, and a dropped field silently weakens an issuer check."""
+        cached = {
+            "issuer": "https://as.example.com",
+            "authorize_url": "https://as.example.com/auth",
+            "token_url": "https://as.example.com/token",
+            "iss_param_supported": True,
+        }
+        with pytest.raises(ConfigurationError, match="iss_param_supported"):
+            ServerMetadata.model_validate(cached)
+
     def test_a_url_carrying_a_credential_is_refused(self) -> None:
         """Metadata can be built by hand, so the model decides what its URLs may carry."""
         with pytest.raises(ConfigurationError, match="authorize_url must not carry userinfo"):
@@ -1412,7 +1456,7 @@ class TestTokenSet:
         assert token.expires_in is None
         assert token.expires_at is None
         assert token.scope is None
-        assert token.metadata == {}
+        assert token.extras == {}
 
     def test_full_token(self) -> None:
         token = TokenSet(
@@ -1422,11 +1466,11 @@ class TestTokenSet:
             expires_in=3600,
             expires_at=1700000000.0,
             scope="read write",
-            metadata={"team_id": "T123"},
+            extras={"team_id": "T123"},
         )
         assert token.refresh_token == "refresh-xyz"
         assert token.expires_in == 3600
-        assert token.metadata == {"team_id": "T123"}
+        assert token.extras == {"team_id": "T123"}
 
     def test_context_defaults_to_empty_dict(self) -> None:
         token = TokenSet(access_token="access-abc")
@@ -1438,17 +1482,33 @@ class TestTokenSet:
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self) -> None:
+    def test_extras_isolated_from_caller_mutation(self) -> None:
         original = {"team_id": "T123"}
-        token = TokenSet(access_token="access-abc", metadata=original)
+        token = TokenSet(access_token="access-abc", extras=original)
         original["team_id"] = "mutated"
-        assert token.metadata["team_id"] == "T123"
+        assert token.extras["team_id"] == "T123"
 
     def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
         token = TokenSet(access_token="access-abc", context=original)
         original["user_id"] = "mutated"
         assert token.context["user_id"] == "U123"
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A token set is persisted, so a field no attribute names is data this model cannot carry."""
+        with pytest.raises(ConfigurationError, match="metadata"):
+            TokenSet.model_validate({"access_token": "access-abc", "metadata": {"team_id": "T123"}})
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TokenSet.model_validate({"access_token": "access-abc", "metadata": {"team_id": "T123"}})
+
+        assert "T123" not in str(refusal.value)
+
+    def test_an_unknown_field_of_a_nested_user_token_is_refused(self) -> None:
+        stored = {"access_token": "access-abc", "user_token": {"access_token": "xoxp", "metadata": {"id": "U1"}}}
+        with pytest.raises(ConfigurationError, match="metadata"):
+            TokenSet.model_validate(stored)
 
     def test_frozen(self) -> None:
         token = TokenSet(access_token="access-abc")
@@ -1467,10 +1527,10 @@ class _Sessions(BaseModel):
 
 class TestFreshTokenSet:
     def test_keyword_construction_builds_a_token_set(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         assert isinstance(tokens, TokenSet)
         assert tokens.access_token == "access-abc"
-        assert tokens.metadata == {"id_token": "id-jwt"}
+        assert tokens.extras == {"id_token": "id-jwt"}
 
     def test_frozen(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc")
@@ -1490,7 +1550,7 @@ class TestFreshTokenSet:
             FreshTokenSet.model_validate_strings({"access_token": "access-abc"})
 
     def test_the_fields_reload_as_a_plain_token_set(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", metadata={"id_token": "id-jwt"})
+        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", extras={"id_token": "id-jwt"})
         stored = TokenSet.model_validate(fresh.model_dump())
         assert not isinstance(stored, FreshTokenSet)
         assert stored.model_dump() == fresh.model_dump()
@@ -1539,19 +1599,19 @@ class TestIdentityMaterial:
         with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
-    def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+    def test_from_token_set_extracts_id_token_from_extras(self) -> None:
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token == "access-abc"
         assert material.id_token == "id-jwt"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"team_id": "T123"})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_non_string_id_token_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": 12345})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
@@ -1561,7 +1621,7 @@ class TestIdentityMaterial:
         tokens = FreshTokenSet(
             access_token="access-abc",
             refresh_token="refresh-xyz",
-            metadata={"id_token": "id-jwt"},
+            extras={"id_token": "id-jwt"},
             context={"user_id": "U123"},
         )
         material = IdentityMaterial.from_token_set(tokens)
@@ -1977,35 +2037,58 @@ class TestOAuthPendingState:
         )
         assert state.code_verifier is None
 
-    def test_metadata_defaults_to_empty_dict(self) -> None:
+    def test_context_defaults_to_empty_dict(self) -> None:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
         )
-        assert state.metadata == {}
+        assert state.context == {}
 
-    def test_metadata_round_trips(self) -> None:
+    def test_context_round_trips(self) -> None:
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata=meta,
+            context=meta,
         )
-        assert state.metadata == meta
-        assert state.metadata["user_id"] == "U123"
+        assert state.context == meta
+        assert state.context["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self) -> None:
+    def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata=original,
+            context=original,
         )
         original["user_id"] = "mutated"
-        assert state.metadata["user_id"] == "U123"
+        assert state.context["user_id"] == "U123"
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A pending state is persisted, so a field no attribute names is data this model cannot carry."""
+        stored = {
+            "state": "random-state-token",
+            "redirect_uri": "https://app.example.com/callback",
+            "created_at": 1.0,
+            "metadata": {"tenant_id": "T456"},
+        }
+        with pytest.raises(ConfigurationError, match="metadata"):
+            OAuthPendingState.model_validate(stored)
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        stored = {
+            "state": "random-state-token",
+            "redirect_uri": "https://app.example.com/callback",
+            "created_at": 1.0,
+            "metadata": {"tenant_id": "T456"},
+        }
+        with pytest.raises(ConfigurationError) as refusal:
+            OAuthPendingState.model_validate(stored)
+
+        assert "T456" not in str(refusal.value)
 
     def test_frozen(self) -> None:
         state = OAuthPendingState(

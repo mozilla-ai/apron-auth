@@ -1128,8 +1128,11 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
+class ServerMetadata(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """OAuth metadata discovered for an authorization server.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and leave an issuer check weaker than the document stated.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
     authorization-code flow, plus the registration endpoint from RFC 7591 and
@@ -1227,11 +1230,14 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
+class ClientRegistration(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """A client's credentials at one authorization server.
 
     RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
     Client ID Metadata Document (CIMD) states its own.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and load a confidential client as a public one.
 
     NOTE: Credentials an authorization server issued are not valid at any other authorization server.
     A caller that persists them must store them keyed by the minting issuer (the ``issuer`` of the
@@ -1256,15 +1262,18 @@ class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class UserToken(_RefusesWithoutRepeating, frozen=True):
+class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """The token a provider issues for the person who authorized an application, beside the application's own.
 
     A provider that grants an application its own token and the authorizing person a second one
     returns the person's token in a member of its own, as Slack does in ``authed_user``.
     This model is that token, so a caller can read, refresh and revoke it by name.
 
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose what the provider sent.
+
     NOTE: A nested member stating no access token carries no user token, so the token set states
-    none and keeps the member in its metadata.
+    none and keeps the member in its extras.
 
     Attributes:
         access_token: The access token issued for the person.
@@ -1274,7 +1283,7 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted for this token, delimited by the provider's scope separator.
         user_id: The provider's identifier for the person the token acts as.
-        metadata: Fields of the provider's nested member that the named attributes above do not
+        extras: Fields of the provider's nested member that the named attributes above do not
             capture, including one whose value is not of the type its own field states.
             Populated automatically.
             NOTE: An attribute above states what this library read, and takes precedence over a
@@ -1288,14 +1297,17 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
     expires_at: float | None = None
     scope: str | None = None
     user_id: str | None = None
-    metadata: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
 
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class TokenSet(_RefusesWithoutRepeating, frozen=True):
+class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """Token data returned from code exchange or refresh.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose what the provider or the caller attached.
 
     Attributes:
         access_token: The access token issued by the provider.
@@ -1307,10 +1319,14 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
             provider's scope separator.
         user_token: The token the provider issued for the authorizing person, where it issues one
             beside the application's own. Populated automatically.
-        metadata: Additional fields from the provider's token endpoint
-            response that are not captured by the named attributes above
-            (e.g. Slack's ``team_id``).  Populated automatically.
-        context: Caller-supplied context carried opaquely from ``OAuthPendingState.metadata``.
+        extras: Fields of the provider's token-endpoint response that the named attributes above do not
+            capture, such as Slack's ``team_id``, including one whose value is not of the type its own
+            field states. Populated automatically.
+            NOTE: An attribute above states what this library read, and takes precedence over a
+            field of the same name here, which states only what the provider sent.
+            NOTE: A field carried here can hold credential material, such as a refresh token a
+            provider sent as a list, so it is as sensitive as the named attributes above.
+        context: Caller-supplied context carried opaquely from ``OAuthPendingState.context``.
             It is empty for a token set that does not come from a code exchange.
     """
 
@@ -1321,7 +1337,7 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
     expires_at: float | None = None
     scope: str | None = None
     user_token: UserToken | None = None
-    metadata: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
     context: dict[str, Any] = {}
 
     # Attached last, so it wraps every validator above it.
@@ -1447,7 +1463,7 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             The identity material: the access token, the granted scopes,
             and, when the response carried one, the OIDC ID token.
         """
-        id_token = tokens.metadata.get("id_token")
+        id_token = tokens.extras.get("id_token")
         return cls(
             access_token=tokens.access_token,
             id_token=id_token if isinstance(id_token, str) else None,
@@ -1658,8 +1674,11 @@ class IdentityProfile(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
+class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """State stored during the OAuth authorization flow.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose the context a caller attached.
 
     Attributes:
         state: Unique token identifying this authorization request.
@@ -1667,7 +1686,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
         code_verifier: PKCE code verifier, if PKCE is enabled.
         nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
         created_at: Unix timestamp when this state was created.
-        metadata: Opaque caller-supplied context that apron-auth carries but never interprets.
+        context: Opaque caller-supplied context that apron-auth carries but never interprets.
             Attach application-specific data such as ``user_id`` or ``tenant_id`` here.
     """
 
@@ -1676,7 +1695,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
     code_verifier: str | None = None
     nonce: str | None = None
     created_at: float
-    metadata: dict[str, Any] = {}
+    context: dict[str, Any] = {}
 
     # No transport rule: the redirect URI is the one a config already stated, and a config that
     # accepts plain HTTP for it records no waiver here to read.

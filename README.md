@@ -182,7 +182,7 @@ url, pending_state = await client.get_authorization_url(
 
 ### Code exchange
 
-When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only `state` (see below).
+When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only `state` (see below).
 
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
@@ -570,12 +570,12 @@ tokens = await client.exchange_code(code="...", state="state-from-callback")
 
 #### Carrying context through the flow
 
-If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `metadata` when building the authorization URL. apron-auth carries it opaquely on the pending state, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
+If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `context` when building the authorization URL. apron-auth carries it opaquely on `OAuthPendingState.context`, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
 
 ```python
 url, pending_state = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
-    metadata={"user_id": "U123", "tenant_id": "T456"},
+    context={"user_id": "U123", "tenant_id": "T456"},
 )
 
 # On callback, context comes back on the TokenSet.
@@ -584,7 +584,7 @@ print(tokens.context["user_id"])    # "U123"
 print(tokens.context["tenant_id"])  # "T456"
 
 # Provider response extras (e.g. Slack's team_id) are separate.
-print(tokens.metadata)  # {"team_id": "T123", ...}
+print(tokens.extras)  # {"team_id": "T123", ...}
 ```
 
 ## Connecting to an MCP server
@@ -807,7 +807,20 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 
 `TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
 
+### Migrating from 0.19
+
+- `OAuthPendingState.metadata` is now `context`, and the `get_authorization_url` keyword that fills it is now `context` as well. The field and the keyword therefore carry one name, and it matches the `TokenSet.context` a code exchange copies the value onto.
+- `TokenSet.metadata` and `UserToken.metadata` are both now `extras`. They hold the fields a provider's token response carried that no attribute names, which is a different thing from `TokenSet.context`, and that field keeps its name and its meaning.
+- `OAuthPendingState`, `TokenSet`, `UserToken`, `ClientRegistration` and `ServerMetadata` refuse a field they do not define, as `ProviderConfig` already did. The refusal raises `ConfigurationError`, names the field and does not repeat its value. A field these models did not define was dropped silently before, so a document stored under the old name reloaded with that value missing and no error. This refusal applies when **you** build or reload one of these models. It does not reach a provider's response: `exchange_code` and `refresh_token` read a token response field by field and put everything the model does not name on `TokenSet.extras`, so no field a provider invents can refuse an exchange. The models this library builds from a provider's response and does not list here still ignore an unknown field, because every field they drop fails closed.
+- If you build a `ServerMetadata` or a `ClientRegistration` by validating an authorization server's own document, select the model's fields out of it first. RFC 8414 and RFC 7591 both let a server return members this library does not model, and those members are now refused rather than ignored. `oidc.discover`, `mcp.discover` and `mcp.register_client` already read a document field by field, so a config built through them is unaffected.
+- The refusal applies to every unnamed key, not only a renamed one, so a stored record must hold the model's fields alone. If your store adds keys of its own, such as a document identifier or an expiry attribute, select the model's fields out of the record rather than passing the whole record to `model_validate`. This is a standing requirement, not a one-time migration step.
+- A refusal names the field at the level it was found, so an unnamed key inside a nested `user_token` reports the same text as one at the top level. Re-key both at once, because a second attempt that still refuses looks identical to the first.
+- A token-endpoint response field is read onto its `TokenSet` attribute only where its value is of the type that attribute states. One of any other type goes to `TokenSet.extras` and the attribute takes its default, so `token_type` can now read `"Bearer"` and `scope`, `refresh_token`, `expires_in` or `expires_at` can read `None` where a wrong-typed value previously raised `ConfigurationError` out of `exchange_code` after the code had been redeemed. `expires_in` is also no longer coerced, so a numeric string lands in the extras rather than becoming an integer; `expires_at` still states the expiry in that case, because the token client derives it before this library reads the response. Read `TokenSet.extras` for anything an attribute states nothing for, and treat it as sensitive: a credential a provider sent in the wrong shape arrives there.
+- Taken together, a pending state or a token set you persisted under 0.19 does not reload under 0.20: `model_validate` refuses the stored `metadata` key. Re-key each stored document (`doc["context"] = doc.pop("metadata")` for a pending state, `doc["extras"] = doc.pop("metadata")` for a token set and for a `user_token` nested in one) before you load it, or discard the documents you can afford to lose. Discarding a pending state abandons the flow it records, so drain or expire in-flight authorizations across the upgrade.
+
 ### Migrating from 0.18
+
+This section names the fields as 0.19 named them. Read the 0.19 section above for the renames that followed, and apply them if you are upgrading past 0.19.
 
 - `PermanentOAuthError` is gone. Catch `TokenRefreshError` and read `retryable`; a dead grant has `retryable == False` and `error_code == "invalid_grant"`.
 - `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
