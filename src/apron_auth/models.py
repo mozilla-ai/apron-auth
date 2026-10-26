@@ -1264,7 +1264,7 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
     This model is that token, so a caller can read, refresh and revoke it by name.
 
     NOTE: A nested member stating no access token carries no user token, so the token set states
-    none and keeps the member in its metadata.
+    none and keeps the member in its extras.
 
     Attributes:
         access_token: The access token issued for the person.
@@ -1274,7 +1274,7 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted for this token, delimited by the provider's scope separator.
         user_id: The provider's identifier for the person the token acts as.
-        metadata: Fields of the provider's nested member that the named attributes above do not
+        extras: Fields of the provider's nested member that the named attributes above do not
             capture, including one whose value is not of the type its own field states.
             Populated automatically.
             NOTE: An attribute above states what this library read, and takes precedence over a
@@ -1288,7 +1288,7 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
     expires_at: float | None = None
     scope: str | None = None
     user_id: str | None = None
-    metadata: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
 
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
@@ -1307,7 +1307,7 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
             provider's scope separator.
         user_token: The token the provider issued for the authorizing person, where it issues one
             beside the application's own. Populated automatically.
-        metadata: Additional fields from the provider's token endpoint
+        extras: Additional fields from the provider's token endpoint
             response that are not captured by the named attributes above
             (e.g. Slack's ``team_id``).  Populated automatically.
         context: Caller-supplied context carried opaquely from ``OAuthPendingState.context``.
@@ -1321,7 +1321,7 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
     expires_at: float | None = None
     scope: str | None = None
     user_token: UserToken | None = None
-    metadata: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
     context: dict[str, Any] = {}
 
     # Attached last, so it wraps every validator above it.
@@ -1447,7 +1447,7 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             The identity material: the access token, the granted scopes,
             and, when the response carried one, the OIDC ID token.
         """
-        id_token = tokens.metadata.get("id_token")
+        id_token = tokens.extras.get("id_token")
         return cls(
             access_token=tokens.access_token,
             id_token=id_token if isinstance(id_token, str) else None,

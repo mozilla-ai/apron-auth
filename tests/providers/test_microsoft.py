@@ -642,7 +642,7 @@ class TestMicrosoftIdTokenVerification:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO, is_reusable=True)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]), is_reusable=True)
         client = OAuthClient(_config())
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": _member_id_token()})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": _member_id_token()})
 
         await client.fetch_identity(tokens)
         await client.fetch_identity(tokens)

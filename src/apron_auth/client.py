@@ -364,7 +364,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     # type is carried as it arrived, because the token beside it is usable either way and a refusal
     # here would lose a token the response issued.
     named: dict[str, Any] = {"access_token": access_token}
-    metadata: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
     for member, value in nested.items():
         if member == "access_token":
             continue
@@ -377,9 +377,9 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
         elif member == "expires_at" and lifetime is not None:
             named["expires_at"] = lifetime
         else:
-            metadata[member] = value
+            extras[member] = value
     named["expires_at"] = _expires_at(named)
-    return UserToken(**named, metadata=metadata)
+    return UserToken(**named, extras=extras)
 
 
 class OAuthClient:
@@ -1090,21 +1090,21 @@ class OAuthClient:
 
         Returns:
             The parsed token set. Response fields with no named slot are
-            collected into :attr:`TokenSet.metadata`, and ``expires_at`` is
+            collected into :attr:`TokenSet.extras`, and ``expires_at`` is
             derived from ``expires_in`` when the response omits it.
             A token the provider issues for the authorizing person is read onto
-            :attr:`TokenSet.user_token` and kept out of the metadata.
+            :attr:`TokenSet.user_token` and kept out of the extras.
         """
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
-        metadata = {k: v for k, v in data.items() if k not in known_fields}
+        extras = {k: v for k, v in data.items() if k not in known_fields}
 
-        # A token left in the metadata is a token no caller names, so nothing refreshes or revokes it.
+        # A token left in the extras is a token no caller names, so nothing refreshes or revokes it.
         user_token = None
         nested_field = self._config.provider.user_token_response_field if self._config.provider else None
-        if nested_field is not None and isinstance(nested := metadata.get(nested_field), dict):
+        if nested_field is not None and isinstance(nested := extras.get(nested_field), dict):
             user_token = _user_token(nested)
             if user_token is not None:
-                del metadata[nested_field]
+                del extras[nested_field]
 
         expires_in = data.get("expires_in")
 
@@ -1116,6 +1116,6 @@ class OAuthClient:
             expires_at=_expires_at(data),
             scope=data.get("scope"),
             user_token=user_token,
-            metadata=metadata,
+            extras=extras,
             context=context or {},
         )

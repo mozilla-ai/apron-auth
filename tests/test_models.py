@@ -1412,7 +1412,7 @@ class TestTokenSet:
         assert token.expires_in is None
         assert token.expires_at is None
         assert token.scope is None
-        assert token.metadata == {}
+        assert token.extras == {}
 
     def test_full_token(self) -> None:
         token = TokenSet(
@@ -1422,11 +1422,11 @@ class TestTokenSet:
             expires_in=3600,
             expires_at=1700000000.0,
             scope="read write",
-            metadata={"team_id": "T123"},
+            extras={"team_id": "T123"},
         )
         assert token.refresh_token == "refresh-xyz"
         assert token.expires_in == 3600
-        assert token.metadata == {"team_id": "T123"}
+        assert token.extras == {"team_id": "T123"}
 
     def test_context_defaults_to_empty_dict(self) -> None:
         token = TokenSet(access_token="access-abc")
@@ -1438,11 +1438,11 @@ class TestTokenSet:
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self) -> None:
+    def test_extras_isolated_from_caller_mutation(self) -> None:
         original = {"team_id": "T123"}
-        token = TokenSet(access_token="access-abc", metadata=original)
+        token = TokenSet(access_token="access-abc", extras=original)
         original["team_id"] = "mutated"
-        assert token.metadata["team_id"] == "T123"
+        assert token.extras["team_id"] == "T123"
 
     def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
@@ -1467,10 +1467,10 @@ class _Sessions(BaseModel):
 
 class TestFreshTokenSet:
     def test_keyword_construction_builds_a_token_set(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         assert isinstance(tokens, TokenSet)
         assert tokens.access_token == "access-abc"
-        assert tokens.metadata == {"id_token": "id-jwt"}
+        assert tokens.extras == {"id_token": "id-jwt"}
 
     def test_frozen(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc")
@@ -1490,7 +1490,7 @@ class TestFreshTokenSet:
             FreshTokenSet.model_validate_strings({"access_token": "access-abc"})
 
     def test_the_fields_reload_as_a_plain_token_set(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", metadata={"id_token": "id-jwt"})
+        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", extras={"id_token": "id-jwt"})
         stored = TokenSet.model_validate(fresh.model_dump())
         assert not isinstance(stored, FreshTokenSet)
         assert stored.model_dump() == fresh.model_dump()
@@ -1539,19 +1539,19 @@ class TestIdentityMaterial:
         with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
-    def test_from_token_set_extracts_id_token_from_metadata(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": "id-jwt"})
+    def test_from_token_set_extracts_id_token_from_extras(self) -> None:
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token == "access-abc"
         assert material.id_token == "id-jwt"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"team_id": "T123"})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_non_string_id_token_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", metadata={"id_token": 12345})
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
@@ -1561,7 +1561,7 @@ class TestIdentityMaterial:
         tokens = FreshTokenSet(
             access_token="access-abc",
             refresh_token="refresh-xyz",
-            metadata={"id_token": "id-jwt"},
+            extras={"id_token": "id-jwt"},
             context={"user_id": "U123"},
         )
         material = IdentityMaterial.from_token_set(tokens)

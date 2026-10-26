@@ -168,7 +168,7 @@ class TestContextFlowsThroughStateStore:
         )
         assert tokens.context == meta
         assert tokens.context["user_id"] == "U123"
-        assert tokens.metadata["team_id"] == "T-provider"
+        assert tokens.extras["team_id"] == "T-provider"
 
 
 class TestSlackUserScopesInAuthorizationUrl:

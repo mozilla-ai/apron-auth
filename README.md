@@ -584,7 +584,7 @@ print(tokens.context["user_id"])    # "U123"
 print(tokens.context["tenant_id"])  # "T456"
 
 # Provider response extras (e.g. Slack's team_id) are separate.
-print(tokens.metadata)  # {"team_id": "T123", ...}
+print(tokens.extras)  # {"team_id": "T123", ...}
 ```
 
 ## Connecting to an MCP server

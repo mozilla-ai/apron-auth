@@ -831,7 +831,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = OAuthClient(config=config, state_store=store)
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
-        assert tokens.metadata["user_id"] == "provider-U"
+        assert tokens.extras["user_id"] == "provider-U"
         assert tokens.context["user_id"] == "caller-U"
 
     async def test_exchange_state_not_found_raises(self):
@@ -924,8 +924,8 @@ class TestExchangeCode:
             state="pending-state",
             pending_state=_pending_state(),
         )
-        assert tokens.metadata["team_id"] == "T123"
-        assert tokens.metadata["authed_user"] == {"id": "U456"}
+        assert tokens.extras["team_id"] == "T123"
+        assert tokens.extras["authed_user"] == {"id": "U456"}
 
     async def test_exchange_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -2246,7 +2246,7 @@ class TestFetchIdentity:
             token_url="https://oauth2.googleapis.com/token",
         )
         client = OAuthClient(config=config)
-        stored = TokenSet.model_validate({"access_token": "access-abc", "metadata": {"id_token": "id-jwt"}})
+        stored = TokenSet.model_validate({"access_token": "access-abc", "extras": {"id_token": "id-jwt"}})
 
         with pytest.raises(ConfigurationError, match="reloaded from storage"):
             await client.fetch_identity(stored)
@@ -2976,12 +2976,12 @@ class TestTheUserTokenAProviderNests:
             access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
         )
 
-    async def test_it_is_kept_out_of_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_it_is_kept_out_of_the_extras(self, httpx_mock: HTTPXMock) -> None:
         """A token in a free dict is a token nothing names, so nothing revokes it."""
         tokens = await self._exchanged(httpx_mock, self.BOT_AND_USER)
 
-        assert "authed_user" not in tokens.metadata
-        assert "xoxp-USER" not in json.dumps(tokens.metadata)
+        assert "authed_user" not in tokens.extras
+        assert "xoxp-USER" not in json.dumps(tokens.extras)
 
     async def test_a_rotating_user_token_keeps_its_refresh_token_and_expiry(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
@@ -3012,7 +3012,7 @@ class TestTheUserTokenAProviderNests:
         tokens = await self._exchanged(httpx_mock, response)
 
         assert tokens.user_token is not None
-        assert tokens.user_token.metadata == {"enterprise_id": "E1"}
+        assert tokens.user_token.extras == {"enterprise_id": "E1"}
 
     @pytest.mark.parametrize(
         "member",
@@ -3035,29 +3035,29 @@ class TestTheUserTokenAProviderNests:
         assert tokens.access_token == "xoxb-BOT"
         assert tokens.user_token is not None
         assert tokens.user_token.access_token == "xoxp-USER"
-        assert tokens.user_token.metadata == member
+        assert tokens.user_token.extras == member
 
     def test_every_named_string_member_maps_to_a_field_the_model_states(self) -> None:
-        """A name that matches no field would send its value to the metadata without anyone noticing."""
+        """A name that matches no field would send its value to the extras without anyone noticing."""
         assert set(_USER_TOKEN_STRINGS.values()) <= set(UserToken.model_fields)
 
-    async def test_a_nested_object_with_no_token_stays_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_nested_object_with_no_token_stays_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
         """A bot-only install names the installer without issuing a token for them."""
         response = {**self.BOT_AND_USER, "authed_user": {"id": "U1"}}
 
         tokens = await self._exchanged(httpx_mock, response)
 
         assert tokens.user_token is None
-        assert tokens.metadata["authed_user"] == {"id": "U1"}
+        assert tokens.extras["authed_user"] == {"id": "U1"}
 
-    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_metadata(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url="https://provider.example.com/token", json=self.BOT_AND_USER)
         client = OAuthClient(config=_make_oauth_config())
 
         tokens = await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
 
         assert tokens.user_token is None
-        assert tokens.metadata["authed_user"]["access_token"] == "xoxp-USER"
+        assert tokens.extras["authed_user"]["access_token"] == "xoxp-USER"
 
     async def test_a_refused_response_revokes_the_nested_user_token_too(self, httpx_mock: HTTPXMock) -> None:
         """A token the library refuses must not stay valid, wherever the response carried it."""
