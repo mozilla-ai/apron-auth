@@ -927,6 +927,26 @@ class TestExchangeCode:
         assert tokens.extras["team_id"] == "T123"
         assert tokens.extras["authed_user"] == {"id": "U456"}
 
+    @pytest.mark.parametrize("field", ["context", "extras", "user_token"])
+    async def test_a_response_field_named_after_a_model_field_does_not_refuse_the_exchange(
+        self, httpx_mock: HTTPXMock, field: str
+    ) -> None:
+        """A token set refuses a field it does not define, so a provider-chosen name must not reach it as one."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", field: {"sent": "by the provider"}},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        tokens = await client.exchange_code(
+            code="auth-code-123",
+            state="pending-state",
+            pending_state=_pending_state(context={"tenant_id": "T456"}),
+        )
+
+        assert tokens.extras[field] == {"sent": "by the provider"}
+        assert tokens.context == {"tenant_id": "T456"}
+
     async def test_exchange_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
@@ -3038,7 +3058,7 @@ class TestTheUserTokenAProviderNests:
         assert tokens.user_token.extras == member
 
     def test_every_named_string_member_maps_to_a_field_the_model_states(self) -> None:
-        """A name that matches no field would send its value to the extras without anyone noticing."""
+        """A name that matches no field is refused as one, which would abort an exchange that issued a token."""
         assert set(_USER_TOKEN_STRINGS.values()) <= set(UserToken.model_fields)
 
     async def test_a_nested_object_with_no_token_stays_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
