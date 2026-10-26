@@ -162,7 +162,7 @@ def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str
     without_scope = dict(extra_params or {})
     if "scope" in without_scope:
         msg = "Slack scopes are set through this preset's scope parameters, so extra_params cannot set scope"
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     return without_scope
 
 
@@ -648,7 +648,7 @@ def preset(
     """
     if not scopes and not user_scopes:
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
 
     if not scopes:
         msg = (
@@ -656,7 +656,7 @@ def preset(
             "token response carrying no access token is refused, so this flow needs at least one bot "
             "scope. Use sign_in_preset to sign a person in."
         )
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
 
     scope_separator = Provider.SLACK.scope_separator
 
@@ -670,7 +670,7 @@ def preset(
             "Slack serves Sign in with Slack from its own endpoints and returns no ID token from this "
             "flow, so the openid scope cannot be requested here. Use sign_in_preset for Sign in with Slack."
         )
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
 
     required_scope_families: list[list[str]] = []
     if scopes:
@@ -732,7 +732,7 @@ def sign_in_preset(
             "Sign in with Slack sends no user_scope parameter, so extra_params cannot set one. "
             "Use preset to install a workspace app."
         )
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
 
     requested = list(scopes or [])
     outside_this_flow = sorted(scope_words(requested, Provider.SLACK.scope_separator) - _SLACK_SIGN_IN_SCOPES)
@@ -741,7 +741,7 @@ def sign_in_preset(
             f"Slack serves Sign in with Slack from its own endpoints, which grant {sorted(_SLACK_SIGN_IN_SCOPES)} "
             f"alone, so {outside_this_flow} cannot be requested here. Use preset to install a workspace app."
         )
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
