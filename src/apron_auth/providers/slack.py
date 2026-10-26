@@ -630,10 +630,11 @@ class SlackRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
+    *,
     scopes: list[str],
-    user_scopes: list[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    user_scopes: list[str] | None = None,
 ) -> tuple[ProviderConfig, RevocationHandler]:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
@@ -657,10 +658,10 @@ def preset(
         client_id: The OAuth client identifier.
         client_secret: The OAuth client secret.
         scopes: The bot scopes to request.
-        user_scopes: The user scopes to request via Slack's ``user_scope``
-            parameter, if any.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        user_scopes: The user scopes to request via Slack's ``user_scope``
+            parameter, if any.
 
     Returns:
         The provider configuration paired with its revocation handler.
@@ -711,6 +712,7 @@ def preset(
 def sign_in_preset(
     client_id: str,
     client_secret: str,
+    *,
     scopes: list[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,

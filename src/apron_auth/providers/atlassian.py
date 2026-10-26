@@ -258,6 +258,7 @@ class AtlassianIdentityHandler:
 def preset(
     client_id: str,
     client_secret: str,
+    *,
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,

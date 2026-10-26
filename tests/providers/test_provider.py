@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from support import VaryFacts
@@ -29,6 +31,9 @@ from apron_auth.providers import (
 )
 from apron_auth.providers._host_match import oauth_hosts_match
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
     Provider.GITHUB: github,
@@ -40,6 +45,13 @@ MODULES: dict[Provider, ModuleType] = {
     Provider.SALESFORCE: salesforce,
     Provider.SLACK: slack,
     Provider.TYPEFORM: typeform,
+}
+
+# Every preset this library offers, including the two no Provider member names.
+PRESETS: dict[str, Callable[..., Any]] = {
+    **{f"{provider.value}.preset": MODULES[provider].preset for provider in Provider},
+    "oidc.preset": oidc.preset,
+    "slack.sign_in_preset": slack.sign_in_preset,
 }
 
 # The known-good facts per provider, pinned independently of the enum, so a slip in a member's
@@ -200,6 +212,17 @@ def test_the_named_provider_modules_are_exactly_the_members() -> None:
         f"member whose value is the module name. Modules with no member: {sorted(discovered - members)}. "
         f"Members with no module: {sorted(members - discovered)}."
     )
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_takes_two_positionals_and_the_rest_by_keyword(name: str) -> None:
+    """A positional call that reads correctly against one preset must not mean something else against another."""
+    params = list(inspect.signature(PRESETS[name]).parameters.values())
+    positional = [p.name for p in params if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    keyword_only = {p.name for p in params if p.kind is inspect.Parameter.KEYWORD_ONLY}
+
+    assert positional == ["client_id", "client_secret"]
+    assert {"scopes", "redirect_uri", "extra_params"} <= keyword_only
 
 
 def test_the_fact_tables_cover_every_member() -> None:

@@ -248,13 +248,13 @@ def _fields_needing_a_waiver(urls: Mapping[UrlField, str | None]) -> tuple[UrlFi
 
 
 def preset(
-    *,
     client_id: str,
     client_secret: str,
+    *,
     scopes: list[str],
-    metadata: ServerMetadata,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    metadata: ServerMetadata,
     allow_insecure_http: bool = False,
 ) -> tuple[ProviderConfig, RevocationHandler | None]:
     """Create a provider configuration from a discovered OpenID provider.
@@ -276,9 +276,9 @@ def preset(
         client_id: The OAuth client identifier registered at the provider.
         client_secret: The OAuth client secret paired with it.
         scopes: Scopes to request, merged with the required ``openid`` scope.
-        metadata: The provider's discovered metadata, from :func:`discover`.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        metadata: The provider's discovered metadata, from :func:`discover`.
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
