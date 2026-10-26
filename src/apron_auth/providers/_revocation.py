@@ -9,12 +9,17 @@ from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
 
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
+    from apron_auth.protocols import TransportFactory
 
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
 
 
-def revocation_handler_for(config: ProviderConfig) -> RevocationHandler | None:
+def revocation_handler_for(
+    config: ProviderConfig,
+    *,
+    transport_factory: TransportFactory | None = None,
+) -> RevocationHandler | None:
     """Build the revocation handler of the provider ``config`` names.
 
     A provider that needs nothing of its own takes RFC 7009 revocation, and one that needs more
@@ -24,6 +29,9 @@ def revocation_handler_for(config: ProviderConfig) -> RevocationHandler | None:
 
     Args:
         config: The provider configuration to revoke against.
+        transport_factory: Controls the outbound connection for RFC 7009 revocation, where a caller
+            handling untrusted input can pin DNS to validated addresses. A provider that names a
+            class of its own takes no factory, because none of those classes accepts one.
 
     Returns:
         A new handler for the named provider, or ``None`` when the config names no provider or
@@ -38,7 +46,7 @@ def revocation_handler_for(config: ProviderConfig) -> RevocationHandler | None:
         return None
     class_name = provider.revocation_handler_class_name
     if class_name is None:
-        return StandardRevocationHandler()
+        return StandardRevocationHandler(transport_factory=transport_factory)
     # A registry would import every provider module. Resolving by name imports only the named one.
     module = import_module(f"{_PROVIDER_PACKAGE}.{provider.value}")
     handler_class = getattr(module, class_name, None)
