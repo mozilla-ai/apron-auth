@@ -1275,7 +1275,10 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
         scope: Scopes granted for this token, delimited by the provider's scope separator.
         user_id: The provider's identifier for the person the token acts as.
         metadata: Fields of the provider's nested member that the named attributes above do not
-            capture. Populated automatically.
+            capture, including one whose value is not of the type its own field states.
+            Populated automatically.
+            NOTE: An attribute above states what this library read, and takes precedence over a
+            field of the same name here, which states only what the provider sent.
     """
 
     access_token: str

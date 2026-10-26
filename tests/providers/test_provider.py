@@ -233,6 +233,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
         "host_suffixes",
         "identity_handler_class_name",
         "scope_separator",
+        "user_token_response_field",
     ],
 )
 def test_a_members_fact_cannot_be_assigned(provider: Provider, fact: str) -> None:
