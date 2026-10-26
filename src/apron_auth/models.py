@@ -1128,8 +1128,11 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
+class ServerMetadata(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """OAuth metadata discovered for an authorization server.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and leave an issuer check weaker than the document stated.
 
     Mirrors the RFC 8414 authorization-server metadata fields relevant to an
     authorization-code flow, plus the registration endpoint from RFC 7591 and

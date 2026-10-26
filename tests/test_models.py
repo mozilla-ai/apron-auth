@@ -530,6 +530,26 @@ class TestProviderConfigUnknownFields:
             )
 
 
+class TestUnknownFieldRefusals:
+    def test_the_models_a_caller_states_are_the_ones_that_refuse_an_unknown_field(self) -> None:
+        """A model a caller writes or reloads refuses an unknown field, so a mistyped one cannot be dropped.
+
+        The rest are built from a provider's response by this library, and every field they drop
+        fails closed, so a refusal there would reject data rather than protect anything.
+        """
+        refusing = {model.__name__ for model in MODELS if model.model_config.get("extra") == "forbid"}
+
+        assert refusing == {
+            "ClientRegistration",
+            "FreshTokenSet",
+            "OAuthPendingState",
+            "ProviderConfig",
+            "ServerMetadata",
+            "TokenSet",
+            "UserToken",
+        }
+
+
 class TestUrlFields:
     def test_members_are_in_alphabetical_order(self) -> None:
         names = [field.value for field in UrlField]
@@ -1353,6 +1373,17 @@ class TestProviderConfigValidateIssuer:
 
 
 class TestServerMetadata:
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A caller caches discovered metadata, and a dropped field silently weakens an issuer check."""
+        cached = {
+            "issuer": "https://as.example.com",
+            "authorize_url": "https://as.example.com/auth",
+            "token_url": "https://as.example.com/token",
+            "iss_param_supported": True,
+        }
+        with pytest.raises(ConfigurationError, match="iss_param_supported"):
+            ServerMetadata.model_validate(cached)
+
     def test_a_url_carrying_a_credential_is_refused(self) -> None:
         """Metadata can be built by hand, so the model decides what its URLs may carry."""
         with pytest.raises(ConfigurationError, match="authorize_url must not carry userinfo"):
