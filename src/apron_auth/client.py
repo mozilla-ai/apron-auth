@@ -57,20 +57,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The refusal of a token-endpoint response carrying no access token, which RFC 6749 section 5.1 requires.
+_NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
+
 # The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
 # NOTE: The exchange_code docstring states this value.
 _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
-# The refusal of a token-endpoint response carrying no access token, which RFC 6749 section 5.1 requires.
-_NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
-
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
-# The members of a nested user token that UserToken names, rather than carrying in its metadata.
-_USER_TOKEN_FIELDS = frozenset(
-    {"access_token", "expires_at", "expires_in", "id", "refresh_token", "scope", "token_type"}
-)
+# The string members of a nested user token, each mapped to the UserToken field that states it.
+_USER_TOKEN_STRINGS = {"id": "user_id", "refresh_token": "refresh_token", "scope": "scope", "token_type": "token_type"}
 
 
 class _TokenEndpointError(Exception):
@@ -346,17 +344,26 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     access_token = nested.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         return None
-    expires_in = nested.get("expires_in")
-    return UserToken(
-        access_token=access_token,
-        token_type=nested.get("token_type", "Bearer"),
-        refresh_token=nested.get("refresh_token"),
-        expires_in=int(expires_in) if expires_in is not None else None,
-        expires_at=_expires_at(nested),
-        scope=nested.get("scope"),
-        user_id=nested.get("id"),
-        metadata={name: value for name, value in nested.items() if name not in _USER_TOKEN_FIELDS},
-    )
+    # A member is read onto its field only where it holds what that field states. One of any other
+    # type is carried as it arrived, because the token beside it is usable either way and a refusal
+    # here would lose a token the response issued.
+    named: dict[str, Any] = {"access_token": access_token}
+    metadata: dict[str, Any] = {}
+    for member, value in nested.items():
+        if member == "access_token":
+            continue
+        field = _USER_TOKEN_STRINGS.get(member)
+        lifetime = finite_number(value) if member in {"expires_at", "expires_in"} else None
+        if field is not None and isinstance(value, str):
+            named[field] = value
+        elif member == "expires_in" and lifetime is not None:
+            named["expires_in"] = int(lifetime)
+        elif member == "expires_at" and lifetime is not None:
+            named["expires_at"] = lifetime
+        else:
+            metadata[member] = value
+    named["expires_at"] = _expires_at(named)
+    return UserToken(**named, metadata=metadata)
 
 
 class OAuthClient:
