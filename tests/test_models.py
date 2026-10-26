@@ -98,6 +98,19 @@ class TestClientRegistration:
         registration = ClientRegistration(client_id="c", token_endpoint_auth_method="none")
         assert registration.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
 
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A caller persists a registration, and a misspelled secret would load it as a public client."""
+        stored = {"client_id": "c", "clientSecret": "s", "token_endpoint_auth_method": "client_secret_post"}
+        with pytest.raises(ConfigurationError, match="clientSecret"):
+            ClientRegistration.model_validate(stored)
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        stored = {"client_id": "c", "clientSecret": "shared-secret"}
+        with pytest.raises(ConfigurationError) as refusal:
+            ClientRegistration.model_validate(stored)
+
+        assert "shared-secret" not in str(refusal.value)
+
 
 class TestProviderConfig:
     def test_minimal_config(self) -> None:

@@ -1227,11 +1227,14 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
+class ClientRegistration(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """A client's credentials at one authorization server.
 
     RFC 7591 dynamic client registration issues them, and a caller that registered out of band or hosts a
     Client ID Metadata Document (CIMD) states its own.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and load a confidential client as a public one.
 
     NOTE: Credentials an authorization server issued are not valid at any other authorization server.
     A caller that persists them must store them keyed by the minting issuer (the ``issuer`` of the
