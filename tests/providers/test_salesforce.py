@@ -11,6 +11,11 @@ from apron_auth.providers.salesforce import BASE_SCOPES, preset
 
 
 class TestSalesforcePreset:
+    def test_refuses_a_host_carrying_a_port(self) -> None:
+        """The identity handler reads the host alone, so a port would be dropped without a word."""
+        with pytest.raises(ConfigurationError, match="bare hostname"):
+            preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host="login.salesforce.com:8443")
+
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
         assert isinstance(config, ProviderConfig)

@@ -8,6 +8,7 @@ been verified end-to-end.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -39,8 +40,9 @@ BASE_SCOPE_METADATA = [
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
-# The characters that make an instance host unsafe to put into a URL.
-_FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
+# The characters that make an instance host unsafe to put into a URL. A colon states a port, which
+# the identity handler drops when it reads the host, so a request would reach another port in silence.
+_FORBIDDEN_HOST_CHARS = frozenset("/:?#@ \t\n\r")
 
 # The path of the userinfo endpoint on the user's Salesforce instance.
 _SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
@@ -156,7 +158,7 @@ def preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str],
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     host: str = "login.salesforce.com",
@@ -192,7 +194,7 @@ def preset(
     if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
         msg = (
             "host must be a bare hostname such as 'login.salesforce.com', "
-            "with no scheme, path, credential or whitespace"
+            "with no scheme, port, path, credential or whitespace"
         )
         raise ConfigurationError(msg)
 
