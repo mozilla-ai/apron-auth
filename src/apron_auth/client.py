@@ -332,6 +332,18 @@ def _stated_error_member(response: httpx.Response | None) -> object:
     return body.get("error", "") if isinstance(body, dict) else ""
 
 
+def _states_an_access_token(response: Mapping[str, Any]) -> bool:
+    """Report whether a token-endpoint response carries the access token RFC 6749 section 5.1 requires.
+
+    Args:
+        response: The token-endpoint response to read.
+
+    Returns:
+        Whether the response states a non-empty access token.
+    """
+    return isinstance(access_token := response.get("access_token"), str) and bool(access_token)
+
+
 def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     """Return the user token a nested member of a token response carries.
 
@@ -553,7 +565,9 @@ class OAuthClient:
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
                 or was created further ahead of this client's clock than the allowed difference.
-            TokenExchangeError: If the token endpoint rejects the exchange.
+            TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
+                access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
+                its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
         self._config.validate_issuer(iss)
@@ -592,27 +606,11 @@ class OAuthClient:
             # NOTE: A response whose ID token fails a check may answer a request the client never made.
             await self._revoke_refused_tokens(response)
             raise
-        if not await self._states_an_access_token(response):
+        if not _states_an_access_token(response):
+            # The response issued these tokens to this exchange, so nothing else holds them.
+            await self._revoke_refused_tokens(response)
             raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.metadata)
-
-    async def _states_an_access_token(self, response: dict[str, Any]) -> bool:
-        """Report whether a token-endpoint response carries the access token it must, revoking it if not.
-
-        RFC 6749 section 5.1 requires the field, so a response stating no access token is no token
-        response, and this library can use nothing it carries. Whatever it does carry is revoked, so
-        a refusal leaves no token valid.
-
-        Args:
-            response: The token-endpoint response to read.
-
-        Returns:
-            Whether the response carries a non-empty access token.
-        """
-        if isinstance(access_token := response.get("access_token"), str) and access_token:
-            return True
-        await self._revoke_refused_tokens(response)
-        return False
 
     async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
@@ -699,7 +697,9 @@ class OAuthClient:
             The refreshed token set, which identity can be established from.
 
         Raises:
-            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached.
+            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, or if its
+                response states no access token, which RFC 6749 section 5.1 requires. A refused response's
+                tokens are not revoked here, because a refresh response can repeat the token it was sent.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
@@ -721,7 +721,9 @@ class OAuthClient:
             # traceback holds the request frame, whose locals carry the refresh token and the client secret.
             message, kind, error_code = failure
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
-        if not await self._states_an_access_token(response):
+        if not _states_an_access_token(response):
+            # NOTE: The tokens are not revoked here. A refresh response can repeat the refresh token
+            # it was sent, and revoking that would end a grant the caller still holds and can use.
             raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 

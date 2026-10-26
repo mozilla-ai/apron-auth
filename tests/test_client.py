@@ -2905,6 +2905,19 @@ class TestAResponseThatStatesNoAccessToken:
         with pytest.raises(TokenRefreshError):
             await client.refresh_token("refresh-xyz")
 
+    async def test_a_refused_refresh_keeps_the_grant_the_caller_still_holds(self, httpx_mock: HTTPXMock) -> None:
+        """A refresh response can repeat the token it was sent, so revoking it would end a usable grant."""
+        revoke_url = "https://provider.example.com/revoke"
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"ok": True, "refresh_token": "callers-own-refresh"}
+        )
+        client = OAuthClient(config=_make_oauth_config(revocation_url=revoke_url))
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert httpx_mock.get_requests(url=revoke_url) == []
+
     async def test_the_refusal_revokes_the_refresh_token_it_cannot_use(self, httpx_mock: HTTPXMock) -> None:
         """A refused response must leave no token valid, so the refusal runs where revocation can."""
         revoke_url = "https://provider.example.com/revoke"
