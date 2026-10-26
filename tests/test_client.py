@@ -3057,6 +3057,19 @@ class TestTheUserTokenAProviderNests:
         assert tokens.user_token.access_token == "xoxp-USER"
         assert tokens.user_token.extras == member
 
+    async def test_a_top_level_field_named_user_token_does_not_refuse_the_promotion(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The promotion deletes the nested member from the extras, which still hold a provider's own name."""
+        response = {**self.BOT_AND_USER, "user_token": {"sent": "by the provider"}}
+
+        tokens = await self._exchanged(httpx_mock, response)
+
+        assert tokens.user_token is not None
+        assert tokens.user_token.access_token == "xoxp-USER"
+        assert tokens.extras["user_token"] == {"sent": "by the provider"}
+        assert "authed_user" not in tokens.extras
+
     def test_every_named_string_member_maps_to_a_field_the_model_states(self) -> None:
         """A name that matches no field is refused as one, which would abort an exchange that issued a token."""
         assert set(_USER_TOKEN_STRINGS.values()) <= set(UserToken.model_fields)
