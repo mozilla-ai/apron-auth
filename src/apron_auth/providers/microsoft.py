@@ -35,7 +35,7 @@ from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 logger = logging.getLogger(__name__)
@@ -516,7 +516,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler | None]:
+) -> ProviderConfig:
     """Create a Microsoft OAuth provider configuration.
 
     Microsoft does not provide a token revocation endpoint. Scopes from
@@ -533,8 +533,8 @@ def preset(
             the ``prompt=consent`` default.
 
     Returns:
-        The provider configuration paired with ``None``, as Microsoft
-        exposes no revocation endpoint.
+        The provider configuration. It declares no revocation endpoint, because Microsoft
+        exposes none.
     """
     # Entra names the client in an ID token's audience by its lowercase GUID, and a GUID is case-insensitive.
     if _GUID_RE.match(client_id):
@@ -543,4 +543,4 @@ def preset(
     config = _PRESET.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, None
+    return config

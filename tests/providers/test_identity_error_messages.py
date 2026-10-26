@@ -73,7 +73,7 @@ HANDLERS: dict[str, _HandlerCase] = {
 
 async def _fetch_identity_error(name: str) -> IdentityFetchError:
     case = HANDLERS[name]
-    config, _ = case.preset(
+    config = case.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=case.scopes,

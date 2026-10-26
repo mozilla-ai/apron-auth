@@ -32,7 +32,7 @@ from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +256,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Notion OAuth provider configuration.
 
     Notion uses client_secret_basic auth. Revocation targets
@@ -273,9 +273,10 @@ def preset(
             the ``owner=user`` default.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
     config = _PRESET.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, NotionRevocationHandler()
+    return config

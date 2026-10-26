@@ -65,7 +65,7 @@ from apron_auth.providers._presets import Preset
 from apron_auth.scopes import scope_words
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
@@ -635,7 +635,7 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     user_scopes: list[str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
     Signing a person in is :func:`sign_in_preset` instead. Slack says each set of scopes must be
@@ -664,7 +664,8 @@ def preset(
             parameter, if any.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
         ConfigurationError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter
@@ -706,7 +707,7 @@ def preset(
     config = declared.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra
     )
-    return config, SlackRevocationHandler()
+    return config
 
 
 def sign_in_preset(
@@ -716,7 +717,7 @@ def sign_in_preset(
     scopes: list[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for Sign in with Slack.
 
     Installing an app in a workspace is :func:`preset` instead. Slack serves this flow from its
@@ -736,7 +737,8 @@ def sign_in_preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
         ConfigurationError: If ``scopes`` asks for a scope outside this flow, if ``extra_params``
@@ -765,4 +767,4 @@ def sign_in_preset(
     config = _SIGN_IN_PRESET.config(
         client_id, client_secret, scopes=requested, redirect_uri=redirect_uri, extra_params=merged_extra
     )
-    return config, SlackRevocationHandler()
+    return config

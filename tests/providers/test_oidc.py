@@ -34,7 +34,6 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     UrlField,
 )
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers.oidc import (
     OidcIdentityHandler,
     _bearer_error,
@@ -532,7 +531,7 @@ class TestHttpsRequirement:
 
     def test_preset_carries_a_waiver_from_the_metadata_into_the_config(self) -> None:
         """The config sends the client's secret to the token endpoint, so it records the waiver too."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -545,7 +544,7 @@ class TestHttpsRequirement:
 
     def test_preset_waives_a_plain_http_redirect_uri_with_the_opt_in(self) -> None:
         """The redirect URI is the config's own field, so the opt-in has to reach it."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -722,7 +721,7 @@ class TestPreset:
 
     def test_builds_a_config_from_discovered_metadata(self):
         """The config takes its endpoints and issuer from the metadata."""
-        config, revocation = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=["email", "profile"],
@@ -732,11 +731,11 @@ class TestPreset:
         assert config.authorize_url == AUTHORIZE_URL
         assert config.token_url == TOKEN_URL
         assert config.issuer == ISSUER
-        assert revocation is None
+        assert config.revocation_url is None
 
     def test_merges_the_openid_scope(self):
         """Without it the provider runs a plain OAuth flow and returns no ID token."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=["email"],
@@ -745,20 +744,20 @@ class TestPreset:
 
         assert "openid" in config.scopes
 
-    def test_pairs_a_revocation_handler_when_the_provider_advertises_one(self):
-        """A revocation endpoint in the metadata yields a standard RFC 7009 handler."""
-        _, revocation = preset(
+    def test_declares_a_revocation_endpoint_when_the_provider_advertises_one(self):
+        """The config names no provider, so the client revokes through RFC 7009 revocation."""
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
             metadata=metadata(revocation_url=f"{ISSUER}/protocol/openid-connect/revoke"),
         )
 
-        assert isinstance(revocation, StandardRevocationHandler)
+        assert config.revocation_url == f"{ISSUER}/protocol/openid-connect/revoke"
 
     def test_carries_iss_support_onto_the_config(self):
         """Advertised RFC 9207 ``iss`` support makes the callback ``iss`` required."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -769,7 +768,7 @@ class TestPreset:
 
     def test_enables_pkce_when_the_provider_advertises_s256(self):
         """PKCE is on when ``S256`` is advertised."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -804,7 +803,7 @@ class TestPreset:
 
     def test_enables_pkce_when_the_provider_advertises_nothing(self):
         """A provider that does not implement PKCE ignores the extra parameters."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -834,7 +833,7 @@ class TestPreset:
 
     def test_keeps_pkce_when_s256_appears_alongside_others(self):
         """Other advertised methods do not matter while ``S256`` is among them."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -845,7 +844,7 @@ class TestPreset:
 
     def test_prefers_client_secret_post_among_advertised_methods(self):
         """``client_secret_post`` wins when both secret methods are advertised."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -862,7 +861,7 @@ class TestPreset:
 
     def test_uses_basic_when_the_provider_advertises_no_method(self) -> None:
         """An absent list means ``client_secret_basic`` (OpenID Connect Discovery 1.0 section 3)."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -873,7 +872,7 @@ class TestPreset:
 
     def test_falls_back_to_basic_when_that_is_all_that_is_advertised(self):
         """``client_secret_basic`` is used when it is the only method on offer."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -919,7 +918,7 @@ class TestPreset:
 
     def test_asserts_no_domain_ownership(self):
         """OpenID Connect standardizes no domain-ownership claim."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -930,7 +929,7 @@ class TestPreset:
 
     def test_adds_no_extra_params_of_its_own(self):
         """No product-specific authorization parameters are added to a generic provider."""
-        config, _ = preset(
+        config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -997,7 +996,7 @@ class TestHandlerInference:
 
     def test_a_generic_config_on_a_claimed_host_names_no_provider(self, claimed_metadata: ServerMetadata) -> None:
         """A built-in handler would change ``provider`` and so every user's ``identity_key()``."""
-        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
+        config = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
 
         assert config.provider is None
 
@@ -1005,7 +1004,7 @@ class TestHandlerInference:
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
         """The client raises the unsupported-identity error and sends nothing to the provider."""
-        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
+        config = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
         client = OAuthClient(config)
 
         with pytest.raises(IdentityNotSupportedError):
@@ -1017,7 +1016,7 @@ class TestHandlerInference:
         self, claimed_metadata: ServerMetadata, httpx_mock: HTTPXMock
     ) -> None:
         """The explicit handler is the one source of identity for a config that names no provider."""
-        config, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
+        config = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=claimed_metadata)
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
         client = OAuthClient(config, identity_handler=identity_handler(claimed_metadata))
 
@@ -1047,7 +1046,7 @@ class TestOidcIdentity:
     @pytest.fixture
     def config(self) -> ProviderConfig:
         """The provider config the handler's tokens were issued under."""
-        built, _ = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
+        built = preset(client_id=CLIENT_ID, client_secret=CLIENT_SECRET, scopes=[], metadata=metadata())
         return built
 
     async def test_reads_identity_from_userinfo_and_the_id_token(
@@ -1685,7 +1684,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"}, is_reusable=True)
         other_issuer = "https://sso.other.example"
         other_metadata = metadata(issuer=other_issuer, userinfo_url=None)
-        other_config, _ = preset(
+        other_config = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -1890,7 +1889,7 @@ class TestOidcIdentity:
     ) -> None:
         """A handler for one issuer never sends another issuer's access token to its userinfo endpoint."""
         other_issuer = "https://other.example.com"
-        other, _ = preset(
+        other = preset(
             client_id=CLIENT_ID,
             client_secret=CLIENT_SECRET,
             scopes=[],
@@ -1908,7 +1907,7 @@ class TestOidcIdentity:
 
     async def test_validates_against_the_config_not_the_handler(self, handler: OidcIdentityHandler):
         """Issuer and client id come from the config, so the pair cannot disagree."""
-        other, _ = preset(
+        other = preset(
             client_id="another-client",
             client_secret=CLIENT_SECRET,
             scopes=[],

@@ -32,7 +32,7 @@ def linear_env() -> dict[str, str]:
 
 class TestLinearRefresh:
     async def test_refresh_returns_access_token(self, linear_env: dict[str, str]):
-        config, _ = linear.preset(
+        config = linear.preset(
             client_id=linear_env["client_id"],
             client_secret=linear_env["client_secret"],
             scopes=["read"],
@@ -45,12 +45,12 @@ class TestLinearRefresh:
 class TestLinearRevocation:
     async def test_revoke_access_token(self, linear_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = linear.preset(
+        config = linear.preset(
             client_id=linear_env["client_id"],
             client_secret=linear_env["client_secret"],
             scopes=["read"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(linear_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

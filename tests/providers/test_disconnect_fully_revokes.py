@@ -51,7 +51,7 @@ EXPECTED: dict[str, tuple[Callable[..., tuple[ProviderConfig, object]], bool]] =
 def test_preset_disconnect_fully_revokes_matches_fixture(name: str, expected: bool) -> None:
     """Each preset's ``disconnect_fully_revokes`` matches the pinned fixture."""
     factory, _ = EXPECTED[name]
-    config, _ = factory(
+    config = factory(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],

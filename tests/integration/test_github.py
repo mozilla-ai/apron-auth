@@ -32,7 +32,7 @@ def github_env() -> dict[str, str]:
 
 class TestGitHubRefresh:
     async def test_refresh_returns_access_token(self, github_env: dict[str, str]):
-        config, _ = github.preset(
+        config = github.preset(
             client_id=github_env["client_id"],
             client_secret=github_env["client_secret"],
             scopes=["repo"],
@@ -45,12 +45,12 @@ class TestGitHubRefresh:
 class TestGitHubRevocation:
     async def test_revoke_access_token(self, github_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = github.preset(
+        config = github.preset(
             client_id=github_env["client_id"],
             client_secret=github_env["client_secret"],
             scopes=["repo"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(github_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

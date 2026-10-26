@@ -15,7 +15,7 @@ from apron_auth import providers as providers_pkg
 from apron_auth.errors import ConfigurationError
 from apron_auth.mcp import to_provider_config
 from apron_auth.models import ClientRegistration, Provider, ProviderConfig, ProviderFacts, ServerMetadata
-from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler
+from apron_auth.protocols import IdentityHandler, RevocationHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -195,7 +195,7 @@ def _named_provider_module_names() -> list[str]:
 
 
 def _preset_config(module: ModuleType) -> ProviderConfig:
-    config, _ = module.preset(
+    config = module.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
@@ -340,24 +340,6 @@ def test_member_names_a_revocation_handler_its_module_defines(provider: Provider
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_member_names_the_handler_its_preset_returns(provider: Provider) -> None:
-    """A member that disagreed with its own preset would revoke through a different handler."""
-    config, handler = MODULES[provider].preset(
-        client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
-        scopes=["dummy"],
-    )
-    name = provider.revocation_handler_class_name
-
-    if name is not None:
-        assert type(handler).__name__ == name
-    elif config.revocation_url is None:
-        assert handler is None
-    else:
-        assert isinstance(handler, StandardRevocationHandler)
-
-
-@pytest.mark.parametrize("provider", list(Provider))
 def test_preset_sets_the_matching_member(provider: Provider) -> None:
     config = _preset_config(MODULES[provider])
     assert config.provider is provider
@@ -380,12 +362,12 @@ def test_preset_config_carries_the_member_data(provider: Provider) -> None:
 
 
 def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> None:
-    on_suffix, _ = salesforce.preset(
+    on_suffix = salesforce.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
     )
-    off_suffix, _ = salesforce.preset(
+    off_suffix = salesforce.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
@@ -425,7 +407,7 @@ def test_hand_built_config_has_no_provider() -> None:
 
 
 def test_a_generic_openid_config_has_no_provider() -> None:
-    config, _ = oidc.preset(
+    config = oidc.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["openid"],

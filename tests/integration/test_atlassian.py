@@ -32,7 +32,7 @@ def atlassian_env() -> dict[str, str]:
 
 class TestAtlassianRefresh:
     async def test_refresh_returns_access_token(self, atlassian_env: dict[str, str]):
-        config, _ = atlassian.preset(
+        config = atlassian.preset(
             client_id=atlassian_env["client_id"],
             client_secret=atlassian_env["client_secret"],
             scopes=["read:jira-work"],
@@ -45,12 +45,12 @@ class TestAtlassianRefresh:
 class TestAtlassianRevocation:
     async def test_revoke_access_token(self, atlassian_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = atlassian.preset(
+        config = atlassian.preset(
             client_id=atlassian_env["client_id"],
             client_secret=atlassian_env["client_secret"],
             scopes=["read:jira-work"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(atlassian_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

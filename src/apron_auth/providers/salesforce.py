@@ -16,12 +16,11 @@ import httpx
 from apron_auth._urls import matches_suffix
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 # The scopes the preset always requests, with the labels a consent screen shows.
@@ -166,7 +165,7 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     host: str = "login.salesforce.com",
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Salesforce OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically — Salesforce
@@ -188,7 +187,8 @@ def preset(
         host: The Salesforce login host, as described above.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
         ConfigurationError: If ``host`` is empty or is not a bare hostname. It does not repeat the
@@ -213,4 +213,4 @@ def preset(
     config = declared.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, StandardRevocationHandler()
+    return config

@@ -19,7 +19,7 @@ from pytest_httpx import HTTPXMock
 from apron_auth.errors import RevocationError
 from apron_auth.models import ProviderConfig
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
-from apron_auth.providers import github, google, hubspot, notion, slack
+from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 
 TOKEN = "token-SECRET-123"
 RAW_TEXT = "raw transport text"
@@ -33,19 +33,17 @@ def _standard() -> tuple[ProviderConfig, RevocationHandler]:
         token_url="https://provider.example.com/token",
         revocation_url="https://provider.example.com/revoke",
     )
-    return config, StandardRevocationHandler()
+    return config
 
 
-def _preset(
-    preset: Callable[..., tuple[ProviderConfig, RevocationHandler]], scopes: list[str]
-) -> Callable[[], tuple[ProviderConfig, RevocationHandler]]:
-    def build() -> tuple[ProviderConfig, RevocationHandler]:
+def _preset(preset: Callable[..., ProviderConfig], scopes: list[str]) -> Callable[[], ProviderConfig]:
+    def build() -> ProviderConfig:
         return preset(client_id="cid", client_secret="csecret", scopes=scopes)  # pragma: allowlist secret
 
     return build
 
 
-HANDLERS: dict[str, Callable[[], tuple[ProviderConfig, RevocationHandler]]] = {
+CONFIGS: dict[str, Callable[[], ProviderConfig]] = {
     "github": _preset(github.preset, ["read:user"]),
     "google": _preset(google.preset, ["openid"]),
     "hubspot": _preset(hubspot.preset, ["contacts"]),
@@ -62,7 +60,8 @@ async def _revocation_error(
         raise failure(f"{RAW_TEXT} for url {request.url}", request=request)
 
     httpx_mock.add_callback(refuse)
-    config, handler = HANDLERS[name]()
+    config = CONFIGS[name]()
+    handler = revocation_handler_for(config) or StandardRevocationHandler()
     with pytest.raises(RevocationError) as exc_info:
         await handler.revoke(TOKEN, config)
     return exc_info.value
@@ -76,7 +75,7 @@ async def _revocation_error(
         pytest.param(httpx.UnsupportedProtocol, "request failed", id="other"),
     ],
 )
-@pytest.mark.parametrize("name", list(HANDLERS))
+@pytest.mark.parametrize("name", list(CONFIGS))
 async def test_transport_error_reports_failure_kind_without_request_url(
     name: str, failure: type[httpx.RequestError], kind: str, httpx_mock: HTTPXMock
 ) -> None:
@@ -88,7 +87,7 @@ async def test_transport_error_reports_failure_kind_without_request_url(
     assert TOKEN not in str(error)
 
 
-@pytest.mark.parametrize("name", list(HANDLERS))
+@pytest.mark.parametrize("name", list(CONFIGS))
 async def test_error_does_not_carry_the_failed_request(name: str, httpx_mock: HTTPXMock) -> None:
     error = await _revocation_error(name, httpx_mock)
 
@@ -105,7 +104,8 @@ NON_ASCII_TOKEN = "token-SECRET-\u20ac"
 @pytest.mark.parametrize("name", sorted(SENDS_TOKEN_IN_HEADER))
 async def test_token_that_cannot_be_sent_is_a_request_failure(name: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(is_optional=True)
-    config, handler = HANDLERS[name]()
+    config = CONFIGS[name]()
+    handler = revocation_handler_for(config) or StandardRevocationHandler()
 
     with pytest.raises(RevocationError) as exc_info:
         await handler.revoke(NON_ASCII_TOKEN, config)
@@ -117,10 +117,11 @@ async def test_token_that_cannot_be_sent_is_a_request_failure(name: str, httpx_m
     assert httpx_mock.get_requests() == []
 
 
-@pytest.mark.parametrize("name", sorted(set(HANDLERS) - SENDS_TOKEN_IN_HEADER))
+@pytest.mark.parametrize("name", sorted(set(CONFIGS) - SENDS_TOKEN_IN_HEADER))
 async def test_token_that_is_not_ascii_reaches_the_endpoint(name: str, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(json={"ok": True})
-    config, handler = HANDLERS[name]()
+    config = CONFIGS[name]()
+    handler = revocation_handler_for(config) or StandardRevocationHandler()
 
     await handler.revoke(NON_ASCII_TOKEN, config)
 

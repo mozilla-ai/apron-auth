@@ -34,7 +34,7 @@ def microsoft_env() -> dict[str, str]:
 
 class TestMicrosoftRefresh:
     async def test_refresh_returns_access_token(self, microsoft_env: dict[str, str]):
-        config, _ = microsoft.preset(
+        config = microsoft.preset(
             client_id=microsoft_env["client_id"],
             client_secret=microsoft_env["client_secret"],
             scopes=["offline_access"],

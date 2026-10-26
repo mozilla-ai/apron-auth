@@ -53,9 +53,9 @@ def _config(provider: Provider | None, *, host: str = "provider.example.com", re
 
 
 @pytest.mark.parametrize("provider", list(Provider))
-def test_it_resolves_what_the_provider_preset_pairs_with_its_config(provider: Provider) -> None:
-    """The resolver must answer what the preset answers, or resolving would change where a token goes."""
-    config, paired = MODULES[provider].preset(
+def test_it_resolves_the_class_the_member_names_for_a_preset_config(provider: Provider) -> None:
+    """A preset's own endpoints must reach the handler its member names, or revocation changes hands."""
+    config = MODULES[provider].preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
@@ -63,7 +63,12 @@ def test_it_resolves_what_the_provider_preset_pairs_with_its_config(provider: Pr
 
     resolved = revocation_handler_for(config)
 
-    assert type(resolved) is type(paired)
+    if provider.revocation_handler_class_name is not None:
+        assert type(resolved).__name__ == provider.revocation_handler_class_name
+    elif config.revocation_url is None:
+        assert resolved is None
+    else:
+        assert isinstance(resolved, StandardRevocationHandler)
 
 
 @pytest.mark.parametrize("provider", [p for p in Provider if p.revocation_handler_class_name is not None])

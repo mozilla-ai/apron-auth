@@ -5,26 +5,28 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
+from apron_auth.providers import revocation_handler_for
 
 
 class TestTypeformPreset:
-    def test_returns_config_and_none_handler(self):
+    def test_returns_a_configuration_that_declares_no_revocation(self):
         from apron_auth.providers.typeform import preset
 
-        config, handler = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         assert isinstance(config, ProviderConfig)
-        assert handler is None
+        assert config.revocation_url is None
+        assert revocation_handler_for(config) is None
 
     def test_pkce_disabled(self):
         from apron_auth.providers.typeform import preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         assert config.use_pkce is False
 
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.typeform import preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         assert config.authorize_url == "https://api.typeform.com/oauth/authorize"
         assert config.token_url == "https://api.typeform.com/oauth/token"
         assert config.revocation_url is None
@@ -40,7 +42,7 @@ class TestTypeformIdentityHandler:
         httpx_mock.add_response(url="https://api.typeform.com/me", json=payload)
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -75,7 +77,7 @@ class TestTypeformIdentityHandler:
         )
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -90,7 +92,7 @@ class TestTypeformIdentityHandler:
         )
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Typeform identity"):
@@ -104,7 +106,7 @@ class TestTypeformIdentityHandler:
         )
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         handler = TypeformIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Typeform identity response"):
@@ -113,7 +115,7 @@ class TestTypeformIdentityHandler:
     async def test_granted_scope_without_accounts_read_raises_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read", "forms:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read", "forms:read"])
         material = IdentityMaterial(access_token="access-abc", scope="forms:read")
 
         with pytest.raises(IdentityScopeNotGrantedError, match="accounts:read"):
@@ -125,7 +127,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         config = config.model_copy(update={"scope_separator": ","})
         material = IdentityMaterial(access_token="access-abc", scope=blank_scope)
 
@@ -139,7 +141,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
 
         identity = await TypeformIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
@@ -153,7 +155,7 @@ class TestTypeformIdentityHandler:
             status_code=403,
             json={"code": "AUTHENTICATION_ERROR", "description": "The access token is incorrect"},
         )
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
 
         with pytest.raises(IdentityFetchError) as exc_info:
             await TypeformIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -163,7 +165,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["forms:read"])
         material = IdentityMaterial(access_token="access-abc", scope="forms:read accounts:read")
 
         identity = await TypeformIdentityHandler().fetch_identity(material, config)
@@ -174,7 +176,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         config = config.model_copy(update={"scope_separator": ","})
         material = IdentityMaterial(access_token="access-abc", scope="forms:read,accounts:read")
 
@@ -186,7 +188,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:write"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:write"])
         config = config.model_copy(update={"implicit_scopes": {"accounts:write": frozenset({"accounts:read"})}})
         material = IdentityMaterial(access_token="access-abc", scope="accounts:write")
 
@@ -202,7 +204,7 @@ class TestTypeformIdentityHandler:
             status_code=403,
             json={"code": "AUTHENTICATION_ERROR", "description": "The access token is incorrect"},
         )
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         material = IdentityMaterial(access_token="access-abc", scope="accounts:read")
 
         with pytest.raises(IdentityFetchError) as exc_info:
@@ -213,7 +215,7 @@ class TestTypeformIdentityHandler:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json=["not", "an", "object"])
-        config, _ = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
 
         with pytest.raises(IdentityFetchError, match="not a JSON object"):
             await TypeformIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)

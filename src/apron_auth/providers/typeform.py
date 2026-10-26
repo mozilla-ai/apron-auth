@@ -18,7 +18,7 @@ from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 # What this provider's preset states, beside the values its caller passes.
@@ -113,7 +113,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler | None]:
+) -> ProviderConfig:
     """Create a Typeform OAuth provider configuration.
 
     Typeform does not support PKCE and does not provide a revocation
@@ -127,10 +127,10 @@ def preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with ``None``, as Typeform
-        exposes no revocation endpoint.
+        The provider configuration. It declares no revocation endpoint, because Typeform
+        exposes none.
     """
     config = _PRESET.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, None
+    return config

@@ -32,7 +32,7 @@ def slack_env() -> dict[str, str]:
 
 class TestSlackRefresh:
     async def test_refresh_returns_access_token(self, slack_env: dict[str, str]):
-        config, _ = slack.preset(
+        config = slack.preset(
             client_id=slack_env["client_id"],
             client_secret=slack_env["client_secret"],
             scopes=["channels:read"],
@@ -45,12 +45,12 @@ class TestSlackRefresh:
 class TestSlackRevocation:
     async def test_revoke_access_token(self, slack_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = slack.preset(
+        config = slack.preset(
             client_id=slack_env["client_id"],
             client_secret=slack_env["client_secret"],
             scopes=["channels:read"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(slack_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

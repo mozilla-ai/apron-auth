@@ -21,7 +21,7 @@ from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 # The scopes the preset always requests, with the labels a consent screen shows.
@@ -170,7 +170,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Google OAuth provider configuration.
 
     Default extra_params include access_type=offline and prompt=consent
@@ -186,9 +186,10 @@ def preset(
             the ``access_type=offline`` and ``prompt=consent`` defaults.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
     config = _PRESET.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, GoogleRevocationHandler()
+    return config

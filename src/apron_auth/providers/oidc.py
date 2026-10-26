@@ -70,14 +70,13 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     UrlField,
 )
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from apron_auth.protocols import RevocationHandler, TransportFactory
+    from apron_auth.protocols import TransportFactory
 
 
 logger = logging.getLogger(__name__)
@@ -256,7 +255,7 @@ def preset(
     extra_params: dict[str, str] | None = None,
     metadata: ServerMetadata,
     allow_insecure_http: bool = False,
-) -> tuple[ProviderConfig, RevocationHandler | None]:
+) -> ProviderConfig:
     """Create a provider configuration from a discovered OpenID provider.
 
     It takes ``metadata`` as a parameter, so it stays synchronous and the caller can cache, validate or stub the fetch.
@@ -283,8 +282,8 @@ def preset(
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
     Returns:
-        The provider configuration, paired with a standard RFC 7009 revocation handler.
-        The handler is ``None`` when the provider advertises no revocation endpoint.
+        The provider configuration. It declares a revocation endpoint where the server
+        advertises one, and the client revokes through RFC 7009 revocation.
 
     Raises:
         ConfigurationError: If ``client_secret`` is empty,
@@ -352,7 +351,7 @@ def preset(
     )
     config = ProviderConfig.unsafe.allow_plain_http(*waived, **values) if waived else ProviderConfig(**values)
     # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
-    return config, StandardRevocationHandler() if metadata.revocation_url else None
+    return config
 
 
 def identity_handler(

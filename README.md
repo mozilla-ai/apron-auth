@@ -37,7 +37,7 @@ Presets bundle the endpoints, auth method, PKCE config, and revocation handler f
 ```python
 from apron_auth.providers import google
 
-config, revocation_handler = google.preset(
+config = google.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=["openid", "email", "profile"],
@@ -49,7 +49,7 @@ If you use [apron-tools](https://github.com/mozilla-ai/apron-tools), scopes come
 ```python
 from apron_tools.providers.google.gmail.scopes import CAPABILITY_GROUP as GMAIL
 
-config, revocation_handler = google.preset(
+config = google.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=GMAIL.scopes,
@@ -69,7 +69,7 @@ from apron_auth.providers import oidc
 
 metadata = await oidc.discover("https://sso.example.com/realms/acme")
 
-config, revocation_handler = oidc.preset(
+config = oidc.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=["email", "profile"],
@@ -438,7 +438,7 @@ domain-gated tenancy flow can reject incapable providers at startup,
 rather than discovering the gap at login time:
 
 ```python
-config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
+config = some_preset(client_id=..., client_secret=..., scopes=...)
 if domain_gated_signin and not config.can_assert_domain_ownership:
     raise ConfigError(
         "This provider cannot assert domain ownership; do not "
@@ -542,9 +542,13 @@ These merge with the defaults, which `OAuthClient.DEFAULT_RETRYABLE_ERROR_CODES`
 ### Token revocation
 
 ```python
-client = OAuthClient(config, revocation_handler=revocation_handler)
+client = OAuthClient(config)
 await client.revoke_token(tokens.access_token)
 ```
+
+The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to `OAuthClient` to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
+
+A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there.
 
 ### State management
 
@@ -716,14 +720,14 @@ Run the two flows separately. The install yields a bot token for workspace work,
 An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`.
 
 ```python
-config, revocation_handler = slack.preset(
+config = slack.preset(
     client_id="...",
     client_secret="...",
     scopes=["channels:read"],
     user_scopes=["chat:write"],
     redirect_uri="https://app.example.com/callback",
 )
-client = OAuthClient(config=config, revocation_handler=revocation_handler)
+client = OAuthClient(config=config)
 url, pending_state = await client.get_authorization_url()
 tokens = await client.exchange_code(
     code="authorization-code-from-callback",
@@ -762,8 +766,8 @@ Some providers' revocation endpoints fully remove the user's portal-level OAuth 
 ```python
 from apron_auth.providers import google, hubspot
 
-google_config, _ = google.preset(...)
-hubspot_config, _ = hubspot.preset(...)
+google_config = google.preset(...)
+hubspot_config = hubspot.preset(...)
 
 if google_config.disconnect_fully_revokes:
     ...  # tier 1: trigger revoke + re-auth in-app

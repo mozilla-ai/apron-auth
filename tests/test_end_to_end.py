@@ -175,7 +175,7 @@ class TestSlackUserScopesInAuthorizationUrl:
     async def test_user_scope_appears_in_url(self):
         from apron_auth.providers.slack import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="slack-id",
             client_secret="slack-secret",  # pragma: allowlist secret
             scopes=["channels:read"],
@@ -198,7 +198,7 @@ class TestSlackSignInFlow:
     def _client() -> OAuthClient:
         from apron_auth.providers.slack import sign_in_preset
 
-        config, _ = sign_in_preset(
+        config = sign_in_preset(
             client_id="slack-id",
             client_secret="slack-secret",  # pragma: allowlist secret
             scopes=["email"],

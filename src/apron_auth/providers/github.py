@@ -23,7 +23,7 @@ from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 logger = logging.getLogger(__name__)
@@ -303,7 +303,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a GitHub OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically — ``read:user`` and
@@ -319,7 +319,8 @@ def preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
     declared = replace(
         _PRESET,
@@ -329,4 +330,4 @@ def preset(
     config = declared.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, GitHubRevocationHandler()
+    return config

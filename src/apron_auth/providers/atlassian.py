@@ -17,12 +17,11 @@ import httpx
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+    pass
 
 
 logger = logging.getLogger(__name__)
@@ -262,7 +261,7 @@ def preset(
     scopes: list[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create an Atlassian OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically.
@@ -276,9 +275,10 @@ def preset(
             the ``audience`` and ``prompt=consent`` defaults.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
     config = _PRESET.config(
         client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
-    return config, StandardRevocationHandler()
+    return config
