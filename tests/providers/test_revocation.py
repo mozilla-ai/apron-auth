@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from types import ModuleType
 
+import httpx
 import pytest
 from pydantic import SecretStr
+from pytest_httpx import HTTPXMock
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import Provider, ProviderConfig
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
 from apron_auth.providers import (
@@ -37,8 +40,9 @@ MODULES: dict[Provider, ModuleType] = {
 }
 
 
-def _config(provider: Provider | None, *, host: str = "provider.example.com", revokes: bool = True) -> ProviderConfig:
-    """Build a config whose endpoints sit on one host, so the revocation host rule is satisfied."""
+def _config(provider: Provider | None, *, host: str | None = None, revokes: bool = True) -> ProviderConfig:
+    """Build a config whose endpoints sit on one of the provider's own hosts, as its preset's do."""
+    host = host or (provider.host_suffixes[0] if provider else "provider.example.com")
     return ProviderConfig(
         provider=provider,
         client_id="cid",
@@ -93,8 +97,41 @@ def test_a_config_with_no_revocation_endpoint_resolves_no_handler(provider: Prov
     assert revocation_handler_for(_config(provider, revokes=False)) is None
 
 
+def test_endpoints_outside_a_provider_that_names_a_class_are_refused() -> None:
+    """A provider's own handler may put the token in the request line, so it runs on that host alone."""
+    config = _config(Provider.HUBSPOT, host="oauth.acme.test")
+
+    with pytest.raises(ConfigurationError, match="HubSpot"):
+        revocation_handler_for(config)
+
+
+def test_endpoints_outside_a_provider_taking_rfc_7009_still_resolve() -> None:
+    """RFC 7009 states the token in the body and reads no host, so a deployment of its own keeps it."""
+    config = _config(Provider.SALESFORCE, host="login.mycompany.com")
+
+    assert isinstance(revocation_handler_for(config), StandardRevocationHandler)
+
+
 def test_a_config_that_names_no_provider_resolves_no_handler() -> None:
     assert revocation_handler_for(_config(None)) is None
+
+
+async def test_a_providers_own_handler_does_not_reach_the_transport_factory(httpx_mock: HTTPXMock) -> None:
+    """NOTE: No provider's own handler class accepts a factory, so a caller's DNS pinning is not applied."""
+    pinned: list[str] = []
+
+    def factory(url: str) -> httpx.MockTransport:
+        pinned.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+
+    config = _config(Provider.SLACK)
+    httpx_mock.add_response(url=config.revocation_url, json={"ok": True})
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    await handler.revoke("xoxb-token", config)
+
+    assert pinned == []
 
 
 def test_a_handler_is_built_per_call() -> None:

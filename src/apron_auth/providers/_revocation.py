@@ -5,7 +5,9 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
+from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
@@ -23,7 +25,8 @@ def revocation_handler_for(
     """Build the revocation handler of the provider ``config`` names.
 
     A provider that needs nothing of its own takes RFC 7009 revocation, and one that needs more
-    names a class of its own on its member.
+    names a class of its own on its member. Its endpoint hosts are a condition on that class alone,
+    because such a class may state the token where RFC 7009 does not, such as in the request line.
     NOTE: The named provider's module is imported on the first call that reaches it, so the first
     caller pays for that import.
 
@@ -38,6 +41,8 @@ def revocation_handler_for(
         declares no revocation endpoint.
 
     Raises:
+        ConfigurationError: If the named provider states a class of its own and either of the
+            config's OAuth endpoints is not one of that provider's hosts.
         TypeError: If the named provider states a class its module does not define, or one that
             does not revoke, which is a defect in this library rather than in the config.
     """
@@ -47,6 +52,14 @@ def revocation_handler_for(
     class_name = provider.revocation_handler_class_name
     if class_name is None:
         return StandardRevocationHandler(transport_factory=transport_factory)
+    if not oauth_hosts_match(config, provider.host_suffixes):
+        msg = (
+            f"The authorization and token endpoints must both be {provider.display_name} hosts for its "
+            f"own revocation handler to apply, because that handler may state the token where RFC 7009 "
+            f"does not. Pass a revocation handler that accepts these endpoints, or name no provider for "
+            f"a server that is not {provider.display_name}'s."
+        )
+        raise ConfigurationError(msg)
     # A registry would import every provider module. Resolving by name imports only the named one.
     module = import_module(f"{_PROVIDER_PACKAGE}.{provider.value}")
     handler_class = getattr(module, class_name, None)
