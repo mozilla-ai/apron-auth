@@ -3074,3 +3074,71 @@ class TestTheUserTokenAProviderNests:
             parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
         ]
         assert sorted(revoked) == ["xoxb-BOT", "xoxp-USER"]
+
+
+class TestARefusedResponseLeavesNoTokenValid:
+    """A token the library refuses must not stay valid, whatever the config says and wherever it sits."""
+
+    SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.access"
+    REVOKE_URL = "https://slack.com/api/auth.revoke"
+
+    def _revoked(self, httpx_mock: HTTPXMock) -> list[str]:
+        return [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+        ]
+
+    async def test_a_nested_token_is_revoked_without_a_named_provider(self, httpx_mock: HTTPXMock) -> None:
+        """A config built by hand names no provider, and the refusal must not depend on one."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            json={"ok": True, "app_id": "A1", "authed_user": {"id": "U1", "access_token": "xoxp-USER"}},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        assert self._revoked(httpx_mock) == ["xoxp-USER"]
+
+    async def test_a_refused_refresh_revokes_a_token_the_caller_never_held(self, httpx_mock: HTTPXMock) -> None:
+        """Sparing the token the caller presented does not justify sparing one it was just issued."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json={"ok": True, "refresh_token": "rotated-refresh"})
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert self._revoked(httpx_mock) == ["rotated-refresh"]
+
+    async def test_a_refused_refresh_still_spares_the_token_it_was_given(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            json={"ok": True, "refresh_token": "callers-own-refresh", "authed_user": {"access_token": "xoxp-NEW"}},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("callers-own-refresh")
+
+        assert self._revoked(httpx_mock) == ["xoxp-NEW"]

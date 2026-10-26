@@ -10,6 +10,7 @@ import secrets
 import time
 from collections.abc import Sequence
 from functools import cached_property
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
@@ -68,7 +69,10 @@ _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
 # The string members of a nested user token, each mapped to the UserToken field that states it.
-_USER_TOKEN_STRINGS = {"id": "user_id", "refresh_token": "refresh_token", "scope": "scope", "token_type": "token_type"}
+# NOTE: It decides which member of a response becomes a named credential, so it is read-only.
+_USER_TOKEN_STRINGS = MappingProxyType(
+    {"id": "user_id", "refresh_token": "refresh_token", "scope": "scope", "token_type": "token_type"}
+)
 
 
 class _TokenEndpointError(Exception):
@@ -612,12 +616,13 @@ class OAuthClient:
             raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.metadata)
 
-    async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
+    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: str | None = None) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
         Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
-        Every token the response carries is revoked at once, including one in the member a provider
-        issues the authorizing person's token in.
+        Every token the response carries is revoked at once, including one a provider issues inside a
+        member of its own.
+        A token given as ``keep`` is left alone, for a caller that still holds it and can still use it.
         Each revocation that fails, is canceled on its own, or is unfinished at the limit is logged.
         A log line names the token kind and the host, never error text.
         The error of a revocation unfinished at the limit is not raised.
@@ -627,15 +632,21 @@ class OAuthClient:
 
         Args:
             response: The refused token-endpoint response.
+            keep: A token the caller presented with the request, which stays valid.
 
         Raises:
             BaseException: If a revocation that finished before the limit raised an error that is not an exception,
                 which revoke_token does not convert.
         """
         tokens = _revocable_tokens(response)
-        nested_field = self._config.provider.user_token_response_field if self._config.provider else None
-        if nested_field is not None and isinstance(nested := response.get(nested_field), dict):
-            tokens += _revocable_tokens(nested, label_prefix="user ")
+        # A provider can issue a token inside a member of its own, as Slack does under authed_user.
+        # The sweep reads the response's shape rather than the config, because a config that names no
+        # provider is the one a caller builds by hand and its tokens are no less live.
+        for value in response.values():
+            if isinstance(value, dict):
+                tokens += _revocable_tokens(value, label_prefix="nested ")
+        if keep is not None:
+            tokens = [(label, token) for label, token in tokens if not _same_secret(token, keep)]
         if not tokens:
             return
         revocation_url = self._config.revocation_url
@@ -698,8 +709,8 @@ class OAuthClient:
 
         Raises:
             TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, or if its
-                response states no access token, which RFC 6749 section 5.1 requires. A refused response's
-                tokens are not revoked here, because a refresh response can repeat the token it was sent.
+                response states no access token, which RFC 6749 section 5.1 requires. A response refused for
+                stating none has every token revoked except ``refresh_token`` itself, which the caller holds.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
@@ -722,8 +733,9 @@ class OAuthClient:
             message, kind, error_code = failure
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
         if not _states_an_access_token(response):
-            # NOTE: The tokens are not revoked here. A refresh response can repeat the refresh token
-            # it was sent, and revoking that would end a grant the caller still holds and can use.
+            # A refresh response can repeat the token it was sent, which the caller still holds, so
+            # that one token is spared and everything the response issued beside it is revoked.
+            await self._revoke_refused_tokens(response, keep=refresh_token)
             raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 
