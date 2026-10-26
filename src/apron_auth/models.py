@@ -1086,7 +1086,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
         A revocation request carries a bearer token to ``revocation_url``. A token is revoked at the
         host that issued it, or at another of the named provider's own hosts, so any other host
-        would be sent a token it never issued.
+        would be sent a token it never issued. A subdomain of the issuing host is another host.
         NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
 
         Returns:
@@ -1101,7 +1101,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             return self
         token_host = urlparse(self.token_url).hostname or ""
         revocation_host = urlparse(self.revocation_url).hostname or ""
-        if matches_suffix(revocation_host, (token_host,)):
+        # A subdomain is a separate authority, so only the host itself answers for the token it issued.
+        if revocation_host and revocation_host == token_host:
             return self
         suffixes = self.provider.host_suffixes
         if matches_suffix(revocation_host, suffixes) and matches_suffix(token_host, suffixes):

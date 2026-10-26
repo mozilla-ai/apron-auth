@@ -1822,6 +1822,18 @@ class TestProviderConfigRevocationHost:
                 revocation_url="https://slack.com/api/auth.revoke",
             )
 
+    def test_refuses_a_subdomain_on_a_deployment_of_its_own(self) -> None:
+        """Without the provider's hosts to fall back on, only the one host that issued the token applies."""
+        with pytest.raises(ConfigurationError, match="names attacker.login.mycompany.com"):
+            ProviderConfig(
+                provider=Provider.SALESFORCE,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+                token_url="https://login.mycompany.com/services/oauth2/token",
+                revocation_url="https://attacker.login.mycompany.com/services/oauth2/revoke",
+            )
+
     def test_refuses_a_lookalike_of_the_token_endpoints_host(self) -> None:
         """The match is anchored on a label boundary, so a lookalike is not the same host."""
         with pytest.raises(ConfigurationError, match="revocation_url names evilslack.com"):
