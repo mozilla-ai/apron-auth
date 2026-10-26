@@ -21,7 +21,7 @@ from pydantic import (
 )
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
-from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
+from apron_auth._urls import AuthorityCredential, authority_credential, query_parameters, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -879,6 +879,26 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             raise ValueError(msg)
         if not is_public and self.client_secret is None:
             msg = f"client_secret is required unless token_endpoint_auth_method is '{TokenEndpointAuthMethod.NONE}'"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _authorize_url_does_not_set_reserved_parameters(self) -> ProviderConfig:
+        """Reject an authorization URL whose own query sets a parameter reserved for the request itself.
+
+        A reserved parameter binds the request to the client, or replaces the request as a whole.
+        The request drops such a parameter rather than sending it, so a configuration that sets one
+        never sends what it states, and refusing it at construction reports that before any sign-in.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If the ``authorize_url`` query holds a reserved authorization request parameter.
+        """
+        refused = sorted(RESERVED_AUTHORIZATION_PARAMS & query_parameters(self.authorize_url).keys())
+        if refused:
+            msg = f"authorize_url must not set reserved authorization request parameters: {', '.join(refused)}"
             raise ValueError(msg)
         return self
 

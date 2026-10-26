@@ -324,6 +324,61 @@ class TestProviderConfig:
         )
         assert config.extra_params == params
 
+    @pytest.mark.parametrize("name", sorted(RESERVED_AUTHORIZATION_PARAMS))
+    def test_the_authorize_url_query_cannot_set_a_reserved_parameter(self, name: str) -> None:
+        """The request drops such a parameter, so a config that sets one never sends what it states."""
+        with pytest.raises(ConfigurationError, match=f"reserved authorization request parameters: {name}"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url=f"https://provider.example.com/authorize?{name}=value",
+                token_url="https://provider.example.com/token",
+            )
+
+    @pytest.mark.parametrize("query", ["state=", "state"], ids=["an empty value", "no value at all"])
+    def test_the_authorize_url_query_cannot_set_a_reserved_parameter_without_a_value(self, query: str) -> None:
+        """A parameter stated with no value is still stated, and the request drops it just the same."""
+        with pytest.raises(ConfigurationError, match="reserved authorization request parameters: state"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url=f"https://provider.example.com/authorize?{query}",
+                token_url="https://provider.example.com/token",
+            )
+
+    def test_the_authorize_url_query_error_names_every_refused_parameter(self) -> None:
+        with pytest.raises(ConfigurationError, match="response_type, state"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize?state=fixed&prompt=consent&response_type=token",
+                token_url="https://provider.example.com/token",
+            )
+
+    def test_the_authorize_url_query_names_its_own_field_in_the_refusal(self) -> None:
+        """Two sources set these parameters, so the message says which one was refused."""
+        with pytest.raises(ConfigurationError, match="authorize_url"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url="https://provider.example.com/authorize?state=fixed",
+                token_url="https://provider.example.com/token",
+            )
+
+    @pytest.mark.parametrize(
+        "query",
+        ["scope=openid+email", "access_type=offline&prompt=consent", "ui_locales=en&ui_locales=fr"],
+        ids=["scope", "provider parameters", "a repeated parameter"],
+    )
+    def test_the_authorize_url_query_may_set_scope_and_provider_parameters(self, query: str) -> None:
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("test-secret"),
+            authorize_url=f"https://provider.example.com/authorize?{query}",
+            token_url="https://provider.example.com/token",
+        )
+        assert config.authorize_url.endswith(query)
+
     def test_reserved_parameters_are_the_ones_that_bind_or_replace_the_request(self) -> None:
         """Removing a name from the reserved set must be a deliberate change, not a silent one."""
         assert {

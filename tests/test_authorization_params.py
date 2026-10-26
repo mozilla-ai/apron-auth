@@ -13,8 +13,8 @@ from apron_auth.models import ProviderConfig
 
 _PACKAGE_ROOT = Path(apron_auth.__file__).parent
 
-# The module that owns the query, and the only one allowed to read the authorization URL's own query.
-_OWNING_MODULE = "_authorization_params.py"
+# The module that reads a URL's query, and the only one allowed to parse one.
+_OWNING_MODULE = "_urls.py"
 
 
 def _config(**overrides: object) -> ProviderConfig:
@@ -80,12 +80,34 @@ class TestThePrecedenceOfEachSource:
 class TestTheReservedParameters:
     @pytest.mark.parametrize("name", ["client_id", "nonce", "redirect_uri", "request", "state"])
     def test_a_reserved_parameter_is_dropped_from_the_authorization_urls_own_query(self, name: str) -> None:
-        """A reserved parameter binds the request to one client, so a configuration must not set it."""
-        config = _config(authorize_url=f"https://sso.example.com/auth?{name}=injected")
+        """A validated config cannot hold one, so the drop is what protects a config built without validation."""
+        config = ProviderConfig.model_construct(
+            client_id="cid",
+            client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+            authorize_url=f"https://sso.example.com/auth?{name}=injected",
+            token_url="https://sso.example.com/token",
+            scopes=[],
+            extra_params={},
+            resource=None,
+        )
 
         query = authorization_query(config, {})
 
         assert name not in query
+
+    @pytest.mark.parametrize("query", ["state=", "state"], ids=["an empty value", "no value at all"])
+    def test_a_reserved_parameter_with_no_value_is_dropped_too(self, query: str) -> None:
+        config = ProviderConfig.model_construct(
+            client_id="cid",
+            client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+            authorize_url=f"https://sso.example.com/auth?{query}",
+            token_url="https://sso.example.com/token",
+            scopes=[],
+            extra_params={},
+            resource=None,
+        )
+
+        assert "state" not in authorization_query(config, {})
 
     @pytest.mark.parametrize("name", ["client_id", "nonce", "redirect_uri", "request", "state"])
     def test_a_reserved_parameter_is_dropped_from_the_extra_parameters(self, name: str) -> None:
@@ -121,8 +143,8 @@ class TestTheScopeWordsOfASentParameter:
         assert sent_scope_words(query, "user_scope", ",") == {"openid"}
 
 
-def test_only_the_owning_module_reads_the_authorization_urls_own_query() -> None:
-    """Two readers of that query disagree as soon as one of them changes, so there is one reader."""
+def test_only_the_owning_module_parses_a_url_query() -> None:
+    """Two parsers of a query disagree as soon as one of them changes, so there is one parser."""
     readers = sorted(
         path.name for path in _PACKAGE_ROOT.rglob("*.py") if "parse_qs" in path.read_text(encoding="utf-8")
     )
