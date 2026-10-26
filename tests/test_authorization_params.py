@@ -95,6 +95,20 @@ class TestTheReservedParameters:
 
         assert name not in query
 
+    @pytest.mark.parametrize("query", ["state=", "state"], ids=["an empty value", "no value at all"])
+    def test_a_reserved_parameter_with_no_value_is_dropped_too(self, query: str) -> None:
+        config = ProviderConfig.model_construct(
+            client_id="cid",
+            client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+            authorize_url=f"https://sso.example.com/auth?{query}",
+            token_url="https://sso.example.com/token",
+            scopes=[],
+            extra_params={},
+            resource=None,
+        )
+
+        assert "state" not in authorization_query(config, {})
+
     @pytest.mark.parametrize("name", ["client_id", "nonce", "redirect_uri", "request", "state"])
     def test_a_reserved_parameter_is_dropped_from_the_extra_parameters(self, name: str) -> None:
         config = ProviderConfig.model_construct(

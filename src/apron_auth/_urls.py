@@ -159,6 +159,8 @@ def parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
 def query_parameters(url: str) -> dict[str, str | list[str]]:
     """Return the parameters ``url`` states in its query.
 
+    A parameter written with no value states that parameter with an empty value, because a rule
+    that reads the query decides on the names it holds rather than on what they are set to.
     A URL with no query, and one that cannot be read at all, both state no parameters.
 
     Args:
@@ -171,7 +173,10 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
         query = urlparse(url).query
     except ValueError:
         return {}
-    return {name: values[0] if len(values) == 1 else values for name, values in parse_qs(query).items()}
+    return {
+        name: values[0] if len(values) == 1 else values
+        for name, values in parse_qs(query, keep_blank_values=True).items()
+    }
 
 
 def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:

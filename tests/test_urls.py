@@ -123,6 +123,16 @@ class TestQueryParameters:
                 {"scope": "openid email"},
                 id="a value is decoded",
             ),
+            pytest.param(
+                "https://sso.example.com/auth?prompt=",
+                {"prompt": ""},
+                id="a parameter with an empty value is stated",
+            ),
+            pytest.param(
+                "https://sso.example.com/auth?prompt",
+                {"prompt": ""},
+                id="a parameter with no value at all is stated",
+            ),
         ],
     )
     def test_reads_what_the_query_states(self, url: str, expected: dict[str, str | list[str]]) -> None:

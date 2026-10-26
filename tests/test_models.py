@@ -335,6 +335,17 @@ class TestProviderConfig:
                 token_url="https://provider.example.com/token",
             )
 
+    @pytest.mark.parametrize("query", ["state=", "state"], ids=["an empty value", "no value at all"])
+    def test_the_authorize_url_query_cannot_set_a_reserved_parameter_without_a_value(self, query: str) -> None:
+        """A parameter stated with no value is still stated, and the request drops it just the same."""
+        with pytest.raises(ConfigurationError, match="reserved authorization request parameters: state"):
+            ProviderConfig(
+                client_id="test-client",
+                client_secret=SecretStr("test-secret"),
+                authorize_url=f"https://provider.example.com/authorize?{query}",
+                token_url="https://provider.example.com/token",
+            )
+
     def test_the_authorize_url_query_error_names_every_refused_parameter(self) -> None:
         with pytest.raises(ConfigurationError, match="response_type, state"):
             ProviderConfig(
