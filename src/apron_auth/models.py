@@ -170,6 +170,10 @@ class ProviderFacts:
         identity_handler_class_name: The name of the class in the provider's module that fetches identity.
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
+        revocation_handler_class_name: The name of the class in the provider's module that revokes a
+            token, named rather than held for the same reason. The class takes no constructor arguments.
+            ``None`` where the provider needs no revocation of its own, which leaves a config that
+            declares a revocation endpoint to the standard RFC 7009 revocation.
         scope_separator: The string the provider's scope parameter is joined with.
             NOTE: It must not be empty, as :attr:`ProviderConfig.scope_separator` requires.
         user_token_response_field: The member of a token-endpoint response that carries the token the
@@ -182,6 +186,7 @@ class ProviderFacts:
     display_name: str
     host_suffixes: tuple[str, ...]
     identity_handler_class_name: str
+    revocation_handler_class_name: str | None
     scope_separator: str
     user_token_response_field: str | None
 
@@ -230,6 +235,11 @@ class Provider(StrEnum):
         return self._facts.identity_handler_class_name
 
     @property
+    def revocation_handler_class_name(self) -> str | None:
+        """The name of the class in the provider's module that revokes a token."""
+        return self._facts.revocation_handler_class_name
+
+    @property
     def scope_separator(self) -> str:
         """The string the provider's scope parameter is joined with."""
         return self._facts.scope_separator
@@ -247,6 +257,7 @@ class Provider(StrEnum):
             display_name="Atlassian",
             host_suffixes=("auth.atlassian.com",),
             identity_handler_class_name="AtlassianIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -259,6 +270,7 @@ class Provider(StrEnum):
             display_name="GitHub",
             host_suffixes=("github.com",),
             identity_handler_class_name="GitHubIdentityHandler",
+            revocation_handler_class_name="GitHubRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -271,6 +283,7 @@ class Provider(StrEnum):
             display_name="Google",
             host_suffixes=("google.com", "googleapis.com"),
             identity_handler_class_name="GoogleIdentityHandler",
+            revocation_handler_class_name="GoogleRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -283,6 +296,7 @@ class Provider(StrEnum):
             display_name="HubSpot",
             host_suffixes=("api.hubapi.com", "app.hubspot.com"),
             identity_handler_class_name="HubSpotIdentityHandler",
+            revocation_handler_class_name="HubSpotRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -295,6 +309,7 @@ class Provider(StrEnum):
             display_name="Linear",
             host_suffixes=("linear.app",),
             identity_handler_class_name="LinearIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=",",
             user_token_response_field=None,
         ),
@@ -307,6 +322,7 @@ class Provider(StrEnum):
             display_name="Microsoft",
             host_suffixes=("login.microsoftonline.com",),
             identity_handler_class_name="MicrosoftIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -319,6 +335,7 @@ class Provider(StrEnum):
             display_name="Notion",
             host_suffixes=("api.notion.com",),
             identity_handler_class_name="NotionIdentityHandler",
+            revocation_handler_class_name="NotionRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -331,6 +348,7 @@ class Provider(StrEnum):
             display_name="Salesforce",
             host_suffixes=("salesforce.com",),
             identity_handler_class_name="SalesforceIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -343,6 +361,7 @@ class Provider(StrEnum):
             display_name="Slack",
             host_suffixes=("slack.com",),
             identity_handler_class_name="SlackIdentityHandler",
+            revocation_handler_class_name="SlackRevocationHandler",
             scope_separator=",",
             user_token_response_field="authed_user",
         ),
@@ -355,6 +374,7 @@ class Provider(StrEnum):
             display_name="Typeform",
             host_suffixes=("api.typeform.com",),
             identity_handler_class_name="TypeformIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),

@@ -15,7 +15,7 @@ from apron_auth import providers as providers_pkg
 from apron_auth.errors import ConfigurationError
 from apron_auth.mcp import to_provider_config
 from apron_auth.models import ClientRegistration, Provider, ProviderConfig, ProviderFacts, ServerMetadata
-from apron_auth.protocols import IdentityHandler
+from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -64,6 +64,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Atlassian",
         host_suffixes=("auth.atlassian.com",),
         identity_handler_class_name="AtlassianIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -73,6 +74,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="GitHub",
         host_suffixes=("github.com",),
         identity_handler_class_name="GitHubIdentityHandler",
+        revocation_handler_class_name="GitHubRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -82,6 +84,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Google",
         host_suffixes=("google.com", "googleapis.com"),
         identity_handler_class_name="GoogleIdentityHandler",
+        revocation_handler_class_name="GoogleRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -91,6 +94,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="HubSpot",
         host_suffixes=("api.hubapi.com", "app.hubspot.com"),
         identity_handler_class_name="HubSpotIdentityHandler",
+        revocation_handler_class_name="HubSpotRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -100,6 +104,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Linear",
         host_suffixes=("linear.app",),
         identity_handler_class_name="LinearIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=",",
         user_token_response_field=None,
     ),
@@ -109,6 +114,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Microsoft",
         host_suffixes=("login.microsoftonline.com",),
         identity_handler_class_name="MicrosoftIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -118,6 +124,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Notion",
         host_suffixes=("api.notion.com",),
         identity_handler_class_name="NotionIdentityHandler",
+        revocation_handler_class_name="NotionRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -127,6 +134,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Salesforce",
         host_suffixes=("salesforce.com",),
         identity_handler_class_name="SalesforceIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -136,6 +144,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Slack",
         host_suffixes=("slack.com",),
         identity_handler_class_name="SlackIdentityHandler",
+        revocation_handler_class_name="SlackRevocationHandler",
         scope_separator=",",
         user_token_response_field="authed_user",
     ),
@@ -145,6 +154,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Typeform",
         host_suffixes=("api.typeform.com",),
         identity_handler_class_name="TypeformIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -288,6 +298,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
     assert provider.disconnect_fully_revokes is pinned.disconnect_fully_revokes
     assert provider.scope_separator == pinned.scope_separator
     assert provider.identity_handler_class_name == pinned.identity_handler_class_name
+    assert provider.revocation_handler_class_name == pinned.revocation_handler_class_name
     assert provider.can_assert_domain_ownership is pinned.can_assert_domain_ownership
 
 
@@ -300,6 +311,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
         "display_name",
         "host_suffixes",
         "identity_handler_class_name",
+        "revocation_handler_class_name",
         "scope_separator",
         "user_token_response_field",
     ],
@@ -317,6 +329,32 @@ def test_member_names_an_identity_handler_its_module_defines(provider: Provider)
     handler_class = getattr(MODULES[provider], provider.identity_handler_class_name, None)
     assert handler_class is not None, f"{MODULES[provider].__name__} defines no {provider.identity_handler_class_name}."
     assert isinstance(handler_class(), IdentityHandler)
+
+
+@pytest.mark.parametrize("provider", [p for p in Provider if p.revocation_handler_class_name is not None])
+def test_member_names_a_revocation_handler_its_module_defines(provider: Provider) -> None:
+    name = provider.revocation_handler_class_name
+    handler_class = getattr(MODULES[provider], name, None)
+    assert handler_class is not None, f"{MODULES[provider].__name__} defines no {name}."
+    assert isinstance(handler_class(), RevocationHandler)
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+def test_member_names_the_handler_its_preset_returns(provider: Provider) -> None:
+    """A member that disagreed with its own preset would revoke through a different handler."""
+    config, handler = MODULES[provider].preset(
+        client_id="cid",
+        client_secret="csecret",  # pragma: allowlist secret
+        scopes=["dummy"],
+    )
+    name = provider.revocation_handler_class_name
+
+    if name is not None:
+        assert type(handler).__name__ == name
+    elif config.revocation_url is None:
+        assert handler is None
+    else:
+        assert isinstance(handler, StandardRevocationHandler)
 
 
 @pytest.mark.parametrize("provider", list(Provider))
