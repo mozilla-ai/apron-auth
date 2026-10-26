@@ -712,7 +712,7 @@ config, revocation_handler = slack.preset(
     client_id="...",
     client_secret="...",
     scopes=["channels:read"],
-    user_scopes=["identity.basic"],
+    user_scopes=["chat:write"],
     redirect_uri="https://app.example.com/callback",
 )
 client = OAuthClient(config=config, revocation_handler=revocation_handler)
@@ -736,9 +736,11 @@ if tokens.user_token is not None:
         await client.revoke_token(tokens.user_token.refresh_token)
 ```
 
+`OAuthClient.refresh_token` refreshes the token in `token_set.access_token`, so it cannot refresh the user token: Slack returns a refreshed user token nested as well, and a response carrying no token at the top level is refused. Refresh a rotating user token with Slack's own endpoint for now.
+
 Revoking the bot token alone leaves the person's token valid. Slack does not document whether revoking an access token affects the refresh token paired with it, so revoke every refresh token you hold and treat each revocation as best effort. Slack's own `apps.uninstall` removes every token of an installation, which no single revocation here promises.
 
-An install that asks for user scopes alone is refused, because Slack returns no token for the app itself in that case: sign a person in with `slack.sign_in_preset(...)`, whose token endpoint returns the person's token as `token_set.access_token`.
+`slack.preset(...)` refuses an install that asks for user scopes alone, because Slack then returns no token for the app itself and a token response carrying no access token is refused. Sign a person in with `slack.sign_in_preset(...)` instead, whose token endpoint returns the person's token as `token_set.access_token`.
 
 ## Scope reduction tiers
 
