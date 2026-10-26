@@ -705,6 +705,41 @@ Neither preset accepts a `scope` key in `extra_params`, because each builds that
 
 Run the two flows separately. The install yields a bot token for workspace work, and the sign-in yields a user token that identifies the person.
 
+An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`.
+
+```python
+config, revocation_handler = slack.preset(
+    client_id="...",
+    client_secret="...",
+    scopes=["channels:read"],
+    user_scopes=["identity.basic"],
+    redirect_uri="https://app.example.com/callback",
+)
+client = OAuthClient(config=config, revocation_handler=revocation_handler)
+url, pending_state = await client.get_authorization_url()
+tokens = await client.exchange_code(
+    code="authorization-code-from-callback",
+    state="state-from-callback",
+    pending_state=pending_state,
+)
+```
+
+Each token is revoked on its own, so disconnecting the install revokes both, and the refresh token beside each one where the install rotates its tokens:
+
+```python
+await client.revoke_token(tokens.access_token)
+if tokens.refresh_token is not None:
+    await client.revoke_token(tokens.refresh_token)
+if tokens.user_token is not None:
+    await client.revoke_token(tokens.user_token.access_token)
+    if tokens.user_token.refresh_token is not None:
+        await client.revoke_token(tokens.user_token.refresh_token)
+```
+
+Revoking the bot token alone leaves the person's token valid. Slack does not document whether revoking an access token affects the refresh token paired with it, so revoke every refresh token you hold and treat each revocation as best effort. Slack's own `apps.uninstall` removes every token of an installation, which no single revocation here promises.
+
+An install that asks for user scopes alone is refused, because Slack returns no token for the app itself in that case: sign a person in with `slack.sign_in_preset(...)`, whose token endpoint returns the person's token as `token_set.access_token`.
+
 ## Scope reduction tiers
 
 Some providers' revocation endpoints fully remove the user's portal-level OAuth grant; others only invalidate the current token while the grant lingers. apron-auth surfaces this difference as `ProviderConfig.disconnect_fully_revokes` so consumers can offer the right scope-reduction UX without rebuilding the per-provider truth table inline.
