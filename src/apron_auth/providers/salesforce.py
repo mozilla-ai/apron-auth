@@ -8,6 +8,7 @@ been verified end-to-end.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
@@ -40,9 +41,10 @@ BASE_SCOPE_METADATA = [
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
-# The characters that make an instance host unsafe to put into a URL. A colon states a port, which
-# the identity handler drops when it reads the host, so a request would reach another port in silence.
-_FORBIDDEN_HOST_CHARS = frozenset("/:?#@ \t\n\r")
+# A DNS name, which is what an instance host may be. Anything else is refused as a whole rather than
+# by forbidden character, because a character list missed a port and then a backslash, and a browser
+# reads a backslash in an authority as a separator while this library's host check does not.
+_DNS_NAME = re.compile(r"\A(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\Z")
 
 # The path of the userinfo endpoint on the user's Salesforce instance.
 _SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
@@ -191,10 +193,10 @@ def preset(
         ConfigurationError: If ``host`` is empty or is not a bare hostname. It does not repeat the
             value it refused, because a rejected authority can carry a credential.
     """
-    if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
+    if not _DNS_NAME.fullmatch(host):
         msg = (
             "host must be a bare hostname such as 'login.salesforce.com', "
-            "with no scheme, port, path, credential or whitespace"
+            "stating DNS labels alone with no scheme, port, path, credential or whitespace"
         )
         raise ConfigurationError(msg)
 

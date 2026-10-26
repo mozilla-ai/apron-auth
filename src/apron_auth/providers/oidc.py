@@ -72,6 +72,7 @@ from apron_auth.models import (
 )
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
+from apron_auth.providers._presets import scope_sequence
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -306,7 +307,7 @@ def preset(
     except OidcDiscoveryError as exc:
         raise ConfigurationError(str(exc)) from exc
 
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scope_sequence(scopes, "scopes")))
     methods = metadata.code_challenge_methods
     if methods and "S256" not in methods:
         msg = "OpenID provider advertises no S256 code-challenge method; PKCE cannot be negotiated"

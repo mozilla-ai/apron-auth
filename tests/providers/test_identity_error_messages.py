@@ -46,7 +46,7 @@ _OIDC_METADATA = ServerMetadata(
 
 
 class _HandlerCase(NamedTuple):
-    preset: Callable[..., tuple[ProviderConfig, object]]
+    preset: Callable[..., ProviderConfig]
     scopes: list[str]
     handler: Callable[[], IdentityHandler]
 

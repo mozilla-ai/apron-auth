@@ -179,8 +179,11 @@ _VALID_KWARGS: dict[str, dict[str, Any]] = {
 
 
 def _valid_kwargs(name: str) -> dict[str, Any]:
-    """Return the keywords a preset accepts, so only the value under test differs between them."""
-    return _VALID_KWARGS.get(name, {"scopes": ["dummy"]})
+    """Return the keywords a preset accepts, so only the value under test differs between them.
+
+    The mapping is fresh per call, because a caller sets the value under test on it.
+    """
+    return dict(_VALID_KWARGS.get(name, {"scopes": ["dummy"]}))
 
 
 def _named_provider_module_names() -> list[str]:
@@ -234,6 +237,16 @@ def test_the_named_provider_modules_are_exactly_the_members() -> None:
         f"member whose value is the module name. Modules with no member: {sorted(discovered - members)}. "
         f"Members with no module: {sorted(members - discovered)}."
     )
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_refuses_a_bare_string_of_scopes(name: str) -> None:
+    """A string is a sequence of characters, so taking one would request each letter as a scope."""
+    kwargs = _valid_kwargs(name)
+    kwargs["scopes"] = " ".join(kwargs["scopes"])
+
+    with pytest.raises(ConfigurationError, match="scopes must be a sequence of scope strings"):
+        PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))

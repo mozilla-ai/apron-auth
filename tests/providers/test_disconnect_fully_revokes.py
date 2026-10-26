@@ -33,7 +33,7 @@ from apron_auth.providers import (
     typeform,
 )
 
-EXPECTED: dict[str, tuple[Callable[..., tuple[ProviderConfig, object]], bool]] = {
+EXPECTED: dict[str, tuple[Callable[..., ProviderConfig], bool]] = {
     "google": (google.preset, True),
     "github": (github.preset, True),
     "slack": (slack.preset, False),

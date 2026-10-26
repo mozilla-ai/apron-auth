@@ -7,12 +7,34 @@ from typing import TYPE_CHECKING
 
 from pydantic import SecretStr
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import ProviderConfig, TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from apron_auth.models import Provider, ScopeMetadata
+
+
+def scope_sequence(scopes: Sequence[str] | None, field: str) -> list[str]:
+    """Return ``scopes`` as a list, refusing a bare string.
+
+    A string is itself a sequence of characters, so taking one would request each letter as a scope.
+
+    Args:
+        scopes: The scopes a caller stated, or ``None`` where the parameter is optional.
+        field: The parameter's name, for the refusal to name.
+
+    Returns:
+        The scopes as a list, empty where the caller stated none.
+
+    Raises:
+        ConfigurationError: If ``scopes`` is a string.
+    """
+    if isinstance(scopes, str):
+        msg = f"{field} must be a sequence of scope strings, not one string"
+        raise ConfigurationError(msg)
+    return list(scopes or [])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -84,7 +106,7 @@ class Preset:
             token_url=self.token_url,
             revocation_url=self.revocation_url,
             redirect_uri=redirect_uri,
-            scopes=self._requested_scopes(scopes),
+            scopes=self._requested_scopes(scope_sequence(scopes, "scopes")),
             use_pkce=self.use_pkce,
             token_endpoint_auth_method=self.token_endpoint_auth_method,
             extra_params={**self.default_extra_params, **(extra_params or {})},

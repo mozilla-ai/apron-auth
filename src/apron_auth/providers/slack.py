@@ -62,7 +62,7 @@ from apron_auth.models import (
     TenancyContext,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
-from apron_auth.providers._presets import Preset
+from apron_auth.providers._presets import Preset, scope_sequence
 from apron_auth.scopes import scope_words
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
@@ -668,6 +668,8 @@ def preset(
         ConfigurationError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter
             asks for the ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
+    scopes = scope_sequence(scopes, "scopes")
+    user_scopes = scope_sequence(user_scopes, "user_scopes")
     if not scopes and not user_scopes:
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
         raise ConfigurationError(msg)
@@ -711,7 +713,7 @@ def sign_in_preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str] | None = None,
+    scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> ProviderConfig:
@@ -750,7 +752,7 @@ def sign_in_preset(
         )
         raise ConfigurationError(msg)
 
-    requested = list(scopes or [])
+    requested = scope_sequence(scopes, "scopes")
     outside_this_flow = sorted(scope_words(requested, Provider.SLACK.scope_separator) - _SLACK_SIGN_IN_SCOPES)
     if outside_this_flow:
         msg = (

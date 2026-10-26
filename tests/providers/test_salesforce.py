@@ -11,10 +11,33 @@ from apron_auth.providers.salesforce import BASE_SCOPES, preset
 
 
 class TestSalesforcePreset:
-    def test_refuses_a_host_carrying_a_port(self) -> None:
-        """The identity handler reads the host alone, so a port would be dropped without a word."""
+    # A host that is not a DNS name, each of which once passed a blocklist of forbidden characters.
+    REFUSED_HOSTS = [
+        "login.salesforce.com:8443",
+        "evil.example\\login.salesforce.com",
+        "login.salesforce.com%2f.evil.example",
+        "login.salesforce.com/path",
+        "operator:sesame@login.salesforce.com",
+        "[::1]",
+        "login.salesforce.com\u3002evil.example",
+        "",
+        "-login.salesforce.com",
+        "login..salesforce.com",
+    ]
+
+    @pytest.mark.parametrize("host", REFUSED_HOSTS, ids=lambda h: repr(h))
+    def test_refuses_a_host_that_is_not_a_dns_name(self, host: str) -> None:
+        """A character blocklist missed a port and a backslash, so the host is read as a name instead."""
         with pytest.raises(ConfigurationError, match="bare hostname"):
-            preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host="login.salesforce.com:8443")
+            preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host=host)
+
+    @pytest.mark.parametrize(
+        "host", ["login.salesforce.com", "test.salesforce.com", "acme.my.salesforce.com", "login.mycompany.com"]
+    )
+    def test_accepts_a_dns_name(self, host: str) -> None:
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host=host)
+
+        assert config.authorize_url.startswith(f"https://{host}/")
 
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
