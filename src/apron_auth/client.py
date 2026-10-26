@@ -425,7 +425,7 @@ class OAuthClient:
     async def get_authorization_url(
         self,
         redirect_uri: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> tuple[str, OAuthPendingState]:
         """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
 
@@ -434,7 +434,7 @@ class OAuthClient:
 
         Args:
             redirect_uri: Override the redirect URI from ``ProviderConfig``.
-            metadata: Opaque caller context attached to the pending state.
+            context: Opaque caller context attached to the pending state.
 
         Returns:
             A tuple of the authorization URL and the pending state.
@@ -503,7 +503,7 @@ class OAuthClient:
             code_verifier=code_verifier,
             nonce=nonce,
             created_at=time.time(),
-            metadata=metadata or {},
+            context=context or {},
         )
 
         if self._state_store is not None:
@@ -614,7 +614,7 @@ class OAuthClient:
             # The response issued these tokens to this exchange, so nothing else holds them.
             await self._revoke_refused_tokens(response)
             raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
-        return self._parse_token_response(response, context=pending.metadata)
+        return self._parse_token_response(response, context=pending.context)
 
     async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: str | None = None) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.

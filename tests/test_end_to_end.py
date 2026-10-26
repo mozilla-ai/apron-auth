@@ -109,8 +109,8 @@ class TestFullOAuthFlow:
         assert result is True
 
 
-class TestMetadataFlowsThroughStateStore:
-    async def test_metadata_survives_save_and_consume(self, httpx_mock: HTTPXMock):
+class TestContextFlowsThroughStateStore:
+    async def test_context_survives_save_and_consume(self, httpx_mock: HTTPXMock):
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -125,17 +125,17 @@ class TestMetadataFlowsThroughStateStore:
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
-        assert pending_state.metadata == meta
+        assert pending_state.context == meta
 
-        # Consume from store and verify metadata survived round-trip.
+        # Consume from store and verify the context survived round-trip.
         consumed = await store.consume(pending_state.state)
         assert consumed is not None
-        assert consumed.metadata == meta
-        assert consumed.metadata["user_id"] == "U123"
+        assert consumed.context == meta
+        assert consumed.context["user_id"] == "U123"
 
-    async def test_metadata_flows_through_to_token_set_context(self, httpx_mock: HTTPXMock):
+    async def test_context_flows_through_to_token_set_context(self, httpx_mock: HTTPXMock):
         config = ProviderConfig(
             client_id="test-client",
             client_secret=SecretStr("test-secret"),
@@ -150,7 +150,7 @@ class TestMetadataFlowsThroughStateStore:
         meta = {"user_id": "U123", "tenant_id": "T456"}
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
 
         httpx_mock.add_response(

@@ -1310,7 +1310,7 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
         metadata: Additional fields from the provider's token endpoint
             response that are not captured by the named attributes above
             (e.g. Slack's ``team_id``).  Populated automatically.
-        context: Caller-supplied context carried opaquely from ``OAuthPendingState.metadata``.
+        context: Caller-supplied context carried opaquely from ``OAuthPendingState.context``.
             It is empty for a token set that does not come from a code exchange.
     """
 
@@ -1667,7 +1667,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
         code_verifier: PKCE code verifier, if PKCE is enabled.
         nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
         created_at: Unix timestamp when this state was created.
-        metadata: Opaque caller-supplied context that apron-auth carries but never interprets.
+        context: Opaque caller-supplied context that apron-auth carries but never interprets.
             Attach application-specific data such as ``user_id`` or ``tenant_id`` here.
     """
 
@@ -1676,7 +1676,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
     code_verifier: str | None = None
     nonce: str | None = None
     created_at: float
-    metadata: dict[str, Any] = {}
+    context: dict[str, Any] = {}
 
     # No transport rule: the redirect URI is the one a config already stated, and a config that
     # accepts plain HTTP for it records no waiver here to read.

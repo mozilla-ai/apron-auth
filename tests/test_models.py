@@ -1977,35 +1977,35 @@ class TestOAuthPendingState:
         )
         assert state.code_verifier is None
 
-    def test_metadata_defaults_to_empty_dict(self) -> None:
+    def test_context_defaults_to_empty_dict(self) -> None:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
         )
-        assert state.metadata == {}
+        assert state.context == {}
 
-    def test_metadata_round_trips(self) -> None:
+    def test_context_round_trips(self) -> None:
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata=meta,
+            context=meta,
         )
-        assert state.metadata == meta
-        assert state.metadata["user_id"] == "U123"
+        assert state.context == meta
+        assert state.context["user_id"] == "U123"
 
-    def test_metadata_isolated_from_caller_mutation(self) -> None:
+    def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata=original,
+            context=original,
         )
         original["user_id"] = "mutated"
-        assert state.metadata["user_id"] == "U123"
+        assert state.context["user_id"] == "U123"
 
     def test_frozen(self) -> None:
         state = OAuthPendingState(

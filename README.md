@@ -570,12 +570,12 @@ tokens = await client.exchange_code(code="...", state="state-from-callback")
 
 #### Carrying context through the flow
 
-If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `metadata` when building the authorization URL. apron-auth carries it opaquely on the pending state, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
+If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `context` when building the authorization URL. apron-auth carries it opaquely on `OAuthPendingState.context`, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
 
 ```python
 url, pending_state = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
-    metadata={"user_id": "U123", "tenant_id": "T456"},
+    context={"user_id": "U123", "tenant_id": "T456"},
 )
 
 # On callback, context comes back on the TokenSet.

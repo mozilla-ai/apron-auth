@@ -262,25 +262,25 @@ class TestGetAuthorizationUrl:
         )
         assert pending_state is not None
 
-    async def test_metadata_defaults_to_empty(self):
+    async def test_context_defaults_to_empty(self):
         config = _make_config()
         client = OAuthClient(config=config)
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
-        assert pending_state.metadata == {}
+        assert pending_state.context == {}
 
-    async def test_metadata_attached_to_pending_state(self):
+    async def test_context_attached_to_pending_state(self):
         config = _make_config()
         client = OAuthClient(config=config)
         meta = {"user_id": "U123", "tenant_id": "T456"}
         _, pending_state = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
-        assert pending_state.metadata == meta
+        assert pending_state.context == meta
 
-    async def test_metadata_saved_to_state_store(self):
+    async def test_context_saved_to_state_store(self):
         config = _make_config()
         store = AsyncMock()
         store.save = AsyncMock()
@@ -288,10 +288,10 @@ class TestGetAuthorizationUrl:
         meta = {"user_id": "U123"}
         await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
-            metadata=meta,
+            context=meta,
         )
         saved_state = store.save.call_args[0][0]
-        assert saved_state.metadata == meta
+        assert saved_state.context == meta
 
     async def test_state_is_unique_per_call(self):
         config = _make_config()
@@ -533,7 +533,7 @@ class TestExchangeCode:
             redirect_uri="https://app.example.com/callback",
             code_verifier="stored-verifier",
             created_at=time.time(),
-            metadata={"user_id": "U123", "tenant_id": "T456"},
+            context={"user_id": "U123", "tenant_id": "T456"},
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=pending)
@@ -542,7 +542,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         assert tokens.context == {"user_id": "U123", "tenant_id": "T456"}
 
-    async def test_exchange_auto_consume_empty_metadata(self, httpx_mock):
+    async def test_exchange_auto_consume_empty_context(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -559,7 +559,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(code="auth-code-123", state="stored-state")
         assert tokens.context == {}
 
-    async def test_exchange_pending_state_without_metadata_has_empty_context(self, httpx_mock: HTTPXMock) -> None:
+    async def test_exchange_pending_state_without_context_has_empty_context(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -573,7 +573,7 @@ class TestExchangeCode:
         )
         assert tokens.context == {}
 
-    async def test_exchange_pending_state_metadata_becomes_context(self, httpx_mock: HTTPXMock) -> None:
+    async def test_exchange_pending_state_context_is_carried_onto_the_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "token_type": "Bearer"},
@@ -582,7 +582,7 @@ class TestExchangeCode:
         tokens = await client.exchange_code(
             code="auth-code-123",
             state="pending-state",
-            pending_state=_pending_state(metadata={"user_id": "U123"}),
+            pending_state=_pending_state(context={"user_id": "U123"}),
         )
         assert tokens.context == {"user_id": "U123"}
 
@@ -824,7 +824,7 @@ class TestExchangeCode:
             state="stored-state",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
-            metadata={"user_id": "caller-U"},
+            context={"user_id": "caller-U"},
         )
         store = AsyncMock()
         store.consume = AsyncMock(return_value=pending)
