@@ -172,6 +172,9 @@ class ProviderFacts:
             A member names it rather than holding it, because every provider module imports this one.
         scope_separator: The string the provider's scope parameter is joined with.
             NOTE: It must not be empty, as :attr:`ProviderConfig.scope_separator` requires.
+        user_token_response_field: The member of a token-endpoint response that carries the token the
+            provider issued for the authorizing person, beside the application's own.
+            ``None`` where the provider issues one token per response.
     """
 
     can_assert_domain_ownership: bool
@@ -180,6 +183,7 @@ class ProviderFacts:
     host_suffixes: tuple[str, ...]
     identity_handler_class_name: str
     scope_separator: str
+    user_token_response_field: str | None
 
 
 @unique
@@ -230,6 +234,11 @@ class Provider(StrEnum):
         """The string the provider's scope parameter is joined with."""
         return self._facts.scope_separator
 
+    @property
+    def user_token_response_field(self) -> str | None:
+        """The member of a token-endpoint response carrying the token issued for the authorizing person."""
+        return self._facts.user_token_response_field
+
     ATLASSIAN = (
         "atlassian",
         ProviderFacts(
@@ -239,6 +248,7 @@ class Provider(StrEnum):
             host_suffixes=("auth.atlassian.com",),
             identity_handler_class_name="AtlassianIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     GITHUB = (
@@ -250,6 +260,7 @@ class Provider(StrEnum):
             host_suffixes=("github.com",),
             identity_handler_class_name="GitHubIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     GOOGLE = (
@@ -261,6 +272,7 @@ class Provider(StrEnum):
             host_suffixes=("google.com", "googleapis.com"),
             identity_handler_class_name="GoogleIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     HUBSPOT = (
@@ -272,6 +284,7 @@ class Provider(StrEnum):
             host_suffixes=("api.hubapi.com", "app.hubspot.com"),
             identity_handler_class_name="HubSpotIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     LINEAR = (
@@ -283,6 +296,7 @@ class Provider(StrEnum):
             host_suffixes=("linear.app",),
             identity_handler_class_name="LinearIdentityHandler",
             scope_separator=",",
+            user_token_response_field=None,
         ),
     )
     MICROSOFT = (
@@ -294,6 +308,7 @@ class Provider(StrEnum):
             host_suffixes=("login.microsoftonline.com",),
             identity_handler_class_name="MicrosoftIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     NOTION = (
@@ -305,6 +320,7 @@ class Provider(StrEnum):
             host_suffixes=("api.notion.com",),
             identity_handler_class_name="NotionIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     SALESFORCE = (
@@ -316,6 +332,7 @@ class Provider(StrEnum):
             host_suffixes=("salesforce.com",),
             identity_handler_class_name="SalesforceIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
     SLACK = (
@@ -327,6 +344,7 @@ class Provider(StrEnum):
             host_suffixes=("slack.com",),
             identity_handler_class_name="SlackIdentityHandler",
             scope_separator=",",
+            user_token_response_field="authed_user",
         ),
     )
     TYPEFORM = (
@@ -338,6 +356,7 @@ class Provider(StrEnum):
             host_suffixes=("api.typeform.com",),
             identity_handler_class_name="TypeformIdentityHandler",
             scope_separator=" ",
+            user_token_response_field=None,
         ),
     )
 
@@ -1237,6 +1256,41 @@ class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
+class UserToken(_RefusesWithoutRepeating, frozen=True):
+    """The token a provider issues for the person who authorized an application, beside the application's own.
+
+    A provider that grants an application its own token and the authorizing person a second one
+    returns the person's token in a member of its own, as Slack does in ``authed_user``.
+    This model is that token, so a caller can read, refresh and revoke it by name.
+
+    NOTE: A nested member stating no access token carries no user token, so the token set states
+    none and keeps the member in its metadata.
+
+    Attributes:
+        access_token: The access token issued for the person.
+        token_type: Token type, as the provider states it.
+        refresh_token: The refresh token for this token, where the provider rotates it.
+        expires_in: Token lifetime in seconds as reported by the provider.
+        expires_at: Absolute expiry time as a Unix timestamp.
+        scope: Scopes granted for this token, delimited by the provider's scope separator.
+        user_id: The provider's identifier for the person the token acts as.
+        metadata: Fields of the provider's nested member that the named attributes above do not
+            capture. Populated automatically.
+    """
+
+    access_token: str
+    token_type: str = "Bearer"
+    refresh_token: str | None = None
+    expires_in: int | None = None
+    expires_at: float | None = None
+    scope: str | None = None
+    user_id: str | None = None
+    metadata: dict[str, Any] = {}
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
+
 class TokenSet(_RefusesWithoutRepeating, frozen=True):
     """Token data returned from code exchange or refresh.
 
@@ -1248,6 +1302,8 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted by the provider, delimited by the
             provider's scope separator.
+        user_token: The token the provider issued for the authorizing person, where it issues one
+            beside the application's own. Populated automatically.
         metadata: Additional fields from the provider's token endpoint
             response that are not captured by the named attributes above
             (e.g. Slack's ``team_id``).  Populated automatically.
@@ -1261,6 +1317,7 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True):
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
+    user_token: UserToken | None = None
     metadata: dict[str, Any] = {}
     context: dict[str, Any] = {}
 

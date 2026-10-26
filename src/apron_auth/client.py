@@ -43,6 +43,7 @@ from apron_auth.models import (
     IdentityMaterial,
     OAuthPendingState,
     UrlField,
+    UserToken,
 )
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
@@ -65,6 +66,11 @@ _NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
 
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
+
+# The members of a nested user token that UserToken names, rather than carrying in its metadata.
+_USER_TOKEN_FIELDS = frozenset(
+    {"access_token", "expires_at", "expires_in", "id", "refresh_token", "scope", "token_type"}
+)
 
 
 class _TokenEndpointError(Exception):
@@ -229,6 +235,22 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     raise StateError(msg)
 
 
+def _expires_at(token: Mapping[str, Any]) -> float | None:
+    """Return the absolute expiry a token states, derived from its lifetime where it states no expiry.
+
+    Args:
+        token: A token-endpoint response, or a member of one that carries a token of its own.
+
+    Returns:
+        The expiry as a Unix timestamp, or ``None`` where the token states neither an expiry nor a lifetime.
+    """
+    expires_at = token.get("expires_at")
+    expires_in = token.get("expires_in")
+    if expires_at is None and expires_in is not None:
+        return time.time() + int(expires_in)
+    return expires_at
+
+
 def _id_token_claims(id_token: object) -> dict[str, Any]:
     """Return the claims of an ID token from a token response, without checking its signature.
 
@@ -262,6 +284,23 @@ def _read_task_exception(task: asyncio.Task[None]) -> None:
         task.exception()
 
 
+def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
+    """Return the tokens a token-endpoint response or one of its members carries.
+
+    Args:
+        token: A token-endpoint response, or a member of one that carries a token of its own.
+        label_prefix: A word placed before each label, to tell one member's tokens from another's.
+
+    Returns:
+        Each token with the kind a log line names it by, the refresh token first.
+    """
+    return [
+        (f"{label_prefix}{label}", value)
+        for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
+        if isinstance(value := token.get(field), str) and value
+    ]
+
+
 def _same_secret(given: str, expected: str) -> bool:
     """Return whether two secret strings are equal, in time that does not depend on where they differ.
 
@@ -293,6 +332,31 @@ def _stated_error_member(response: httpx.Response | None) -> object:
     except ValueError:
         return ""
     return body.get("error", "") if isinstance(body, dict) else ""
+
+
+def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
+    """Return the user token a nested member of a token response carries.
+
+    Args:
+        nested: The member the provider issues the authorizing person's token in.
+
+    Returns:
+        The token, or ``None`` where the member states no access token.
+    """
+    access_token = nested.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        return None
+    expires_in = nested.get("expires_in")
+    return UserToken(
+        access_token=access_token,
+        token_type=nested.get("token_type", "Bearer"),
+        refresh_token=nested.get("refresh_token"),
+        expires_in=int(expires_in) if expires_in is not None else None,
+        expires_at=_expires_at(nested),
+        scope=nested.get("scope"),
+        user_id=nested.get("id"),
+        metadata={name: value for name, value in nested.items() if name not in _USER_TOKEN_FIELDS},
+    )
 
 
 class OAuthClient:
@@ -547,7 +611,8 @@ class OAuthClient:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
         Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
-        Both tokens are revoked at once.
+        Every token the response carries is revoked at once, including one in the member a provider
+        issues the authorizing person's token in.
         Each revocation that fails, is canceled on its own, or is unfinished at the limit is logged.
         A log line names the token kind and the host, never error text.
         The error of a revocation unfinished at the limit is not raised.
@@ -562,11 +627,10 @@ class OAuthClient:
             BaseException: If a revocation that finished before the limit raised an error that is not an exception,
                 which revoke_token does not convert.
         """
-        tokens = [
-            (label, token)
-            for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
-            if isinstance(token := response.get(field), str) and token
-        ]
+        tokens = _revocable_tokens(response)
+        nested_field = self._config.provider.user_token_response_field if self._config.provider else None
+        if nested_field is not None and isinstance(nested := response.get(nested_field), dict):
+            tokens += _revocable_tokens(nested, label_prefix="user ")
         if not tokens:
             return
         revocation_url = self._config.revocation_url
@@ -1007,22 +1071,30 @@ class OAuthClient:
             The parsed token set. Response fields with no named slot are
             collected into :attr:`TokenSet.metadata`, and ``expires_at`` is
             derived from ``expires_in`` when the response omits it.
+            A token the provider issues for the authorizing person is read onto
+            :attr:`TokenSet.user_token` and kept out of the metadata.
         """
         known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
         metadata = {k: v for k, v in data.items() if k not in known_fields}
 
-        expires_at = data.get("expires_at")
+        # A token left in the metadata is a token no caller names, so nothing refreshes or revokes it.
+        user_token = None
+        nested_field = self._config.provider.user_token_response_field if self._config.provider else None
+        if nested_field is not None and isinstance(nested := metadata.get(nested_field), dict):
+            user_token = _user_token(nested)
+            if user_token is not None:
+                del metadata[nested_field]
+
         expires_in = data.get("expires_in")
-        if expires_at is None and expires_in is not None:
-            expires_at = time.time() + int(expires_in)
 
         return FreshTokenSet(
             access_token=data["access_token"],
             token_type=data.get("token_type", "Bearer"),
             refresh_token=data.get("refresh_token"),
             expires_in=int(expires_in) if expires_in is not None else None,
-            expires_at=expires_at,
+            expires_at=_expires_at(data),
             scope=data.get("scope"),
+            user_token=user_token,
             metadata=metadata,
             context=context or {},
         )
