@@ -15,7 +15,13 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth.client import _USER_TOKEN_STRINGS, OAuthClient, _expires_at
+from apron_auth.client import (
+    _TOKEN_SET_NUMBERS,
+    _TOKEN_SET_STRINGS,
+    _USER_TOKEN_STRINGS,
+    OAuthClient,
+    _expires_at,
+)
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -3035,6 +3041,15 @@ class TestATopLevelFieldOfTheWrongType:
         assert tokens.expires_in == 3600
         assert tokens.expires_at is not None
         assert "expires_in" not in tokens.extras
+
+    def test_the_named_fields_are_every_field_this_client_reads_from_a_response(self) -> None:
+        """A field named nowhere here is read from no response, so its attribute keeps its default in silence."""
+        # The client fills these three itself rather than reading a scalar of the same name off a response.
+        filled_by_this_client = {"context", "extras", "user_token"}
+
+        named = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
+
+        assert named == set(TokenSet.model_fields) - filled_by_this_client
 
     async def test_a_lifetime_that_is_not_a_number_states_no_lifetime(self, httpx_mock: HTTPXMock) -> None:
         """A boolean reads as a number in Python, so it is refused here rather than taken as one second."""
