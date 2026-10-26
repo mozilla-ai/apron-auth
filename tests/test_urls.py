@@ -13,6 +13,7 @@ import pytest
 from apron_auth._urls import (
     is_loopback_host,
     is_plain_http,
+    matches_suffix,
     parse_ip,
     query_parameters,
     uses_allowed_transport,
@@ -72,6 +73,32 @@ class TestIsPlainHttp:
     )
     def test_anything_else_is_not_plain_http(self, url: str) -> None:
         assert is_plain_http(url) is False
+
+
+class TestMatchesSuffix:
+    def test_empty_host_does_not_match(self):
+        assert matches_suffix("", ("example.com",)) is False
+
+    def test_exact_match_returns_true(self):
+        assert matches_suffix("example.com", ("example.com",)) is True
+
+    def test_label_boundary_subdomain_matches(self):
+        assert matches_suffix("api.example.com", ("example.com",)) is True
+
+    def test_lookalike_with_shared_tld_does_not_match(self):
+        assert matches_suffix("evilexample.com", ("example.com",)) is False
+
+    def test_multiple_suffixes_any_match(self):
+        assert matches_suffix("graph.microsoft.com", ("salesforce.com", "graph.microsoft.com")) is True
+
+    def test_no_suffixes_never_matches(self):
+        assert matches_suffix("example.com", ()) is False
+
+    def test_substring_after_dot_does_not_match(self):
+        assert matches_suffix("attacker.com.example.com.attacker.test", ("example.com",)) is False
+
+    def test_unrelated_host_does_not_match(self):
+        assert matches_suffix("other.test", ("example.com",)) is False
 
 
 class TestParseIp:

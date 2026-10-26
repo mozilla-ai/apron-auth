@@ -1,38 +1,14 @@
-"""Boundary-aware host-suffix matchers.
-
-These helpers compare hostnames (or hostnames parsed from a
-:class:`ProviderConfig` OAuth configuration) against trusted
-suffixes using a label-boundary rule. They provide a shared, pure
-matching implementation so provider modules can enforce consistent
-host checks.
-"""
+"""Whether the OAuth endpoints a configuration names are a provider's own hosts."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from apron_auth._urls import matches_suffix
+
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
-
-
-def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
-    """Return True if ``host`` matches any suffix on a label boundary.
-
-    A suffix matches when ``host`` equals the suffix outright or ends
-    with ``"." + suffix``. The dot anchor is the safety property: it
-    rejects lookalike hosts such as ``evilexample.com`` against
-    suffix ``example.com`` while still accepting legitimate
-    subdomains like ``api.example.com``.
-
-    Args:
-        host: The hostname to test.
-        suffixes: The trusted suffixes to match against.
-
-    Returns:
-        ``True`` when ``host`` matches any suffix on a label boundary.
-    """
-    return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
 
 
 def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool:

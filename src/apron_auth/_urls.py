@@ -133,6 +133,23 @@ def is_plain_http(url: str) -> bool:
     return scheme == "http" and bool(host)
 
 
+def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
+    """Return whether ``host`` matches any of ``suffixes`` on a label boundary.
+
+    A suffix matches when ``host`` equals it or ends with a dot and it.
+    The dot is the safety property: it refuses a lookalike such as ``evilexample.com`` against the
+    suffix ``example.com``, while still accepting a subdomain such as ``api.example.com``.
+
+    Args:
+        host: The hostname to read.
+        suffixes: The trusted suffixes to match it against.
+
+    Returns:
+        Whether the host matches any suffix on a label boundary.
+    """
+    return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
+
+
 def parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     """Return the address ``host`` names, or None when it names no address.
 

@@ -13,10 +13,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from apron_auth._urls import matches_suffix
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._host_match import matches_suffix
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 
