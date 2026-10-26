@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._host_match import matches_suffix
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
@@ -198,18 +198,16 @@ def preset(
         msg = f"host must be a bare hostname like 'login.salesforce.com' (no scheme, path, or whitespace); got {host!r}"
         raise ValueError(msg)
 
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
+    # Every endpoint names the org's own login host, so this preset states them per call.
+    declared = Preset(
         provider=Provider.SALESFORCE,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
         authorize_url=f"https://{host}/services/oauth2/authorize",
         token_url=f"https://{host}/services/oauth2/token",
         revocation_url=f"https://{host}/services/oauth2/revoke",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=extra_params or {},
+        base_scopes=BASE_SCOPES,
         scope_metadata=BASE_SCOPE_METADATA,
+    )
+    config = declared.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
     return config, StandardRevocationHandler()

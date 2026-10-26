@@ -13,12 +13,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
@@ -44,6 +44,17 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.GOOGLE,
+    authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+    token_url="https://oauth2.googleapis.com/token",
+    revocation_url="https://oauth2.googleapis.com/revoke",
+    base_scopes=BASE_SCOPES,
+    default_extra_params={"access_type": "offline", "prompt": "consent"},
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # The endpoint that returns the signed-in user's profile.
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -176,22 +187,7 @@ def preset(
     Returns:
         The provider configuration paired with its revocation handler.
     """
-    defaults = {"access_type": "offline", "prompt": "consent"}
-    if extra_params:
-        defaults.update(extra_params)
-
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
-        provider=Provider.GOOGLE,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        revocation_url="https://oauth2.googleapis.com/revoke",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=defaults,
-        scope_metadata=BASE_SCOPE_METADATA,
+    config = _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
     return config, GoogleRevocationHandler()

@@ -10,16 +10,24 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
 
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.TYPEFORM,
+    authorize_url="https://api.typeform.com/oauth/authorize",
+    token_url="https://api.typeform.com/oauth/token",
+    use_pkce=False,
+)
 
 # The scope the userinfo endpoint requires.
 _TYPEFORM_USERINFO_SCOPE = "accounts:read"
@@ -121,15 +129,7 @@ def preset(
         The provider configuration paired with ``None``, as Typeform
         exposes no revocation endpoint.
     """
-    config = ProviderConfig(
-        provider=Provider.TYPEFORM,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://api.typeform.com/oauth/authorize",
-        token_url="https://api.typeform.com/oauth/token",
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        use_pkce=False,
-        extra_params=extra_params or {},
+    config = _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
     return config, None

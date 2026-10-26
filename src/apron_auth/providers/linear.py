@@ -16,12 +16,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset
 
 if TYPE_CHECKING:
     from apron_auth.protocols import RevocationHandler
@@ -38,6 +38,14 @@ _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 # canonical key. Linear keeps the last 3 urlKeys as redirects but the
 # urlKey itself should not be treated as a permanent identifier.
 _LINEAR_VIEWER_QUERY = "query { viewer { id name displayName email avatarUrl } organization { id name urlKey } }"
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.LINEAR,
+    authorize_url="https://linear.app/oauth/authorize",
+    token_url="https://api.linear.app/oauth/token",
+    revocation_url="https://api.linear.app/oauth/revoke",
+)
 
 
 class LinearIdentityHandler:
@@ -144,15 +152,7 @@ def preset(
     Returns:
         The provider configuration paired with its revocation handler.
     """
-    config = ProviderConfig(
-        provider=Provider.LINEAR,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://linear.app/oauth/authorize",
-        token_url="https://api.linear.app/oauth/token",
-        revocation_url="https://api.linear.app/oauth/revoke",
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        extra_params=extra_params or {},
+    config = _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
     )
     return config, StandardRevocationHandler()

@@ -36,11 +36,11 @@ References:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._http_errors import http_failure
@@ -61,6 +61,7 @@ from apron_auth.models import (
     TenancyContext,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset
 from apron_auth.scopes import scope_words
 
 if TYPE_CHECKING:
@@ -101,6 +102,28 @@ _SLACK_REVOKE_URL = "https://slack.com/api/auth.revoke"
 
 # The scope that asks Slack for an ID token. Slack issues it to a user token only.
 _SLACK_SIGN_IN_SCOPE = "openid"
+
+# The two presets sit last because they read the endpoint constants above, and are A-Z between themselves.
+
+# What the workspace-install preset states, beside the values its caller passes.
+# NOTE: The required scope families name the caller's own scopes, so they are stated per call.
+_INSTALL_PRESET = Preset(
+    provider=Provider.SLACK,
+    authorize_url="https://slack.com/oauth/v2/authorize",
+    token_url="https://slack.com/api/oauth.v2.access",
+    revocation_url=_SLACK_REVOKE_URL,
+)
+
+# What the Sign in with Slack preset states, beside the values its caller passes.
+_SIGN_IN_PRESET = Preset(
+    provider=Provider.SLACK,
+    authorize_url=_SLACK_OPENID_AUTHORIZE_URL,
+    token_url=_SLACK_OPENID_TOKEN_URL,
+    revocation_url=_SLACK_REVOKE_URL,
+    issuer=_SLACK_OPENID_ISSUER,
+    required_scope_families=[[_SLACK_SIGN_IN_SCOPE]],
+    scope_metadata=SIGN_IN_SCOPE_METADATA,
+)
 
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
@@ -678,17 +701,9 @@ def preset(
     if user_scopes:
         required_scope_families.append(list(user_scopes))
 
-    config = ProviderConfig(
-        provider=Provider.SLACK,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://slack.com/oauth/v2/authorize",
-        token_url="https://slack.com/api/oauth.v2.access",
-        revocation_url=_SLACK_REVOKE_URL,
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        extra_params=merged_extra,
-        required_scope_families=required_scope_families,
+    declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
+    config = declared.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra
     )
     return config, SlackRevocationHandler()
 
@@ -745,18 +760,7 @@ def sign_in_preset(
     if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
-    config = ProviderConfig(
-        provider=Provider.SLACK,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url=_SLACK_OPENID_AUTHORIZE_URL,
-        token_url=_SLACK_OPENID_TOKEN_URL,
-        revocation_url=_SLACK_REVOKE_URL,
-        issuer=_SLACK_OPENID_ISSUER,
-        redirect_uri=redirect_uri,
-        scopes=requested,
-        extra_params=merged_extra,
-        scope_metadata=SIGN_IN_SCOPE_METADATA,
-        required_scope_families=[[_SLACK_SIGN_IN_SCOPE]],
+    config = _SIGN_IN_PRESET.config(
+        client_id, client_secret, scopes=requested, redirect_uri=redirect_uri, extra_params=merged_extra
     )
     return config, SlackRevocationHandler()
