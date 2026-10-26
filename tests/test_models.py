@@ -1450,6 +1450,22 @@ class TestTokenSet:
         original["user_id"] = "mutated"
         assert token.context["user_id"] == "U123"
 
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A token set is persisted, so a field no attribute names is data this model cannot carry."""
+        with pytest.raises(ConfigurationError, match="metadata"):
+            TokenSet.model_validate({"access_token": "access-abc", "metadata": {"team_id": "T123"}})
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            TokenSet.model_validate({"access_token": "access-abc", "metadata": {"team_id": "T123"}})
+
+        assert "T123" not in str(refusal.value)
+
+    def test_an_unknown_field_of_a_nested_user_token_is_refused(self) -> None:
+        stored = {"access_token": "access-abc", "user_token": {"access_token": "xoxp", "metadata": {"id": "U1"}}}
+        with pytest.raises(ConfigurationError, match="metadata"):
+            TokenSet.model_validate(stored)
+
     def test_frozen(self) -> None:
         token = TokenSet(access_token="access-abc")
         with pytest.raises(ConfigurationError):
@@ -2006,6 +2022,29 @@ class TestOAuthPendingState:
         )
         original["user_id"] = "mutated"
         assert state.context["user_id"] == "U123"
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A pending state is persisted, so a field no attribute names is data this model cannot carry."""
+        stored = {
+            "state": "random-state-token",
+            "redirect_uri": "https://app.example.com/callback",
+            "created_at": 1.0,
+            "metadata": {"tenant_id": "T456"},
+        }
+        with pytest.raises(ConfigurationError, match="metadata"):
+            OAuthPendingState.model_validate(stored)
+
+    def test_a_refused_unknown_field_does_not_repeat_its_value(self) -> None:
+        stored = {
+            "state": "random-state-token",
+            "redirect_uri": "https://app.example.com/callback",
+            "created_at": 1.0,
+            "metadata": {"tenant_id": "T456"},
+        }
+        with pytest.raises(ConfigurationError) as refusal:
+            OAuthPendingState.model_validate(stored)
+
+        assert "T456" not in str(refusal.value)
 
     def test_frozen(self) -> None:
         state = OAuthPendingState(

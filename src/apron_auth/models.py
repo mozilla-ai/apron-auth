@@ -1256,12 +1256,15 @@ class ClientRegistration(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class UserToken(_RefusesWithoutRepeating, frozen=True):
+class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """The token a provider issues for the person who authorized an application, beside the application's own.
 
     A provider that grants an application its own token and the authorizing person a second one
     returns the person's token in a member of its own, as Slack does in ``authed_user``.
     This model is that token, so a caller can read, refresh and revoke it by name.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose what the provider sent.
 
     NOTE: A nested member stating no access token carries no user token, so the token set states
     none and keeps the member in its extras.
@@ -1294,8 +1297,11 @@ class UserToken(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class TokenSet(_RefusesWithoutRepeating, frozen=True):
+class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """Token data returned from code exchange or refresh.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose what the provider or the caller attached.
 
     Attributes:
         access_token: The access token issued by the provider.
@@ -1658,8 +1664,11 @@ class IdentityProfile(_RefusesWithoutRepeating, frozen=True):
     _repeats_no_value = _REPEATS_NO_VALUE
 
 
-class OAuthPendingState(_RefusesWithoutRepeating, frozen=True):
+class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """State stored during the OAuth authorization flow.
+
+    Construction and validation refuse a field this model does not define, so a renamed or mistyped
+    one cannot be dropped silently and lose the context a caller attached.
 
     Attributes:
         state: Unique token identifying this authorization request.
