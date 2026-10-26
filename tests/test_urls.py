@@ -91,6 +91,13 @@ class TestMatchesSuffix:
     def test_multiple_suffixes_any_match(self):
         assert matches_suffix("graph.microsoft.com", ("salesforce.com", "graph.microsoft.com")) is True
 
+    def test_a_mixed_case_host_matches(self):
+        """DNS names are case-insensitive, and this matcher decides where a credential may be sent."""
+        assert matches_suffix("API.Example.COM", ("example.com",)) is True
+
+    def test_a_mixed_case_suffix_matches(self):
+        assert matches_suffix("api.example.com", ("Example.COM",)) is True
+
     def test_no_suffixes_never_matches(self):
         assert matches_suffix("example.com", ()) is False
 

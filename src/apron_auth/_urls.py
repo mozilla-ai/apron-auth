@@ -136,7 +136,7 @@ def is_plain_http(url: str) -> bool:
 def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
     """Return whether ``host`` matches any of ``suffixes`` on a label boundary.
 
-    A suffix matches when ``host`` equals it or ends with a dot and it.
+    A suffix matches when ``host`` equals it or ends with a dot and it, ignoring case.
     The dot is the safety property: it refuses a lookalike such as ``evilexample.com`` against the
     suffix ``example.com``, while still accepting a subdomain such as ``api.example.com``.
 
@@ -147,7 +147,9 @@ def matches_suffix(host: str, suffixes: tuple[str, ...]) -> bool:
     Returns:
         Whether the host matches any suffix on a label boundary.
     """
-    return any(host == suffix or host.endswith("." + suffix) for suffix in suffixes)
+    # A DNS name is case-insensitive, and this answer decides where a credential may be sent.
+    name = host.lower()
+    return any(name == suffix.lower() or name.endswith("." + suffix.lower()) for suffix in suffixes)
 
 
 def parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
