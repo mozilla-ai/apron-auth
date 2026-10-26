@@ -37,7 +37,7 @@ References:
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -63,10 +63,6 @@ from apron_auth.models import (
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import scope_words
-
-if TYPE_CHECKING:
-    pass
-
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
 SIGN_IN_SCOPE_METADATA = [
@@ -764,7 +760,6 @@ def sign_in_preset(
     if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
-    config = _SIGN_IN_PRESET.config(
+    return _SIGN_IN_PRESET.config(
         client_id, client_secret, scopes=requested, redirect_uri=redirect_uri, extra_params=merged_extra
     )
-    return config

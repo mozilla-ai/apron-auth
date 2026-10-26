@@ -10,8 +10,6 @@ the authorization request asks for.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import httpx
 
 from apron_auth._http_errors import http_failure
@@ -19,10 +17,6 @@ from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
-
-if TYPE_CHECKING:
-    pass
-
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -189,7 +183,4 @@ def preset(
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    config = _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
-    )
-    return config
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

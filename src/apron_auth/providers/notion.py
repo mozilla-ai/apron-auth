@@ -14,7 +14,6 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
 import httpx
 
@@ -30,9 +29,6 @@ from apron_auth.models import (
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -276,7 +272,4 @@ def preset(
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    config = _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
-    )
-    return config
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

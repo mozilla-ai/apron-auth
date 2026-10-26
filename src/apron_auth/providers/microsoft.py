@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import Any, NamedTuple
 
 import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
@@ -33,10 +33,6 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, Provi
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._presets import Preset
-
-if TYPE_CHECKING:
-    pass
-
 
 logger = logging.getLogger(__name__)
 
@@ -540,7 +536,4 @@ def preset(
     if _GUID_RE.match(client_id):
         client_id = client_id.lower()
 
-    config = _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
-    )
-    return config
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

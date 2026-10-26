@@ -7,8 +7,6 @@ apron-auth has no way to remove the portal-level grant.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import httpx
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
@@ -16,10 +14,6 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, Provi
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
-
-if TYPE_CHECKING:
-    pass
-
 
 # What this provider's preset states, beside the values its caller passes.
 _PRESET = Preset(
@@ -130,7 +124,4 @@ def preset(
         The provider configuration. It declares no revocation endpoint, because Typeform
         exposes none.
     """
-    config = _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
-    )
-    return config
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

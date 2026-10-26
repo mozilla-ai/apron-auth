@@ -8,7 +8,6 @@ been verified end-to-end.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import httpx
@@ -18,10 +17,6 @@ from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
-
-if TYPE_CHECKING:
-    pass
-
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [

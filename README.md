@@ -32,7 +32,7 @@ Requires Python 3.11+.
 
 ### With a provider preset
 
-Presets bundle the endpoints, auth method, PKCE config, and revocation handler for a given provider into a single call.
+Presets bundle the endpoints, auth method, PKCE config and provider name for a given provider into a single call, and the client reads the revocation handler from the name.
 
 ```python
 from apron_auth.providers import google

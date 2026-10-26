@@ -277,8 +277,8 @@ def preset(
         scopes: Scopes to request, merged with the required ``openid`` scope.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
-        metadata: The provider's discovered metadata, from :func:`discover`.
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
+        metadata: The provider's discovered metadata, from :func:`discover`.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
     Returns:
@@ -350,7 +350,6 @@ def preset(
         else ()
     )
     config = ProviderConfig.unsafe.allow_plain_http(*waived, **values) if waived else ProviderConfig(**values)
-    # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
     return config
 
 

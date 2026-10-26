@@ -749,8 +749,8 @@ class OAuthClient:
     async def revoke_token(self, token: str) -> bool:
         """Revoke a token via the provider's revocation endpoint.
 
-        Uses the configured RevocationHandler, or falls back to
-        StandardRevocationHandler (RFC 7009 POST).
+        A handler passed to this client revokes the token. Otherwise the handler the config's
+        provider needs does, and a config naming no provider takes RFC 7009 revocation.
 
         Args:
             token: The token to revoke.

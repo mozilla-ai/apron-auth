@@ -13,18 +13,12 @@ inspects the response body even on success status codes and raises
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import httpx
 
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
-
-if TYPE_CHECKING:
-    pass
-
 
 # The GraphQL endpoint that the identity query goes to.
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -153,7 +147,4 @@ def preset(
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    config = _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
-    )
-    return config
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
