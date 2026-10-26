@@ -60,6 +60,9 @@ logger = logging.getLogger(__name__)
 # NOTE: The exchange_code docstring states this value.
 _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
+# The refusal of a token-endpoint response carrying no access token, which RFC 6749 section 5.1 requires.
+_NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
+
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
@@ -518,7 +521,27 @@ class OAuthClient:
             # NOTE: A response whose ID token fails a check may answer a request the client never made.
             await self._revoke_refused_tokens(response)
             raise
+        if not await self._states_an_access_token(response):
+            raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.metadata)
+
+    async def _states_an_access_token(self, response: dict[str, Any]) -> bool:
+        """Report whether a token-endpoint response carries the access token it must, revoking it if not.
+
+        RFC 6749 section 5.1 requires the field, so a response stating no access token is no token
+        response, and this library can use nothing it carries. Whatever it does carry is revoked, so
+        a refusal leaves no token valid.
+
+        Args:
+            response: The token-endpoint response to read.
+
+        Returns:
+            Whether the response carries a non-empty access token.
+        """
+        if isinstance(access_token := response.get("access_token"), str) and access_token:
+            return True
+        await self._revoke_refused_tokens(response)
+        return False
 
     async def _revoke_refused_tokens(self, response: dict[str, Any]) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
@@ -627,6 +650,8 @@ class OAuthClient:
             # traceback holds the request frame, whose locals carry the refresh token and the client secret.
             message, kind, error_code = failure
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
+        if not await self._states_an_access_token(response):
+            raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 
     async def revoke_token(self, token: str) -> bool:

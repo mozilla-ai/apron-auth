@@ -2880,3 +2880,43 @@ class TestAuthorizationUrlRedirectCredential:
 
         with pytest.raises(ConfigurationError, match="redirect_uri is malformed"):
             await OAuthClient(config).get_authorization_url(redirect_uri="https://[::1/cb")
+
+
+class TestAResponseThatStatesNoAccessToken:
+    """RFC 6749 section 5.1 requires the field, so a response without it carries no token to return."""
+
+    async def test_an_exchange_refuses_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"ok": True, "authed_user": {"id": "U1", "access_token": "xoxp-USER"}},
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenExchangeError) as exc_info:
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        assert "xoxp-USER" not in str(exc_info.value)
+
+    async def test_a_refresh_refuses_it(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url="https://provider.example.com/token", json={"ok": True})
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("refresh-xyz")
+
+    async def test_the_refusal_revokes_the_refresh_token_it_cannot_use(self, httpx_mock: HTTPXMock) -> None:
+        """A refused response must leave no token valid, so the refusal runs where revocation can."""
+        revoke_url = "https://provider.example.com/revoke"
+        httpx_mock.add_response(url=revoke_url)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"ok": True, "refresh_token": "refresh-xyz"}
+        )
+        client = OAuthClient(config=_make_oauth_config(revocation_url=revoke_url))
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+        revoked = [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=revoke_url)
+        ]
+        assert revoked == ["refresh-xyz"]
