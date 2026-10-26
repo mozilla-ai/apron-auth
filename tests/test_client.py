@@ -2989,6 +2989,7 @@ class TestATopLevelFieldOfTheWrongType:
 
     WRONG = [
         ("expires_at", "soon"),
+        ("expires_in", "3600"),
         ("expires_in", True),
         ("refresh_token", {"token": "r"}),
         ("refresh_token", ["r"]),
@@ -3050,6 +3051,14 @@ class TestATopLevelFieldOfTheWrongType:
         named = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
 
         assert named == set(TokenSet.model_fields) - filled_by_this_client
+
+    async def test_a_numeric_string_lifetime_still_states_an_expiry(self, httpx_mock: HTTPXMock) -> None:
+        """The token client derives the expiry before this library reads the response, so it survives."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": "3600"})
+
+        assert tokens.expires_in is None
+        assert tokens.extras["expires_in"] == "3600"
+        assert tokens.expires_at is not None
 
     async def test_a_lifetime_that_is_not_a_number_states_no_lifetime(self, httpx_mock: HTTPXMock) -> None:
         """A boolean reads as a number in Python, so it is refused here rather than taken as one second."""
