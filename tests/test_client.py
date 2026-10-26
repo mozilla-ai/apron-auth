@@ -15,7 +15,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth.client import _USER_TOKEN_STRINGS, OAuthClient
+from apron_auth.client import _USER_TOKEN_STRINGS, OAuthClient, _expires_at
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -2954,6 +2954,109 @@ class TestAResponseThatStatesNoAccessToken:
             parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=revoke_url)
         ]
         assert revoked == ["refresh-xyz"]
+
+
+class TestTheDerivedExpiry:
+    """Deriving an absolute expiry from what a token states."""
+
+    def test_an_expiry_is_taken_as_stated(self) -> None:
+        assert _expires_at({"expires_at": 1700000000.0}) == 1700000000.0
+
+    def test_a_lifetime_derives_an_expiry_when_none_is_stated(self) -> None:
+        assert _expires_at({"expires_in": 60}) is not None
+
+    def test_a_token_stating_neither_derives_nothing(self) -> None:
+        assert _expires_at({}) is None
+
+    @pytest.mark.parametrize("value", ["one hour", {"seconds": 60}, [60], True, float("inf")])
+    def test_a_lifetime_that_is_not_a_finite_number_derives_nothing(self, value: object) -> None:
+        """The derivation adds the lifetime to a clock reading, which a value of another type cannot enter."""
+        assert _expires_at({"expires_in": value}) is None
+
+    @pytest.mark.parametrize("value", ["soon", {"at": 1.0}, [1.0], True, float("nan")])
+    def test_an_expiry_that_is_not_a_finite_number_states_none(self, value: object) -> None:
+        assert _expires_at({"expires_at": value}) is None
+
+
+class TestATopLevelFieldOfTheWrongType:
+    """A provider's value is read onto its field only where it holds what that field states."""
+
+    WRONG = [
+        ("expires_at", "soon"),
+        ("expires_in", True),
+        ("refresh_token", {"token": "r"}),
+        ("refresh_token", ["r"]),
+        ("scope", {"granted": "chat:write"}),
+        ("scope", ["chat:write"]),
+        ("token_type", 7),
+        ("token_type", {"kind": "Bearer"}),
+    ]
+
+    # A lifetime or expiry of these types is refused by the token client before this library reads the body.
+    REFUSED_BEFORE_PARSING = [
+        ("expires_at", {"at": 1.0}),
+        ("expires_at", [1.0]),
+        ("expires_in", "3600.5"),
+        ("expires_in", "one hour"),
+        ("expires_in", [3600]),
+        ("expires_in", {"seconds": 3600}),
+    ]
+
+    async def _exchanged(self, httpx_mock: HTTPXMock, response: dict[str, object]) -> TokenSet:
+        httpx_mock.add_response(url="https://provider.example.com/token", json=response)
+        client = OAuthClient(config=_make_oauth_config())
+        return await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_it_does_not_refuse_the_exchange(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """The exchange redeemed the code, so a refusal here would strand the access token it issued."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        assert tokens.access_token == "LIVE-TOKEN"
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_it_is_carried_into_the_extras(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """Nothing the provider sent is dropped, so the value arrives as it was sent."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        assert tokens.extras[field] == value
+
+    @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
+    async def test_the_field_states_no_value(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
+        """An attribute states what this library read, so one it could not read states nothing."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
+
+        expected = "Bearer" if field == "token_type" else None
+        assert getattr(tokens, field) == expected
+
+    async def test_a_lifetime_this_library_can_read_still_derives_the_expiry(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": 3600})
+
+        assert tokens.expires_in == 3600
+        assert tokens.expires_at is not None
+        assert "expires_in" not in tokens.extras
+
+    async def test_a_lifetime_that_is_not_a_number_states_no_lifetime(self, httpx_mock: HTTPXMock) -> None:
+        """A boolean reads as a number in Python, so it is refused here rather than taken as one second."""
+        tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": True})
+
+        assert tokens.expires_in is None
+        assert tokens.extras["expires_in"] is True
+
+    @pytest.mark.parametrize(
+        ("field", "value"), REFUSED_BEFORE_PARSING, ids=[f"{f}={v!r}" for f, v in REFUSED_BEFORE_PARSING]
+    )
+    async def test_a_lifetime_the_token_client_refuses_states_the_documented_failure(
+        self, httpx_mock: HTTPXMock, field: str, value: object
+    ) -> None:
+        """The token client reads the lifetime itself, so this library never reaches these values."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"access_token": "LIVE-TOKEN", field: value}
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(code="auth-code-123", state="pending-state", pending_state=_pending_state())
 
 
 class TestTheUserTokenAProviderNests:

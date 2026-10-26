@@ -68,6 +68,12 @@ _REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
+# The number fields a token-endpoint response states: a lifetime in seconds and a Unix timestamp.
+_TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
+
+# The string fields a token-endpoint response states, beside the access token.
+_TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
+
 # The string members of a nested user token, each mapped to the UserToken field that states it.
 # NOTE: It decides which member of a response becomes a named credential, so it is read-only.
 _USER_TOKEN_STRINGS = MappingProxyType(
@@ -246,10 +252,10 @@ def _expires_at(token: Mapping[str, Any]) -> float | None:
     Returns:
         The expiry as a Unix timestamp, or ``None`` where the token states neither an expiry nor a lifetime.
     """
-    expires_at = token.get("expires_at")
-    expires_in = token.get("expires_in")
+    expires_at = finite_number(token.get("expires_at"))
+    expires_in = finite_number(token.get("expires_in"))
     if expires_at is None and expires_in is not None:
-        return time.time() + int(expires_in)
+        return time.time() + expires_in
     return expires_at
 
 
@@ -1090,13 +1096,36 @@ class OAuthClient:
 
         Returns:
             The parsed token set. Response fields with no named slot are
-            collected into :attr:`TokenSet.extras`, and ``expires_at`` is
+            collected into :attr:`TokenSet.extras`, including one whose value is
+            not of the type its own field states, and ``expires_at`` is
             derived from ``expires_in`` when the response omits it.
             A token the provider issues for the authorizing person is read onto
             :attr:`TokenSet.user_token` and kept out of the extras.
         """
-        known_fields = {"access_token", "token_type", "refresh_token", "expires_in", "expires_at", "scope"}
+        known_fields = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
         extras = {k: v for k, v in data.items() if k not in known_fields}
+
+        # A field is read onto its attribute only where it holds what that attribute states. One of any
+        # other type is carried into the extras, because the access token is usable either way and a
+        # refusal here would strand a token the response issued.
+        named: dict[str, Any] = {}
+        for field in _TOKEN_SET_STRINGS:
+            value = data.get(field)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                named[field] = value
+            else:
+                extras[field] = value
+        for field in _TOKEN_SET_NUMBERS:
+            value = data.get(field)
+            if value is None:
+                continue
+            number = finite_number(value)
+            if number is None:
+                extras[field] = value
+            else:
+                named[field] = int(number) if field == "expires_in" else number
 
         # A token left in the extras is a token no caller names, so nothing refreshes or revokes it.
         user_token = None
@@ -1106,16 +1135,12 @@ class OAuthClient:
             if user_token is not None:
                 del extras[nested_field]
 
-        expires_in = data.get("expires_in")
+        named["expires_at"] = _expires_at(named)
 
         return FreshTokenSet(
             access_token=data["access_token"],
-            token_type=data.get("token_type", "Bearer"),
-            refresh_token=data.get("refresh_token"),
-            expires_in=int(expires_in) if expires_in is not None else None,
-            expires_at=_expires_at(data),
-            scope=data.get("scope"),
             user_token=user_token,
             extras=extras,
             context=context or {},
+            **named,
         )
