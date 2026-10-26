@@ -10,6 +10,8 @@ the authorization request asks for.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import httpx
 
 from apron_auth._http_errors import http_failure
@@ -161,7 +163,7 @@ def preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str],
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> ProviderConfig:

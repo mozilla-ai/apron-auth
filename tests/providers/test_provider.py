@@ -237,6 +237,17 @@ def test_the_named_provider_modules_are_exactly_the_members() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_accepts_any_sequence_of_scopes(name: str) -> None:
+    """The shared builder takes a Sequence, so a preset must not demand a list of its caller."""
+    kwargs = _valid_kwargs(name)
+    kwargs["scopes"] = tuple(kwargs["scopes"])
+
+    config = PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
+
+    assert isinstance(config, ProviderConfig)
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
 def test_every_preset_takes_two_positionals_and_the_rest_by_keyword(name: str) -> None:
     """A positional call that reads correctly against one preset must not mean something else against another."""
     params = list(inspect.signature(PRESETS[name]).parameters.values())

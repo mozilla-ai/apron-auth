@@ -7,6 +7,8 @@ apron-auth has no way to remove the portal-level grant.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import httpx
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
@@ -104,7 +106,7 @@ def preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str],
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> ProviderConfig:

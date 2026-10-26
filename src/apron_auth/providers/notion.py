@@ -14,6 +14,7 @@ References:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import httpx
 
@@ -249,7 +250,7 @@ def preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str],
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
 ) -> ProviderConfig:

@@ -36,6 +36,7 @@ References:
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
@@ -627,10 +628,10 @@ def preset(
     client_id: str,
     client_secret: str,
     *,
-    scopes: list[str],
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    user_scopes: list[str] | None = None,
+    user_scopes: Sequence[str] | None = None,
 ) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
