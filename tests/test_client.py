@@ -2189,7 +2189,7 @@ class TestRefreshToken:
 
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
-        from apron_auth.protocols import StandardRevocationHandler
+        from apron_auth.providers._revocation import StandardRevocationHandler
 
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config(revocation_url="https://provider.example.com/revoke")

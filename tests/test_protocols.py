@@ -7,7 +7,8 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, RevocationError
 from apron_auth.models import OAuthPendingState, ProviderConfig
-from apron_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
+from apron_auth.protocols import RevocationHandler, StateStore
+from apron_auth.providers._revocation import StandardRevocationHandler
 
 
 def _make_config(**overrides: object) -> ProviderConfig:

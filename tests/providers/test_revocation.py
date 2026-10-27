@@ -11,7 +11,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import Provider, ProviderConfig
-from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
+from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -25,6 +25,7 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
+from apron_auth.providers._revocation import StandardRevocationHandler
 
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,

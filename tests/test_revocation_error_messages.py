@@ -18,8 +18,8 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import RevocationError
 from apron_auth.models import ProviderConfig
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
+from apron_auth.providers._revocation import StandardRevocationHandler
 
 TOKEN = "token-SECRET-123"
 RAW_TEXT = "raw transport text"
