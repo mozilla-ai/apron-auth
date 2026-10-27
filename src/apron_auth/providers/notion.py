@@ -14,10 +14,9 @@ References:
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import ConfigurationError, RevocationError
@@ -30,14 +29,22 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
+from apron_auth.providers._presets import Preset
 
 logger = logging.getLogger(__name__)
 
 # The endpoint that revokes a Notion access token.
 NOTION_REVOCATION_URL = "https://api.notion.com/v1/oauth/revoke"
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.NOTION,
+    authorize_url="https://api.notion.com/v1/oauth/authorize",
+    token_url="https://api.notion.com/v1/oauth/token",
+    revocation_url=NOTION_REVOCATION_URL,
+    default_extra_params={"owner": "user"},
+    token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+)
 
 # The endpoint that returns the bot user of the access token, with its owner.
 _NOTION_USERINFO_URL = "https://api.notion.com/v1/users/me"
@@ -242,10 +249,11 @@ class NotionRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Notion OAuth provider configuration.
 
     Notion uses client_secret_basic auth. Revocation targets
@@ -262,22 +270,7 @@ def preset(
             the ``owner=user`` default.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    defaults = {"owner": "user"}
-    if extra_params:
-        defaults.update(extra_params)
-
-    config = ProviderConfig(
-        provider=Provider.NOTION,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://api.notion.com/v1/oauth/authorize",
-        token_url="https://api.notion.com/v1/oauth/token",
-        revocation_url=NOTION_REVOCATION_URL,
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
-        extra_params=defaults,
-    )
-    return config, NotionRevocationHandler()
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

@@ -32,7 +32,7 @@ def google_env() -> dict[str, str]:
 
 class TestGoogleRefresh:
     async def test_refresh_returns_access_token(self, google_env: dict[str, str]):
-        config, _ = google.preset(
+        config = google.preset(
             client_id=google_env["client_id"],
             client_secret=google_env["client_secret"],
             scopes=["openid", "email"],
@@ -43,7 +43,7 @@ class TestGoogleRefresh:
         assert tokens.token_type.lower() == "bearer"
 
     async def test_refresh_returns_expiry(self, google_env: dict[str, str]):
-        config, _ = google.preset(
+        config = google.preset(
             client_id=google_env["client_id"],
             client_secret=google_env["client_secret"],
             scopes=["openid", "email"],
@@ -57,12 +57,12 @@ class TestGoogleRefresh:
 class TestGoogleRevocation:
     async def test_revoke_access_token(self, google_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = google.preset(
+        config = google.preset(
             client_id=google_env["client_id"],
             client_secret=google_env["client_secret"],
             scopes=["openid", "email"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(google_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

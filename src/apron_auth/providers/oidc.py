@@ -70,14 +70,14 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     UrlField,
 )
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
+from apron_auth.providers._presets import scope_sequence
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from apron_auth.protocols import RevocationHandler, TransportFactory
+    from apron_auth.protocols import TransportFactory
 
 
 logger = logging.getLogger(__name__)
@@ -248,15 +248,15 @@ def _fields_needing_a_waiver(urls: Mapping[UrlField, str | None]) -> tuple[UrlFi
 
 
 def preset(
-    *,
     client_id: str,
     client_secret: str,
-    scopes: list[str],
-    metadata: ServerMetadata,
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    metadata: ServerMetadata,
     allow_insecure_http: bool = False,
-) -> tuple[ProviderConfig, RevocationHandler | None]:
+) -> ProviderConfig:
     """Create a provider configuration from a discovered OpenID provider.
 
     It takes ``metadata`` as a parameter, so it stays synchronous and the caller can cache, validate or stub the fetch.
@@ -276,15 +276,15 @@ def preset(
         client_id: The OAuth client identifier registered at the provider.
         client_secret: The OAuth client secret paired with it.
         scopes: Scopes to request, merged with the required ``openid`` scope.
-        metadata: The provider's discovered metadata, from :func:`discover`.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
+        metadata: The provider's discovered metadata, from :func:`discover`.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
 
     Returns:
-        The provider configuration, paired with a standard RFC 7009 revocation handler.
-        The handler is ``None`` when the provider advertises no revocation endpoint.
+        The provider configuration. It declares a revocation endpoint where the server
+        advertises one, and the client revokes through RFC 7009 revocation.
 
     Raises:
         ConfigurationError: If ``client_secret`` is empty,
@@ -307,7 +307,7 @@ def preset(
     except OidcDiscoveryError as exc:
         raise ConfigurationError(str(exc)) from exc
 
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
+    merged_scopes = sorted(set(BASE_SCOPES) | set(scope_sequence(scopes, "scopes")))
     methods = metadata.code_challenge_methods
     if methods and "S256" not in methods:
         msg = "OpenID provider advertises no S256 code-challenge method; PKCE cannot be negotiated"
@@ -351,8 +351,7 @@ def preset(
         else ()
     )
     config = ProviderConfig.unsafe.allow_plain_http(*waived, **values) if waived else ProviderConfig(**values)
-    # Revocation ending the user's consent is a per-product fact, so callers fall back to provider-side removal.
-    return config, StandardRevocationHandler() if metadata.revocation_url else None
+    return config
 
 
 def identity_handler(

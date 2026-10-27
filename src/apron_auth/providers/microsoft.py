@@ -12,12 +12,12 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, NamedTuple
+from collections.abc import Sequence
+from typing import Any, NamedTuple
 
 import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
 from joserfc.jwt import JWTClaimsRegistry
-from pydantic import SecretStr
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
@@ -33,10 +33,7 @@ from apron_auth.errors import (
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +64,16 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.MICROSOFT,
+    authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    base_scopes=BASE_SCOPES,
+    default_extra_params={"prompt": "consent"},
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # Canonical 8-4-4-4-12 hex GUID. Entra tenant IDs are GUIDs; validating
 # the shape rejects a non-GUID ``tid`` before it is interpolated into the
@@ -502,10 +509,11 @@ def _email_verified(id_token: _IdToken | None, email: object) -> bool | None:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler | None]:
+) -> ProviderConfig:
     """Create a Microsoft OAuth provider configuration.
 
     Microsoft does not provide a token revocation endpoint. Scopes from
@@ -522,28 +530,11 @@ def preset(
             the ``prompt=consent`` default.
 
     Returns:
-        The provider configuration paired with ``None``, as Microsoft
-        exposes no revocation endpoint.
+        The provider configuration. It declares no revocation endpoint, because Microsoft
+        exposes none.
     """
-    defaults = {"prompt": "consent"}
-    if extra_params:
-        defaults.update(extra_params)
-
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
     # Entra names the client in an ID token's audience by its lowercase GUID, and a GUID is case-insensitive.
     if _GUID_RE.match(client_id):
         client_id = client_id.lower()
 
-    config = ProviderConfig(
-        provider=Provider.MICROSOFT,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-        token_url="https://login.microsoftonline.com/common/oauth2/v2.0/token",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=defaults,
-        scope_metadata=BASE_SCOPE_METADATA,
-    )
-    return config, None
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

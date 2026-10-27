@@ -32,7 +32,7 @@ def salesforce_env() -> dict[str, str]:
 
 class TestSalesforceRefresh:
     async def test_refresh_returns_access_token(self, salesforce_env: dict[str, str]):
-        config, _ = salesforce.preset(
+        config = salesforce.preset(
             client_id=salesforce_env["client_id"],
             client_secret=salesforce_env["client_secret"],
             scopes=["api"],
@@ -45,12 +45,12 @@ class TestSalesforceRefresh:
 class TestSalesforceRevocation:
     async def test_revoke_access_token(self, salesforce_env: dict[str, str]):
         """Refresh to get a fresh access token, then revoke it."""
-        config, handler = salesforce.preset(
+        config = salesforce.preset(
             client_id=salesforce_env["client_id"],
             client_secret=salesforce_env["client_secret"],
             scopes=["api"],
         )
-        client = OAuthClient(config, revocation_handler=handler)
+        client = OAuthClient(config)
         tokens = await client.refresh_token(salesforce_env["refresh_token"])
         result = await client.revoke_token(tokens.access_token)
         assert result is True

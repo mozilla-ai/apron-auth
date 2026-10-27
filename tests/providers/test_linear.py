@@ -6,6 +6,7 @@ from pytest_httpx import HTTPXMock
 from apron_auth.errors import IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
+from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.linear import LinearIdentityHandler, preset
 
 LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -25,7 +26,7 @@ class TestLinearIdentityHandler:
             url=LINEAR_GRAPHQL_URL,
             json={"data": {"viewer": viewer, "organization": organization}},
         )
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -52,7 +53,7 @@ class TestLinearIdentityHandler:
         ``viewer`` — the handler must degrade to ``tenancies=()``."""
         viewer = {"id": "user-123", "email": "user@example.com"}
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, json={"data": {"viewer": viewer}})
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -68,7 +69,7 @@ class TestLinearIdentityHandler:
             url=LINEAR_GRAPHQL_URL,
             json={"data": {"viewer": viewer, "organization": organization}},
         )
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -82,7 +83,7 @@ class TestLinearIdentityHandler:
             url=LINEAR_GRAPHQL_URL,
             json={"data": {"viewer": viewer, "organization": organization}},
         )
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -95,7 +96,7 @@ class TestLinearIdentityHandler:
             status_code=200,
             json={"errors": [{"message": "Authentication required", "extensions": {"code": "AUTHENTICATION_ERROR"}}]},
         )
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Linear GraphQL returned errors"):
@@ -103,7 +104,7 @@ class TestLinearIdentityHandler:
 
     async def test_http_error_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=500, json={"error": "internal"})
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Linear identity"):
@@ -111,7 +112,7 @@ class TestLinearIdentityHandler:
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, content=b"not-json")
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Linear identity response"):
@@ -119,7 +120,7 @@ class TestLinearIdentityHandler:
 
     async def test_missing_data_object_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": None})
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="missing data"):
@@ -127,7 +128,7 @@ class TestLinearIdentityHandler:
 
     async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": {}})
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="missing data.viewer"):
@@ -135,17 +136,17 @@ class TestLinearIdentityHandler:
 
 
 class TestLinearPreset:
-    def test_returns_config_and_handler(self) -> None:
-        config, handler = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+    def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         assert isinstance(config, ProviderConfig)
-        assert isinstance(handler, RevocationHandler)
+        assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_scope_separator_is_comma(self) -> None:
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read", "write"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read", "write"])
         assert config.scope_separator == ","
 
     def test_config_has_correct_endpoints(self) -> None:
-        config, _ = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         assert config.authorize_url == "https://linear.app/oauth/authorize"
         assert config.token_url == "https://api.linear.app/oauth/token"
         assert config.revocation_url == "https://api.linear.app/oauth/revoke"

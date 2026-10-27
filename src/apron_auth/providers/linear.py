@@ -13,19 +13,14 @@ inspects the response body even on success status codes and raises
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 # The GraphQL endpoint that the identity query goes to.
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -38,6 +33,14 @@ _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
 # canonical key. Linear keeps the last 3 urlKeys as redirects but the
 # urlKey itself should not be treated as a permanent identifier.
 _LINEAR_VIEWER_QUERY = "query { viewer { id name displayName email avatarUrl } organization { id name urlKey } }"
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.LINEAR,
+    authorize_url="https://linear.app/oauth/authorize",
+    token_url="https://api.linear.app/oauth/token",
+    revocation_url="https://api.linear.app/oauth/revoke",
+)
 
 
 class LinearIdentityHandler:
@@ -128,10 +131,11 @@ class LinearIdentityHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Linear OAuth provider configuration.
 
     Args:
@@ -142,17 +146,7 @@ def preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    config = ProviderConfig(
-        provider=Provider.LINEAR,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://linear.app/oauth/authorize",
-        token_url="https://api.linear.app/oauth/token",
-        revocation_url="https://api.linear.app/oauth/revoke",
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        extra_params=extra_params or {},
-    )
-    return config, StandardRevocationHandler()
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

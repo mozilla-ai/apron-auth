@@ -11,19 +11,17 @@ authorization request asks for.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import Any
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +45,16 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+# NOTE: The revocation endpoint names the client, so the preset states it per call.
+_PRESET = Preset(
+    provider=Provider.GITHUB,
+    authorize_url="https://github.com/login/oauth/authorize",
+    token_url="https://github.com/login/oauth/access_token",
+    base_scopes=BASE_SCOPES,
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # Maps a broad GitHub scope to the narrower scopes it implicitly grants.
 # Only the immediate scopes each one implies are listed;
@@ -288,10 +296,11 @@ class GitHubRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a GitHub OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically — ``read:user`` and
@@ -307,21 +316,15 @@ def preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
-        provider=Provider.GITHUB,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://github.com/login/oauth/authorize",
-        token_url="https://github.com/login/oauth/access_token",
+    declared = replace(
+        _PRESET,
         revocation_url=f"https://api.github.com/applications/{client_id}/grant",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=extra_params or {},
-        scope_metadata=BASE_SCOPE_METADATA,
         implicit_scopes=IMPLICIT_SCOPES,
     )
-    return config, GitHubRevocationHandler()
+    config = declared.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
+    )
+    return config

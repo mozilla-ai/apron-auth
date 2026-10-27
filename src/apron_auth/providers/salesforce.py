@@ -8,21 +8,17 @@ been verified end-to-end.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import re
+from collections.abc import Sequence
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
 
+from apron_auth._urls import matches_suffix
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers._host_match import matches_suffix
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -45,8 +41,10 @@ BASE_SCOPE_METADATA = [
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
-# The characters that make an instance host unsafe to put into a URL.
-_FORBIDDEN_HOST_CHARS = frozenset("/?#@ \t\n\r")
+# A DNS name, which is what an instance host may be. Anything else is refused as a whole rather than
+# by forbidden character, because a character list missed a port and then a backslash, and a browser
+# reads a backslash in an authority as a separator while this library's host check does not.
+_DNS_NAME = re.compile(r"\A(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.(?!-)[A-Za-z0-9-]{1,63}(?<!-))*\Z")
 
 # The path of the userinfo endpoint on the user's Salesforce instance.
 _SALESFORCE_USERINFO_PATH = "/services/oauth2/userinfo"
@@ -161,11 +159,12 @@ class SalesforceIdentityHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     host: str = "login.salesforce.com",
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Salesforce OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically — Salesforce
@@ -175,9 +174,7 @@ def preset(
     ``host`` selects the Salesforce login host. Use
     ``test.salesforce.com`` for sandboxes, or a My Domain host (e.g.
     ``acme.my.salesforce.com``) for orgs that require it. It must be a
-    bare hostname — no scheme, path, query, or whitespace — and is
-    rejected with :class:`ValueError` otherwise so misconfiguration
-    fails fast rather than producing a malformed OAuth endpoint.
+    bare hostname, with no scheme, path, query, or whitespace.
 
     Args:
         client_id: The OAuth client identifier.
@@ -189,27 +186,30 @@ def preset(
         host: The Salesforce login host, as described above.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
-        ValueError: If ``host`` is empty or not a bare hostname.
+        ConfigurationError: If ``host`` is empty or is not a bare hostname. It does not repeat the
+            value it refused, because a rejected authority can carry a credential.
     """
-    if not host or any(c in _FORBIDDEN_HOST_CHARS for c in host):
-        msg = f"host must be a bare hostname like 'login.salesforce.com' (no scheme, path, or whitespace); got {host!r}"
-        raise ValueError(msg)
+    if not _DNS_NAME.fullmatch(host):
+        msg = (
+            "host must be a bare hostname such as 'login.salesforce.com', "
+            "stating DNS labels alone with no scheme, port, path, credential or whitespace"
+        )
+        raise ConfigurationError(msg)
 
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
+    # Every endpoint names the org's own login host, so this preset states them per call.
+    declared = Preset(
         provider=Provider.SALESFORCE,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
         authorize_url=f"https://{host}/services/oauth2/authorize",
         token_url=f"https://{host}/services/oauth2/token",
         revocation_url=f"https://{host}/services/oauth2/revoke",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=extra_params or {},
+        base_scopes=BASE_SCOPES,
         scope_metadata=BASE_SCOPE_METADATA,
     )
-    return config, StandardRevocationHandler()
+    config = declared.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
+    )
+    return config

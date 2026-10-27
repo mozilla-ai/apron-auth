@@ -10,19 +10,15 @@ the authorization request asks for.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Sequence
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -44,6 +40,17 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.GOOGLE,
+    authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+    token_url="https://oauth2.googleapis.com/token",
+    revocation_url="https://oauth2.googleapis.com/revoke",
+    base_scopes=BASE_SCOPES,
+    default_extra_params={"access_type": "offline", "prompt": "consent"},
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # The endpoint that returns the signed-in user's profile.
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -155,10 +162,11 @@ class GoogleRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Google OAuth provider configuration.
 
     Default extra_params include access_type=offline and prompt=consent
@@ -174,24 +182,7 @@ def preset(
             the ``access_type=offline`` and ``prompt=consent`` defaults.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    defaults = {"access_type": "offline", "prompt": "consent"}
-    if extra_params:
-        defaults.update(extra_params)
-
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
-        provider=Provider.GOOGLE,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        revocation_url="https://oauth2.googleapis.com/revoke",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=defaults,
-        scope_metadata=BASE_SCOPE_METADATA,
-    )
-    return config, GoogleRevocationHandler()
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

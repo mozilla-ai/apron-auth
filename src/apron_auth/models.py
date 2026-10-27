@@ -21,7 +21,13 @@ from pydantic import (
 )
 
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
-from apron_auth._urls import AuthorityCredential, authority_credential, query_parameters, uses_allowed_transport
+from apron_auth._urls import (
+    AuthorityCredential,
+    authority_credential,
+    matches_suffix,
+    query_parameters,
+    uses_allowed_transport,
+)
 from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
@@ -170,6 +176,10 @@ class ProviderFacts:
         identity_handler_class_name: The name of the class in the provider's module that fetches identity.
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
+        revocation_handler_class_name: The name of the class in the provider's module that revokes a
+            token, named rather than held for the same reason. The class takes no constructor arguments.
+            ``None`` where the provider needs no revocation of its own, which leaves a config that
+            declares a revocation endpoint to the standard RFC 7009 revocation.
         scope_separator: The string the provider's scope parameter is joined with.
             NOTE: It must not be empty, as :attr:`ProviderConfig.scope_separator` requires.
         user_token_response_field: The member of a token-endpoint response that carries the token the
@@ -182,6 +192,7 @@ class ProviderFacts:
     display_name: str
     host_suffixes: tuple[str, ...]
     identity_handler_class_name: str
+    revocation_handler_class_name: str | None
     scope_separator: str
     user_token_response_field: str | None
 
@@ -230,6 +241,11 @@ class Provider(StrEnum):
         return self._facts.identity_handler_class_name
 
     @property
+    def revocation_handler_class_name(self) -> str | None:
+        """The name of the class in the provider's module that revokes a token."""
+        return self._facts.revocation_handler_class_name
+
+    @property
     def scope_separator(self) -> str:
         """The string the provider's scope parameter is joined with."""
         return self._facts.scope_separator
@@ -247,6 +263,7 @@ class Provider(StrEnum):
             display_name="Atlassian",
             host_suffixes=("auth.atlassian.com",),
             identity_handler_class_name="AtlassianIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -259,6 +276,7 @@ class Provider(StrEnum):
             display_name="GitHub",
             host_suffixes=("github.com",),
             identity_handler_class_name="GitHubIdentityHandler",
+            revocation_handler_class_name="GitHubRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -271,6 +289,7 @@ class Provider(StrEnum):
             display_name="Google",
             host_suffixes=("google.com", "googleapis.com"),
             identity_handler_class_name="GoogleIdentityHandler",
+            revocation_handler_class_name="GoogleRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -283,6 +302,7 @@ class Provider(StrEnum):
             display_name="HubSpot",
             host_suffixes=("api.hubapi.com", "app.hubspot.com"),
             identity_handler_class_name="HubSpotIdentityHandler",
+            revocation_handler_class_name="HubSpotRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -295,6 +315,7 @@ class Provider(StrEnum):
             display_name="Linear",
             host_suffixes=("linear.app",),
             identity_handler_class_name="LinearIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=",",
             user_token_response_field=None,
         ),
@@ -307,6 +328,7 @@ class Provider(StrEnum):
             display_name="Microsoft",
             host_suffixes=("login.microsoftonline.com",),
             identity_handler_class_name="MicrosoftIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -319,6 +341,7 @@ class Provider(StrEnum):
             display_name="Notion",
             host_suffixes=("api.notion.com",),
             identity_handler_class_name="NotionIdentityHandler",
+            revocation_handler_class_name="NotionRevocationHandler",
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -331,6 +354,7 @@ class Provider(StrEnum):
             display_name="Salesforce",
             host_suffixes=("salesforce.com",),
             identity_handler_class_name="SalesforceIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -343,6 +367,7 @@ class Provider(StrEnum):
             display_name="Slack",
             host_suffixes=("slack.com",),
             identity_handler_class_name="SlackIdentityHandler",
+            revocation_handler_class_name="SlackRevocationHandler",
             scope_separator=",",
             user_token_response_field="authed_user",
         ),
@@ -355,6 +380,7 @@ class Provider(StrEnum):
             display_name="Typeform",
             host_suffixes=("api.typeform.com",),
             identity_handler_class_name="TypeformIdentityHandler",
+            revocation_handler_class_name=None,
             scope_separator=" ",
             user_token_response_field=None,
         ),
@@ -1053,6 +1079,41 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
                 msg = f"{fact} must be {stated!r} for provider {self.provider.display_name}, got {carried!r}"
                 raise ValueError(msg)
         return self
+
+    @model_validator(mode="after")
+    def _revocation_endpoint_sits_with_the_token_endpoint(self) -> ProviderConfig:
+        """Reject a config that revokes a token somewhere other than where it was issued.
+
+        A revocation request carries a bearer token to ``revocation_url``. A token is revoked at the
+        host that issued it, or at another of the named provider's own hosts, so any other host
+        would be sent a token it never issued. A subdomain of the issuing host is another host.
+        NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``provider`` is set and the revocation and token endpoints name
+                neither one host nor two of the named provider's. The message names the hosts
+                alone, because a rejected authority can carry a credential.
+        """
+        if self.provider is None or self.revocation_url is None:
+            return self
+        token_host = urlparse(self.token_url).hostname or ""
+        revocation_host = urlparse(self.revocation_url).hostname or ""
+        # A subdomain is a separate authority, so only the host itself answers for the token it issued.
+        if revocation_host and revocation_host == token_host:
+            return self
+        suffixes = self.provider.host_suffixes
+        if matches_suffix(revocation_host, suffixes) and matches_suffix(token_host, suffixes):
+            return self
+        display_name = self.provider.display_name
+        msg = (
+            f"revocation_url names {revocation_host} and token_url names {token_host}. A token is "
+            f"revoked where it was issued, so both must name one host, or both must name "
+            f"{display_name} hosts."
+        )
+        raise ValueError(msg)
 
     def basic_auth(self) -> tuple[str, str] | None:
         """Return the client's HTTP Basic credential, or None for a public client.

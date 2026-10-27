@@ -32,12 +32,12 @@ Requires Python 3.11+.
 
 ### With a provider preset
 
-Presets bundle the endpoints, auth method, PKCE config, and revocation handler for a given provider into a single call.
+Presets bundle the endpoints, auth method, PKCE config and provider name for a given provider into a single call, and the client reads the revocation handler from the name.
 
 ```python
 from apron_auth.providers import google
 
-config, revocation_handler = google.preset(
+config = google.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=["openid", "email", "profile"],
@@ -49,7 +49,7 @@ If you use [apron-tools](https://github.com/mozilla-ai/apron-tools), scopes come
 ```python
 from apron_tools.providers.google.gmail.scopes import CAPABILITY_GROUP as GMAIL
 
-config, revocation_handler = google.preset(
+config = google.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=GMAIL.scopes,
@@ -69,7 +69,7 @@ from apron_auth.providers import oidc
 
 metadata = await oidc.discover("https://sso.example.com/realms/acme")
 
-config, revocation_handler = oidc.preset(
+config = oidc.preset(
     client_id="your-client-id",
     client_secret="your-client-secret",  # pragma: allowlist secret
     scopes=["email", "profile"],
@@ -214,19 +214,23 @@ print(identity.email_verified)
 ```
 
 `fetch_identity` takes the `FreshTokenSet` that `exchange_code` and
-`refresh_token` return, and nothing else. An identity handler may
-accept the ID token in it without a signature check, which is safe
-only for a token the token endpoint returned over TLS, so a `TokenSet`
-reloaded from storage is a type error and raises `ConfigurationError`.
-Persist the fields as before. A stored set comes back as a plain
-`TokenSet`, and `refresh_token` turns it into a fresh one; when the
-provider issued no refresh token, run authorization again. A model you
-persist must hold a `TokenSet`, not a `FreshTokenSet`: reloading a
-`FreshTokenSet` field from storage raises `ConfigurationError`. The fresh
-set is narrowed to an `IdentityMaterial` — exposing only the access
-token and, for OIDC providers, the ID token — before being handed to
-the provider's identity handler, so handlers never receive the refresh
-token or caller context.
+`refresh_token` return, and nothing else. An identity handler may accept
+the ID token in it without a signature check, which is safe only for a
+token the token endpoint returned over TLS, so a `TokenSet` reloaded
+from storage is a type error and raises `ConfigurationError`. Persist
+the fields as before. A stored set comes back as a plain `TokenSet`, and
+`refresh_token` turns it into a fresh one; when the provider issued no
+refresh token, run authorization again. Restore it with
+`TokenSet.model_validate`, and pass the model's own fields and nothing
+else: a field the model does not define is refused rather than ignored,
+and a `UserToken` nested in the record is held to the same rule. If your
+store adds keys of its own, select the model's fields out of the record
+first. A model you persist must hold a `TokenSet`, not a
+`FreshTokenSet`: reloading a `FreshTokenSet` field from storage raises
+`ConfigurationError`. The fresh set is narrowed to an `IdentityMaterial`
+— exposing only the access token and, for OIDC providers, the ID token —
+before being handed to the provider's identity handler, so handlers
+never receive the refresh token or caller context.
 
 A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
 OAuth protocol endpoints come from the provider config; identity API
@@ -434,7 +438,7 @@ domain-gated tenancy flow can reject incapable providers at startup,
 rather than discovering the gap at login time:
 
 ```python
-config, _ = some_preset(client_id=..., client_secret=..., scopes=...)
+config = some_preset(client_id=..., client_secret=..., scopes=...)
 if domain_gated_signin and not config.can_assert_domain_ownership:
     raise ConfigError(
         "This provider cannot assert domain ownership; do not "
@@ -538,9 +542,13 @@ These merge with the defaults, which `OAuthClient.DEFAULT_RETRYABLE_ERROR_CODES`
 ### Token revocation
 
 ```python
-client = OAuthClient(config, revocation_handler=revocation_handler)
+client = OAuthClient(config)
 await client.revoke_token(tokens.access_token)
 ```
+
+The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to `OAuthClient` to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
+
+A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there.
 
 ### State management
 
@@ -587,6 +595,8 @@ print(tokens.context["tenant_id"])  # "T456"
 print(tokens.extras)  # {"team_id": "T123", ...}
 ```
 
+`TokenSet.extras` holds every field a token response carried that no attribute names. A field whose value is not of the type its attribute states lands there too, and the attribute keeps its default, so `scope`, `refresh_token`, `expires_in` and `expires_at` state nothing, and `token_type` reads `Bearer`, while the value the provider sent sits in the extras. `expires_in` is not coerced, so a numeric string lands there rather than becoming an integer, and `expires_at` can still state the expiry, because the token client derives it before this library reads the response. Treat the extras as sensitive: a credential a provider sent in the wrong shape arrives there, which makes them as sensitive as the token fields the model names.
+
 ## Connecting to an MCP server
 
 When the provider is not a known preset but a remote MCP (Model Context Protocol) server, `apron_auth.mcp` discovers its OAuth configuration at runtime (RFC 9728 protected-resource metadata + RFC 8414 authorization-server metadata) and, where the server supports it, registers a client dynamically (RFC 7591). The result folds into the same `ProviderConfig`/`OAuthClient` used everywhere else.
@@ -631,6 +641,8 @@ tokens = await client.exchange_code(
 The config that `to_provider_config` returns names no built-in provider and allows no provider's identity handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. An authorization server on a built-in provider's host gets no handler either, which would otherwise send the MCP server's access token to that provider's API.
 
 A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
+
+`ServerMetadata` and `ClientRegistration` refuse a field they do not define, so select the model's fields out of an authorization server's own document rather than validating the whole document. RFC 8414 and RFC 7591 both let a server return members this library does not model. `discover` and `register_client` read a document field by field, so a config built through them is unaffected; the rule applies to a model you build or reload yourself.
 
 Public clients are supported end to end: a server that issues no secret yields `ClientRegistration.client_secret = None`, and `to_provider_config` sets `token_endpoint_auth_method` to `TokenEndpointAuthMethod.NONE`.
 
@@ -708,14 +720,14 @@ Run the two flows separately. The install yields a bot token for workspace work,
 An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`.
 
 ```python
-config, revocation_handler = slack.preset(
+config = slack.preset(
     client_id="...",
     client_secret="...",
     scopes=["channels:read"],
     user_scopes=["chat:write"],
     redirect_uri="https://app.example.com/callback",
 )
-client = OAuthClient(config=config, revocation_handler=revocation_handler)
+client = OAuthClient(config=config)
 url, pending_state = await client.get_authorization_url()
 tokens = await client.exchange_code(
     code="authorization-code-from-callback",
@@ -754,8 +766,8 @@ Some providers' revocation endpoints fully remove the user's portal-level OAuth 
 ```python
 from apron_auth.providers import google, hubspot
 
-google_config, _ = google.preset(...)
-hubspot_config, _ = hubspot.preset(...)
+google_config = google.preset(...)
+hubspot_config = hubspot.preset(...)
 
 if google_config.disconnect_fully_revokes:
     ...  # tier 1: trigger revoke + re-auth in-app
@@ -806,59 +818,6 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenValidationError`.                     |
 
 `TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
-
-### Migrating from 0.19
-
-- `OAuthPendingState.metadata` is now `context`, and the `get_authorization_url` keyword that fills it is now `context` as well. The field and the keyword therefore carry one name, and it matches the `TokenSet.context` a code exchange copies the value onto.
-- `TokenSet.metadata` and `UserToken.metadata` are both now `extras`. They hold the fields a provider's token response carried that no attribute names, which is a different thing from `TokenSet.context`, and that field keeps its name and its meaning.
-- `OAuthPendingState`, `TokenSet`, `UserToken`, `ClientRegistration` and `ServerMetadata` refuse a field they do not define, as `ProviderConfig` already did. The refusal raises `ConfigurationError`, names the field and does not repeat its value. A field these models did not define was dropped silently before, so a document stored under the old name reloaded with that value missing and no error. This refusal applies when **you** build or reload one of these models. It does not reach a provider's response: `exchange_code` and `refresh_token` read a token response field by field and put everything the model does not name on `TokenSet.extras`, so no field a provider invents can refuse an exchange. The models this library builds from a provider's response and does not list here still ignore an unknown field, because every field they drop fails closed.
-- If you build a `ServerMetadata` or a `ClientRegistration` by validating an authorization server's own document, select the model's fields out of it first. RFC 8414 and RFC 7591 both let a server return members this library does not model, and those members are now refused rather than ignored. `oidc.discover`, `mcp.discover` and `mcp.register_client` already read a document field by field, so a config built through them is unaffected.
-- The refusal applies to every unnamed key, not only a renamed one, so a stored record must hold the model's fields alone. If your store adds keys of its own, such as a document identifier or an expiry attribute, select the model's fields out of the record rather than passing the whole record to `model_validate`. This is a standing requirement, not a one-time migration step.
-- A refusal names the field at the level it was found, so an unnamed key inside a nested `user_token` reports the same text as one at the top level. Re-key both at once, because a second attempt that still refuses looks identical to the first.
-- A token-endpoint response field is read onto its `TokenSet` attribute only where its value is of the type that attribute states. One of any other type goes to `TokenSet.extras` and the attribute takes its default, so `token_type` can now read `"Bearer"` and `scope`, `refresh_token`, `expires_in` or `expires_at` can read `None` where a wrong-typed value previously raised `ConfigurationError` out of `exchange_code` after the code had been redeemed. `expires_in` is also no longer coerced, so a numeric string lands in the extras rather than becoming an integer; `expires_at` still states the expiry in that case, because the token client derives it before this library reads the response. Read `TokenSet.extras` for anything an attribute states nothing for, and treat it as sensitive: a credential a provider sent in the wrong shape arrives there.
-- Taken together, a pending state or a token set you persisted under 0.19 does not reload under 0.20: `model_validate` refuses the stored `metadata` key. Re-key each stored document (`doc["context"] = doc.pop("metadata")` for a pending state, `doc["extras"] = doc.pop("metadata")` for a token set and for a `user_token` nested in one) before you load it, or discard the documents you can afford to lose. Discarding a pending state abandons the flow it records, so drain or expire in-flight authorizations across the upgrade.
-
-### Migrating from 0.18
-
-This section names the fields as 0.19 named them. Read the 0.19 section above for the renames that followed, and apply them if you are upgrading past 0.19.
-
-- `PermanentOAuthError` is gone. Catch `TokenRefreshError` and read `retryable`; a dead grant has `retryable == False` and `error_code == "invalid_grant"`.
-- `permanent_error_codes` on `OAuthClient` is now `retryable_error_codes`, and the default changed: a code you do not list is not retryable.
-- `TokenVerificationError` is now `TokenValidationError` and requires a `reason`.
-- `IdentityNotSupportedError` is a `ConfigurationError`, not a sibling of `IdentityFetchError`.
-- `exchange_code` and `refresh_token` return a `FreshTokenSet`, and `fetch_identity` accepts only that type. A `TokenSet` reloaded from storage raises `ConfigurationError`; call `refresh_token` and pass its result, or run authorization again when the provider issued no refresh token. A model you persist must hold a `TokenSet`, because a `FreshTokenSet` field cannot be reloaded and a `FreshTokenSet` cannot be pickled. A `FreshTokenSet` does not compare equal to a `TokenSet` carrying the same fields, because the two types are the distinction.
-- A `RevocationError` or `IdentityFetchError` your own handler raises should pass `kind`, or declare `default_kind` on a subclass. One raised without a kind is `UNEXPECTED`, which is never retryable.
-- `StandardRevocationHandler` raises `RevocationError` with the status's `kind` for an error status. It no longer returns `False`.
-- `TokenExchangeError.retryable` is always `False`. Start a new authorization instead of repeating an exchange.
-- The message on a `TokenExchangeError` or `TokenRefreshError` from the token endpoint states the failure in this library's own terms, such as `HTTP 400` or `request timed out`, and no longer repeats the endpoint's `error_description`. The endpoint chooses that text and can echo a value the request sent, in whatever encoding it likes, so no rule can make it safe to publish; it is now read nowhere and logged nowhere. Branch on `kind`, `retryable` and `error_code`. `error_code` is reported only when the endpoint stated a lowercase identifier no longer than any registered code, because RFC 6749 section 5.2 names six codes and then restricts only which characters the field may hold, so an endpoint can put anything printable there. `TokenEndpointError` applies that rule itself and holds the result read-only, so `error_code` is the same whatever raised the error, and an assignment to it now raises `AttributeError`. A value the request sent as a secret is not reported either, because an endpoint can echo what it was sent and a client secret, authorization code, code verifier or refresh token can take the shape a code takes. Code that matched the old message text must change.
-- `mcp.discover`, `mcp.register_client` and `mcp.cimd_client_id` raise `ConfigurationError` for a URL you passed that they refuse — the server URL, the resource-metadata hint, the registration endpoint, or the CIMD client identifier — including one the HTTP client cannot send. `mcp.cimd_client_id` raised `ValueError` before. A URL the server's metadata declares still raises `McpDiscoveryError`.
-- `TokenEndpointAuthMethod` and `ApplicationType` are `StrEnum`s, and `ProviderConfig`, `ClientRegistration` and `mcp.register_client` take the members. A member equals its wire value, so a `"client_secret_basic"` or `"native"` string still works, but a value outside the set is refused where the model or the registration response is read instead of at the token request. `mcp.register_client` no longer raises `ValueError` for an `application_type` outside the set: the parameter's type is the check, so a value your type checker accepts is registered as given.
-- `mcp.register_client` refuses a registration response whose credentials this library cannot use: a `client_secret` that is present but empty or not a string, a token-endpoint auth method it cannot perform, or a method that contradicts the secret the response states, such as `none` arriving with a secret. An unusable secret was dropped silently before, and the other two were refused a phase later by `mcp.to_provider_config`. Each refusal leaves a registration standing at the authorization server, whose credentials the call discards. A member stated as `null` still states no value, as an absent member does.
-- `mcp.to_provider_config` takes a `ClientRegistration` as its second argument, in place of the `client_id`, `client_secret` and `registered_auth_method` keywords. Pass what `mcp.register_client` returned, or build `ClientRegistration(client_id=...)` for an identifier you hold already.
-- `exchange_code` refuses a pending state older than `max_pending_age_seconds`, ten minutes by default. Raise it on the config if your authorization flows legitimately run longer.
-- Every model in `apron_auth.models` raises `ConfigurationError` where it raised a `ValidationError` from the validation library, whether the refusal comes from construction, from validation of a mapping or a document, or from setting a field, and the message names each field it refused. A `ValidationError` carries the raw value it was given, so a refusal of a config holding a plain-string `client_secret`, or of a token set holding an access token, handed that credential to whatever recorded the error. Catch `ConfigurationError` and read its message; a per-field structured error is no longer available from these models. The rule is part of each model's schema, so validating one through a `TypeAdapter` of your own raises `ConfigurationError` too. The exception is a document your own code hands to a JSON parser, through `TypeAdapter.validate_json` or the model's validator directly: the parser refuses a malformed document before the schema runs, and that refusal is a `ValidationError` carrying the document.
-- A URL carrying userinfo is refused wherever this library validates one, not only as an issuer, and `ProviderConfig` and `OAuthPendingState` refuse one in every URL field they hold. A public client states no credential of its own, so the HTTP client would have presented the URL's to the provider. Move such a credential out of the URL and onto the config.
-- Every endpoint URL on `ProviderConfig` and `ServerMetadata` must use `https`. A loopback host is accepted over plain HTTP with no opt-in, because a request to one reaches no network, so a config that already pointed at `localhost` needs no change. An empty string is refused where it used to pass as an unset endpoint. Anywhere else, plain HTTP needs `ProviderConfig.unsafe.allow_plain_http("token_url", ...)` or `ServerMetadata.unsafe.allow_plain_http(...)`, which names each field it accepts it for, takes a field name or a `UrlField` member, and records the set on the model. The waiver cannot be passed as a keyword or read back out of storage, so it stays a statement made in code about one machine; a model recording one also cannot be pickled, nor validated as a field of another model. A copy made with `model_copy`, `copy.replace` or `copy.deepcopy` runs no validator and carries whatever it was given. `oidc.discover` and `oidc.preset` keep their `allow_insecure_http` parameter and state the waiver for you; `oidc.discovery_url` and `oidc.identity_handler` keep theirs too and build no model, so they state none. `resource` is exempt, because it identifies an API rather than naming an endpoint this library requests. `get_authorization_url` applies the same rule to a `redirect_uri` passed per call, which a config waiving `redirect_uri` covers. A redirect URI stating a native client's own scheme, such as `com.example.app:/callback`, is refused with no waiver available, because no scheme but `https` states a transport this library can check: use the RFC 8252 loopback redirect instead. `mcp.register_client` refuses such a URI before it registers, so a refusal never leaves credentials standing at the server. `apron_auth.models.URL_FIELDS` is now the `UrlField` enum, exported as `apron_auth.UrlField`.
-- An `authorize_url` whose own query sets a reserved authorization request parameter is refused when the config is built, as `extra_params` already was. The request has always dropped such a parameter and set its own, so a config that stated one never sent it, and the drop stays in place for a config built without validation. A name written with no value, as in `?state=` or `?state`, sets that parameter and is refused with the rest. Move the value to the typed field where one exists, and otherwise take it out of the URL. A parameter that is not reserved and is written with no value is now sent as the URL states it, where it used to be dropped. RFC 6749 section 3.1 has a provider treat a parameter sent with no value as omitted, so the request asks for the same thing either way.
-- A token-endpoint response that states no access token is refused, with `TokenExchangeError` from a code exchange and `TokenRefreshError` from a refresh, where it used to raise a `KeyError` from inside this library. RFC 6749 section 5.1 requires the field, so such a response carries no token this library can use. Any other token the refused response carried is revoked first, so a refusal leaves nothing valid. A Slack app asking for user scopes alone takes this path, because Slack then returns no top-level token: sign a person in with `slack.sign_in_preset(...)` instead.
-- A token a provider issues for the person who authorized the application, beside the application's own, is read onto `TokenSet.user_token` as a typed `UserToken` and is no longer left in `TokenSet.metadata`. For Slack that moves the user token from `metadata["authed_user"]["access_token"]` to `token_set.user_token.access_token`, with its refresh token, expiry, scope and user ID beside it, so it can be refreshed and revoked by name rather than dug out of a free dict. Any member of the nested object that `UserToken` does not name is kept on `UserToken.metadata`, so nothing the provider sent is dropped. A nested object carrying no access token, such as the `authed_user` of a bot-only install, stays in `TokenSet.metadata` as it was. A refused token response now revokes a nested token too. Read `apron_auth.UserToken` for the shape; `Provider.user_token_response_field` states which member a provider uses, and only Slack uses one.
-- `slack.preset(...)` and `slack.sign_in_preset(...)` raise `ConfigurationError` where they raised `ValueError`, as every other provider module already did. `ConfigurationError` does not inherit from `ValueError`, so code catching `ValueError` around a Slack preset must catch `ConfigurationError`, or `OAuthError` for every fault this library raises.
-- A refused token response has its tokens revoked wherever the response carried them, including inside a member a provider issues a second token in, and whether or not the configuration names a provider. A refused refresh spares only the refresh token the call presented, because the caller still holds that one, and revokes anything the response issued beside it.
-- Errors can be pickled and keep `kind`, `error_code` and `reason`.
-- A built-in identity handler comes from `ProviderConfig.provider`, not from the endpoint hosts. Name the provider on a config you build by hand to keep the handler it used to be given, and expect `IdentityNotSupportedError` from `fetch_identity` for a config that names none. Naming it also takes that provider's stated facts, so a Google or Microsoft config gains `can_assert_domain_ownership=True`, which a domain-gated sign-in gate reads.
-- A config that names a provider whose host suffixes do not cover both its authorization and token endpoints raises `ConfigurationError` from `fetch_identity`, where it used to raise `IdentityNotSupportedError`. Pass your own `identity_handler` for a deployment on other hosts.
-- `ProviderConfig.allow_identity_inference` is now `use_builtin_identity_handler`, because a config names its provider rather than having one inferred from its hosts. It still refuses that provider's handler when `False`.
-- `ProviderConfig` refuses a field it does not define, so a renamed or mistyped keyword raises instead of being dropped. A persisted config carrying a field this version removed must be migrated before it is loaded.
-- A revocation handler you call yourself raises `ConfigurationError`, not `ValueError`, for a config that carries no revocation endpoint. `revoke_token` already refused such a config with `ConfigurationError`, so this changes only a direct call.
-- A handler that refuses the configuration it was given raises `ConfigurationError`, and `fetch_identity` and `revoke_token` pass that class through. The Salesforce identity handler used to raise `IdentityFetchError` with `kind` `CONFIGURATION` for a non-Salesforce `authorize_url`, and a revocation handler's `ConfigurationError` used to arrive as `RevocationError`, so catch `ConfigurationError` for a configuration fault on either path. Revoking the tokens of a refused token response stays best effort and logs such a fault rather than raising it.
-- `apron_auth.providers.identity`, each provider module's `maybe_identity_handler` and `IDENTITY_RESOLVER`, and `apron_auth.protocols.IdentityResolver` are gone. `apron_auth.providers.identity_handler_for(config)` returns the handler a config resolves to.
-- Sign in with Slack has its own preset. `slack.preset(...)` configures a workspace install only and now refuses the `openid` scope in `scopes` and in `user_scopes`. Use `slack.sign_in_preset(...)` instead, which runs on Slack's OpenID endpoints, always requests `openid` and names Slack's issuer. A Slack config that asked for `openid` on `oauth/v2` received no ID token, so nothing checked the nonce the request sent. The Slack identity handler now selects the OpenID `userInfo` path from the token endpoint the config names rather than from a scope word, so a config built by hand must name `https://slack.com/api/openid.connect.token` to reach it, and `fetch_identity` raises `ConfigurationError` when the token endpoint and the requested scopes name different flows. Neither Slack preset accepts a `scope` key in `extra_params` any more, because it would replace the scopes the preset built. `slack.sign_in_preset(...)` requests `openid`, `email` and `profile` alone and refuses any other scope, and it declares `openid` as the one required scope family rather than every scope it was given.
-- A `Provider` member's facts are read-only. Reading one is unchanged, and assigning to `Provider.GOOGLE.host_suffixes` or any other fact now raises `AttributeError`.
-- `can_assert_domain_ownership` is a `Provider` member's fact, like `disconnect_fully_revokes` and `scope_separator`. A config that names a provider takes it from the member, and one that contradicts the member is refused at construction.
-- `MemoryStateStore` returns a pending state that is exactly `max_age` old, where it previously dropped one. It now draws the boundary where `exchange_code` draws it.
-- `MemoryStateStore` raises `ConfigurationError` for a `max_age` that is not a positive number of seconds that can be subtracted from a clock reading, as the provider config already refuses such a `max_pending_age_seconds`. A store built with `0` to expire every state at once no longer constructs.
-- `MemoryStateStore` treats a stored state whose creation time is unusable, or further ahead of the system clock than the library allows, as expired rather than as current. After the system clock steps backwards, a state younger than the step less that difference is expired, so a step beyond the difference plus `max_age` expires every state the store holds.
-- `stores.DEFAULT_MAX_AGE` is gone, and was never exported from the package. `MemoryStateStore` and `max_pending_age_seconds` now default to one ten-minute limit, so omit `max_age` to take it or pass your own.
 
 ## Logging
 

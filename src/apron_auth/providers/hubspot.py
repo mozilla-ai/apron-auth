@@ -28,11 +28,11 @@ no human handle in the introspection payload to put there.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth.errors import ConfigurationError, RevocationError
@@ -43,13 +43,9 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
-    TokenEndpointAuthMethod,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +63,16 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.HUBSPOT,
+    authorize_url="https://app.hubspot.com/oauth/authorize",
+    token_url="https://api.hubapi.com/oauth/v1/token",
+    revocation_url="https://api.hubapi.com/oauth/v1/refresh-tokens",
+    base_scopes=BASE_SCOPES,
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # The token introspection endpoint, which takes the access token as the last path segment.
 _HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX = "https://api.hubapi.com/oauth/v1/access-tokens/"
@@ -257,10 +263,11 @@ class HubSpotRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a HubSpot OAuth provider configuration.
 
     HubSpot uses ``client_secret_post`` token-endpoint authentication
@@ -282,21 +289,7 @@ def preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
-        provider=Provider.HUBSPOT,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://app.hubspot.com/oauth/authorize",
-        token_url="https://api.hubapi.com/oauth/v1/token",
-        revocation_url="https://api.hubapi.com/oauth/v1/refresh-tokens",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        token_endpoint_auth_method=TokenEndpointAuthMethod.CLIENT_SECRET_POST,
-        extra_params=extra_params or {},
-        scope_metadata=BASE_SCOPE_METADATA,
-    )
-    return config, HubSpotRevocationHandler()
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

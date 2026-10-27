@@ -48,7 +48,7 @@ from apron_auth.models import (
 )
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 from apron_auth.protocols import StandardRevocationHandler
-from apron_auth.providers import identity_handler_for
+from apron_auth.providers import identity_handler_for, revocation_handler_for
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -749,8 +749,8 @@ class OAuthClient:
     async def revoke_token(self, token: str) -> bool:
         """Revoke a token via the provider's revocation endpoint.
 
-        Uses the configured RevocationHandler, or falls back to
-        StandardRevocationHandler (RFC 7009 POST).
+        A handler passed to this client revokes the token. Otherwise the handler the config's
+        provider needs does, and a config naming no provider takes RFC 7009 revocation.
 
         Args:
             token: The token to revoke.
@@ -771,6 +771,8 @@ class OAuthClient:
             raise ConfigurationError(msg)
 
         handler = self._revocation_handler
+        if handler is None:
+            handler = self._provider_revocation_handler
         if handler is None:
             handler = StandardRevocationHandler(transport_factory=self._transport_factory)
 
@@ -888,6 +890,16 @@ class OAuthClient:
                 provider it names.
         """
         return identity_handler_for(self._config)
+
+    @cached_property
+    def _provider_revocation_handler(self) -> RevocationHandler | None:
+        """Return the revocation handler of the provider this config names, building it on first use.
+
+        Returns:
+            The named provider's handler, or ``None`` when the config names no provider or declares
+            no revocation endpoint.
+        """
+        return revocation_handler_for(self._config, transport_factory=self._transport_factory)
 
     def _authorization_query(self, params: dict[str, str]) -> dict[str, str | list[str]]:
         """Return the query of an authorization URL that sends ``params``.

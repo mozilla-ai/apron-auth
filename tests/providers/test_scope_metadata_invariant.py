@@ -17,7 +17,7 @@ from functools import partial
 
 import pytest
 
-from apron_auth.models import ServerMetadata
+from apron_auth.models import ProviderConfig, ServerMetadata
 from apron_auth.providers import (
     atlassian,
     github,
@@ -43,7 +43,7 @@ PROBE_OIDC_METADATA = ServerMetadata(
 )
 
 
-PRESETS: list[tuple[str, Callable[..., tuple]]] = [
+PRESETS: list[tuple[str, Callable[..., ProviderConfig]]] = [
     ("atlassian", atlassian.preset),
     ("github", github.preset),
     ("google", google.preset),
@@ -59,8 +59,8 @@ PRESETS: list[tuple[str, Callable[..., tuple]]] = [
 
 
 @pytest.mark.parametrize(("name", "preset_fn"), PRESETS, ids=[name for name, _ in PRESETS])
-def test_injected_scopes_have_matching_metadata(name: str, preset_fn: Callable[..., tuple]):
-    config, _ = preset_fn(
+def test_injected_scopes_have_matching_metadata(name: str, preset_fn: Callable[..., ProviderConfig]):
+    config = preset_fn(
         client_id=f"{name}-id",
         client_secret=f"{name}-secret",  # pragma: allowlist secret
         scopes=list(PROBE_CONSUMER_SCOPES),
@@ -72,7 +72,7 @@ def test_injected_scopes_have_matching_metadata(name: str, preset_fn: Callable[.
 
 
 @pytest.mark.parametrize(("name", "preset_fn"), PRESETS, ids=[name for name, _ in PRESETS])
-def test_scope_metadata_only_describes_injected_scopes(name: str, preset_fn: Callable[..., tuple]):
+def test_scope_metadata_only_describes_injected_scopes(name: str, preset_fn: Callable[..., ProviderConfig]):
     """Presets must not declare metadata for scopes they don't own.
 
     apron-tools owns tool-level scope metadata; apron-auth presets only
@@ -80,7 +80,7 @@ def test_scope_metadata_only_describes_injected_scopes(name: str, preset_fn: Cal
     Declaring metadata for a caller-passed scope would create the same
     drift problem the consent-picker design is meant to avoid.
     """
-    config, _ = preset_fn(
+    config = preset_fn(
         client_id=f"{name}-id",
         client_secret=f"{name}-secret",  # pragma: allowlist secret
         scopes=list(PROBE_CONSUMER_SCOPES),

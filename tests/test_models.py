@@ -1754,6 +1754,142 @@ class TestProviderConfigProvider:
             )
 
 
+class TestProviderConfigRevocationHost:
+    """A token is revoked where it was issued, or at another of the named provider's own hosts.
+
+    A revocation handler sends a bearer token to ``revocation_url``, so any other host would be sent
+    a token it never issued.
+    """
+
+    SLACK_OAUTH = {
+        "authorize_url": "https://slack.com/oauth/v2/authorize",
+        "token_url": "https://slack.com/api/oauth.v2.access",
+    }
+
+    def _config(self, **overrides: object) -> ProviderConfig:
+        fields: dict[str, object] = {
+            "provider": Provider.SLACK,
+            "client_id": "cid",
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
+            **self.SLACK_OAUTH,
+        }
+        fields.update(overrides)
+        return ProviderConfig(**fields)  # type: ignore[arg-type]
+
+    def test_accepts_the_token_endpoints_own_host(self) -> None:
+        config = self._config(revocation_url="https://slack.com/api/auth.revoke")
+
+        assert config.revocation_url == "https://slack.com/api/auth.revoke"
+
+    def test_accepts_a_subdomain_of_the_token_endpoints_host(self) -> None:
+        """GitHub issues at github.com and revokes at api.github.com."""
+        config = ProviderConfig(
+            provider=Provider.GITHUB,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://github.com/login/oauth/authorize",
+            token_url="https://github.com/login/oauth/access_token",
+            revocation_url="https://api.github.com/applications/cid/token",
+            disconnect_fully_revokes=True,
+        )
+
+        assert config.revocation_url == "https://api.github.com/applications/cid/token"
+
+    def test_accepts_a_sibling_host_of_the_named_provider(self) -> None:
+        """Google issues at googleapis.com and documents a revocation endpoint on google.com."""
+        config = ProviderConfig(
+            provider=Provider.GOOGLE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+            revocation_url="https://accounts.google.com/o/oauth2/revoke",
+            can_assert_domain_ownership=True,
+            disconnect_fully_revokes=True,
+        )
+
+        assert config.revocation_url == "https://accounts.google.com/o/oauth2/revoke"
+
+    def test_refuses_a_host_that_is_neither_the_token_endpoints_nor_the_providers(self) -> None:
+        with pytest.raises(ConfigurationError, match="revocation_url names attacker.example.com and token_url names"):
+            self._config(revocation_url="https://attacker.example.com/collect")
+
+    def test_refuses_the_providers_revocation_host_when_the_token_endpoint_is_not_the_providers(self) -> None:
+        """Both hosts must be the provider's, or a config issuing tokens elsewhere would still pass."""
+        with pytest.raises(ConfigurationError, match="revocation_url names slack.com and token_url names"):
+            self._config(
+                token_url="https://attacker.example.com/token",
+                revocation_url="https://slack.com/api/auth.revoke",
+            )
+
+    def test_refuses_a_subdomain_on_a_deployment_of_its_own(self) -> None:
+        """Without the provider's hosts to fall back on, only the one host that issued the token applies."""
+        with pytest.raises(ConfigurationError, match="names attacker.login.mycompany.com"):
+            ProviderConfig(
+                provider=Provider.SALESFORCE,
+                client_id="cid",
+                client_secret=SecretStr("csec"),  # pragma: allowlist secret
+                authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+                token_url="https://login.mycompany.com/services/oauth2/token",
+                revocation_url="https://attacker.login.mycompany.com/services/oauth2/revoke",
+            )
+
+    def test_refuses_a_lookalike_of_the_token_endpoints_host(self) -> None:
+        """The match is anchored on a label boundary, so a lookalike is not the same host."""
+        with pytest.raises(ConfigurationError, match="revocation_url names evilslack.com"):
+            self._config(revocation_url="https://evilslack.com/api/auth.revoke")
+
+    def test_refuses_one_on_a_config_that_states_none_of_the_providers_hosts(self) -> None:
+        """The rule cannot hang off the endpoints a caller chose, or the caller can choose past it."""
+        with pytest.raises(ConfigurationError, match="revocation_url names attacker-b.example.com"):
+            self._config(
+                authorize_url="https://attacker-a.example.com/authorize",
+                token_url="https://attacker-a.example.com/token",
+                revocation_url="https://attacker-b.example.com/collect",
+            )
+
+    def test_refuses_one_where_only_the_authorization_endpoint_is_the_providers(self) -> None:
+        with pytest.raises(ConfigurationError, match="revocation_url names attacker.example.com"):
+            self._config(
+                authorize_url="https://slack.com/oauth/v2/authorize",
+                token_url="https://elsewhere.example.com/token",
+                revocation_url="https://attacker.example.com/collect",
+            )
+
+    def test_the_refusal_does_not_repeat_a_credential_the_url_carried(self) -> None:
+        """Whichever rule refuses it, a rejected authority can carry a credential, so none is repeated."""
+        carrying = "https://operator:sesame@attacker.example.com/collect"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as refusal:
+            self._config(revocation_url=carrying)
+
+        assert "sesame" not in str(refusal.value)
+
+    def test_accepts_a_deployment_wholly_off_the_providers_hosts(self) -> None:
+        """A Salesforce org on a custom login domain issues and revokes on that one host."""
+        config = ProviderConfig(
+            provider=Provider.SALESFORCE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+            token_url="https://login.mycompany.com/services/oauth2/token",
+            revocation_url="https://login.mycompany.com/services/oauth2/revoke",
+        )
+
+        assert config.revocation_url == "https://login.mycompany.com/services/oauth2/revoke"
+
+    def test_accepts_any_revocation_host_when_the_config_names_no_provider(self) -> None:
+        """A config naming no provider states no hosts of its own, so the caller owns the endpoint."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            **self.SLACK_OAUTH,
+            revocation_url="https://elsewhere.example.com/revoke",
+        )
+
+        assert config.revocation_url == "https://elsewhere.example.com/revoke"
+
+
 class TestTenancyContextOwnsEmailDomain:
     def test_defaults_to_false(self) -> None:
         ctx = TenancyContext()

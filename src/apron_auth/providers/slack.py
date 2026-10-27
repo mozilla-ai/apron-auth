@@ -36,11 +36,12 @@ References:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._http_errors import http_failure
@@ -61,11 +62,8 @@ from apron_auth.models import (
     TenancyContext,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._presets import Preset, scope_sequence
 from apron_auth.scopes import scope_words
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
 SIGN_IN_SCOPE_METADATA = [
@@ -101,6 +99,28 @@ _SLACK_REVOKE_URL = "https://slack.com/api/auth.revoke"
 
 # The scope that asks Slack for an ID token. Slack issues it to a user token only.
 _SLACK_SIGN_IN_SCOPE = "openid"
+
+# The two presets sit last because they read the endpoint constants above, and are A-Z between themselves.
+
+# What the workspace-install preset states, beside the values its caller passes.
+# NOTE: The required scope families name the caller's own scopes, so they are stated per call.
+_INSTALL_PRESET = Preset(
+    provider=Provider.SLACK,
+    authorize_url="https://slack.com/oauth/v2/authorize",
+    token_url="https://slack.com/api/oauth.v2.access",
+    revocation_url=_SLACK_REVOKE_URL,
+)
+
+# What the Sign in with Slack preset states, beside the values its caller passes.
+_SIGN_IN_PRESET = Preset(
+    provider=Provider.SLACK,
+    authorize_url=_SLACK_OPENID_AUTHORIZE_URL,
+    token_url=_SLACK_OPENID_TOKEN_URL,
+    revocation_url=_SLACK_REVOKE_URL,
+    issuer=_SLACK_OPENID_ISSUER,
+    required_scope_families=[[_SLACK_SIGN_IN_SCOPE]],
+    scope_metadata=SIGN_IN_SCOPE_METADATA,
+)
 
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
@@ -157,7 +177,7 @@ def _extra_params_without_scope(extra_params: dict[str, str] | None) -> dict[str
         The parameters, as a dict of their own.
 
     Raises:
-        ValueError: If the parameters set ``scope``.
+        ConfigurationError: If the parameters set ``scope``.
     """
     without_scope = dict(extra_params or {})
     if "scope" in without_scope:
@@ -607,11 +627,12 @@ class SlackRevocationHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
-    user_scopes: list[str] | None = None,
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+    user_scopes: Sequence[str] | None = None,
+) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
     Signing a person in is :func:`sign_in_preset` instead. Slack says each set of scopes must be
@@ -634,18 +655,21 @@ def preset(
         client_id: The OAuth client identifier.
         client_secret: The OAuth client secret.
         scopes: The bot scopes to request.
-        user_scopes: The user scopes to request via Slack's ``user_scope``
-            parameter, if any.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        user_scopes: The user scopes to request via Slack's ``user_scope``
+            parameter, if any.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
-        ValueError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter asks for
-            the ``openid`` scope, or if ``extra_params`` sets ``scope``.
+        ConfigurationError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter
+            asks for the ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
+    scopes = scope_sequence(scopes, "scopes")
+    user_scopes = scope_sequence(user_scopes, "user_scopes")
     if not scopes and not user_scopes:
         msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
         raise ConfigurationError(msg)
@@ -678,28 +702,21 @@ def preset(
     if user_scopes:
         required_scope_families.append(list(user_scopes))
 
-    config = ProviderConfig(
-        provider=Provider.SLACK,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://slack.com/oauth/v2/authorize",
-        token_url="https://slack.com/api/oauth.v2.access",
-        revocation_url=_SLACK_REVOKE_URL,
-        redirect_uri=redirect_uri,
-        scopes=scopes,
-        extra_params=merged_extra,
-        required_scope_families=required_scope_families,
+    declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
+    config = declared.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra
     )
-    return config, SlackRevocationHandler()
+    return config
 
 
 def sign_in_preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str] | None = None,
+    *,
+    scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for Sign in with Slack.
 
     Installing an app in a workspace is :func:`preset` instead. Slack serves this flow from its
@@ -719,11 +736,12 @@ def sign_in_preset(
         extra_params: Extra authorization-request parameters.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
 
     Raises:
-        ValueError: If ``scopes`` asks for a scope outside this flow, if ``extra_params`` sets
-            ``scope``, which would replace the requested scopes, or if it sets ``user_scope``,
+        ConfigurationError: If ``scopes`` asks for a scope outside this flow, if ``extra_params``
+            sets ``scope``, which would replace the requested scopes, or if it sets ``user_scope``,
             which this flow does not send.
     """
     merged_extra = _extra_params_without_scope(extra_params)
@@ -734,7 +752,7 @@ def sign_in_preset(
         )
         raise ConfigurationError(msg)
 
-    requested = list(scopes or [])
+    requested = scope_sequence(scopes, "scopes")
     outside_this_flow = sorted(scope_words(requested, Provider.SLACK.scope_separator) - _SLACK_SIGN_IN_SCOPES)
     if outside_this_flow:
         msg = (
@@ -745,18 +763,6 @@ def sign_in_preset(
     if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
-    config = ProviderConfig(
-        provider=Provider.SLACK,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url=_SLACK_OPENID_AUTHORIZE_URL,
-        token_url=_SLACK_OPENID_TOKEN_URL,
-        revocation_url=_SLACK_REVOKE_URL,
-        issuer=_SLACK_OPENID_ISSUER,
-        redirect_uri=redirect_uri,
-        scopes=requested,
-        extra_params=merged_extra,
-        scope_metadata=SIGN_IN_SCOPE_METADATA,
-        required_scope_families=[[_SLACK_SIGN_IN_SCOPE]],
+    return _SIGN_IN_PRESET.config(
+        client_id, client_secret, scopes=requested, redirect_uri=redirect_uri, extra_params=merged_extra
     )
-    return config, SlackRevocationHandler()

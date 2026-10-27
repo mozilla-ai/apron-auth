@@ -10,20 +10,16 @@ surface a deep link to that page for manual removal.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers._identity_requests import fetch_identity_json
-
-if TYPE_CHECKING:
-    from apron_auth.protocols import RevocationHandler
-
+from apron_auth.providers._presets import Preset
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +46,17 @@ BASE_SCOPE_METADATA = [
 
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
+
+# What this provider's preset states, beside the values its caller passes.
+_PRESET = Preset(
+    provider=Provider.ATLASSIAN,
+    authorize_url="https://auth.atlassian.com/authorize",
+    token_url="https://auth.atlassian.com/oauth/token",
+    revocation_url="https://auth.atlassian.com/oauth/revoke",
+    base_scopes=BASE_SCOPES,
+    default_extra_params={"audience": "api.atlassian.com", "prompt": "consent"},
+    scope_metadata=BASE_SCOPE_METADATA,
+)
 
 # The endpoint that lists the Atlassian sites the access token can reach.
 _ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
@@ -247,10 +254,11 @@ class AtlassianIdentityHandler:
 def preset(
     client_id: str,
     client_secret: str,
-    scopes: list[str],
+    *,
+    scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-) -> tuple[ProviderConfig, RevocationHandler]:
+) -> ProviderConfig:
     """Create an Atlassian OAuth provider configuration.
 
     Scopes from BASE_SCOPES are merged automatically.
@@ -264,24 +272,7 @@ def preset(
             the ``audience`` and ``prompt=consent`` defaults.
 
     Returns:
-        The provider configuration paired with its revocation handler.
+        The provider configuration. The client resolves this provider's revocation handler
+        from it.
     """
-    defaults = {"audience": "api.atlassian.com", "prompt": "consent"}
-    if extra_params:
-        defaults.update(extra_params)
-
-    merged_scopes = sorted(set(BASE_SCOPES) | set(scopes))
-
-    config = ProviderConfig(
-        provider=Provider.ATLASSIAN,
-        client_id=client_id,
-        client_secret=SecretStr(client_secret),
-        authorize_url="https://auth.atlassian.com/authorize",
-        token_url="https://auth.atlassian.com/oauth/token",
-        revocation_url="https://auth.atlassian.com/oauth/revoke",
-        redirect_uri=redirect_uri,
-        scopes=merged_scopes,
-        extra_params=defaults,
-        scope_metadata=BASE_SCOPE_METADATA,
-    )
-    return config, StandardRevocationHandler()
+    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)

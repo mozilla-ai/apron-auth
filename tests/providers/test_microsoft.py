@@ -12,6 +12,7 @@ from pytest_httpx import HTTPXMock
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError, TokenValidationReason
 from apron_auth.models import FreshTokenSet, IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
 
 _USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
@@ -88,36 +89,37 @@ def _org_response(
 def _config() -> ProviderConfig:
     from apron_auth.providers.microsoft import preset
 
-    config, _ = preset(client_id=_CLIENT_ID, client_secret="msecret", scopes=["openid"])
+    config = preset(client_id=_CLIENT_ID, client_secret="msecret", scopes=["openid"])
     return config
 
 
 class TestMicrosoftPreset:
-    def test_returns_config_and_none_handler(self):
+    def test_returns_a_configuration_that_declares_no_revocation(self):
         from apron_auth.providers.microsoft import preset
 
-        config, handler = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
+        config = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
         assert isinstance(config, ProviderConfig)
-        assert handler is None
+        assert config.revocation_url is None
+        assert revocation_handler_for(config) is None
 
     def test_a_guid_client_id_is_lowercased(self):
         """Entra names the client by its lowercase GUID in an ID token's audience."""
         from apron_auth.providers.microsoft import preset
 
         guid = "ABCDEF12-3456-7890-ABCD-EF1234567890"
-        config, _ = preset(client_id=guid, client_secret="msecret", scopes=[])
+        config = preset(client_id=guid, client_secret="msecret", scopes=[])
         assert config.client_id == guid.lower()
 
     def test_a_client_id_that_is_not_a_guid_is_kept(self):
         from apron_auth.providers.microsoft import preset
 
-        config, _ = preset(client_id="My-App", client_secret="msecret", scopes=[])
+        config = preset(client_id="My-App", client_secret="msecret", scopes=[])
         assert config.client_id == "My-App"
 
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.microsoft import preset
 
-        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
+        config = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
         assert config.authorize_url == "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
         assert config.token_url == "https://login.microsoftonline.com/common/oauth2/v2.0/token"
         assert config.revocation_url is None
@@ -125,19 +127,19 @@ class TestMicrosoftPreset:
     def test_extra_params_include_prompt(self):
         from apron_auth.providers.microsoft import preset
 
-        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
+        config = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
         assert config.extra_params["prompt"] == "consent"
 
     def test_can_assert_domain_ownership(self):
         from apron_auth.providers.microsoft import preset
 
-        config, _ = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
+        config = preset(client_id="mid", client_secret="msecret", scopes=["offline_access"])
         assert config.can_assert_domain_ownership is True
 
     def test_base_scopes_merged_with_caller_scopes(self):
         from apron_auth.providers.microsoft import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="mid",
             client_secret="msecret",  # pragma: allowlist secret
             scopes=["Mail.Read"],
@@ -149,7 +151,7 @@ class TestMicrosoftPreset:
     def test_duplicate_scopes_deduplicated(self):
         from apron_auth.providers.microsoft import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="mid",
             client_secret="msecret",  # pragma: allowlist secret
             scopes=["offline_access", "Mail.Read"],
@@ -159,7 +161,7 @@ class TestMicrosoftPreset:
     def test_scope_metadata_covers_base_scopes(self):
         from apron_auth.providers.microsoft import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="mid",
             client_secret="msecret",  # pragma: allowlist secret
             scopes=["Mail.Read"],
@@ -704,7 +706,7 @@ class TestMicrosoftIdTokenVerification:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
         app_id = "8a1b2c3d-0000-4000-8000-abcdef012345"
-        config, _ = preset(client_id=app_id.upper(), client_secret="msecret", scopes=["openid"])
+        config = preset(client_id=app_id.upper(), client_secret="msecret", scopes=["openid"])
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
             IdentityMaterial(access_token="access-abc", id_token=_member_id_token(aud=app_id)), config

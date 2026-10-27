@@ -6,23 +6,52 @@ from pytest_httpx import HTTPXMock
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
+from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.salesforce import BASE_SCOPES, preset
 
 
 class TestSalesforcePreset:
-    def test_returns_config_and_handler(self):
-        config, handler = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
+    # A host that is not a DNS name, each of which once passed a blocklist of forbidden characters.
+    REFUSED_HOSTS = [
+        "login.salesforce.com:8443",
+        "evil.example\\login.salesforce.com",
+        "login.salesforce.com%2f.evil.example",
+        "login.salesforce.com/path",
+        "operator:sesame@login.salesforce.com",
+        "[::1]",
+        "login.salesforce.com\u3002evil.example",
+        "",
+        "-login.salesforce.com",
+        "login..salesforce.com",
+    ]
+
+    @pytest.mark.parametrize("host", REFUSED_HOSTS, ids=lambda h: repr(h))
+    def test_refuses_a_host_that_is_not_a_dns_name(self, host: str) -> None:
+        """A character blocklist missed a port and a backslash, so the host is read as a name instead."""
+        with pytest.raises(ConfigurationError, match="bare hostname"):
+            preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host=host)
+
+    @pytest.mark.parametrize(
+        "host", ["login.salesforce.com", "test.salesforce.com", "acme.my.salesforce.com", "login.mycompany.com"]
+    )
+    def test_accepts_a_dns_name(self, host: str) -> None:
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"], host=host)
+
+        assert config.authorize_url.startswith(f"https://{host}/")
+
+    def test_returns_a_configuration_its_provider_handler_resolves_from(self):
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
         assert isinstance(config, ProviderConfig)
-        assert isinstance(handler, RevocationHandler)
+        assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self):
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["api"])
         assert config.authorize_url == "https://login.salesforce.com/services/oauth2/authorize"
         assert config.token_url == "https://login.salesforce.com/services/oauth2/token"
         assert config.revocation_url == "https://login.salesforce.com/services/oauth2/revoke"
 
     def test_sandbox_host_produces_test_endpoints(self):
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["api"],
@@ -47,8 +76,8 @@ class TestSalesforcePreset:
             "test .salesforce.com",
         ],
     )
-    def test_malformed_host_raises_value_error(self, bad_host: str):
-        with pytest.raises(ValueError, match="bare hostname"):
+    def test_a_malformed_host_is_refused(self, bad_host: str):
+        with pytest.raises(ConfigurationError, match="bare hostname"):
             preset(
                 client_id="sfid",
                 client_secret="sfsecret",  # pragma: allowlist secret
@@ -56,8 +85,20 @@ class TestSalesforcePreset:
                 host=bad_host,
             )
 
+    def test_a_refused_host_is_not_repeated(self):
+        """A rejected authority can carry a credential, which a caller recording the refusal would record."""
+        with pytest.raises(ConfigurationError) as refusal:
+            preset(
+                client_id="sfid",
+                client_secret="sfsecret",  # pragma: allowlist secret
+                scopes=["api"],
+                host="operator:" + "sesame@login.salesforce.com",
+            )
+
+        assert "sesame" not in str(refusal.value)
+
     def test_base_scopes_merged_with_caller_scopes(self):
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["api"],
@@ -67,7 +108,7 @@ class TestSalesforcePreset:
         assert "api" in config.scopes
 
     def test_duplicate_scopes_deduplicated(self):
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["refresh_token", "api"],
@@ -75,7 +116,7 @@ class TestSalesforcePreset:
         assert config.scopes.count("refresh_token") == 1
 
     def test_scope_metadata_covers_base_scopes(self):
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["api"],
@@ -105,7 +146,7 @@ class TestSalesforceIdentityHandler:
         httpx_mock.add_response(url="https://login.salesforce.com/services/oauth2/userinfo", json=payload)
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -152,7 +193,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -166,7 +207,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -183,7 +224,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -197,7 +238,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["openid"],
@@ -220,7 +261,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["openid"],
@@ -244,7 +285,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -261,7 +302,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -281,7 +322,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["openid"],
@@ -300,7 +341,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(
+        config = preset(
             client_id="sfid",
             client_secret="sfsecret",  # pragma: allowlist secret
             scopes=["openid"],
@@ -320,7 +361,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Salesforce identity"):
@@ -334,7 +375,7 @@ class TestSalesforceIdentityHandler:
         )
         from apron_auth.providers.salesforce import SalesforceIdentityHandler
 
-        config, _ = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
+        config = preset(client_id="sfid", client_secret="sfsecret", scopes=["openid"])
         handler = SalesforceIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Salesforce identity response"):

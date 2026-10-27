@@ -2233,6 +2233,70 @@ class TestRevokeToken:
         assert result is True
         assert calls == ["https://provider.example.com/revoke"]
 
+    async def test_a_named_provider_revokes_through_its_own_handler(self, httpx_mock):
+        """A caller who passes no handler used to get RFC 7009 revocation, which is wrong for Slack."""
+        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
+        config = ProviderConfig(
+            provider=Provider.SLACK,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url="https://slack.com/api/oauth.v2.access",
+            revocation_url="https://slack.com/api/auth.revoke",
+        )
+        client = OAuthClient(config=config)
+
+        assert await client.revoke_token(token="xoxp-live") is True
+
+        request = httpx_mock.get_request()
+        assert request.headers["Authorization"] == "Bearer xoxp-live"
+        assert b"token=" not in request.content
+
+    async def test_a_handler_the_caller_passes_overrides_the_providers(self):
+        """The override is how a named provider's token is revoked through a handler of your own."""
+        revoked: list[str] = []
+
+        class MyHandler:
+            async def revoke(self, token: str, config) -> bool:
+                del config
+                revoked.append(token)
+                return True
+
+        config = ProviderConfig(
+            provider=Provider.SLACK,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url="https://slack.com/api/oauth.v2.access",
+            revocation_url="https://slack.com/api/auth.revoke",
+        )
+        client = OAuthClient(config=config, revocation_handler=MyHandler())
+
+        assert await client.revoke_token(token="xoxp-live") is True
+        assert revoked == ["xoxp-live"]
+
+    async def test_a_provider_taking_rfc_7009_still_honors_the_transport_factory(self):
+        """A provider naming no handler of its own must keep the caller's DNS pinning."""
+        calls: list[str] = []
+
+        def factory(url: str) -> httpx.MockTransport:
+            calls.append(url)
+            return httpx.MockTransport(lambda request: httpx.Response(200))
+
+        config = ProviderConfig(
+            provider=Provider.LINEAR,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://linear.app/oauth/authorize",
+            token_url="https://api.linear.app/oauth/token",
+            revocation_url="https://api.linear.app/oauth/revoke",
+            scope_separator=",",
+        )
+        client = OAuthClient(config=config, transport_factory=factory)
+
+        assert await client.revoke_token(token="access-token") is True
+        assert calls == ["https://api.linear.app/oauth/revoke"]
+
     async def test_revocation_failure_raises(self, httpx_mock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=503)
         config = _make_config(revocation_url="https://provider.example.com/revoke")
@@ -3221,7 +3285,7 @@ class TestTheUserTokenAProviderNests:
 
     async def test_a_refused_response_revokes_the_nested_user_token_too(self, httpx_mock: HTTPXMock) -> None:
         """A token the library refuses must not stay valid, wherever the response carried it."""
-        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(url=self.REVOKE_URL, json={"ok": True}, is_reusable=True)
         httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json={**self.BOT_AND_USER, "id_token": "not-a-token"})
         client = OAuthClient(config=self._config(revocation_url=self.REVOKE_URL))
 
@@ -3230,8 +3294,10 @@ class TestTheUserTokenAProviderNests:
                 code="auth-code-123", state="pending-state", pending_state=_pending_state(nonce="sent-nonce")
             )
 
+        # Slack presents the token it revokes as a bearer credential, so it is not in a form body.
         revoked = [
-            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+            request.headers["Authorization"].removeprefix("Bearer ")
+            for request in httpx_mock.get_requests(url=self.REVOKE_URL)
         ]
         assert sorted(revoked) == ["xoxb-BOT", "xoxp-USER"]
 

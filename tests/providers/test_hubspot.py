@@ -10,6 +10,8 @@ from apron_auth.client import OAuthClient
 from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
+from apron_auth.providers import revocation_handler_for
+from apron_auth.providers.hubspot import HubSpotRevocationHandler
 
 
 class TestHubSpotIdentityHandler:
@@ -22,7 +24,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -56,7 +58,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -92,7 +94,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -111,7 +113,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -132,7 +134,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -152,7 +154,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -178,7 +180,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -197,7 +199,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -220,7 +222,7 @@ class TestHubSpotIdentityHandler:
         )
         from apron_auth.providers.hubspot import HubSpotIdentityHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -232,21 +234,21 @@ class TestHubSpotIdentityHandler:
 
 
 class TestHubSpotPreset:
-    def test_returns_config_and_handler(self):
+    def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
         assert isinstance(config, ProviderConfig)
-        assert isinstance(handler, RevocationHandler)
+        assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.hubspot import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -258,7 +260,7 @@ class TestHubSpotPreset:
     def test_token_endpoint_auth_method_is_client_secret_post(self):
         from apron_auth.providers.hubspot import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -268,7 +270,7 @@ class TestHubSpotPreset:
     def test_extra_params_passed_through(self):
         from apron_auth.providers.hubspot import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -279,7 +281,7 @@ class TestHubSpotPreset:
     def test_base_scopes_merged_with_caller_scopes(self):
         from apron_auth.providers.hubspot import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -291,7 +293,7 @@ class TestHubSpotPreset:
     def test_duplicate_scopes_deduplicated(self):
         from apron_auth.providers.hubspot import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["oauth", "contacts"],
@@ -301,7 +303,7 @@ class TestHubSpotPreset:
     def test_scope_metadata_covers_base_scopes(self):
         from apron_auth.providers.hubspot import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -316,12 +318,12 @@ class TestHubSpotRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await handler.revoke("refresh-abc", config)
+        result = await HubSpotRevocationHandler().revoke("refresh-abc", config)
         assert result is True
 
         request = httpx_mock.get_request()
@@ -333,37 +335,37 @@ class TestHubSpotRevocationHandler:
         httpx_mock.add_response(status_code=404)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await handler.revoke("refresh-missing", config)
+        result = await HubSpotRevocationHandler().revoke("refresh-missing", config)
         assert result is True
 
     async def test_non_success_status_returns_false(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await handler.revoke("refresh-abc", config)
+        result = await HubSpotRevocationHandler().revoke("refresh-abc", config)
         assert result is False
 
     async def test_url_encodes_path_significant_chars(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
         raw_token = "a/b+c=d e"
-        result = await handler.revoke(raw_token, config)
+        result = await HubSpotRevocationHandler().revoke(raw_token, config)
         assert result is True
 
         request = httpx_mock.get_request()
@@ -381,13 +383,13 @@ class TestHubSpotRevocationHandler:
         httpx_mock.add_callback(refuse)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
         with pytest.raises(RevocationError) as exc_info:
-            await handler.revoke(secret, config)
+            await HubSpotRevocationHandler().revoke(secret, config)
         assert str(exc_info.value) == "Failed to revoke HubSpot token: network error"
         formatted = "".join(traceback.format_exception(exc_info.value))
         assert secret not in formatted
@@ -398,7 +400,7 @@ class TestHubSpotRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.hubspot import HubSpotRevocationHandler, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
@@ -430,12 +432,12 @@ class TestHubSpotRevocationViaOAuthClient:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.hubspot import preset
 
-        config, handler = preset(
+        config = preset(
             client_id="hsid",
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        client = OAuthClient(config=config, revocation_handler=handler)
+        client = OAuthClient(config=config)
         result = await client.revoke_token("refresh-abc")
         assert result is True
 

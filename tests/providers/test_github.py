@@ -9,20 +9,22 @@ from pytest_httpx import HTTPXMock
 from apron_auth.errors import RevocationError
 from apron_auth.models import IdentityMaterial, ProviderConfig
 from apron_auth.protocols import RevocationHandler
+from apron_auth.providers import revocation_handler_for
+from apron_auth.providers.github import GitHubRevocationHandler
 
 
 class TestGitHubPreset:
-    def test_returns_config_and_handler(self) -> None:
+    def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert isinstance(config, ProviderConfig)
-        assert isinstance(handler, RevocationHandler)
+        assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self) -> None:
         from apron_auth.providers.github import preset
 
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert config.authorize_url == "https://github.com/login/oauth/authorize"
         assert config.token_url == "https://github.com/login/oauth/access_token"
         assert config.revocation_url == "https://api.github.com/applications/ghid/grant"
@@ -30,7 +32,7 @@ class TestGitHubPreset:
     def test_base_scopes_merged_with_caller_scopes(self) -> None:
         from apron_auth.providers.github import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="ghid",
             client_secret="ghsecret",  # pragma: allowlist secret
             scopes=["repo"],
@@ -42,7 +44,7 @@ class TestGitHubPreset:
     def test_duplicate_scopes_deduplicated(self) -> None:
         from apron_auth.providers.github import preset
 
-        config, _ = preset(
+        config = preset(
             client_id="ghid",
             client_secret="ghsecret",  # pragma: allowlist secret
             scopes=["read:user", "repo"],
@@ -52,7 +54,7 @@ class TestGitHubPreset:
     def test_scope_metadata_covers_base_scopes(self) -> None:
         from apron_auth.providers.github import BASE_SCOPES, preset
 
-        config, _ = preset(
+        config = preset(
             client_id="ghid",
             client_secret="ghsecret",  # pragma: allowlist secret
             scopes=["repo"],
@@ -66,7 +68,7 @@ class TestGitHubImplicitScopes:
     def test_preset_populates_implicit_scopes(self) -> None:
         from apron_auth.providers.github import IMPLICIT_SCOPES, preset
 
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         assert config.implicit_scopes == IMPLICIT_SCOPES
 
     @pytest.mark.parametrize(
@@ -97,7 +99,7 @@ class TestGitHubImplicitScopes:
         from apron_auth.providers.github import preset
 
         # Requested scopes don't affect implicit_scopes; it is fixed per provider.
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=[])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=[])
         assert config.resolve_implicit_scopes(granted) == expected
 
 
@@ -117,7 +119,7 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         handler = GitHubIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -133,8 +135,8 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        result = await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        result = await GitHubRevocationHandler().revoke("access-abc", config)
         assert result is True
         request = httpx_mock.get_request()
         assert request.method == "DELETE"
@@ -144,8 +146,8 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        await GitHubRevocationHandler().revoke("access-abc", config)
         request = httpx_mock.get_request()
         assert request.headers.get("accept") == "application/vnd.github+json"
         assert request.headers.get("x-github-api-version") == "2022-11-28"
@@ -154,8 +156,8 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        await GitHubRevocationHandler().revoke("access-abc", config)
         request = httpx_mock.get_request()
         payload = json.loads(request.content)
         assert payload == {"access_token": "access-abc"}
@@ -164,31 +166,31 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=404)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        result = await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        result = await GitHubRevocationHandler().revoke("access-abc", config)
         assert result is True
 
     async def test_validation_failure_returns_false(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=422)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        result = await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        result = await GitHubRevocationHandler().revoke("access-abc", config)
         assert result is False
 
     async def test_unexpected_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        result = await handler.revoke("access-abc", config)
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        result = await GitHubRevocationHandler().revoke("access-abc", config)
         assert result is False
 
     async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import GitHubRevocationHandler, preset
 
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         client = httpx.AsyncClient()
         handler = GitHubRevocationHandler(client=client)
         result = await handler.revoke("access-abc", config)
@@ -200,9 +202,9 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.github import preset
 
-        config, handler = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$") as exc_info:
-            await handler.revoke("access-abc", config)
+            await GitHubRevocationHandler().revoke("access-abc", config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -210,7 +212,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.github import GitHubRevocationHandler, preset
 
-        config, _ = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
         client = httpx.AsyncClient()
         handler = GitHubRevocationHandler(client=client)
         with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$"):

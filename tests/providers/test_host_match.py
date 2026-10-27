@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import SecretStr
 
 from apron_auth.models import ProviderConfig
-from apron_auth.providers._host_match import matches_suffix, oauth_hosts_match
+from apron_auth.providers._host_match import oauth_hosts_match
 
 
 def _make_config(authorize_url: str, token_url: str) -> ProviderConfig:
@@ -13,32 +13,6 @@ def _make_config(authorize_url: str, token_url: str) -> ProviderConfig:
         authorize_url=authorize_url,
         token_url=token_url,
     )
-
-
-class TestMatchesSuffix:
-    def test_empty_host_does_not_match(self):
-        assert matches_suffix("", ("example.com",)) is False
-
-    def test_exact_match_returns_true(self):
-        assert matches_suffix("example.com", ("example.com",)) is True
-
-    def test_label_boundary_subdomain_matches(self):
-        assert matches_suffix("api.example.com", ("example.com",)) is True
-
-    def test_lookalike_with_shared_tld_does_not_match(self):
-        assert matches_suffix("evilexample.com", ("example.com",)) is False
-
-    def test_multiple_suffixes_any_match(self):
-        assert matches_suffix("graph.microsoft.com", ("salesforce.com", "graph.microsoft.com")) is True
-
-    def test_no_suffixes_never_matches(self):
-        assert matches_suffix("example.com", ()) is False
-
-    def test_substring_after_dot_does_not_match(self):
-        assert matches_suffix("attacker.com.example.com.attacker.test", ("example.com",)) is False
-
-    def test_unrelated_host_does_not_match(self):
-        assert matches_suffix("other.test", ("example.com",)) is False
 
 
 class TestOauthHostsMatch:

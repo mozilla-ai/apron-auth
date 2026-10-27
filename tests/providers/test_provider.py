@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import pkgutil
 from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from support import VaryFacts
 
 from apron_auth import providers as providers_pkg
+from apron_auth.errors import ConfigurationError
 from apron_auth.mcp import to_provider_config
 from apron_auth.models import ClientRegistration, Provider, ProviderConfig, ProviderFacts, ServerMetadata
-from apron_auth.protocols import IdentityHandler
+from apron_auth.protocols import IdentityHandler, RevocationHandler
 from apron_auth.providers import (
     atlassian,
     github,
@@ -29,6 +32,9 @@ from apron_auth.providers import (
 )
 from apron_auth.providers._host_match import oauth_hosts_match
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
     Provider.GITHUB: github,
@@ -42,6 +48,13 @@ MODULES: dict[Provider, ModuleType] = {
     Provider.TYPEFORM: typeform,
 }
 
+# Every preset this library offers, including the two no Provider member names.
+PRESETS: dict[str, Callable[..., Any]] = {
+    **{f"{provider.value}.preset": MODULES[provider].preset for provider in Provider},
+    "oidc.preset": oidc.preset,
+    "slack.sign_in_preset": slack.sign_in_preset,
+}
+
 # The known-good facts per provider, pinned independently of the enum, so a slip in a member's
 # declaration fails a test rather than shipping, including one that moves where a token may be sent.
 MODULE_FACTS: dict[Provider, ProviderFacts] = {
@@ -51,6 +64,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Atlassian",
         host_suffixes=("auth.atlassian.com",),
         identity_handler_class_name="AtlassianIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -60,6 +74,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="GitHub",
         host_suffixes=("github.com",),
         identity_handler_class_name="GitHubIdentityHandler",
+        revocation_handler_class_name="GitHubRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -69,6 +84,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Google",
         host_suffixes=("google.com", "googleapis.com"),
         identity_handler_class_name="GoogleIdentityHandler",
+        revocation_handler_class_name="GoogleRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -78,6 +94,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="HubSpot",
         host_suffixes=("api.hubapi.com", "app.hubspot.com"),
         identity_handler_class_name="HubSpotIdentityHandler",
+        revocation_handler_class_name="HubSpotRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -87,6 +104,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Linear",
         host_suffixes=("linear.app",),
         identity_handler_class_name="LinearIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=",",
         user_token_response_field=None,
     ),
@@ -96,6 +114,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Microsoft",
         host_suffixes=("login.microsoftonline.com",),
         identity_handler_class_name="MicrosoftIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -105,6 +124,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Notion",
         host_suffixes=("api.notion.com",),
         identity_handler_class_name="NotionIdentityHandler",
+        revocation_handler_class_name="NotionRevocationHandler",
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -114,6 +134,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Salesforce",
         host_suffixes=("salesforce.com",),
         identity_handler_class_name="SalesforceIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -123,6 +144,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Slack",
         host_suffixes=("slack.com",),
         identity_handler_class_name="SlackIdentityHandler",
+        revocation_handler_class_name="SlackRevocationHandler",
         scope_separator=",",
         user_token_response_field="authed_user",
     ),
@@ -132,6 +154,7 @@ MODULE_FACTS: dict[Provider, ProviderFacts] = {
         display_name="Typeform",
         host_suffixes=("api.typeform.com",),
         identity_handler_class_name="TypeformIdentityHandler",
+        revocation_handler_class_name=None,
         scope_separator=" ",
         user_token_response_field=None,
     ),
@@ -148,6 +171,20 @@ _GENERIC_METADATA = ServerMetadata(
     issuer="https://issuer.example",
 )
 
+# Values each preset accepts, so a test can vary one thing at a time against all of them.
+_VALID_KWARGS: dict[str, dict[str, Any]] = {
+    "oidc.preset": {"scopes": ["dummy"], "metadata": _GENERIC_METADATA},
+    "slack.sign_in_preset": {"scopes": ["email"]},
+}
+
+
+def _valid_kwargs(name: str) -> dict[str, Any]:
+    """Return the keywords a preset accepts, so only the value under test differs between them.
+
+    The mapping is fresh per call, because a caller sets the value under test on it.
+    """
+    return dict(_VALID_KWARGS.get(name, {"scopes": ["dummy"]}))
+
 
 def _named_provider_module_names() -> list[str]:
     names = []
@@ -161,7 +198,7 @@ def _named_provider_module_names() -> list[str]:
 
 
 def _preset_config(module: ModuleType) -> ProviderConfig:
-    config, _ = module.preset(
+    config = module.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
@@ -202,6 +239,71 @@ def test_the_named_provider_modules_are_exactly_the_members() -> None:
     )
 
 
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_refuses_a_bare_string_of_scopes(name: str) -> None:
+    """A string is a sequence of characters, so taking one would request each letter as a scope."""
+    kwargs = _valid_kwargs(name)
+    kwargs["scopes"] = " ".join(kwargs["scopes"])
+
+    with pytest.raises(ConfigurationError, match="scopes must be a sequence of scope strings"):
+        PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_accepts_any_sequence_of_scopes(name: str) -> None:
+    """The shared builder takes a Sequence, so a preset must not demand a list of its caller."""
+    kwargs = _valid_kwargs(name)
+    kwargs["scopes"] = tuple(kwargs["scopes"])
+
+    config = PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
+
+    assert isinstance(config, ProviderConfig)
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_takes_two_positionals_and_the_rest_by_keyword(name: str) -> None:
+    """A positional call that reads correctly against one preset must not mean something else against another."""
+    params = list(inspect.signature(PRESETS[name]).parameters.values())
+    positional = [p.name for p in params if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
+    keyword_only = {p.name for p in params if p.kind is inspect.Parameter.KEYWORD_ONLY}
+
+    assert positional == ["client_id", "client_secret"]
+    assert {"scopes", "redirect_uri", "extra_params"} <= keyword_only
+
+
+# A value each provider-specific keyword refuses, so one class covers a fault in any of them.
+_REFUSED_SPECIFIC_KWARGS: dict[str, dict[str, Any]] = {
+    "salesforce.preset": {"host": "https://login.salesforce.com/"},
+    "slack.preset": {"user_scopes": ["openid"]},
+    "slack.sign_in_preset": {"scopes": ["chat:write"]},
+}
+
+
+@pytest.mark.parametrize("name", sorted(_REFUSED_SPECIFIC_KWARGS))
+def test_a_fault_in_a_provider_specific_keyword_is_a_configuration_error(name: str) -> None:
+    """A provider-specific keyword is still something a caller passed, so its fault is the same class."""
+    with pytest.raises(ConfigurationError):
+        PRESETS[name]("cid", "csecret", **{**_valid_kwargs(name), **_REFUSED_SPECIFIC_KWARGS[name]})
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_every_preset_refuses_a_reserved_authorization_parameter_as_a_configuration_error(name: str) -> None:
+    """A fault in what a caller passed is one class, so one except clause covers every preset."""
+    with pytest.raises(ConfigurationError):
+        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+
+
+@pytest.mark.parametrize("name", sorted(PRESETS))
+def test_no_preset_raises_a_value_error_for_a_fault_in_what_it_was_passed(name: str) -> None:
+    """ConfigurationError does not inherit from ValueError, so a caller catching one misses the other."""
+    try:
+        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+    except ConfigurationError:
+        return
+    except ValueError as error:  # pragma: no cover - the assertion reports the class
+        pytest.fail(f"{name} raised {type(error).__name__}, not ConfigurationError")
+
+
 def test_the_fact_tables_cover_every_member() -> None:
     assert set(MODULES) == set(Provider)
     assert set(MODULE_FACTS) == set(Provider)
@@ -220,6 +322,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
     assert provider.disconnect_fully_revokes is pinned.disconnect_fully_revokes
     assert provider.scope_separator == pinned.scope_separator
     assert provider.identity_handler_class_name == pinned.identity_handler_class_name
+    assert provider.revocation_handler_class_name == pinned.revocation_handler_class_name
     assert provider.can_assert_domain_ownership is pinned.can_assert_domain_ownership
 
 
@@ -232,6 +335,7 @@ def test_member_data_matches_the_pinned_facts(provider: Provider) -> None:
         "display_name",
         "host_suffixes",
         "identity_handler_class_name",
+        "revocation_handler_class_name",
         "scope_separator",
         "user_token_response_field",
     ],
@@ -249,6 +353,14 @@ def test_member_names_an_identity_handler_its_module_defines(provider: Provider)
     handler_class = getattr(MODULES[provider], provider.identity_handler_class_name, None)
     assert handler_class is not None, f"{MODULES[provider].__name__} defines no {provider.identity_handler_class_name}."
     assert isinstance(handler_class(), IdentityHandler)
+
+
+@pytest.mark.parametrize("provider", [p for p in Provider if p.revocation_handler_class_name is not None])
+def test_member_names_a_revocation_handler_its_module_defines(provider: Provider) -> None:
+    name = provider.revocation_handler_class_name
+    handler_class = getattr(MODULES[provider], name, None)
+    assert handler_class is not None, f"{MODULES[provider].__name__} defines no {name}."
+    assert isinstance(handler_class(), RevocationHandler)
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -274,12 +386,12 @@ def test_preset_config_carries_the_member_data(provider: Provider) -> None:
 
 
 def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> None:
-    on_suffix, _ = salesforce.preset(
+    on_suffix = salesforce.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
     )
-    off_suffix, _ = salesforce.preset(
+    off_suffix = salesforce.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["dummy"],
@@ -319,7 +431,7 @@ def test_hand_built_config_has_no_provider() -> None:
 
 
 def test_a_generic_openid_config_has_no_provider() -> None:
-    config, _ = oidc.preset(
+    config = oidc.preset(
         client_id="cid",
         client_secret="csecret",  # pragma: allowlist secret
         scopes=["openid"],
