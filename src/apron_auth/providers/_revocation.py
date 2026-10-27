@@ -1,20 +1,127 @@
-"""The revocation handler of the provider a configuration names."""
+"""The revocation handler of the provider a configuration names, and the request every handler sends through."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
 from importlib import import_module
 from typing import TYPE_CHECKING
 
-from apron_auth.errors import ConfigurationError
+import httpx
+
+from apron_auth._http_errors import http_failure
+from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.protocols import RevocationHandler, StandardRevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from apron_auth.models import ProviderConfig
     from apron_auth.protocols import TransportFactory
 
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
+
+
+class HttpMethod(StrEnum):
+    """The HTTP methods a provider's revocation endpoint answers."""
+
+    DELETE = "DELETE"
+    POST = "POST"
+
+
+@dataclass(frozen=True, kw_only=True)
+class RevocationRequest:
+    """What one provider states about its revocation request, beside what the shared send supplies.
+
+    The fields describe one HTTP request and only mean something together, so they travel as one value.
+
+    Attributes:
+        url: The endpoint to send to, including any part of the path the provider builds per token.
+        label: The provider's display name, which the failure message names.
+        auth: HTTP Basic credentials, or ``None`` to present no client authentication.
+        data: A form body.
+        headers: Request headers.
+        json_body: A JSON body.
+        method: The method the endpoint answers.
+        params: Query parameters.
+    """
+
+    url: str
+    label: str
+    auth: tuple[str, str] | None = None
+    data: Mapping[str, str] | None = None
+    headers: Mapping[str, str] | None = None
+    json_body: Mapping[str, str] | None = None
+    method: HttpMethod = HttpMethod.POST
+    params: Mapping[str, str] | None = None
+
+
+def revocation_endpoint(config: ProviderConfig) -> str:
+    """Return the revocation endpoint ``config`` declares.
+
+    Args:
+        config: The provider configuration to revoke against.
+
+    Returns:
+        The endpoint.
+
+    Raises:
+        ConfigurationError: If the configuration declares none.
+    """
+    if config.revocation_url is None:
+        msg = "the provider configuration carries no revocation endpoint"
+        raise ConfigurationError(msg)
+    return config.revocation_url
+
+
+async def send_revocation(
+    request: RevocationRequest,
+    *,
+    transport_factory: TransportFactory | None = None,
+) -> httpx.Response:
+    """Send one revocation request and return its response, whatever status it carries.
+
+    A provider reads success its own way, so this states no success rule and leaves the response to its caller.
+
+    Args:
+        request: What the provider states about the request.
+        transport_factory: Controls the outbound connection. The URL is server-supplied, so a caller
+            handling untrusted input can pin DNS to validated addresses here to prevent SSRF via rebinding.
+
+    Returns:
+        The endpoint's response.
+
+    Raises:
+        RevocationError: If the URL is invalid, or the request cannot be sent or fails to arrive.
+            Its kind says whether the same request may pass later.
+            The caught error is not attached as its cause or context.
+    """
+    transport = transport_factory(request.url) if transport_factory is not None else None
+    try:
+        async with httpx.AsyncClient(transport=transport) as client:
+            return await client.request(
+                request.method,
+                request.url,
+                auth=request.auth,
+                data=request.data,
+                headers=request.headers,
+                json=request.json_body,
+                params=request.params,
+            )
+    # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
+    except httpx.InvalidURL:
+        failure_message, kind = f"Failed to revoke {request.label} token: invalid URL", FailureKind.REFUSED
+    except httpx.HTTPError as exc:
+        failure = http_failure(exc)
+        failure_message, kind = f"Failed to revoke {request.label} token: {failure.description}", failure.kind
+    except Exception:
+        # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
+        failure_message, kind = f"Failed to revoke {request.label} token: request failed", FailureKind.UNEXPECTED
+    # NOTE: The caught error holds the token-bearing request, so this error must not chain it.
+    # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
+    raise RevocationError(failure_message, kind=kind)
 
 
 def revocation_handler_for(
