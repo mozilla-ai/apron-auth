@@ -101,6 +101,14 @@ def test_a_config_with_no_revocation_endpoint_resolves_no_handler(provider: Prov
     assert revocation_handler_for(_config(provider, revokes=False)) is None
 
 
+@pytest.mark.parametrize("provider", list(Provider))
+def test_a_config_whose_revocation_endpoint_is_empty_resolves_no_handler(provider: Provider) -> None:
+    """An empty endpoint is no endpoint, and ``model_copy`` reaches here without the validator that refuses it."""
+    bypassed = _config(provider).model_copy(update={"revocation_url": ""})
+
+    assert revocation_handler_for(bypassed) is None
+
+
 def test_endpoints_outside_a_provider_that_names_a_class_are_refused() -> None:
     """A provider's own handler may put the token in the request line, so it runs on that host alone."""
     config = _config(Provider.HUBSPOT, host="oauth.acme.test")

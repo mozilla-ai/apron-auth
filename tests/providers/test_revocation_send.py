@@ -13,6 +13,7 @@ from apron_auth.models import ProviderConfig
 from apron_auth.providers._revocation import (
     HttpMethod,
     RevocationRequest,
+    StandardRevocationHandler,
     revocation_endpoint,
     send_revocation,
 )
@@ -44,6 +45,24 @@ def test_a_config_declaring_no_endpoint_is_refused() -> None:
     """One sentence states this fault, rather than one copy per handler."""
     with pytest.raises(ConfigurationError, match="carries no revocation endpoint"):
         revocation_endpoint(_config(revokes=False))
+
+
+def test_a_config_whose_endpoint_is_empty_is_refused() -> None:
+    """The model validator refuses an empty endpoint, and ``model_copy`` does not run it."""
+    bypassed = _config().model_copy(update={"revocation_url": ""})
+
+    with pytest.raises(ConfigurationError, match="carries no revocation endpoint"):
+        revocation_endpoint(bypassed)
+
+
+async def test_an_empty_endpoint_is_not_reported_as_a_failure_worth_retrying() -> None:
+    """A permanent fault reported as a transient one sends a caller into a retry loop it cannot leave."""
+    bypassed = _config().model_copy(update={"revocation_url": ""})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await StandardRevocationHandler().revoke(TOKEN, bypassed)
+
+    assert refusal.value.kind.retryable is False
 
 
 async def test_the_response_is_returned_for_the_handler_to_read() -> None:

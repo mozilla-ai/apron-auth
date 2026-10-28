@@ -125,7 +125,8 @@ def revocation_endpoint(config: ProviderConfig) -> str:
     Raises:
         ConfigurationError: If the configuration declares none.
     """
-    if config.revocation_url is None:
+    # NOTE: An empty endpoint is refused on construction, and a copy of a configuration is not constructed.
+    if not config.revocation_url:
         msg = "the provider configuration carries no revocation endpoint"
         raise ConfigurationError(msg)
     return config.revocation_url
@@ -213,7 +214,7 @@ def revocation_handler_for(
             does not revoke, which is a defect in this library rather than in the config.
     """
     provider = config.provider
-    if provider is None or config.revocation_url is None:
+    if provider is None or not config.revocation_url:
         return None
     class_name = provider.revocation_handler_class_name
     if class_name is None:
