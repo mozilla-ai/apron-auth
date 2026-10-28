@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._urls import url_host
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
@@ -90,7 +91,8 @@ class StandardRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If the configuration declares no revocation endpoint.
+            ConfigurationError: If the configuration declares no revocation endpoint, or declares one
+                on a host it does not permit revocation at.
             RevocationError: If the request cannot be sent or fails to arrive, or the endpoint
                 answers an error status.
                 The failed request's error is not attached as its cause or context.
@@ -106,7 +108,7 @@ class StandardRevocationHandler:
             auth=auth,
             data=data,
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.is_success:
             return True
         failure = status_failure(response.status_code)
@@ -132,17 +134,52 @@ def revocation_endpoint(config: ProviderConfig) -> str:
     return config.revocation_url
 
 
+def _refuse_an_unpermitted_host(request: RevocationRequest, config: ProviderConfig) -> None:
+    """Refuse a request bound for a host that cannot answer for the token it carries.
+
+    A handler builds the URL it sends to, so the host that URL names is read here rather than taken
+    from the endpoint a validator saw. A configuration naming no provider permits every host, as
+    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says.
+
+    Args:
+        request: The request about to be sent.
+        config: The provider configuration to revoke against.
+
+    Raises:
+        ConfigurationError: If either URL the request names is on a host the configuration does not
+            permit revocation at. The message names the host alone, because a URL can carry the token.
+    """
+    provider = config.provider
+    if provider is None:
+        return
+    for url in dict.fromkeys((request.url, request.endpoint or request.url)):
+        host = url_host(url)
+        if config.permits_revocation_at(host):
+            continue
+        msg = (
+            f"{provider.display_name} revocation refused: the request host {host!r} cannot answer "
+            f"for this token. A token is revoked at the host that issued it, or at another "
+            f"{provider.display_name} host."
+        )
+        raise ConfigurationError(msg)
+
+
 async def send_revocation(
     request: RevocationRequest,
+    config: ProviderConfig,
     *,
     transport_factory: TransportFactory | None = None,
 ) -> httpx.Response:
     """Send one revocation request and return its response, whatever status it carries.
 
     A provider reads success its own way, so this states no success rule and leaves the response to its caller.
+    The request carries a token, so this refuses a host the configuration does not permit revocation
+    at before it opens a connection.
 
     Args:
         request: What the provider states about the request.
+        config: The provider configuration to revoke against, which decides the hosts the token may
+            be sent to.
         transport_factory: Controls the outbound connection, and is called with the request's endpoint,
             which never carries the token. The URL is server-supplied, so a caller handling untrusted
             input can pin DNS to validated addresses here to prevent SSRF via rebinding.
@@ -153,10 +190,13 @@ async def send_revocation(
         The endpoint's response.
 
     Raises:
+        ConfigurationError: If a URL the request names is on a host the configuration does not permit
+            revocation at. Nothing is sent.
         RevocationError: If the URL is invalid, or the request cannot be sent or fails to arrive.
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
+    _refuse_an_unpermitted_host(request, config)
     subject = f"{request.label} token" if request.label is not None else "token"
     try:
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.

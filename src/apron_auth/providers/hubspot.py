@@ -216,7 +216,8 @@ class HubSpotRevocationHandler:
             ``False`` for any other status.
 
         Raises:
-            ConfigurationError: If ``config`` declares no revocation endpoint.
+            ConfigurationError: If ``config`` declares no revocation endpoint, or declares one on a
+                host it does not permit revocation at.
             RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
                 to arrive.
                 The failed request's error is not attached as its cause or context.
@@ -229,7 +230,7 @@ class HubSpotRevocationHandler:
             method=HttpMethod.DELETE,
             endpoint=endpoint,
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (204, 404):
             return True
         logger.warning("HubSpot revocation returned unexpected status %s", response.status_code)
