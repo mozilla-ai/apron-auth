@@ -46,7 +46,8 @@ from apron_auth.models import (
     UrlField,
     UserToken,
 )
-from apron_auth.protocols import IdentityHandler, RevocationHandler, StandardRevocationHandler, StateStore
+from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore
+from apron_auth.providers._revocation import StandardRevocationHandler
 from apron_auth.stores import MemoryStateStore
 
 # Keep the library silent until the application opts in. Without a

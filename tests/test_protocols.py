@@ -7,7 +7,8 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, RevocationError
 from apron_auth.models import OAuthPendingState, ProviderConfig
-from apron_auth.protocols import RevocationHandler, StandardRevocationHandler, StateStore
+from apron_auth.protocols import RevocationHandler, StateStore
+from apron_auth.providers._revocation import StandardRevocationHandler
 
 
 def _make_config(**overrides: object) -> ProviderConfig:
@@ -126,24 +127,25 @@ class TestStandardRevocationHandler:
         assert "authorization" not in request.headers
         assert b"client_id=test-client" in request.content
 
-    async def test_public_client_revocation_suppresses_injected_default_auth(self):
-        """A public client must not leak an injected client's default auth to the revocation URL."""
-        seen: list[bool] = []
+    async def test_a_public_client_presents_no_client_authentication(self):
+        """RFC 7009 section 5: a public client names itself in the body and authenticates with nothing."""
+        headers: list[bool] = []
+        bodies: list[str] = []
 
-        def responder(request: httpx.Request) -> httpx.Response:
-            seen.append("authorization" in request.headers)
-            return httpx.Response(200)
+        def transport(url: str) -> httpx.AsyncBaseTransport:
+            def respond(request: httpx.Request) -> httpx.Response:
+                headers.append("authorization" in request.headers)
+                bodies.append(request.content.decode())
+                return httpx.Response(200)
 
-        client = httpx.AsyncClient(
-            auth=("default-user", "default-secret"),  # pragma: allowlist secret
-            transport=httpx.MockTransport(responder),
-        )
+            return httpx.MockTransport(respond)
+
         config = _make_config(client_secret=None, token_endpoint_auth_method="none")
-        handler = StandardRevocationHandler(client=client)
-        result = await handler.revoke("access-token-abc", config)
-        await client.aclose()
-        assert result is True
-        assert seen == [False]
+        handler = StandardRevocationHandler(transport_factory=transport)
+
+        assert await handler.revoke("access-token-abc", config) is True
+        assert headers == [False]
+        assert "client_id=" in bodies[0]
 
     async def test_failed_revocation(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
@@ -153,26 +155,6 @@ class TestStandardRevocationHandler:
             await handler.revoke("bad-token", config)
         assert exc_info.value.kind is FailureKind.REJECTED
 
-    async def test_successful_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
-        config = _make_config()
-        client = httpx.AsyncClient()
-        handler = StandardRevocationHandler(client=client)
-        result = await handler.revoke("access-token-abc", config)
-        assert result is True
-        assert not client.is_closed
-        await client.aclose()
-
-    async def test_failed_revocation_with_injected_client(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
-        config = _make_config()
-        client = httpx.AsyncClient()
-        handler = StandardRevocationHandler(client=client)
-        with pytest.raises(RevocationError, match="HTTP 400"):
-            await handler.revoke("bad-token", config)
-        assert not client.is_closed
-        await client.aclose()
-
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         config = _make_config()
@@ -181,18 +163,6 @@ class TestStandardRevocationHandler:
             await handler.revoke("access-token-abc", config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
-
-    async def test_network_error_with_injected_client(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
-        config = _make_config()
-        client = httpx.AsyncClient()
-        handler = StandardRevocationHandler(client=client)
-        with pytest.raises(RevocationError, match="^Failed to revoke token: network error$") as exc_info:
-            await handler.revoke("access-token-abc", config)
-        assert exc_info.value.__cause__ is None
-        assert exc_info.value.__context__ is None
-        assert not client.is_closed
-        await client.aclose()
 
     async def test_transport_factory_used_for_revocation(self):
         """The revocation request routes through the caller's transport_factory.

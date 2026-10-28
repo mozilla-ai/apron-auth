@@ -17,11 +17,11 @@ from typing import Any
 
 import httpx
 
-from apron_auth._http_errors import http_failure
-from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
+from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
+from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +98,9 @@ _GITHUB_EMAILS_URL = "https://api.github.com/user/emails"
 
 # The endpoint that returns the signed-in user's profile.
 _GITHUB_USER_URL = "https://api.github.com/user"
+
+# The status GitHub answers when it validated the grant removal and refused it, or throttled it as spam.
+_GITHUB_VALIDATION_FAILED = 422
 
 
 def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> tuple[str | None, bool | None]:
@@ -199,15 +202,17 @@ class GitHubRevocationHandler:
     existing grant.
     """
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        """Configure the handler.
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how revocation requests reach the network.
 
         Args:
-            client: An optional caller-owned client to send revocation
-                requests through; a fresh client is used per request when
-                omitted.
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
         """
-        self._client = client
+        self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke the GitHub OAuth grant at the configured revocation endpoint.
@@ -222,75 +227,33 @@ class GitHubRevocationHandler:
             when GitHub reports a soft failure.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint.
+            ConfigurationError: If ``config`` declares no revocation endpoint.
+            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
+                to arrive.
                 The failed request's error is not attached as its cause or context.
         """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
-        revocation_url = config.revocation_url
-        if self._client is not None:
-            return await self._send(self._client, token, revocation_url, config)
-        async with httpx.AsyncClient() as client:
-            return await self._send(client, token, revocation_url, config)
-
-    async def _send(
-        self,
-        client: httpx.AsyncClient,
-        token: str,
-        revocation_url: str,
-        config: ProviderConfig,
-    ) -> bool:
-        """Send the revocation request and return success status.
-
-        Args:
-            client: The HTTP client to send the request through.
-            token: The access token whose grant is removed.
-            revocation_url: The grant endpoint to DELETE.
-            config: The provider configuration supplying client credentials.
-
-        Returns:
-            ``True`` on 204/404 (removed or already gone), ``False`` on a
-            422 or other unexpected status.
-
-        Raises:
-            RevocationError: If the request fails to reach the endpoint.
-                The failed request's error is not attached as its cause or context.
-        """
-        auth = config.basic_auth()
-        try:
-            response = await client.request(
-                "DELETE",
-                revocation_url,
-                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an injected client's own
-                # auth flow is not applied to the server-supplied revocation URL.
-                auth=auth,
-                headers=_GITHUB_API_HEADERS,
-                json={"access_token": token},
-            )
-        except httpx.RequestError as exc:
-            failure = http_failure(exc)
-        else:
-            # 204: grant removed. 404: already gone — idempotent re-disconnect.
-            if response.status_code in (204, 404):
-                return True
-            # 422: validation failed or spam-throttled per GitHub docs. Treat
-            # as a soft failure so callers can continue with local cleanup.
-            if response.status_code == 422:
-                logger.warning(
-                    "GitHub grant revocation returned 422 (validation failed "
-                    "or spam-throttled); the grant may still exist at GitHub"
-                )
-                return False
+        request = RevocationRequest(
+            url=revocation_endpoint(config),
+            label="GitHub",
+            method=HttpMethod.DELETE,
+            auth=config.basic_auth(),
+            headers=_GITHUB_API_HEADERS,
+            json_body={"access_token": token},
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        # 204: grant removed. 404: already gone, an idempotent re-disconnect.
+        if response.status_code in (204, 404):
+            return True
+        # 422: validation failed or spam-throttled per GitHub's documentation. A soft failure, so a
+        # caller can continue with local cleanup.
+        if response.status_code == _GITHUB_VALIDATION_FAILED:
             logger.warning(
-                "GitHub grant revocation returned unexpected status %s",
-                response.status_code,
+                "GitHub grant revocation returned 422 (validation failed "
+                "or spam-throttled); the grant may still exist at GitHub"
             )
             return False
-        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
-        # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(f"Failed to revoke GitHub token: {failure.description}", kind=failure.kind)
+        logger.warning("GitHub grant revocation returned unexpected status %s", response.status_code)
+        return False
 
 
 def preset(

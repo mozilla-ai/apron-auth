@@ -47,8 +47,8 @@ from apron_auth.models import (
     UserToken,
 )
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
-from apron_auth.protocols import StandardRevocationHandler
 from apron_auth.providers import identity_handler_for, revocation_handler_for
+from apron_auth.providers._revocation import StandardRevocationHandler
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

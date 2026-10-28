@@ -14,11 +14,11 @@ from collections.abc import Sequence
 
 import httpx
 
-from apron_auth._http_errors import http_failure
-from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
+from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -126,6 +126,18 @@ class GoogleIdentityHandler:
 class GoogleRevocationHandler:
     """Google token revocation via POST with token as query parameter."""
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how revocation requests reach the network.
+
+        Args:
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
+        """
+        self._transport_factory = transport_factory
+
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token at Google's revocation endpoint.
 
@@ -138,25 +150,16 @@ class GoogleRevocationHandler:
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint.
+            RevocationError: If the request cannot be sent or fails to arrive.
                 The failed request's error is not attached as its cause or context.
         """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    config.revocation_url,
-                    params={"token": token},
-                )
-            except httpx.RequestError as exc:
-                failure = http_failure(exc)
-            else:
-                return response.is_success
-        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
-        # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(f"Failed to revoke Google token: {failure.description}", kind=failure.kind)
+        request = RevocationRequest(
+            url=revocation_endpoint(config),
+            label="Google",
+            params={"token": token},
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        return response.is_success
 
 
 def preset(

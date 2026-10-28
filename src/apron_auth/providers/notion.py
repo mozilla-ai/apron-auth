@@ -18,8 +18,6 @@ from collections.abc import Sequence
 
 import httpx
 
-from apron_auth._http_errors import http_failure
-from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -28,8 +26,10 @@ from apron_auth.models import (
     TenancyContext,
     TokenEndpointAuthMethod,
 )
+from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
+from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 
 logger = logging.getLogger(__name__)
 
@@ -163,61 +163,17 @@ class NotionRevocationHandler:
     is already invalid; both are treated as successful (idempotent) outcomes.
     """
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        """Configure the handler.
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how revocation requests reach the network.
 
         Args:
-            client: An optional caller-owned client to send revocation
-                requests through; a fresh client is used per request when
-                omitted.
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
         """
-        self._client = client
-
-    async def _send(
-        self,
-        client: httpx.AsyncClient,
-        token: str,
-        revocation_url: str,
-        config: ProviderConfig,
-    ) -> bool:
-        """Send the revocation request and return success status.
-
-        Args:
-            client: The HTTP client to send the request through.
-            token: The token to revoke.
-            revocation_url: The endpoint to POST the revocation to.
-            config: The provider configuration supplying client credentials.
-
-        Returns:
-            ``True`` on 200 (revoked) or 400 (already invalid — idempotent),
-            ``False`` on any other status.
-
-        Raises:
-            RevocationError: If the request fails to reach the endpoint.
-                The failed request's error is not attached as its cause or context.
-        """
-        auth = config.basic_auth()
-        try:
-            response = await client.post(
-                revocation_url,
-                json={"token": token},
-                # Pass None (not USE_CLIENT_DEFAULT) for a public client, so an injected client's own
-                # auth flow is not applied to the server-supplied revocation URL.
-                auth=auth,  # ty: ignore[invalid-argument-type]
-            )
-        except httpx.RequestError as exc:
-            failure = http_failure(exc)
-        else:
-            if response.status_code in (200, 400):
-                return True
-            logger.warning(
-                "Notion revocation returned unexpected status %d",
-                response.status_code,
-            )
-            return False
-        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
-        # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(f"Failed to revoke Notion token: {failure.description}", kind=failure.kind)
+        self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.
@@ -232,18 +188,22 @@ class NotionRevocationHandler:
             invalid.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint.
+            ConfigurationError: If ``config`` declares no revocation endpoint.
+            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
+                to arrive.
                 The failed request's error is not attached as its cause or context.
         """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
-        revocation_url = config.revocation_url
-        if self._client is not None:
-            return await self._send(self._client, token, revocation_url, config)
-        async with httpx.AsyncClient() as client:
-            return await self._send(client, token, revocation_url, config)
+        request = RevocationRequest(
+            url=revocation_endpoint(config),
+            label="Notion",
+            auth=config.basic_auth(),
+            json_body={"token": token},
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        if response.status_code in (200, 400):
+            return True
+        logger.warning("Notion revocation returned unexpected status %d", response.status_code)
+        return False
 
 
 def preset(
