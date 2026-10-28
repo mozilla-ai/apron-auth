@@ -159,12 +159,15 @@ async def test_a_url_that_names_no_scheme_is_wrapped_rather_than_raised_unwrappe
     assert refusal.value.kind is FailureKind.UNREACHABLE
 
 
-async def test_a_token_that_cannot_go_in_a_header_is_wrapped_rather_than_raised_unwrapped() -> None:
+async def test_a_token_that_cannot_go_in_a_header_is_refused_rather_than_raised_unwrapped() -> None:
     """A non-ASCII token raises outside httpx's error tree, which five of six handlers let escape."""
     with pytest.raises(RevocationError) as refusal:
         await send_revocation(_request(headers={"Authorization": "Bearer töken"}))
 
-    assert refusal.value.kind is FailureKind.UNEXPECTED
+    assert refusal.value.kind is FailureKind.REFUSED
+    assert refusal.value.kind.retryable is False
+    assert "could not be encoded" in str(refusal.value)
+    assert "töken" not in str(refusal.value)
 
 
 async def test_the_label_names_the_provider_in_the_failure() -> None:

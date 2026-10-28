@@ -102,7 +102,8 @@ NON_ASCII_TOKEN = "token-SECRET-\u20ac"
 
 
 @pytest.mark.parametrize("name", sorted(SENDS_TOKEN_IN_HEADER))
-async def test_token_that_cannot_be_sent_is_a_request_failure(name: str, httpx_mock: HTTPXMock) -> None:
+async def test_token_that_cannot_be_sent_is_refused_without_a_request(name: str, httpx_mock: HTTPXMock) -> None:
+    """Nothing left the process, so the message must not report a failure of the request."""
     httpx_mock.add_response(is_optional=True)
     config = CONFIGS[name]()
     handler = revocation_handler_for(config) or StandardRevocationHandler()
@@ -110,7 +111,8 @@ async def test_token_that_cannot_be_sent_is_a_request_failure(name: str, httpx_m
     with pytest.raises(RevocationError) as exc_info:
         await handler.revoke(NON_ASCII_TOKEN, config)
 
-    assert str(exc_info.value).endswith(" token: request failed")
+    assert str(exc_info.value).endswith(" token: the token could not be encoded")
+    assert exc_info.value.kind.retryable is False
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
     assert NON_ASCII_TOKEN not in "".join(traceback.format_exception(exc_info.value))

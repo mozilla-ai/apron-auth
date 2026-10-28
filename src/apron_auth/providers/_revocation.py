@@ -174,11 +174,14 @@ async def send_revocation(
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except httpx.InvalidURL:
         failure_message, kind = f"Failed to revoke {subject}: invalid URL", FailureKind.REFUSED
+    except UnicodeEncodeError:
+        # A token outside ASCII cannot go in a header, which no retry changes, and nothing left the process.
+        failure_message, kind = f"Failed to revoke {subject}: the token could not be encoded", FailureKind.REFUSED
     except httpx.HTTPError as exc:
         failure = http_failure(exc)
         failure_message, kind = f"Failed to revoke {subject}: {failure.description}", failure.kind
     except Exception:
-        # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
+        # A failure outside the clauses above can still hold the token-bearing request.
         failure_message, kind = f"Failed to revoke {subject}: request failed", FailureKind.UNEXPECTED
     # NOTE: The caught error holds the token-bearing request, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
