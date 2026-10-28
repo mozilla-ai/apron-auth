@@ -26,6 +26,7 @@ from apron_auth._urls import (
     authority_credential,
     matches_suffix,
     query_parameters,
+    url_host,
     uses_allowed_transport,
 )
 from apron_auth.errors import ConfigurationError, IssuerValidationError
@@ -1083,38 +1084,55 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
     @model_validator(mode="after")
     def _revocation_endpoint_sits_with_the_token_endpoint(self) -> ProviderConfig:
-        """Reject a config that revokes a token somewhere other than where it was issued.
+        """Reject a config whose revocation endpoint is on a host revocation is not permitted at.
 
-        A revocation request carries a bearer token to ``revocation_url``. A token is revoked at the
-        host that issued it, or at another of the named provider's own hosts, so any other host
-        would be sent a token it never issued. A subdomain of the issuing host is another host.
+        :meth:`permits_revocation_at` states the rule, and refusing at construction reports a
+        configuration that breaks it before it sends a token anywhere.
         NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
 
         Returns:
             The validated config, unchanged.
 
         Raises:
-            ValueError: If ``provider`` is set and the revocation and token endpoints name
-                neither one host nor two of the named provider's. The message names the hosts
-                alone, because a rejected authority can carry a credential.
+            ValueError: If ``provider`` is set and revocation is not permitted at the revocation
+                endpoint's host. The message names the hosts alone, because a rejected authority
+                can carry a credential.
         """
         if self.provider is None or self.revocation_url is None:
             return self
-        token_host = urlparse(self.token_url).hostname or ""
-        revocation_host = urlparse(self.revocation_url).hostname or ""
-        # A subdomain is a separate authority, so only the host itself answers for the token it issued.
-        if revocation_host and revocation_host == token_host:
+        revocation_host = url_host(self.revocation_url)
+        if self.permits_revocation_at(revocation_host):
             return self
-        suffixes = self.provider.host_suffixes
-        if matches_suffix(revocation_host, suffixes) and matches_suffix(token_host, suffixes):
-            return self
-        display_name = self.provider.display_name
         msg = (
-            f"revocation_url names {revocation_host} and token_url names {token_host}. A token is "
-            f"revoked where it was issued, so both must name one host, or both must name "
-            f"{display_name} hosts."
+            f"revocation_url names {revocation_host} and token_url names {url_host(self.token_url)}. "
+            f"A token is revoked where it was issued, so both must name one host, or both must name "
+            f"{self.provider.display_name} hosts."
         )
         raise ValueError(msg)
+
+    def permits_revocation_at(self, host: str) -> bool:
+        """Report whether a token this configuration's token endpoint issued may be revoked at ``host``.
+
+        A revocation request carries the token, so the host has to answer for it: the one that
+        issued it, or another of the named provider's own hosts. A subdomain of the issuing host is
+        a separate authority, so only that host itself answers for what it issued.
+        A configuration naming no provider permits every host, because it states no provider whose
+        hosts the rule could name. The caller passing such a configuration holds the only statement
+        of where its token may be sent.
+
+        Args:
+            host: The hostname a revocation request would be sent to.
+
+        Returns:
+            Whether a revocation request may be sent to the host.
+        """
+        if self.provider is None:
+            return True
+        token_host = url_host(self.token_url)
+        if host and host == token_host:
+            return True
+        suffixes = self.provider.host_suffixes
+        return matches_suffix(host, suffixes) and matches_suffix(token_host, suffixes)
 
     def basic_auth(self) -> tuple[str, str] | None:
         """Return the client's HTTP Basic credential, or None for a public client.
