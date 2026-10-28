@@ -41,6 +41,9 @@ class RevocationRequest:
         url: The endpoint to send to, including any part of the path the provider builds per token.
         label: The provider's display name, which the failure message names, or ``None`` where the
             configuration names no provider and the message names none either.
+        endpoint: The URL the outbound connection is chosen for, where a provider builds ``url`` per
+            token and that URL therefore carries the token. ``None`` means ``url`` carries no token
+            and serves for both.
         auth: HTTP Basic credentials, or ``None`` to present no client authentication.
         data: A form body.
         headers: Request headers.
@@ -51,6 +54,7 @@ class RevocationRequest:
 
     url: str
     label: str | None = None
+    endpoint: str | None = None
     auth: tuple[str, str] | None = None
     data: Mapping[str, str] | None = None
     headers: Mapping[str, str] | None = None
@@ -69,6 +73,8 @@ class StandardRevocationHandler:
             transport_factory: Controls the outbound connection for the revocation URL. The URL is
                 server-supplied, so a caller handling untrusted input can pin DNS to validated
                 addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
         """
         self._transport_factory = transport_factory
 
@@ -136,8 +142,11 @@ async def send_revocation(
 
     Args:
         request: What the provider states about the request.
-        transport_factory: Controls the outbound connection. The URL is server-supplied, so a caller
-            handling untrusted input can pin DNS to validated addresses here to prevent SSRF via rebinding.
+        transport_factory: Controls the outbound connection, and is called with the request's endpoint,
+            which never carries the token. The URL is server-supplied, so a caller handling untrusted
+            input can pin DNS to validated addresses here to prevent SSRF via rebinding.
+            NOTE: The transport it returns is closed when the request completes, so a factory must not
+            return one it intends to reuse.
 
     Returns:
         The endpoint's response.
@@ -148,8 +157,9 @@ async def send_revocation(
             The caught error is not attached as its cause or context.
     """
     subject = f"{request.label} token" if request.label is not None else "token"
-    transport = transport_factory(request.url) if transport_factory is not None else None
     try:
+        # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.
+        transport = transport_factory(request.endpoint or request.url) if transport_factory is not None else None
         async with httpx.AsyncClient(transport=transport) as client:
             return await client.request(
                 request.method,

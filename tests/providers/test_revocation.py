@@ -237,3 +237,41 @@ async def test_every_handler_refuses_a_config_declaring_no_endpoint_alike(provid
 
     with pytest.raises(ConfigurationError, match="carries no revocation endpoint"):
         await handler.revoke(TOKEN, _config(provider, revokes=False))
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Provider) -> None:
+    """A factory is caller-supplied code that may log what it pinned, so the token must not reach it."""
+    seen: list[str] = []
+
+    def factory(url: str) -> httpx.MockTransport:
+        seen.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    await handler.revoke(TOKEN, config)
+
+    assert seen
+    assert TOKEN not in seen[0]
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_a_transport_factory_that_refuses_does_not_escape_as_itself(provider: Provider) -> None:
+    """A factory refusing a private address names the URL it refused, which must not reach a caller raw."""
+
+    def refusing(url: str) -> httpx.MockTransport:
+        msg = f"refusing to connect to {url}"
+        raise RuntimeError(msg)
+
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=refusing)
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.UNEXPECTED
+    assert TOKEN not in "".join(traceback.format_exception(refusal.value))

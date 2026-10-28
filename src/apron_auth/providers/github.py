@@ -209,6 +209,8 @@ class GitHubRevocationHandler:
             transport_factory: Controls the outbound connection for the revocation URL. The URL is
                 server-supplied, so a caller handling untrusted input can pin DNS to validated
                 addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
         """
         self._transport_factory = transport_factory
 
@@ -225,8 +227,9 @@ class GitHubRevocationHandler:
             when GitHub reports a soft failure.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint.
+            ConfigurationError: If ``config`` declares no revocation endpoint.
+            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
+                to arrive.
                 The failed request's error is not attached as its cause or context.
         """
         request = RevocationRequest(

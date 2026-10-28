@@ -177,7 +177,8 @@ class ProviderFacts:
             The class takes no constructor arguments.
             A member names it rather than holding it, because every provider module imports this one.
         revocation_handler_class_name: The name of the class in the provider's module that revokes a
-            token, named rather than held for the same reason. The class takes no constructor arguments.
+            token, named rather than held for the same reason. The class takes ``transport_factory``
+            as its only constructor argument, keyword-only.
             ``None`` where the provider needs no revocation of its own, which leaves a config that
             declares a revocation endpoint to the standard RFC 7009 revocation.
         scope_separator: The string the provider's scope parameter is joined with.

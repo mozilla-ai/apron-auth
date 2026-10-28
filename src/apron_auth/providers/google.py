@@ -133,6 +133,8 @@ class GoogleRevocationHandler:
             transport_factory: Controls the outbound connection for the revocation URL. The URL is
                 server-supplied, so a caller handling untrusted input can pin DNS to validated
                 addresses here to prevent SSRF via rebinding.
+                NOTE: The transport it returns is closed when the request completes, so a factory
+                must not return one it intends to reuse.
         """
         self._transport_factory = transport_factory
 
