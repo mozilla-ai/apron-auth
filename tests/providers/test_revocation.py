@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import traceback
+from collections.abc import Callable
 from types import ModuleType
 
 import httpx
 import pytest
 from pydantic import SecretStr
 
-from apron_auth.errors import ConfigurationError
+from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import Provider, ProviderConfig
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import (
@@ -25,6 +27,8 @@ from apron_auth.providers import (
     typeform,
 )
 from apron_auth.providers._revocation import StandardRevocationHandler
+
+TOKEN = "live-access-token"  # pragma: allowlist secret
 
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
@@ -161,3 +165,75 @@ def test_a_name_the_module_does_not_define_is_refused(monkeypatch: pytest.Monkey
 
     with pytest.raises(TypeError, match="defines no SlackRevocationHandler"):
         revocation_handler_for(_config(Provider.SLACK))
+
+
+def _failing_transport(exc: Exception) -> Callable[[str], httpx.MockTransport]:
+    def factory(url: str) -> httpx.MockTransport:
+        def fail(request: httpx.Request) -> httpx.Response:
+            raise exc
+
+        return httpx.MockTransport(fail)
+
+    return factory
+
+
+def _answering_transport(status_code: int) -> Callable[[str], httpx.MockTransport]:
+    def factory(url: str) -> httpx.MockTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(status_code, json={"ok": False}))
+
+    return factory
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_every_handler_reports_a_transport_failure_alike(provider: Provider) -> None:
+    """Five handlers of six once differed here, so this states the one shape they now share."""
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=_failing_transport(httpx.ConnectError("refused")))
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.UNREACHABLE
+    assert refusal.value.__cause__ is None
+    assert refusal.value.__context__ is None
+    assert TOKEN not in "".join(traceback.format_exception(refusal.value))
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_every_handler_refuses_an_invalid_url_alike(provider: Provider) -> None:
+    """NOTE: httpx.InvalidURL sits outside httpx.HTTPError, and five handlers of six let it escape."""
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=_failing_transport(httpx.InvalidURL("malformed")))
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REFUSED
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_no_handler_lets_a_server_error_escape_as_itself(provider: Provider) -> None:
+    """Each provider reads a status its own way, and none of them answers with an HTTP library's error."""
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(500))
+    assert handler is not None
+
+    try:
+        outcome = await handler.revoke(TOKEN, config)
+    except RevocationError as refusal:
+        assert refusal.kind is FailureKind.SERVER_ERROR
+    else:
+        assert outcome is False
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_every_handler_refuses_a_config_declaring_no_endpoint_alike(provider: Provider) -> None:
+    """The resolver answers None before a handler is built, so the handler states this for a direct caller."""
+    resolved = revocation_handler_for(_config(provider))
+    assert resolved is not None
+    handler = type(resolved)()
+
+    with pytest.raises(ConfigurationError, match="carries no revocation endpoint"):
+        await handler.revoke(TOKEN, _config(provider, revokes=False))
