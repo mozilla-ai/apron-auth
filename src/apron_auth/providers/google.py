@@ -149,8 +149,8 @@ class GoogleRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL, or names one on a host it does
-                not permit revocation at.
+            ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
+                sending a token to.
             RevocationError: If the request cannot be sent or fails to arrive.
                 The failed request's error is not attached as its cause or context.
         """

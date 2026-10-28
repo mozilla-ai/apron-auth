@@ -10,8 +10,9 @@ from typing import TYPE_CHECKING
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
-from apron_auth._urls import url_host
+from apron_auth._urls import url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
+from apron_auth.models import UrlField
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
@@ -92,7 +93,7 @@ class StandardRevocationHandler:
 
         Raises:
             ConfigurationError: If the configuration declares no revocation endpoint, or declares one
-                on a host it does not permit revocation at.
+                it does not permit sending a token to.
             RevocationError: If the request cannot be sent or fails to arrive, or the endpoint
                 answers an error status.
                 The failed request's error is not attached as its cause or context.
@@ -134,31 +135,42 @@ def revocation_endpoint(config: ProviderConfig) -> str:
     return config.revocation_url
 
 
-def _refuse_an_unpermitted_host(request: RevocationRequest, config: ProviderConfig) -> None:
-    """Refuse a request bound for a host that cannot answer for the token it carries.
+def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfig) -> None:
+    """Refuse a request bound for a URL that must not be sent the token it carries.
 
-    A handler builds the URL it sends to, so the host that URL names is read here rather than taken
-    from the endpoint a validator saw. A configuration naming no provider permits every host, as
-    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says.
+    A handler builds the URL it sends to, so each URL the request names is read here rather than
+    taken from the endpoint a validator saw. A URL has to protect the token in transit, and it has
+    to name a host that can answer for it. A configuration naming no provider names no host the
+    second rule could hold it to, as
+    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the first still applies.
 
     Args:
         request: The request about to be sent.
         config: The provider configuration to revoke against.
 
     Raises:
-        ConfigurationError: If either URL the request names is on a host the configuration does not
-            permit revocation at. The message names the host alone, because a URL can carry the token.
+        ConfigurationError: If a URL the request names states a transport the configuration does not
+            accept, or is on a host the configuration does not permit revocation at. The message
+            names the host alone, because a URL can carry the token.
     """
     provider = config.provider
-    if provider is None:
-        return
+    plain_http_allowed = UrlField.REVOCATION_URL in config.allow_insecure_http_for
     for url in dict.fromkeys((request.url, request.endpoint or request.url)):
         host = url_host(url)
-        if config.permits_revocation_at(host):
+        if not host:
+            # A URL naming no host carries the token nowhere, so the send's own refusal reports it.
+            continue
+        if not uses_allowed_transport(url, plain_http_allowed=plain_http_allowed):
+            msg = (
+                f"Revocation refused: the request to {host} must state https, or http on a loopback "
+                f"host, because it carries a token."
+            )
+            raise ConfigurationError(msg)
+        if provider is None or config.permits_revocation_at(host):
             continue
         msg = (
-            f"{provider.display_name} revocation refused: the request host {host!r} cannot answer "
-            f"for this token. A token is revoked at the host that issued it, or at another "
+            f"Revocation refused: the host {host} cannot answer for this token. A "
+            f"{provider.display_name} token is revoked at the host that issued it, or at another "
             f"{provider.display_name} host."
         )
         raise ConfigurationError(msg)
@@ -173,12 +185,12 @@ async def send_revocation(
     """Send one revocation request and return its response, whatever status it carries.
 
     A provider reads success its own way, so this states no success rule and leaves the response to its caller.
-    The request carries a token, so this refuses a host the configuration does not permit revocation
-    at before it opens a connection.
+    The request carries a token, so this refuses a URL the configuration does not permit sending one
+    to before it opens a connection.
 
     Args:
         request: What the provider states about the request.
-        config: The provider configuration to revoke against, which decides the hosts the token may
+        config: The provider configuration to revoke against, which decides the URLs the token may
             be sent to.
         transport_factory: Controls the outbound connection, and is called with the request's endpoint,
             which never carries the token. The URL is server-supplied, so a caller handling untrusted
@@ -190,13 +202,13 @@ async def send_revocation(
         The endpoint's response.
 
     Raises:
-        ConfigurationError: If a URL the request names is on a host the configuration does not permit
-            revocation at. Nothing is sent.
+        ConfigurationError: If a URL the request names must not be sent the token, by the host it
+            names or by the transport it states. Nothing is sent.
         RevocationError: If the URL is invalid, or the request cannot be sent or fails to arrive.
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
-    _refuse_an_unpermitted_host(request, config)
+    _refuse_an_unpermitted_url(request, config)
     subject = f"{request.label} token" if request.label is not None else "token"
     try:
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.

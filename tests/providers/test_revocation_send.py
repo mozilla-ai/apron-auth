@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import Provider, ProviderConfig
+from apron_auth.models import Provider, ProviderConfig, UrlField
 from apron_auth.providers._revocation import (
     HttpMethod,
     RevocationRequest,
@@ -297,3 +297,73 @@ async def test_a_config_naming_no_provider_permits_the_host_it_reaches() -> None
 
     assert response.status_code == 200
     assert asked == [OFF_HOST_URL]
+
+
+async def test_a_cleartext_url_is_refused_before_anything_is_sent() -> None:
+    """Construction requires TLS, and a copy made past it would otherwise send the token in the clear."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    bypassed = _slack_config().model_copy(update={"revocation_url": "http://slack.com/api/auth.revoke"})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url="http://slack.com/api/auth.revoke", data={"token": TOKEN}),
+            bypassed,
+            transport_factory=transport,
+        )
+
+    assert asked == [], "the token must not cross the network unprotected"
+    assert refusal.value.kind.retryable is False
+    assert "must state https" in str(refusal.value)
+
+
+async def test_a_cleartext_url_is_refused_on_a_config_naming_no_provider() -> None:
+    """Every configuration's token needs protecting, and only a named provider has hosts to check."""
+    bypassed = _config().model_copy(update={"revocation_url": "http://auth.example.com/revoke"})
+
+    with pytest.raises(ConfigurationError, match="must state https"):
+        await send_revocation(_request(url="http://auth.example.com/revoke"), bypassed)
+
+
+async def test_a_cleartext_url_a_config_waived_in_code_is_sent_to() -> None:
+    """A waiver stated in code is the one statement that plain HTTP is accepted for this endpoint."""
+    waived = ProviderConfig.unsafe.allow_plain_http(
+        UrlField.REVOCATION_URL,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.example.com/authorize",
+        token_url="https://auth.example.com/token",
+        revocation_url="http://auth.example.com/revoke",
+    )
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    response = await send_revocation(
+        _request(url="http://auth.example.com/revoke", data={"token": TOKEN}),
+        waived,
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200
+
+
+async def test_a_loopback_url_needs_no_waiver() -> None:
+    """A request to the loopback interface reaches no network, so nothing can read the token off it."""
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    local = _config().model_copy(update={"revocation_url": "http://127.0.0.1:8080/revoke"})
+
+    response = await send_revocation(
+        _request(url="http://127.0.0.1:8080/revoke", data={"token": TOKEN}),
+        local,
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200

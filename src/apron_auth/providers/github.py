@@ -227,8 +227,8 @@ class GitHubRevocationHandler:
             when GitHub reports a soft failure.
 
         Raises:
-            ConfigurationError: If ``config`` declares no revocation endpoint, or declares one on a
-                host it does not permit revocation at.
+            ConfigurationError: If ``config`` declares no revocation endpoint, or declares one it
+                does not permit sending a token to.
             RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
                 to arrive.
                 The failed request's error is not attached as its cause or context.
