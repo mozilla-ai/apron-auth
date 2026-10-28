@@ -198,6 +198,22 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
     }
 
 
+def url_host(url: str) -> str:
+    """Return the host ``url`` names, or an empty string when it names none.
+
+    A URL a request cannot be sent to as written names no host, so a rule that decides where a
+    credential may be sent reads no host from it rather than part of one.
+
+    Args:
+        url: The URL to read.
+
+    Returns:
+        The host, lowercased as a DNS name is, or an empty string.
+    """
+    readable = _scheme_and_host(url)
+    return "" if readable is None else readable[1]
+
+
 def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:
     """Return whether what a request sends to ``url`` may cross the network the URL states.
 
