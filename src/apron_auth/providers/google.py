@@ -149,7 +149,8 @@ class GoogleRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL, or names one on a host it does
+                not permit revocation at.
             RevocationError: If the request cannot be sent or fails to arrive.
                 The failed request's error is not attached as its cause or context.
         """
@@ -158,7 +159,7 @@ class GoogleRevocationHandler:
             label="Google",
             params={"token": token},
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         return response.is_success
 
 

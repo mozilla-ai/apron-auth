@@ -597,7 +597,8 @@ class SlackRevocationHandler:
             ``False`` for an error status, or for an ``ok`` value that is missing or anything other than ``true``.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
+            ConfigurationError: If ``config`` has no revocation URL, or names one on a host it does
+                not permit revocation at.
             RevocationError: If the revocation URL is invalid, the request cannot be sent,
                 the request fails to reach the endpoint, or its response body is not a valid JSON object.
                 The caught error is not attached as its cause or context.
@@ -607,7 +608,7 @@ class SlackRevocationHandler:
             label="Slack",
             headers={"Authorization": f"Bearer {token}"},
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:
             return False
         try:

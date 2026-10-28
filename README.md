@@ -548,7 +548,7 @@ await client.revoke_token(tokens.access_token)
 
 The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to `OAuthClient` to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
 
-A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there.
+A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there. Construction refuses one that names another host, and the request refuses the host it is about to reach, so a config copied past validation and a handler that builds its URL per token are both held to the rule. A config that names no provider states no hosts to hold it to, and the caller passing one owns where its token is sent.
 
 ### State management
 
