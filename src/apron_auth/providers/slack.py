@@ -44,7 +44,6 @@ from urllib.parse import urlparse
 import httpx
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
-from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import (
     ConfigurationError,
@@ -61,8 +60,10 @@ from apron_auth.models import (
     ScopeMetadata,
     TenancyContext,
 )
+from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset, scope_sequence
+from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 from apron_auth.scopes import scope_words
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
@@ -572,6 +573,16 @@ class SlackRevocationHandler:
     query-string parameter.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how revocation requests reach the network.
+
+        Args:
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
+        """
+        self._transport_factory = transport_factory
+
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a token at Slack's revocation endpoint.
 
@@ -589,39 +600,26 @@ class SlackRevocationHandler:
                 the request fails to reach the endpoint, or its response body is not a valid JSON object.
                 The caught error is not attached as its cause or context.
         """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.post(
-                    config.revocation_url,
-                    headers={"Authorization": f"Bearer {token}"},
-                )
-            # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
-            except httpx.InvalidURL:
-                failure_message, kind = "Failed to revoke Slack token: invalid URL", FailureKind.REFUSED
-            except httpx.RequestError as exc:
-                transport = http_failure(exc)
-                failure_message, kind = f"Failed to revoke Slack token: {transport.description}", transport.kind
-            except Exception:
-                # Any other send failure can repeat the token's header, like the encoding error for a non-ASCII token.
-                failure_message, kind = "Failed to revoke Slack token: request failed", FailureKind.UNEXPECTED
-            else:
-                if not response.is_success:
-                    return False
-                try:
-                    data = decode_json_body(response)
-                except ValueError:
-                    failure_message, kind = "Failed to parse Slack revocation response", FailureKind.REFUSED
-                else:
-                    if not isinstance(data, dict):
-                        msg = "Slack revocation response was not a JSON object"
-                        raise RevocationError(msg, kind=FailureKind.REFUSED)
-                    return data.get("ok") is True
-        # NOTE: The caught errors hold the token-bearing request or the response, so this error must not reference them.
-        # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
-        raise RevocationError(failure_message, kind=kind)
+        request = RevocationRequest(
+            url=revocation_endpoint(config),
+            label="Slack",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        if not response.is_success:
+            return False
+        try:
+            data = decode_json_body(response)
+        except ValueError:
+            unparsed = "Failed to parse Slack revocation response"
+        else:
+            if not isinstance(data, dict):
+                msg = "Slack revocation response was not a JSON object"
+                raise RevocationError(msg, kind=FailureKind.REFUSED)
+            return data.get("ok") is True
+        # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
+        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        raise RevocationError(unparsed, kind=FailureKind.REFUSED)
 
 
 def preset(

@@ -7,7 +7,6 @@ from types import ModuleType
 import httpx
 import pytest
 from pydantic import SecretStr
-from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import Provider, ProviderConfig
@@ -117,22 +116,25 @@ def test_a_config_that_names_no_provider_resolves_no_handler() -> None:
     assert revocation_handler_for(_config(None)) is None
 
 
-async def test_a_providers_own_handler_does_not_reach_the_transport_factory(httpx_mock: HTTPXMock) -> None:
-    """NOTE: No provider's own handler class accepts a factory, so a caller's DNS pinning is not applied."""
+@pytest.mark.parametrize("provider", [p for p in Provider if p.revocation_handler_class_name is not None])
+async def test_a_providers_own_handler_reaches_the_transport_factory(provider: Provider) -> None:
+    """A caller pinning DNS against rebinding reaches every handler, not only the RFC 7009 one."""
     pinned: list[str] = []
 
     def factory(url: str) -> httpx.MockTransport:
         pinned.append(url)
         return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
 
-    config = _config(Provider.SLACK)
-    httpx_mock.add_response(url=config.revocation_url, json={"ok": True})
+    config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
     assert handler is not None
 
-    await handler.revoke("xoxb-token", config)
+    await handler.revoke("a-token", config)
 
-    assert pinned == []
+    # The factory is asked for the URL the request goes to, which HubSpot builds per token.
+    assert config.revocation_url is not None
+    assert len(pinned) == 1
+    assert pinned[0].startswith(config.revocation_url)
 
 
 def test_a_handler_is_built_per_call() -> None:

@@ -39,7 +39,8 @@ class RevocationRequest:
 
     Attributes:
         url: The endpoint to send to, including any part of the path the provider builds per token.
-        label: The provider's display name, which the failure message names.
+        label: The provider's display name, which the failure message names, or ``None`` where the
+            configuration names no provider and the message names none either.
         auth: HTTP Basic credentials, or ``None`` to present no client authentication.
         data: A form body.
         headers: Request headers.
@@ -49,7 +50,7 @@ class RevocationRequest:
     """
 
     url: str
-    label: str
+    label: str | None = None
     auth: tuple[str, str] | None = None
     data: Mapping[str, str] | None = None
     headers: Mapping[str, str] | None = None
@@ -59,101 +60,50 @@ class RevocationRequest:
 
 
 class StandardRevocationHandler:
-    """RFC 7009 token revocation via POST with token in form body."""
+    """RFC 7009 token revocation: a POST whose form body carries the token."""
 
-    def __init__(
-        self,
-        client: httpx.AsyncClient | None = None,
-        transport_factory: TransportFactory | None = None,
-    ) -> None:
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
         """Configure how revocation requests reach the network.
 
         Args:
-            client: A caller-owned client to send every revocation through;
-                when supplied, ``transport_factory`` is unused.
-            transport_factory: Factory controlling the outbound connection for
-                the revocation URL when no ``client`` is given. The URL is
-                server-supplied, so a caller handling untrusted input can pin
-                DNS to validated addresses here to prevent SSRF via rebinding.
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
         """
-        self._client = client
         self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
-        """Revoke a token using standard RFC 7009 POST.
+        """Revoke a token at the configuration's RFC 7009 endpoint.
 
         Args:
             token: The token to revoke.
-            config: The provider configuration; its ``revocation_url`` and
-                client credentials are used for the request.
+            config: The provider configuration, whose revocation endpoint and client credentials
+                the request carries.
 
         Returns:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL.
-            RevocationError: If the request fails to reach the endpoint.
-                The failed request's error is not attached as its cause or context.
-        """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
-        revocation_url = config.revocation_url
-        if self._client is not None:
-            return await self._send(self._client, token, revocation_url, config)
-        transport = self._transport_factory(revocation_url) if self._transport_factory is not None else None
-        async with httpx.AsyncClient(transport=transport) as client:
-            return await self._send(client, token, revocation_url, config)
-
-    async def _send(
-        self,
-        client: httpx.AsyncClient,
-        token: str,
-        revocation_url: str,
-        config: ProviderConfig,
-    ) -> bool:
-        """Send the revocation request and return success status.
-
-        A public client carries no secret, so no HTTP Basic credential is
-        attached in that case.
-
-        Args:
-            client: The HTTP client to send the request through.
-            token: The token to revoke.
-            revocation_url: The endpoint to POST the revocation to.
-            config: The provider configuration supplying client credentials.
-
-        Returns:
-            ``True`` when the endpoint responds with success.
-
-        Raises:
-            RevocationError: If the request fails to reach the endpoint, or the endpoint answers an error status.
-                Its kind says whether the endpoint may accept the request later.
+            ConfigurationError: If the configuration declares no revocation endpoint.
+            RevocationError: If the request cannot be sent or fails to arrive, or the endpoint
+                answers an error status.
                 The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth()
         data = {"token": token}
         if auth is None:
-            # RFC 7009 section 5: a public client identifies itself with
-            # client_id in the request body, presenting no client authentication.
+            # RFC 7009 section 5: a public client identifies itself with client_id in the request
+            # body, presenting no client authentication.
             data["client_id"] = config.client_id
-        try:
-            response = await client.post(
-                revocation_url,
-                data=data,
-                # Pass None for a public client, so an injected HTTP client's own auth
-                # flow is not applied to the server-supplied revocation URL. The HTTP
-                # client accepts None at runtime, and only its type stub omits it.
-                auth=auth,  # ty: ignore[invalid-argument-type]
-            )
-        except httpx.RequestError as exc:
-            failure = http_failure(exc)
-        else:
-            if response.is_success:
-                return True
-            failure = status_failure(response.status_code)
-        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
-        # This raise stays outside the except block, where Python would set __context__ to the caught error.
+        request = RevocationRequest(
+            url=revocation_endpoint(config),
+            auth=auth,
+            data=data,
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        if response.is_success:
+            return True
+        failure = status_failure(response.status_code)
         raise RevocationError(f"Failed to revoke token: {failure.description}", kind=failure.kind)
 
 
@@ -197,6 +147,7 @@ async def send_revocation(
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
+    subject = f"{request.label} token" if request.label is not None else "token"
     transport = transport_factory(request.url) if transport_factory is not None else None
     try:
         async with httpx.AsyncClient(transport=transport) as client:
@@ -211,13 +162,13 @@ async def send_revocation(
             )
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except httpx.InvalidURL:
-        failure_message, kind = f"Failed to revoke {request.label} token: invalid URL", FailureKind.REFUSED
+        failure_message, kind = f"Failed to revoke {subject}: invalid URL", FailureKind.REFUSED
     except httpx.HTTPError as exc:
         failure = http_failure(exc)
-        failure_message, kind = f"Failed to revoke {request.label} token: {failure.description}", failure.kind
+        failure_message, kind = f"Failed to revoke {subject}: {failure.description}", failure.kind
     except Exception:
         # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
-        failure_message, kind = f"Failed to revoke {request.label} token: request failed", FailureKind.UNEXPECTED
+        failure_message, kind = f"Failed to revoke {subject}: request failed", FailureKind.UNEXPECTED
     # NOTE: The caught error holds the token-bearing request, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
     raise RevocationError(failure_message, kind=kind)
@@ -238,9 +189,8 @@ def revocation_handler_for(
 
     Args:
         config: The provider configuration to revoke against.
-        transport_factory: Controls the outbound connection for RFC 7009 revocation, where a caller
-            handling untrusted input can pin DNS to validated addresses. A provider that names a
-            class of its own takes no factory, because none of those classes accepts one.
+        transport_factory: Controls the outbound connection for every revocation request, where a
+            caller handling untrusted input can pin DNS to validated addresses.
 
     Returns:
         A new handler for the named provider, or ``None`` when the config names no provider or
@@ -275,4 +225,4 @@ def revocation_handler_for(
     if not (isinstance(handler_class, type) and issubclass(handler_class, RevocationHandler)):
         msg = f"{module.__name__}.{class_name} is not a revocation handler"
         raise TypeError(msg)
-    return handler_class()
+    return handler_class(transport_factory=transport_factory)

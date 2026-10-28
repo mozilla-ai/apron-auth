@@ -34,8 +34,6 @@ from urllib.parse import quote
 
 import httpx
 
-from apron_auth._http_errors import http_failure
-from apron_auth.errors import ConfigurationError, RevocationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -44,8 +42,10 @@ from apron_auth.models import (
     ScopeMetadata,
     TenancyContext,
 )
+from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json
 from apron_auth.providers._presets import Preset
+from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
 
 logger = logging.getLogger(__name__)
 
@@ -188,46 +188,15 @@ class HubSpotRevocationHandler:
     Full grant removal requires a manual action in the HubSpot portal.
     """
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
-        """Configure the handler.
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how revocation requests reach the network.
 
         Args:
-            client: An optional caller-owned client to send revocation
-                requests through; a fresh client is used per request when
-                omitted.
+            transport_factory: Controls the outbound connection for the revocation URL. The URL is
+                server-supplied, so a caller handling untrusted input can pin DNS to validated
+                addresses here to prevent SSRF via rebinding.
         """
-        self._client = client
-
-    async def _send(self, client: httpx.AsyncClient, url: str) -> bool:
-        """Send the revocation request and return success status.
-
-        Args:
-            client: The HTTP client to send the request through.
-            url: The refresh-token revocation URL to DELETE.
-
-        Returns:
-            ``True`` on 204 (revoked) or 404 (already gone — idempotent),
-            ``False`` on any other status.
-
-        Raises:
-            RevocationError: If the request fails to reach the endpoint.
-                The failed request's error is not attached as its cause or context.
-        """
-        try:
-            response = await client.delete(url)
-        except httpx.RequestError as exc:
-            failure = http_failure(exc)
-        else:
-            if response.status_code in (204, 404):
-                return True
-            logger.warning(
-                "HubSpot revocation returned unexpected status %s",
-                response.status_code,
-            )
-            return False
-        # NOTE: The caught error holds the request, which carries the token, so this error must not reference it.
-        # This raise stays outside the except block, where Python would set __context__ to the caught error.
-        raise RevocationError(f"Failed to revoke HubSpot token: {failure.description}", kind=failure.kind)
+        self._transport_factory = transport_factory
 
     async def revoke(self, token: str, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
@@ -249,15 +218,17 @@ class HubSpotRevocationHandler:
             RevocationError: If the request fails to reach the endpoint.
                 The failed request's error is not attached as its cause or context.
         """
-        if config.revocation_url is None:
-            msg = "the provider configuration carries no revocation endpoint"
-            raise ConfigurationError(msg)
         encoded = quote(token, safe="")
-        url = f"{config.revocation_url.rstrip('/')}/{encoded}"
-        if self._client is not None:
-            return await self._send(self._client, url)
-        async with httpx.AsyncClient() as client:
-            return await self._send(client, url)
+        request = RevocationRequest(
+            url=f"{revocation_endpoint(config).rstrip('/')}/{encoded}",
+            label="HubSpot",
+            method=HttpMethod.DELETE,
+        )
+        response = await send_revocation(request, transport_factory=self._transport_factory)
+        if response.status_code in (204, 404):
+            return True
+        logger.warning("HubSpot revocation returned unexpected status %s", response.status_code)
+        return False
 
 
 def preset(

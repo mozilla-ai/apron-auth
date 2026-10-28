@@ -396,22 +396,6 @@ class TestHubSpotRevocationHandler:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
-    async def test_accepts_injected_client(self, httpx_mock: HTTPXMock):
-        httpx_mock.add_response(status_code=204)
-        from apron_auth.providers.hubspot import HubSpotRevocationHandler, preset
-
-        config = preset(
-            client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
-            scopes=["contacts"],
-        )
-        client = httpx.AsyncClient()
-        handler = HubSpotRevocationHandler(client=client)
-        result = await handler.revoke("refresh-abc", config)
-        assert result is True
-        assert not client.is_closed
-        await client.aclose()
-
     async def test_raises_when_revocation_url_missing(self):
         from apron_auth.providers.hubspot import HubSpotRevocationHandler
 
