@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import traceback
+
 import httpx
 import pytest
 from pydantic import SecretStr
@@ -97,7 +99,7 @@ async def test_the_method_a_provider_states_is_the_one_sent() -> None:
         (httpx.ReadTimeout("slow"), FailureKind.TIMEOUT, "the endpoint did not answer in time"),
     ],
 )
-def test_a_transport_failure_is_a_revocation_error_of_its_kind(
+async def test_a_transport_failure_is_a_revocation_error_of_its_kind(
     raised: Exception, kind: FailureKind, reason: str
 ) -> None:
     """The kind decides whether a caller may send the same request again."""
@@ -108,10 +110,8 @@ def test_a_transport_failure_is_a_revocation_error_of_its_kind(
 
         return httpx.MockTransport(fail)
 
-    import asyncio
-
     with pytest.raises(RevocationError) as refusal:
-        asyncio.run(send_revocation(_request(data={"token": TOKEN}), transport_factory=transport))
+        await send_revocation(_request(data={"token": TOKEN}), transport_factory=transport)
 
     assert refusal.value.kind is kind, reason
 
@@ -173,8 +173,6 @@ async def test_the_failure_neither_chains_nor_repeats_the_token() -> None:
             _request(data={"token": TOKEN}, headers={"Authorization": f"Bearer {TOKEN}"}),
             transport_factory=transport,
         )
-
-    import traceback
 
     rendered = "".join(traceback.format_exception(refusal.value))
     assert refusal.value.__cause__ is None

@@ -135,7 +135,7 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
 
     await handler.revoke("a-token", config)
 
-    # The factory is asked for the URL the request goes to, which HubSpot builds per token.
+    # The factory is asked for the token-free endpoint, which prefixes the per-token URL HubSpot sends to.
     assert config.revocation_url is not None
     assert len(pinned) == 1
     assert pinned[0].startswith(config.revocation_url)
