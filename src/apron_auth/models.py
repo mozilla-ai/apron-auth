@@ -24,6 +24,7 @@ from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
+    host_name,
     matches_suffix,
     query_parameters,
     url_host,
@@ -1115,7 +1116,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
         A revocation request carries the token, so the host has to answer for it: the one that
         issued it, or another of the named provider's own hosts. A subdomain of the issuing host is
-        a separate authority, so only that host itself answers for what it issued.
+        a separate authority, so only that host itself answers for what it issued. A trailing dot
+        names the same host, so it does not make one host two.
         A configuration naming no provider permits every host, because it states no provider whose
         hosts the rule could name. The caller passing such a configuration holds the only statement
         of where its token may be sent.
@@ -1128,7 +1130,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         if self.provider is None:
             return True
-        token_host = url_host(self.token_url)
+        host = host_name(host)
+        token_host = host_name(url_host(self.token_url))
         if host and host == token_host:
             return True
         suffixes = self.provider.host_suffixes
