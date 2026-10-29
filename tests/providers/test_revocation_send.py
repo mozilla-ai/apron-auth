@@ -425,3 +425,24 @@ async def test_an_authority_only_the_client_can_read_is_named_as_unreadable() ->
     """The refusal says which rule refused, so an operator is not sent looking at the scheme."""
     with pytest.raises(ConfigurationError, match="authority of the request to 127.0.0.1 cannot be read"):
         await send_revocation(_request(url="http://127.0.0.1:+54321/collect"), _slack_config())
+
+
+async def test_a_redirect_is_not_followed() -> None:
+    """A redirect would carry the token to a host no rule read, so the response is returned as it came."""
+    reached: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        def respond(request: httpx.Request) -> httpx.Response:
+            reached.append(str(request.url))
+            return httpx.Response(302, headers={"Location": OFF_HOST_URL})
+
+        return httpx.MockTransport(respond)
+
+    response = await send_revocation(
+        _request(url="https://slack.com/api/auth.revoke", data={"token": TOKEN}),
+        _slack_config(),
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 302
+    assert reached == ["https://slack.com/api/auth.revoke"], "the token must not follow the redirect"
