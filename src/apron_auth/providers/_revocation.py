@@ -143,12 +143,12 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
 
     A handler builds the URL it sends to, so each URL the request names is read here rather than
     taken from the endpoint a validator saw.
-    Four rules apply in turn. The URL must name a host a request can be sent to. Its authority must
-    be readable and must carry no credential of its own. It must protect the token in transit. Its
-    host must be one that can answer for the token.
+    The rules apply in turn, and a refusal names the first one the URL breaks. The URL must name a
+    host a request can be sent to. Its authority must be readable. Its authority must carry no
+    credential of its own. It must protect the token in transit. Its host must be one that can
+    answer for the token.
     A configuration naming no provider names no host the last rule could hold it to, as
-    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the first three still
-    apply.
+    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the rest still apply.
     NOTE: A URL no request can be sent to is refused here rather than left to the send, because the
     send reports it as an endpoint that may answer later and a misconfigured one never will.
 
@@ -228,9 +228,11 @@ async def send_revocation(
         The endpoint's response.
 
     Raises:
-        ConfigurationError: If a URL the request names must not be sent the token, by the host it
-            names or by the transport it states. Nothing is sent.
-        RevocationError: If the URL is invalid, or the request cannot be sent or fails to arrive.
+        ConfigurationError: If a URL the request names must not be sent the token, because it reaches
+            no host, because its authority cannot be read or carries a credential of its own, because
+            of the transport it states, or because of the host it names. Nothing is sent.
+        RevocationError: If the request cannot be sent or fails to arrive, including where the
+            transport refuses the URL it is given.
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
