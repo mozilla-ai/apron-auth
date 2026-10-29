@@ -447,3 +447,50 @@ async def test_a_redirect_is_not_followed() -> None:
 
     assert response.status_code == 302
     assert reached == ["https://slack.com/api/auth.revoke"], "the token must not follow the redirect"
+
+
+def _failing_transport(url: str) -> httpx.AsyncBaseTransport:
+    return httpx.MockTransport(lambda request: httpx.Response(400))
+
+
+async def test_the_standard_handler_names_the_provider_the_config_states() -> None:
+    """A provider taking RFC 7009 revocation names itself, as one with a handler of its own does."""
+    config = ProviderConfig(
+        provider=Provider.ATLASSIAN,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        revocation_url="https://auth.atlassian.com/oauth/revoke",
+    )
+
+    with pytest.raises(RevocationError, match="Failed to revoke Atlassian token"):
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, config)
+
+
+async def test_the_standard_handler_names_the_provider_when_the_request_cannot_be_sent() -> None:
+    """The label the shared send names is taken from the configuration, not only the handler's own message."""
+
+    def unreachable(url: str) -> httpx.AsyncBaseTransport:
+        def fail(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused")
+
+        return httpx.MockTransport(fail)
+
+    config = ProviderConfig(
+        provider=Provider.ATLASSIAN,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        revocation_url="https://auth.atlassian.com/oauth/revoke",
+    )
+
+    with pytest.raises(RevocationError, match="Failed to revoke Atlassian token: "):
+        await StandardRevocationHandler(transport_factory=unreachable).revoke(TOKEN, config)
+
+
+async def test_the_standard_handler_names_no_provider_where_the_config_names_none() -> None:
+    """A configuration naming no provider has no name to give, and the message states none."""
+    with pytest.raises(RevocationError, match="^Failed to revoke token: "):
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, _config())
