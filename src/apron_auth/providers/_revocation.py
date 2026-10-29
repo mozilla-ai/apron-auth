@@ -142,13 +142,15 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
     """Refuse a request bound for a URL that must not be sent the token it carries.
 
     A handler builds the URL it sends to, so each URL the request names is read here rather than
-    taken from the endpoint a validator saw. A URL has to name a host and state an authority that
-    can be read and that leaves the token as the credential the request presents, it has to protect
-    the token in transit, and it has to name a host that can answer for the token. A configuration
-    naming no provider names no host the last rule could hold it to, as
-    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the others still apply.
-    A URL no request can be sent to is refused here rather than left to the send, because the send
-    reads it as an endpoint that may answer later and a misconfigured one never will.
+    taken from the endpoint a validator saw.
+    Four rules apply in turn. The URL must name a host a request can be sent to. Its authority must
+    be readable and must carry no credential of its own. It must protect the token in transit. Its
+    host must be one that can answer for the token.
+    A configuration naming no provider names no host the last rule could hold it to, as
+    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the first three still
+    apply.
+    NOTE: A URL no request can be sent to is refused here rather than left to the send, because the
+    send reports it as an endpoint that may answer later and a misconfigured one never will.
 
     Args:
         request: The request about to be sent.
