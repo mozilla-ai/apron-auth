@@ -104,8 +104,10 @@ class StandardRevocationHandler:
             # RFC 7009 section 5: a public client identifies itself with client_id in the request
             # body, presenting no client authentication.
             data["client_id"] = config.client_id
+        provider = config.provider
         request = RevocationRequest(
             url=revocation_endpoint(config),
+            label=None if provider is None else provider.display_name,
             auth=auth,
             data=data,
         )
@@ -113,7 +115,8 @@ class StandardRevocationHandler:
         if response.is_success:
             return True
         failure = status_failure(response.status_code)
-        raise RevocationError(f"Failed to revoke token: {failure.description}", kind=failure.kind)
+        subject = "token" if provider is None else f"{provider.display_name} token"
+        raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
 def revocation_endpoint(config: ProviderConfig) -> str:
