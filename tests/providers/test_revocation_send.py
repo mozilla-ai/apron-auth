@@ -419,3 +419,9 @@ async def test_a_url_carrying_a_credential_is_refused_before_anything_is_sent(ca
     assert asked == []
     assert refusal.value.kind.retryable is False
     assert "sesame" not in str(refusal.value), "a rejected authority can carry a credential"
+
+
+async def test_an_authority_only_the_client_can_read_is_named_as_unreadable() -> None:
+    """The refusal says which rule refused, so an operator is not sent looking at the scheme."""
+    with pytest.raises(ConfigurationError, match="authority of the request to 127.0.0.1 cannot be read"):
+        await send_revocation(_request(url="http://127.0.0.1:+54321/collect"), _slack_config())
