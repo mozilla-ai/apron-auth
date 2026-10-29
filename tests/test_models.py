@@ -1809,6 +1809,21 @@ class TestProviderConfigPermitsRevocationAt:
         assert config.permits_revocation_at("attacker.login.mycompany.com") is False
         assert config.permits_revocation_at("login.mycompany.com") is True
 
+    @pytest.mark.parametrize(
+        ("host", "token_url"),
+        [
+            pytest.param("slack.com.", "https://slack.com/api/oauth.v2.access", id="on the revocation host"),
+            pytest.param("slack.com", "https://slack.com./api/oauth.v2.access", id="on the issuing host"),
+            pytest.param("slack.com.", "https://slack.com./api/oauth.v2.access", id="on both"),
+        ],
+    )
+    def test_a_trailing_dot_does_not_make_one_host_two(self, host: str, token_url: str) -> None:
+        """The dot names the same host, and refusing it would reject a legitimate endpoint."""
+        assert self._config(token_url=token_url).permits_revocation_at(host) is True
+
+    def test_a_trailing_dot_does_not_make_a_lookalike_the_issuing_host(self) -> None:
+        assert self._config().permits_revocation_at("evilslack.com.") is False
+
     def test_a_host_no_request_can_be_sent_to_is_refused(self) -> None:
         """A URL that cannot be read names no host, and no host answers for the token."""
         assert self._config().permits_revocation_at("") is False
