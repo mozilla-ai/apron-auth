@@ -386,3 +386,36 @@ async def test_a_loopback_url_needs_no_waiver() -> None:
     )
 
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "carrying",
+    [
+        pytest.param(
+            "https://pirate:sesame@slack.com/api/auth.revoke",  # pragma: allowlist secret
+            id="a user and a password",
+        ),
+        pytest.param("https://pirate@slack.com/api/auth.revoke", id="a user alone"),
+        pytest.param("https://@slack.com/api/auth.revoke", id="the delimiter alone"),
+    ],
+)
+async def test_a_url_carrying_a_credential_is_refused_before_anything_is_sent(carrying: str) -> None:
+    """A client presents a URL's own credential in place of the token, so the token would never be revoked."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    bypassed = _slack_config().model_copy(update={"revocation_url": carrying})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url=carrying, headers={"Authorization": f"Bearer {TOKEN}"}),
+            bypassed,
+            transport_factory=transport,
+        )
+
+    assert asked == []
+    assert refusal.value.kind.retryable is False
+    assert "sesame" not in str(refusal.value), "a rejected authority can carry a credential"
