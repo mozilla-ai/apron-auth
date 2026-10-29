@@ -321,6 +321,25 @@ async def test_a_cleartext_url_is_refused_before_anything_is_sent() -> None:
     assert "must state https" in str(refusal.value)
 
 
+async def test_a_port_only_the_client_can_read_does_not_get_past_the_gate() -> None:
+    """The gate reads the host the client dials, so a second parser's blank answer cannot wave a URL through."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url="http://127.0.0.1:+54321/collect", data={"token": TOKEN}),
+            _slack_config(),
+            transport_factory=transport,
+        )
+
+    assert asked == [], "the token must not reach a host the configuration does not permit"
+    assert refusal.value.kind.retryable is False
+
+
 async def test_a_cleartext_url_is_refused_on_a_config_naming_no_provider() -> None:
     """Every configuration's token needs protecting, and only a named provider has hosts to check."""
     bypassed = _config().model_copy(update={"revocation_url": "http://auth.example.com/revoke"})

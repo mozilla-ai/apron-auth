@@ -162,8 +162,9 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
             continue
         if not uses_allowed_transport(url, plain_http_allowed=plain_http_allowed):
             msg = (
-                f"Revocation refused: the request to {host} must state https, or http on a loopback "
-                f"host, because it carries a token."
+                f"Revocation refused: the request to {host} does not state a transport that protects "
+                f"this token. It must state https, or http on a loopback host, in a URL that can be "
+                f"read as written."
             )
             raise ConfigurationError(msg)
         if provider is None or config.permits_revocation_at(host):
