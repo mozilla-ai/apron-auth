@@ -188,7 +188,8 @@ class NotionRevocationHandler:
             invalid.
 
         Raises:
-            ConfigurationError: If ``config`` declares no revocation endpoint.
+            ConfigurationError: If ``config`` declares no revocation endpoint, or declares one it
+                does not permit sending a token to.
             RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
                 to arrive.
                 The failed request's error is not attached as its cause or context.
@@ -199,7 +200,7 @@ class NotionRevocationHandler:
             auth=config.basic_auth(),
             json_body={"token": token},
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (200, 400):
             return True
         logger.warning("Notion revocation returned unexpected status %d", response.status_code)

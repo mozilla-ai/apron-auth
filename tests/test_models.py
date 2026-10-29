@@ -1754,6 +1754,111 @@ class TestProviderConfigProvider:
             )
 
 
+class TestProviderConfigPermitsRevocationAt:
+    """The one statement of where a token may be revoked, asked of a host rather than of a config.
+
+    Construction refuses a config that breaks the rule, and the send path asks the same rule about
+    the host it is about to reach, which is a host no validator saw.
+    """
+
+    def _config(self, **overrides: object) -> ProviderConfig:
+        fields: dict[str, object] = {
+            "provider": Provider.SLACK,
+            "client_id": "cid",
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
+            "authorize_url": "https://slack.com/oauth/v2/authorize",
+            "token_url": "https://slack.com/api/oauth.v2.access",
+        }
+        fields.update(overrides)
+        return ProviderConfig(**fields)  # type: ignore[arg-type]
+
+    def test_the_issuing_host_is_permitted(self) -> None:
+        assert self._config().permits_revocation_at("slack.com") is True
+
+    def test_a_sibling_host_of_the_named_provider_is_permitted(self) -> None:
+        """Google issues at googleapis.com and documents a revocation endpoint on google.com."""
+        config = ProviderConfig(
+            provider=Provider.GOOGLE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+            token_url="https://oauth2.googleapis.com/token",
+            can_assert_domain_ownership=True,
+            disconnect_fully_revokes=True,
+        )
+
+        assert config.permits_revocation_at("accounts.google.com") is True
+
+    def test_a_host_the_config_never_named_is_refused(self) -> None:
+        """A handler builds the URL it sends to, so the rule answers about that host, not the config's."""
+        assert self._config().permits_revocation_at("attacker.example.com") is False
+
+    def test_a_lookalike_of_the_issuing_host_is_refused(self) -> None:
+        assert self._config().permits_revocation_at("evilslack.com") is False
+
+    def test_a_subdomain_of_an_issuing_host_off_the_providers_own_is_refused(self) -> None:
+        """A Salesforce org on a custom login domain has only that one host to answer for its token."""
+        config = ProviderConfig(
+            provider=Provider.SALESFORCE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+            token_url="https://login.mycompany.com/services/oauth2/token",
+        )
+
+        assert config.permits_revocation_at("attacker.login.mycompany.com") is False
+        assert config.permits_revocation_at("login.mycompany.com") is True
+
+    @pytest.mark.parametrize(
+        ("host", "token_url"),
+        [
+            pytest.param("slack.com.", "https://slack.com/api/oauth.v2.access", id="on the revocation host"),
+            pytest.param("slack.com", "https://slack.com./api/oauth.v2.access", id="on the issuing host"),
+            pytest.param("slack.com.", "https://slack.com./api/oauth.v2.access", id="on both"),
+        ],
+    )
+    def test_a_trailing_dot_does_not_make_one_host_two(self, host: str, token_url: str) -> None:
+        """The dot names the same host, and refusing it would reject a legitimate endpoint."""
+        assert self._config(token_url=token_url).permits_revocation_at(host) is True
+
+    def test_a_differently_cased_host_is_the_same_host(self) -> None:
+        """The predicate is public, and a caller reading a host from elsewhere may not have folded it."""
+        config = ProviderConfig(
+            provider=Provider.SALESFORCE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+            token_url="https://login.mycompany.com/services/oauth2/token",
+        )
+
+        assert config.permits_revocation_at("LOGIN.MyCompany.com") is True
+
+    def test_a_trailing_dot_does_not_make_a_lookalike_the_issuing_host(self) -> None:
+        assert self._config().permits_revocation_at("evilslack.com.") is False
+
+    def test_a_host_no_request_can_be_sent_to_is_refused(self) -> None:
+        """A URL that cannot be read names no host, and no host answers for the token."""
+        assert self._config().permits_revocation_at("") is False
+
+    def test_a_config_naming_no_provider_permits_every_host(self) -> None:
+        """It states no provider whose hosts the rule could name, so its caller owns the endpoint."""
+        config = ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://auth.example.com/authorize",
+            token_url="https://auth.example.com/token",
+        )
+
+        assert config.permits_revocation_at("elsewhere.example.com") is True
+
+    def test_an_unreadable_token_endpoint_permits_no_host(self) -> None:
+        """``model_copy`` runs no validator, so the rule reads whatever token endpoint it is given."""
+        bypassed = self._config().model_copy(update={"token_url": "https://[::1/token"})
+
+        assert bypassed.permits_revocation_at("") is False
+        assert bypassed.permits_revocation_at("slack.com") is False
+
+
 class TestProviderConfigRevocationHost:
     """A token is revoked where it was issued, or at another of the named provider's own hosts.
 

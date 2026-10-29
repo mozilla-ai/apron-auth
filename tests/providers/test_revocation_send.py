@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import Provider, ProviderConfig, UrlField
 from apron_auth.providers._revocation import (
     HttpMethod,
     RevocationRequest,
@@ -18,6 +18,8 @@ from apron_auth.providers._revocation import (
     send_revocation,
 )
 
+# A host that is no provider's, standing in for an endpoint chosen by someone other than the provider.
+OFF_HOST_URL = "https://attacker.example.com/collect"
 TOKEN = "live-access-token"  # pragma: allowlist secret
 
 
@@ -28,6 +30,17 @@ def _config(*, revokes: bool = True) -> ProviderConfig:
         authorize_url="https://auth.example.com/authorize",
         token_url="https://auth.example.com/token",
         revocation_url="https://auth.example.com/revoke" if revokes else None,
+    )
+
+
+def _slack_config() -> ProviderConfig:
+    return ProviderConfig(
+        provider=Provider.SLACK,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://slack.com/oauth/v2/authorize",
+        token_url="https://slack.com/api/oauth.v2.access",
+        revocation_url="https://slack.com/api/auth.revoke",
     )
 
 
@@ -76,7 +89,7 @@ async def test_the_response_is_returned_for_the_handler_to_read() -> None:
 
         return httpx.MockTransport(respond)
 
-    response = await send_revocation(_request(data={"token": TOKEN}), transport_factory=transport)
+    response = await send_revocation(_request(data={"token": TOKEN}), _config(), transport_factory=transport)
 
     assert response.status_code == 418
     assert len(sent) == 1
@@ -91,7 +104,7 @@ async def test_the_transport_factory_is_the_one_injection_point() -> None:
         asked.append(url)
         return httpx.MockTransport(lambda request: httpx.Response(200))
 
-    await send_revocation(_request(), transport_factory=transport)
+    await send_revocation(_request(), _config(), transport_factory=transport)
 
     assert asked == ["https://auth.example.com/revoke"]
 
@@ -106,7 +119,7 @@ async def test_the_method_a_provider_states_is_the_one_sent() -> None:
 
         return httpx.MockTransport(respond)
 
-    await send_revocation(_request(method=HttpMethod.DELETE), transport_factory=transport)
+    await send_revocation(_request(method=HttpMethod.DELETE), _config(), transport_factory=transport)
 
     assert sent == ["DELETE"]
 
@@ -130,7 +143,7 @@ async def test_a_transport_failure_is_a_revocation_error_of_its_kind(
         return httpx.MockTransport(fail)
 
     with pytest.raises(RevocationError) as refusal:
-        await send_revocation(_request(data={"token": TOKEN}), transport_factory=transport)
+        await send_revocation(_request(data={"token": TOKEN}), _config(), transport_factory=transport)
 
     assert refusal.value.kind is kind, reason
 
@@ -145,24 +158,25 @@ async def test_an_invalid_url_is_refused() -> None:
         return httpx.MockTransport(fail)
 
     with pytest.raises(RevocationError) as refusal:
-        await send_revocation(_request(), transport_factory=transport)
+        await send_revocation(_request(), _config(), transport_factory=transport)
 
     assert refusal.value.kind is FailureKind.REFUSED
     assert "invalid URL" in str(refusal.value)
 
 
-async def test_a_url_that_names_no_scheme_is_wrapped_rather_than_raised_unwrapped() -> None:
-    """A caller's configuration reaches this, so no httpx error may escape as itself."""
-    with pytest.raises(RevocationError) as refusal:
-        await send_revocation(_request(url="not-a-url"))
+async def test_a_url_that_names_no_host_is_refused_as_a_configuration_fault() -> None:
+    """Such a URL can never answer, and reporting it as unreachable invites a retry that cannot pass."""
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(_request(url="not-a-url"), _config())
 
-    assert refusal.value.kind is FailureKind.UNREACHABLE
+    assert refusal.value.kind.retryable is False
+    assert "names no host" in str(refusal.value)
 
 
 async def test_a_token_that_cannot_go_in_a_header_is_refused_rather_than_raised_unwrapped() -> None:
     """A non-ASCII token raises outside httpx's error tree, which five of six handlers let escape."""
     with pytest.raises(RevocationError) as refusal:
-        await send_revocation(_request(headers={"Authorization": "Bearer töken"}))
+        await send_revocation(_request(headers={"Authorization": "Bearer töken"}), _config())
 
     assert refusal.value.kind is FailureKind.REFUSED
     assert refusal.value.kind.retryable is False
@@ -178,7 +192,7 @@ async def test_the_label_names_the_provider_in_the_failure() -> None:
         return httpx.MockTransport(fail)
 
     with pytest.raises(RevocationError, match="Failed to revoke Example token"):
-        await send_revocation(_request(), transport_factory=transport)
+        await send_revocation(_request(), _config(), transport_factory=transport)
 
 
 async def test_the_failure_neither_chains_nor_repeats_the_token() -> None:
@@ -193,6 +207,7 @@ async def test_the_failure_neither_chains_nor_repeats_the_token() -> None:
     with pytest.raises(RevocationError) as refusal:
         await send_revocation(
             _request(data={"token": TOKEN}, headers={"Authorization": f"Bearer {TOKEN}"}),
+            _config(),
             transport_factory=transport,
         )
 
@@ -200,3 +215,282 @@ async def test_the_failure_neither_chains_nor_repeats_the_token() -> None:
     assert refusal.value.__cause__ is None
     assert refusal.value.__context__ is None
     assert TOKEN not in rendered
+
+
+async def test_a_host_the_config_does_not_permit_is_refused_before_anything_is_sent() -> None:
+    """A copy made past construction can name any endpoint, so the send path asks the rule itself."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    bypassed = _slack_config().model_copy(update={"revocation_url": OFF_HOST_URL})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url=OFF_HOST_URL, data={"token": TOKEN}),
+            bypassed,
+            transport_factory=transport,
+        )
+
+    assert asked == [], "the token must not reach a host that cannot answer for it"
+    assert refusal.value.kind.retryable is False
+    assert "attacker.example.com" in str(refusal.value)
+
+
+async def test_a_url_built_on_another_host_is_refused_although_the_endpoint_is_the_providers() -> None:
+    """A provider that builds its URL per token chooses the host it reaches, so that host is read."""
+    with pytest.raises(ConfigurationError, match="attacker.example.com"):
+        await send_revocation(
+            _request(url=f"{OFF_HOST_URL}/{TOKEN}", endpoint="https://slack.com/api/auth.revoke"),
+            _slack_config(),
+        )
+
+
+async def test_an_endpoint_on_another_host_is_refused_although_the_url_is_the_providers() -> None:
+    """The endpoint chooses the outbound connection, so it is held to the same hosts as the URL."""
+    with pytest.raises(ConfigurationError, match="attacker.example.com"):
+        await send_revocation(
+            _request(url="https://slack.com/api/auth.revoke", endpoint=OFF_HOST_URL),
+            _slack_config(),
+        )
+
+
+async def test_the_refusal_does_not_repeat_a_token_the_url_carried() -> None:
+    """A provider that states the token in the path sends it in the URL, so the message names the host alone."""
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(_request(url=f"{OFF_HOST_URL}/{TOKEN}", endpoint=OFF_HOST_URL), _slack_config())
+
+    assert TOKEN not in str(refusal.value)
+
+
+async def test_a_host_the_config_permits_is_sent_to() -> None:
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    response = await send_revocation(
+        _request(url="https://slack.com/api/auth.revoke", data={"token": TOKEN}),
+        _slack_config(),
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200
+    assert asked == ["https://slack.com/api/auth.revoke"]
+
+
+async def test_a_config_naming_no_provider_permits_the_host_it_reaches() -> None:
+    """It names no provider whose hosts the rule could read, so its caller owns the endpoint."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    response = await send_revocation(
+        _request(url=OFF_HOST_URL, data={"token": TOKEN}),
+        _config(),
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200
+    assert asked == [OFF_HOST_URL]
+
+
+async def test_a_cleartext_url_is_refused_before_anything_is_sent() -> None:
+    """Construction requires TLS, and a copy made past it would otherwise send the token in the clear."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    bypassed = _slack_config().model_copy(update={"revocation_url": "http://slack.com/api/auth.revoke"})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url="http://slack.com/api/auth.revoke", data={"token": TOKEN}),
+            bypassed,
+            transport_factory=transport,
+        )
+
+    assert asked == [], "the token must not cross the network unprotected"
+    assert refusal.value.kind.retryable is False
+    assert "must state https" in str(refusal.value)
+
+
+async def test_a_port_only_the_client_can_read_does_not_get_past_the_gate() -> None:
+    """The gate reads the host the client dials, so a second parser's blank answer cannot wave a URL through."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url="http://127.0.0.1:+54321/collect", data={"token": TOKEN}),
+            _slack_config(),
+            transport_factory=transport,
+        )
+
+    assert asked == [], "the token must not reach a host the configuration does not permit"
+    assert refusal.value.kind.retryable is False
+
+
+async def test_a_cleartext_url_is_refused_on_a_config_naming_no_provider() -> None:
+    """Every configuration's token needs protecting, and only a named provider has hosts to check."""
+    bypassed = _config().model_copy(update={"revocation_url": "http://auth.example.com/revoke"})
+
+    with pytest.raises(ConfigurationError, match="must state https"):
+        await send_revocation(_request(url="http://auth.example.com/revoke"), bypassed)
+
+
+async def test_a_cleartext_url_a_config_waived_in_code_is_sent_to() -> None:
+    """A waiver stated in code is the one statement that plain HTTP is accepted for this endpoint."""
+    waived = ProviderConfig.unsafe.allow_plain_http(
+        UrlField.REVOCATION_URL,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.example.com/authorize",
+        token_url="https://auth.example.com/token",
+        revocation_url="http://auth.example.com/revoke",
+    )
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    response = await send_revocation(
+        _request(url="http://auth.example.com/revoke", data={"token": TOKEN}),
+        waived,
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200
+
+
+async def test_a_loopback_url_needs_no_waiver() -> None:
+    """A request to the loopback interface reaches no network, so nothing can read the token off it."""
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    local = _config().model_copy(update={"revocation_url": "http://127.0.0.1:8080/revoke"})
+
+    response = await send_revocation(
+        _request(url="http://127.0.0.1:8080/revoke", data={"token": TOKEN}),
+        local,
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "carrying",
+    [
+        pytest.param(
+            "https://pirate:sesame@slack.com/api/auth.revoke",  # pragma: allowlist secret
+            id="a user and a password",
+        ),
+        pytest.param("https://pirate@slack.com/api/auth.revoke", id="a user alone"),
+        pytest.param("https://@slack.com/api/auth.revoke", id="the delimiter alone"),
+    ],
+)
+async def test_a_url_carrying_a_credential_is_refused_before_anything_is_sent(carrying: str) -> None:
+    """A client presents a URL's own credential in place of the token, so the token would never be revoked."""
+    asked: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(lambda request: httpx.Response(200))
+
+    bypassed = _slack_config().model_copy(update={"revocation_url": carrying})
+
+    with pytest.raises(ConfigurationError) as refusal:
+        await send_revocation(
+            _request(url=carrying, headers={"Authorization": f"Bearer {TOKEN}"}),
+            bypassed,
+            transport_factory=transport,
+        )
+
+    assert asked == []
+    assert refusal.value.kind.retryable is False
+    assert "sesame" not in str(refusal.value), "a rejected authority can carry a credential"
+
+
+async def test_an_authority_only_the_client_can_read_is_named_as_unreadable() -> None:
+    """The refusal says which rule refused, so an operator is not sent looking at the scheme."""
+    with pytest.raises(ConfigurationError, match="authority of the request to 127.0.0.1 cannot be read"):
+        await send_revocation(_request(url="http://127.0.0.1:+54321/collect"), _slack_config())
+
+
+async def test_a_redirect_is_not_followed() -> None:
+    """A redirect would carry the token to a host no rule read, so the response is returned as it came."""
+    reached: list[str] = []
+
+    def transport(url: str) -> httpx.AsyncBaseTransport:
+        def respond(request: httpx.Request) -> httpx.Response:
+            reached.append(str(request.url))
+            return httpx.Response(302, headers={"Location": OFF_HOST_URL})
+
+        return httpx.MockTransport(respond)
+
+    response = await send_revocation(
+        _request(url="https://slack.com/api/auth.revoke", data={"token": TOKEN}),
+        _slack_config(),
+        transport_factory=transport,
+    )
+
+    assert response.status_code == 302
+    assert reached == ["https://slack.com/api/auth.revoke"], "the token must not follow the redirect"
+
+
+def _failing_transport(url: str) -> httpx.AsyncBaseTransport:
+    return httpx.MockTransport(lambda request: httpx.Response(400))
+
+
+async def test_the_standard_handler_names_the_provider_the_config_states() -> None:
+    """A provider taking RFC 7009 revocation names itself, as one with a handler of its own does."""
+    config = ProviderConfig(
+        provider=Provider.ATLASSIAN,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        revocation_url="https://auth.atlassian.com/oauth/revoke",
+    )
+
+    with pytest.raises(RevocationError, match="Failed to revoke Atlassian token"):
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, config)
+
+
+async def test_the_standard_handler_names_the_provider_when_the_request_cannot_be_sent() -> None:
+    """The label the shared send names is taken from the configuration, not only the handler's own message."""
+
+    def unreachable(url: str) -> httpx.AsyncBaseTransport:
+        def fail(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("refused")
+
+        return httpx.MockTransport(fail)
+
+    config = ProviderConfig(
+        provider=Provider.ATLASSIAN,
+        client_id="cid",
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
+        authorize_url="https://auth.atlassian.com/authorize",
+        token_url="https://auth.atlassian.com/oauth/token",
+        revocation_url="https://auth.atlassian.com/oauth/revoke",
+    )
+
+    with pytest.raises(RevocationError, match="Failed to revoke Atlassian token: "):
+        await StandardRevocationHandler(transport_factory=unreachable).revoke(TOKEN, config)
+
+
+async def test_the_standard_handler_names_no_provider_where_the_config_names_none() -> None:
+    """A configuration naming no provider has no name to give, and the message states none."""
+    with pytest.raises(RevocationError, match="^Failed to revoke token: "):
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, _config())

@@ -198,6 +198,28 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
     }
 
 
+def url_host(url: str) -> str:
+    """Return the host a request to ``url`` would reach, or an empty string when it would reach none.
+
+    The host is read with the HTTP client's own parser, the one that resolves and dials it, so a rule
+    deciding where a credential may be sent reads the host the request reaches rather than a second
+    parser's answer about it. Two parsers disagreeing over an authority would otherwise let a rule
+    accept one host while the request reached another.
+    The name is the form the client dials, so an internationalized host reads as its ASCII form.
+    NOTE: A URL the client refuses outright reads as no host rather than raising.
+
+    Args:
+        url: The URL to read.
+
+    Returns:
+        The host, as the client would dial it, or an empty string.
+    """
+    try:
+        return httpx.URL(url).raw_host.decode("ascii")
+    except (UnicodeDecodeError, ValueError, httpx.InvalidURL):
+        return ""
+
+
 def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:
     """Return whether what a request sends to ``url`` may cross the network the URL states.
 
@@ -205,6 +227,8 @@ def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:
     reaches no network.
     Plain ``http`` to any other host may only when ``plain_http_allowed``.
     No other scheme may, and neither may a URL that cannot be read or names no host.
+    NOTE: This reads the URL with the standard library's parser. A rule that has to agree with the
+    host the HTTP client dials reads that host with :func:`url_host` instead.
 
     Args:
         url: The URL to read.

@@ -873,7 +873,7 @@ class TestSlackRevocationHandler:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
-    async def test_invalid_revocation_url_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
+    async def test_invalid_revocation_url_is_refused_as_a_configuration_fault(self, httpx_mock: HTTPXMock) -> None:
         """A validated config refuses such a URL, so this holds the handler to its own guard."""
         httpx_mock.add_response(is_optional=True)
         from apron_auth.providers.slack import SlackRevocationHandler
@@ -886,8 +886,9 @@ class TestSlackRevocationHandler:
             revocation_url="https://slack.com/api/auth.revoke\x00",
         )
         handler = SlackRevocationHandler()
-        with pytest.raises(RevocationError, match="^Failed to revoke Slack token: invalid URL$") as exc_info:
+        with pytest.raises(ConfigurationError, match="^Revocation refused: the request URL names no host") as exc_info:
             await handler.revoke("access-abc", config)
+        assert exc_info.value.kind.retryable is False
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
         assert httpx_mock.get_requests() == []
