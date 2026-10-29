@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
-from apron_auth._urls import url_host, uses_allowed_transport
+from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import UrlField
 from apron_auth.protocols import RevocationHandler
@@ -139,10 +139,11 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
     """Refuse a request bound for a URL that must not be sent the token it carries.
 
     A handler builds the URL it sends to, so each URL the request names is read here rather than
-    taken from the endpoint a validator saw. A URL has to protect the token in transit, and it has
-    to name a host that can answer for it. A configuration naming no provider names no host the
-    second rule could hold it to, as
-    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the first still applies.
+    taken from the endpoint a validator saw. A URL has to protect the token in transit, it has to
+    leave the token as the credential the request presents, and it has to name a host that can
+    answer for the token. A configuration naming no provider names no host the last rule could hold
+    it to, as :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the others
+    still apply.
 
     Args:
         request: The request about to be sent.
@@ -150,8 +151,9 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
 
     Raises:
         ConfigurationError: If a URL the request names states a transport the configuration does not
-            accept, or is on a host the configuration does not permit revocation at. The message
-            names the host alone, because a URL can carry the token.
+            accept, carries a credential in its authority, or is on a host the configuration does
+            not permit revocation at. The message names the host alone, because a URL can carry both
+            the token and a credential of its own.
     """
     provider = config.provider
     plain_http_allowed = UrlField.REVOCATION_URL in config.allow_insecure_http_for
@@ -165,6 +167,14 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
                 f"Revocation refused: the request to {host} does not state a transport that protects "
                 f"this token. It must state https, or http on a loopback host, in a URL that can be "
                 f"read as written."
+            )
+            raise ConfigurationError(msg)
+        # NOTE: An HTTP client derives client authentication from a URL's authority, which replaces
+        # the credential the request states rather than adding to it.
+        if authority_credential(url) is not AuthorityCredential.ABSENT:
+            msg = (
+                f"Revocation refused: the request to {host} carries a credential in its URL. That "
+                f"credential would be presented in place of the token this request revokes."
             )
             raise ConfigurationError(msg)
         if provider is None or config.permits_revocation_at(host):
