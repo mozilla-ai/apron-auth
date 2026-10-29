@@ -241,6 +241,14 @@ class TestUrlHost:
         """A rule deciding where a credential may go must read no host rather than part of one."""
         assert url_host(url) == ""
 
+    def test_a_port_only_the_client_can_read_still_names_its_host(self) -> None:
+        """``urlparse`` refuses this port, and a rule reading no host from it would wave the URL through."""
+        assert url_host("http://127.0.0.1:+54321/collect") == "127.0.0.1"
+
+    def test_an_internationalized_host_reads_as_the_name_the_client_dials(self) -> None:
+        """Both spellings of one host read the same, so a suffix list written in ASCII answers for both."""
+        assert url_host("https://аррӏе.com/x") == url_host("https://xn--80ak6aa92e.com/x")
+
 
 class TestUsesAllowedTransport:
     """One answer for the model rule and the per-call redirect check, so the two cannot diverge."""
