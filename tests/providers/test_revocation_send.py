@@ -164,12 +164,13 @@ async def test_an_invalid_url_is_refused() -> None:
     assert "invalid URL" in str(refusal.value)
 
 
-async def test_a_url_that_names_no_scheme_is_wrapped_rather_than_raised_unwrapped() -> None:
-    """A caller's configuration reaches this, so no httpx error may escape as itself."""
-    with pytest.raises(RevocationError) as refusal:
+async def test_a_url_that_names_no_host_is_refused_as_a_configuration_fault() -> None:
+    """Such a URL can never answer, and reporting it as unreachable invites a retry that cannot pass."""
+    with pytest.raises(ConfigurationError) as refusal:
         await send_revocation(_request(url="not-a-url"), _config())
 
-    assert refusal.value.kind is FailureKind.UNREACHABLE
+    assert refusal.value.kind.retryable is False
+    assert "names no host" in str(refusal.value)
 
 
 async def test_a_token_that_cannot_go_in_a_header_is_refused_rather_than_raised_unwrapped() -> None:
