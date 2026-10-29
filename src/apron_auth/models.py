@@ -171,8 +171,8 @@ class ProviderFacts:
             :attr:`ProviderConfig.disconnect_fully_revokes` describes the consequences.
         display_name: The provider's name as it appears in messages and documentation.
         host_suffixes: The provider's own OAuth endpoint hosts, matched on a label boundary.
-            They decide whether a config that names the provider may use its identity handler, so
-            they decide where an access token may be sent.
+            They decide whether a config that names the provider may use its identity handler, and
+            which hosts such a config may revoke a token at, so they decide where a token may be sent.
             NOTE: A config that names the provider may have endpoints outside them, such as a
             Salesforce org on a custom login domain.
         identity_handler_class_name: The name of the class in the provider's module that fetches identity.
