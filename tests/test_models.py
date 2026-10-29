@@ -1821,6 +1821,18 @@ class TestProviderConfigPermitsRevocationAt:
         """The dot names the same host, and refusing it would reject a legitimate endpoint."""
         assert self._config(token_url=token_url).permits_revocation_at(host) is True
 
+    def test_a_differently_cased_host_is_the_same_host(self) -> None:
+        """The predicate is public, and a caller reading a host from elsewhere may not have folded it."""
+        config = ProviderConfig(
+            provider=Provider.SALESFORCE,
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://login.mycompany.com/services/oauth2/authorize",
+            token_url="https://login.mycompany.com/services/oauth2/token",
+        )
+
+        assert config.permits_revocation_at("LOGIN.MyCompany.com") is True
+
     def test_a_trailing_dot_does_not_make_a_lookalike_the_issuing_host(self) -> None:
         assert self._config().permits_revocation_at("evilslack.com.") is False
 
