@@ -232,7 +232,8 @@ async def send_revocation(
     try:
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.
         transport = transport_factory(request.endpoint or request.url) if transport_factory is not None else None
-        async with httpx.AsyncClient(transport=transport) as client:
+        # A redirect would carry the token to a host the gate never read, so none is followed.
+        async with httpx.AsyncClient(transport=transport, follow_redirects=False) as client:
             return await client.request(
                 request.method,
                 request.url,
