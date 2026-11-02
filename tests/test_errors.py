@@ -5,6 +5,7 @@ import pickle
 import pytest
 
 from apron_auth.errors import (
+    AuthorizationResponseError,
     ConfigurationError,
     FailureKind,
     IdentityFetchError,
@@ -27,6 +28,7 @@ from apron_auth.errors import (
 )
 
 MULTI_KIND_CLASSES = (
+    AuthorizationResponseError,
     IdentityFetchError,
     McpDiscoveryError,
     McpRegistrationError,
@@ -115,6 +117,51 @@ class TestKindOnErrors:
             TokenExchangeError("boom", kind="timeout")  # type: ignore[arg-type]
 
 
+class TestAuthorizationResponseError:
+    """The authorization endpoint answered with an error, so no code was issued."""
+
+    def test_error_code_defaults_to_empty(self) -> None:
+        assert AuthorizationResponseError("boom", kind=FailureKind.REJECTED).error_code == ""
+
+    def test_a_recognized_code_is_kept_and_the_message_is_left_alone(self) -> None:
+        err = AuthorizationResponseError(
+            "authorization request was refused", kind=FailureKind.REJECTED, error_code="access_denied"
+        )
+
+        assert err.error_code == "access_denied"
+        assert str(err) == "authorization request was refused"
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param({"not": "a code"}, id="a mapping"),
+            pytest.param(["access_denied"], id="a list"),
+            pytest.param(7, id="a number"),
+            pytest.param("Access Denied", id="not an identifier"),
+            pytest.param("a" * 200, id="longer than any code"),
+        ],
+    )
+    def test_a_value_of_another_shape_reads_as_absent(self, code: object) -> None:
+        """A server chooses this field's text, so only a value shaped like a code is comparable."""
+        err = AuthorizationResponseError("boom", kind=FailureKind.REJECTED, error_code=code)  # ty: ignore[invalid-argument-type]
+
+        assert err.error_code == ""
+
+    def test_it_is_not_a_token_endpoint_failure(self) -> None:
+        """No code was redeemed, so a caller handling token-endpoint failures must not catch this."""
+        err = AuthorizationResponseError("boom", kind=FailureKind.REJECTED)
+
+        assert isinstance(err, OAuthError)
+        assert not isinstance(err, TokenEndpointError)
+
+    def test_the_kind_decides_whether_a_new_request_may_pass(self) -> None:
+        refused = AuthorizationResponseError("boom", kind=FailureKind.REJECTED, error_code="access_denied")
+        outage = AuthorizationResponseError("boom", kind=FailureKind.SERVER_ERROR, error_code="temporarily_unavailable")
+
+        assert refused.retryable is False
+        assert outage.retryable is True
+
+
 class TestTokenEndpointErrors:
     def test_error_code_defaults_to_empty(self) -> None:
         assert TokenExchangeError("boom", kind=FailureKind.REJECTED).error_code == ""
@@ -126,7 +173,8 @@ class TestTokenEndpointErrors:
         assert str(err) == "invalid_grant: token revoked"
         assert isinstance(err, TokenEndpointError)
 
-    def test_only_the_token_endpoint_family_carries_an_error_code(self) -> None:
+    def test_an_error_outside_the_code_carrying_families_has_none(self) -> None:
+        """Only a step that reads an OAuth error member off a response reports a code."""
         assert not hasattr(ConfigurationError("boom"), "error_code")
         assert not hasattr(RevocationError("boom", kind=FailureKind.REJECTED), "error_code")
 

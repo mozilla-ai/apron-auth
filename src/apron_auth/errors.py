@@ -109,6 +109,30 @@ class OAuthError(Exception):
         return self.kind.retryable
 
 
+class AuthorizationResponseError(OAuthError):
+    """The authorization server answered the authorization request with an error (RFC 6749 section 4.1.2.1).
+
+    No code was issued, so nothing was redeemed and there is nothing to revoke.
+    ``kind`` says whether a new authorization request may pass later.
+
+    This class owns the shape of ``error_code``, so no raise decides it.
+    It holds the OAuth error code when one is given as a lowercase identifier, and is the empty string
+    otherwise, because the field a code arrives in admits any printable text.
+    NOTE: The description the server sent is not carried here and is never put in the message, because it
+    is text a server chose. A caller reads it off the callback it passed in.
+    """
+
+    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
+        """Record the failure, keeping the error code only where it states one in the shape a code takes."""
+        super().__init__(*args, kind=kind)
+        self._error_code = recognized_error_code(error_code)
+
+    @property
+    def error_code(self) -> str:
+        """The OAuth error code of the failure, fixed when the error is raised."""
+        return self._error_code
+
+
 class ConfigurationError(OAuthError):
     """Provider configuration is invalid or incomplete, or an argument cannot work."""
 
