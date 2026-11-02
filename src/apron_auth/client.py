@@ -535,6 +535,9 @@ class OAuthClient:
             AuthorizationResponseError: If the response states no code, or states both a code and an
                 error. Its kind tells a response this library refused from a request the server
                 rejected. The message states nothing the server sent, because the server chose that text.
+                NOTE: No state has been matched when this is raised, so nothing has authenticated the
+                response. Whoever reaches the redirect URI chooses the kind and the error code, and
+                neither is evidence that the condition it names happened.
         """
         if callback.code and callback.error:
             # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says

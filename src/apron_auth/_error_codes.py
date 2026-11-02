@@ -16,8 +16,7 @@ def recognized_error_code(value: object) -> str:
     """Return the OAuth error code when ``value`` states one in the shape a code takes.
 
     RFC 6749 sections 4.1.2.1 and 5.2 name the codes and then restrict only the characters the field
-    may hold,
-    so a response can carry anything printable there, including a value the request sent.
+    may hold, so a response can carry anything printable there, including a value the request sent.
     Every code the registries define, and every code a provider defines of its own, is a lowercase
     identifier, which the hex, base32 and URL-safe forms a credential takes are not.
     A value of another shape, or one longer than any code, is not comparable against a known code,

@@ -724,9 +724,7 @@ config = slack.preset(
 client = OAuthClient(config=config)
 url, pending_state = await client.get_authorization_url()
 tokens = await client.exchange_code(
-    code="authorization-code-from-callback",
-    state="state-from-callback",
-    pending_state=pending_state,
+    AuthorizationCallback.from_query(query), pending_state=pending_state
 )
 ```
 
@@ -795,7 +793,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 
 | Exception                      | When it's raised                                                                                                |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
-| `AuthorizationResponseError`   | The authorization response states no code to redeem: the server refused the request and said why, or answered with neither a code nor an error. Carries `error_code` where the server named one. Nothing was redeemed, so nothing needs revoking. |
+| `AuthorizationResponseError`   | The authorization response cannot be acted on: the server refused the request and said why, or answered with neither a code nor an error, or with both, or stated one parameter twice. Carries `error_code` where the server named one. Nothing was redeemed, so nothing needs revoking. `AuthorizationCallback.from_query` raises the twice-stated case, so wrap that call too. |
 | `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused. Carries `error_code`. Never `retryable`: a code is single-use, so start a new authorization. |
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |
