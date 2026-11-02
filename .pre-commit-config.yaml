@@ -28,6 +28,16 @@ repos:
         types: [python]
         files: ^src/
 
+      # The typing fixtures assert that a wrong call stays a type error, which they state as a
+      # suppression. An unused suppression has to fail, so this check promotes every warning.
+      - id: ty-check-typing-fixtures
+        name: ty (typing fixtures)
+        entry: uvx ty check tests/typing --python .venv --error-on-warning
+        language: system
+        pass_filenames: false
+        types: [python]
+        files: ^(src/|tests/typing/)
+
   - repo: https://github.com/astral-sh/uv-pre-commit
     rev: 0.11.7
     hooks:
