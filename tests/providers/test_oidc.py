@@ -1824,8 +1824,13 @@ class TestOidcIdentity:
     async def test_reports_a_malformed_id_token_subject_as_such(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock, subject: object
     ):
-        """A non-string ``sub`` is a malformed ID token, not a userinfo disagreement."""
-        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
+        """A malformed ``sub`` is a malformed ID token, not a userinfo disagreement.
+
+        NOTE: The endpoint is optional because which layer refuses depends on the validator's version.
+        A ``sub`` of the wrong type is refused while the claims validate, before userinfo is consulted,
+        and an empty one is the right type and so is refused where the subject is read.
+        """
+        httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"}, is_optional=True)
 
         with pytest.raises(TokenValidationError, match="ID token has an invalid sub claim") as exc_info:
             await handler.fetch_identity(
