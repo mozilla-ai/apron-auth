@@ -438,30 +438,6 @@ def _refusal_text(error: ValidationError) -> str:
     return "; ".join(refusals)
 
 
-def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
-    """Return every value ``query`` states for ``name``.
-
-    A query may state one name more than once, and a mapping built from one keeps those values in its
-    own way: through a reader for repeated values, or as a sequence under the name. A mapping that
-    kept only one of them states only that one, and nothing here can tell that it did.
-
-    Args:
-        query: The query to read, which must state ``name``.
-        name: The parameter to read.
-
-    Returns:
-        The values, in the order the query states them.
-    """
-    for reader in ("getlist", "getall"):
-        read_every = getattr(query, reader, None)
-        if callable(read_every):
-            return list(read_every(name))
-    value = query[name]
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
-        return list(value)
-    return [value]
-
-
 def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
     """Refuse a URL field whose authority carries a credential, naming the field that carries it.
 
@@ -612,6 +588,32 @@ _URLS_STATE_THEIR_TRANSPORT = model_validator(mode="after")(_refuse_a_url_withou
 
 # Attach this to every model that records a plain-HTTP waiver, so only code can state one.
 _WAIVER_COMES_FROM_CODE = model_validator(mode="after")(_refuse_a_waiver_that_did_not_come_from_code)
+
+
+def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
+    """Return every value ``query`` states for ``name``.
+
+    A query may state one name more than once, and a mapping built from one keeps those values in its
+    own way: through a reader for repeated values, or as a sequence under the name. A mapping that
+    kept only one of them states only that one, and nothing here can tell that it did.
+    NOTE: The readers are named by convention rather than by any protocol, so this knows the three
+    spellings in use and reads the mapping itself for anything else.
+
+    Args:
+        query: The query to read, which must state ``name``.
+        name: The parameter to read.
+
+    Returns:
+        The values, in the order the query states them.
+    """
+    for reader in ("get_list", "getall", "getlist"):
+        read_every = getattr(query, reader, None)
+        if callable(read_every):
+            return list(read_every(name))
+    value = query[name]
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return list(value)
+    return [value]
 
 
 class _RefusesWithoutRepeating(BaseModel):

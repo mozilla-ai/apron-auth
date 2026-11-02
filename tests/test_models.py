@@ -12,6 +12,7 @@ from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from urllib.parse import parse_qs
 
+import httpx
 import pytest
 from pydantic import BaseModel, SecretStr
 
@@ -93,8 +94,9 @@ class TestTokenEndpointAuthMethod:
 class _MultiValueQuery(Mapping[str, str]):
     """A query mapping shaped like a web framework's: one value per name, every value through a reader."""
 
-    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+    def __init__(self, pairs: list[tuple[str, str]], reader: str = "getlist") -> None:
         self._pairs = pairs
+        setattr(self, reader, self._every)
 
     def __getitem__(self, name: str) -> str:
         for stated, value in self._pairs:
@@ -112,7 +114,7 @@ class _MultiValueQuery(Mapping[str, str]):
     def __len__(self) -> int:
         return len(list(iter(self)))
 
-    def getlist(self, name: str) -> list[str]:
+    def _every(self, name: str) -> list[str]:
         return [value for stated, value in self._pairs if stated == name]
 
 
@@ -156,6 +158,22 @@ class TestAuthorizationCallback:
     def test_a_repeat_is_read_through_the_mapping_s_own_reader(self) -> None:
         """A web framework's query mapping keeps one value per name, and states the rest only through its reader."""
         polluted = _MultiValueQuery([("code", "attacker-code"), ("code", "victim-code"), ("state", "s")])
+
+        assert polluted["code"] == "attacker-code", "the mapping alone shows one value, which is the trap"
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    @pytest.mark.parametrize("reader", ["get_list", "getall", "getlist"], ids=["get_list", "getall", "getlist"])
+    def test_every_spelling_of_the_reader_is_read(self, reader: str) -> None:
+        """The reader is named by convention, so a mapping is only safe if each spelling in use is known."""
+        polluted = _MultiValueQuery([("code", "attacker-code"), ("code", "victim-code")], reader=reader)
+
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    def test_a_repeat_in_this_library_s_own_query_type_is_read(self) -> None:
+        """The likeliest caller holds the client's own parsed query, which spells the reader its own way."""
+        polluted = httpx.QueryParams("code=attacker-code&code=victim-code&state=s")
 
         assert polluted["code"] == "attacker-code", "the mapping alone shows one value, which is the trap"
         with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
