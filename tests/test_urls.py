@@ -16,6 +16,7 @@ from apron_auth._urls import (
     matches_suffix,
     parse_ip,
     query_parameters,
+    url_host,
     uses_allowed_transport,
     uses_secure_transport,
 )
@@ -205,6 +206,48 @@ class TestQueryParameters:
     def test_everything_else_states_no_protection(self, url: str) -> None:
         """An HTTP client refuses a URL it cannot read, so this library must not call it protected."""
         assert uses_secure_transport(url) is False
+
+
+class TestUrlHost:
+    """The host a rule reads when it decides where a credential may be sent."""
+
+    @pytest.mark.parametrize(
+        ("url", "expected"),
+        [
+            pytest.param("https://slack.com/api/auth.revoke", "slack.com", id="the host it names"),
+            pytest.param("https://API.Example.COM/revoke", "api.example.com", id="lowercased, as a DNS name is"),
+            pytest.param("https://slack.com:8443/revoke", "slack.com", id="without the port"),
+            pytest.param(
+                "https://operator:sesame@attacker.example.com/collect",  # pragma: allowlist secret
+                "attacker.example.com",
+                id="without the userinfo",
+            ),
+        ],
+    )
+    def test_reads_the_host_a_request_would_reach(self, url: str, expected: str) -> None:
+        assert url_host(url) == expected
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://[::1/revoke", id="unreadable host"),
+            pytest.param("https://slack.com:not-a-port/revoke", id="unreadable port"),
+            pytest.param("not-a-url", id="no authority at all"),
+            pytest.param("https:///revoke", id="an authority with no host"),
+            pytest.param("", id="empty"),
+        ],
+    )
+    def test_a_url_no_request_can_be_sent_to_names_no_host(self, url: str) -> None:
+        """A rule deciding where a credential may go must read no host rather than part of one."""
+        assert url_host(url) == ""
+
+    def test_a_port_only_the_client_can_read_still_names_its_host(self) -> None:
+        """``urlparse`` refuses this port, and a rule reading no host from it would wave the URL through."""
+        assert url_host("http://127.0.0.1:+54321/collect") == "127.0.0.1"
+
+    def test_an_internationalized_host_reads_as_the_name_the_client_dials(self) -> None:
+        """Both spellings of one host read the same, so a suffix list written in ASCII answers for both."""
+        assert url_host("https://аррӏе.com/x") == url_host("https://xn--80ak6aa92e.com/x")
 
 
 class TestUsesAllowedTransport:

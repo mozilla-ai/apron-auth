@@ -5,12 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import import_module
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, assert_never
 
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
+from apron_auth.models import UrlField
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
@@ -90,7 +92,8 @@ class StandardRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If the configuration declares no revocation endpoint.
+            ConfigurationError: If the configuration declares no revocation endpoint, or declares one
+                it does not permit sending a token to.
             RevocationError: If the request cannot be sent or fails to arrive, or the endpoint
                 answers an error status.
                 The failed request's error is not attached as its cause or context.
@@ -101,16 +104,19 @@ class StandardRevocationHandler:
             # RFC 7009 section 5: a public client identifies itself with client_id in the request
             # body, presenting no client authentication.
             data["client_id"] = config.client_id
+        provider = config.provider
         request = RevocationRequest(
             url=revocation_endpoint(config),
+            label=None if provider is None else provider.display_name,
             auth=auth,
             data=data,
         )
-        response = await send_revocation(request, transport_factory=self._transport_factory)
+        response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.is_success:
             return True
         failure = status_failure(response.status_code)
-        raise RevocationError(f"Failed to revoke token: {failure.description}", kind=failure.kind)
+        subject = "token" if provider is None else f"{provider.display_name} token"
+        raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
 def revocation_endpoint(config: ProviderConfig) -> str:
@@ -132,17 +138,86 @@ def revocation_endpoint(config: ProviderConfig) -> str:
     return config.revocation_url
 
 
+def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfig) -> None:
+    """Refuse a request bound for a URL that must not be sent the token it carries.
+
+    A handler builds the URL it sends to, so each URL the request names is read here rather than
+    taken from the endpoint a validator saw.
+    The rules apply in turn, and a refusal names the first one the URL breaks. The URL must name a
+    host a request can be sent to. Its authority must be readable. Its authority must carry no
+    credential of its own. It must protect the token in transit. Its host must be one that can
+    answer for the token.
+    A configuration naming no provider names no host the last rule could hold it to, as
+    :meth:`~apron_auth.models.ProviderConfig.permits_revocation_at` says, and the rest still apply.
+    NOTE: A URL no request can be sent to is refused here rather than left to the send, because the
+    send reports it as an endpoint that may answer later and a misconfigured one never will.
+
+    Args:
+        request: The request about to be sent.
+        config: The provider configuration to revoke against.
+
+    Raises:
+        ConfigurationError: If a URL the request names reaches no host, states an authority that
+            cannot be read or that carries a credential, states a transport the configuration does
+            not accept, or is on a host the configuration does not permit revocation at. The message
+            names the host alone, because a URL can carry both the token and a credential of its own.
+    """
+    provider = config.provider
+    plain_http_allowed = UrlField.REVOCATION_URL in config.allow_insecure_http_for
+    for url in dict.fromkeys((request.url, request.endpoint or request.url)):
+        host = url_host(url)
+        if not host:
+            msg = "Revocation refused: the request URL names no host a request can be sent to."
+            raise ConfigurationError(msg)
+        credential = authority_credential(url)
+        match credential:
+            case AuthorityCredential.ABSENT:
+                pass
+            case AuthorityCredential.MALFORMED:
+                msg = f"Revocation refused: the authority of the request to {host} cannot be read."
+                raise ConfigurationError(msg)
+            case AuthorityCredential.PRESENT:
+                # NOTE: An HTTP client derives client authentication from a URL's authority, and
+                # presents it in place of the credential the request states rather than beside it.
+                msg = (
+                    f"Revocation refused: the request to {host} carries a credential in its URL. "
+                    f"That credential would be presented in place of the token this request revokes."
+                )
+                raise ConfigurationError(msg)
+            case _:
+                assert_never(credential)
+        if not uses_allowed_transport(url, plain_http_allowed=plain_http_allowed):
+            msg = (
+                f"Revocation refused: the request to {host} does not state a transport that protects "
+                f"this token. It must state https, or http on a loopback host."
+            )
+            raise ConfigurationError(msg)
+        if provider is None or config.permits_revocation_at(host):
+            continue
+        msg = (
+            f"Revocation refused: the host {host} cannot answer for this token. A "
+            f"{provider.display_name} token is revoked at the host that issued it, or at another "
+            f"{provider.display_name} host."
+        )
+        raise ConfigurationError(msg)
+
+
 async def send_revocation(
     request: RevocationRequest,
+    config: ProviderConfig,
     *,
     transport_factory: TransportFactory | None = None,
 ) -> httpx.Response:
     """Send one revocation request and return its response, whatever status it carries.
 
     A provider reads success its own way, so this states no success rule and leaves the response to its caller.
+    The request carries a token, so this refuses a URL the configuration does not permit sending one
+    to before it opens a connection.
 
     Args:
         request: What the provider states about the request.
+        config: The provider configuration to revoke against, which decides the URLs the token may
+            be sent to.
         transport_factory: Controls the outbound connection, and is called with the request's endpoint,
             which never carries the token. The URL is server-supplied, so a caller handling untrusted
             input can pin DNS to validated addresses here to prevent SSRF via rebinding.
@@ -153,15 +228,21 @@ async def send_revocation(
         The endpoint's response.
 
     Raises:
-        RevocationError: If the URL is invalid, or the request cannot be sent or fails to arrive.
+        ConfigurationError: If a URL the request names must not be sent the token, because it reaches
+            no host, because its authority cannot be read or carries a credential of its own, because
+            of the transport it states, or because of the host it names. Nothing is sent.
+        RevocationError: If the request cannot be sent or fails to arrive, including where the
+            transport refuses the URL it is given.
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
+    _refuse_an_unpermitted_url(request, config)
     subject = f"{request.label} token" if request.label is not None else "token"
     try:
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.
         transport = transport_factory(request.endpoint or request.url) if transport_factory is not None else None
-        async with httpx.AsyncClient(transport=transport) as client:
+        # A redirect would carry the token to a host the gate never read, so none is followed.
+        async with httpx.AsyncClient(transport=transport, follow_redirects=False) as client:
             return await client.request(
                 request.method,
                 request.url,
