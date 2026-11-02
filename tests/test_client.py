@@ -2094,6 +2094,23 @@ class TestRefreshToken:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    async def test_refresh_reports_a_failure_before_any_response_as_unexpected(self) -> None:
+        """Only a response that arrived can have an unreadable body, so an earlier fault is not one."""
+
+        def refusing(url: str) -> httpx.AsyncBaseTransport:
+            msg = f"refusing to dial {url}"
+            raise ValueError(msg)
+
+        client = OAuthClient(config=_make_config(), transport_factory=refusing)
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+
+        assert str(exc_info.value) == "request failed"
+        assert exc_info.value.kind is FailureKind.UNEXPECTED
+        assert "provider.example.com" not in str(exc_info.value), "a refusing factory names the URL it refused"
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
     async def test_refresh_non_string_error_value_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://provider.example.com/token",
