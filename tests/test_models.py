@@ -7,7 +7,7 @@ import math
 import pickle
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from urllib.parse import parse_qs
@@ -16,7 +16,7 @@ import pytest
 from pydantic import BaseModel, SecretStr
 
 from apron_auth import models, providers
-from apron_auth.errors import ConfigurationError, IssuerValidationError
+from apron_auth.errors import AuthorizationResponseError, ConfigurationError, FailureKind, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
     ApplicationType,
@@ -90,6 +90,32 @@ class TestTokenEndpointAuthMethod:
         assert method.requires_secret is requires_secret
 
 
+class _MultiValueQuery(Mapping[str, str]):
+    """A query mapping shaped like a web framework's: one value per name, every value through a reader."""
+
+    def __init__(self, pairs: list[tuple[str, str]]) -> None:
+        self._pairs = pairs
+
+    def __getitem__(self, name: str) -> str:
+        for stated, value in self._pairs:
+            if stated == name:
+                return value
+        raise KeyError(name)
+
+    def __iter__(self) -> Iterator[str]:
+        seen: list[str] = []
+        for name, _ in self._pairs:
+            if name not in seen:
+                seen.append(name)
+                yield name
+
+    def __len__(self) -> int:
+        return len(list(iter(self)))
+
+    def getlist(self, name: str) -> list[str]:
+        return [value for stated, value in self._pairs if stated == name]
+
+
 class TestAuthorizationCallback:
     """The authorization response, read once by this library instead of in pieces by the caller."""
 
@@ -122,12 +148,28 @@ class TestAuthorizationCallback:
     @pytest.mark.parametrize("name", ["code", "state", "iss", "error", "error_description"])
     def test_a_parameter_stated_more_than_once_is_refused(self, name: str) -> None:
         """Two values disagree about one response, and nothing here may choose between them."""
-        with pytest.raises(ConfigurationError, match=f"must state {name} exactly once"):
+        with pytest.raises(AuthorizationResponseError, match=f"must state {name} exactly once") as refusal:
             AuthorizationCallback.from_query({name: ["first", "second"]})
+
+        assert refusal.value.kind is FailureKind.REFUSED
+
+    def test_a_repeat_is_read_through_the_mapping_s_own_reader(self) -> None:
+        """A web framework's query mapping keeps one value per name, and states the rest only through its reader."""
+        polluted = _MultiValueQuery([("code", "attacker-code"), ("code", "victim-code"), ("state", "s")])
+
+        assert polluted["code"] == "attacker-code", "the mapping alone shows one value, which is the trap"
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    def test_a_mapping_with_a_reader_and_no_repeat_is_read(self) -> None:
+        callback = AuthorizationCallback.from_query(_MultiValueQuery([("code", "abc"), ("state", "s")]))
+
+        assert callback.code == "abc"
+        assert callback.state == "s"
 
     def test_a_refusal_does_not_repeat_the_code_it_was_given(self) -> None:
         """The query carries the authorization code, so a caller recording a refusal must not record it."""
-        with pytest.raises(ConfigurationError) as refusal:
+        with pytest.raises(AuthorizationResponseError) as refusal:
             AuthorizationCallback.from_query({"code": ["live-code-one", "live-code-two"]})
 
         assert "live-code-one" not in str(refusal.value)

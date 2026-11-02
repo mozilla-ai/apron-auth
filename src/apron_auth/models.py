@@ -30,7 +30,7 @@ from apron_auth._urls import (
     url_host,
     uses_allowed_transport,
 )
-from apron_auth.errors import ConfigurationError, IssuerValidationError
+from apron_auth.errors import AuthorizationResponseError, ConfigurationError, FailureKind, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 logger = logging.getLogger(__name__)
@@ -436,6 +436,30 @@ def _refusal_text(error: ValidationError) -> str:
         field = ".".join(str(part) for part in path)
         refusals.append(f"{field}: {reason}" if field else reason)
     return "; ".join(refusals)
+
+
+def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
+    """Return every value ``query`` states for ``name``.
+
+    A query may state one name more than once, and a mapping built from one keeps those values in its
+    own way: through a reader for repeated values, or as a sequence under the name. A mapping that
+    kept only one of them states only that one, and nothing here can tell that it did.
+
+    Args:
+        query: The query to read, which must state ``name``.
+        name: The parameter to read.
+
+    Returns:
+        The values, in the order the query states them.
+    """
+    for reader in ("getlist", "getall"):
+        read_every = getattr(query, reader, None)
+        if callable(read_every):
+            return list(read_every(name))
+    value = query[name]
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+        return list(value)
+    return [value]
 
 
 def _refuse_a_url_carrying_a_credential(model: BaseModel) -> BaseModel:
@@ -1794,11 +1818,12 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
         A parameter this model does not name is ignored, because an authorization server may return
         parameters of its own.
         A parameter stated more than once is refused, because its values disagree about one response
-        and nothing here may choose between them.
+        and nothing here may choose between them. Every value a parameter states is read, through the
+        mapping's own reader for repeated values where it offers one, as a web framework's query
+        mapping does through ``getlist`` or ``getall``, and out of a sequence otherwise.
 
-        NOTE: A mapping that already kept one value per name cannot report a repeat. Pass one that
-        preserves them, such as the mapping of each name to its list of values that the standard
-        library's query reader returns.
+        NOTE: A mapping that offers no such reader and has already kept one value per name cannot
+        report a repeat, and this reads the one value it kept.
 
         Args:
             query: The callback's query parameters. A value is the parameter's own value, or a sequence
@@ -1808,19 +1833,22 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             The response the query states.
 
         Raises:
-            ConfigurationError: If a parameter this model names is stated more than once, or states a
-                value that is no string. The refusal names the parameter and not its value.
+            AuthorizationResponseError: If a parameter this model names is stated more than once. That
+                can only come from the response, so it is a response this library refuses rather than
+                an argument that cannot work.
+            ConfigurationError: If a parameter states a value that is no string. A query states strings,
+                so such a value came from the caller rather than from the response.
+                Neither refusal names the value, only the parameter.
         """
         stated: dict[str, str] = {}
         for name in cls.model_fields:
             if name not in query:
                 continue
-            value = query[name]
-            if isinstance(value, Sequence) and not isinstance(value, str | bytes):
-                if len(value) != 1:
-                    msg = f"the callback query must state {name} exactly once"
-                    raise ConfigurationError(msg)
-                value = value[0]
+            values = _stated_values(query, name)
+            if len(values) != 1:
+                msg = f"the callback query must state {name} exactly once"
+                raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
+            value = values[0]
             if not isinstance(value, str):
                 msg = f"the callback query must state {name} as a string"
                 raise ConfigurationError(msg)
