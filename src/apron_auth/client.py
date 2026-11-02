@@ -402,6 +402,7 @@ class OAuthClient:
     def __init__(
         self,
         config: ProviderConfig,
+        *,
         state_store: StateStore | None = None,
         revocation_handler: RevocationHandler | None = None,
         identity_handler: IdentityHandler | None = None,

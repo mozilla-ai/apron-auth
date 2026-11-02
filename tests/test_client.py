@@ -128,6 +128,12 @@ def _openid_claims(**claims: object) -> dict[str, object]:
     return {"sub": "u-1", "aud": "test-client", "exp": int(time.time()) + 300, **claims}
 
 
+class TestClientConstruction:
+    def test_an_optional_collaborator_cannot_be_passed_positionally(self):
+        with pytest.raises(TypeError):
+            OAuthClient(_make_config(), None)
+
+
 class TestGetAuthorizationUrl:
     async def test_returns_url_and_pending_state(self):
         config = _make_config()
