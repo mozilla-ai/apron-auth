@@ -187,6 +187,8 @@ When the user comes back, exchange the authorization response for tokens. Pass t
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
 ```python
+from apron_auth import AuthorizationCallback
+
 # `query` is the callback's query parameters: your framework's own query
 # mapping, or any mapping of the names to their values.
 callback = AuthorizationCallback.from_query(query)
