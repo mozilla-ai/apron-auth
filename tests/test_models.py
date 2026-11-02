@@ -208,6 +208,8 @@ class TestAuthorizationCallback:
             pytest.param(7, id="a number"),
             pytest.param({"code": "abc"}, id="a mapping"),
             pytest.param(b"abc", id="bytes"),
+            pytest.param(bytearray(b"abc"), id="a bytearray"),
+            pytest.param(memoryview(b"abc"), id="a memoryview"),
         ],
     )
     def test_a_value_that_is_no_string_is_refused(self, value: object) -> None:

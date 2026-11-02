@@ -611,7 +611,7 @@ def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
         if callable(read_every):
             return list(read_every(name))
     value = query[name]
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes):
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray | memoryview):
         return list(value)
     return [value]
 
