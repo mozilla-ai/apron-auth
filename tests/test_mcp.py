@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 
 import httpx
@@ -15,6 +16,7 @@ from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
     IdentityNotSupportedError,
+    IssuerValidationError,
     McpDiscoveryError,
     McpRegistrationError,
 )
@@ -41,6 +43,7 @@ from apron_auth.models import (
     FreshTokenSet,
     IdentityMaterial,
     IdentityProfile,
+    OAuthPendingState,
     ProviderConfig,
     ServerMetadata,
     TokenEndpointAuthMethod,
@@ -194,6 +197,18 @@ class TestToProviderConfig:
         config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.issuer == "https://auth.example.com"
         assert config.require_iss is True
+
+    async def test_a_callback_without_iss_is_refused_against_a_discovered_issuer(self) -> None:
+        """Discovery sets the requirement, so nothing is left for a caller to remember per call."""
+        meta = self._meta(issuer="https://auth.example.com", iss_parameter_supported=True)
+        config = to_provider_config(
+            meta, ClientRegistration(client_id="c", client_secret="s"), redirect_uri=_REDIRECT_URI
+        )
+        client = OAuthClient(config)
+        pending = OAuthPendingState(state="s-1", redirect_uri=_REDIRECT_URI, created_at=time.time())
+
+        with pytest.raises(IssuerValidationError):
+            await client.exchange_code(AuthorizationCallback(code="auth-code", state="s-1"), pending_state=pending)
 
     def test_issuer_absent_leaves_config_unbound(self) -> None:
         config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="s"))
