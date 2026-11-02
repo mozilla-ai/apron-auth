@@ -596,8 +596,11 @@ def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
     A query may state one name more than once, and a mapping built from one keeps those values in its
     own way: through a reader for repeated values, or as a sequence under the name. A mapping that
     kept only one of them states only that one, and nothing here can tell that it did.
-    NOTE: The readers are named by convention rather than by any protocol, so this knows the three
-    spellings in use and reads the mapping itself for anything else.
+    NOTE: The readers are named by convention rather than by any protocol, so the spellings are listed
+    rather than derived. ``get_list`` is the one this library's own HTTP client uses, ``getall`` is
+    aiohttp's and WebOb's, and ``getlist`` is Starlette's, Werkzeug's and Django's. A mapping naming
+    its reader a fourth way reads as having kept one value, which cannot be told apart from having
+    been given one.
 
     Args:
         query: The query to read, which must state ``name``.
@@ -1840,11 +1843,15 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             AuthorizationResponseError: If a parameter this model names is stated more than once. That
                 can only come from the response, so it is a response this library refuses rather than
                 an argument that cannot work.
-            ConfigurationError: If a parameter states a value that is no string, or states none at all.
+            ConfigurationError: If ``query`` is no mapping, or a parameter states a value that is no
+                string, or states none at all.
                 A query states one string per name it holds, so such a value came from the caller
                 rather than from the response.
                 Neither refusal names the value, only the parameter.
         """
+        if not isinstance(query, Mapping):
+            msg = "the callback query must be a mapping of each parameter name to its value"
+            raise ConfigurationError(msg)
         stated: dict[str, str] = {}
         for name in cls.model_fields:
             if name not in query:

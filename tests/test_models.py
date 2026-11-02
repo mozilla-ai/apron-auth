@@ -216,6 +216,15 @@ class TestAuthorizationCallback:
         with pytest.raises(ConfigurationError, match="must state code as a string"):
             AuthorizationCallback.from_query({"code": value})
 
+    @pytest.mark.parametrize(
+        "query",
+        [pytest.param("?code=xyz&state=s", id="a raw query string"), pytest.param(["code", "xyz"], id="a sequence")],
+    )
+    def test_a_query_that_is_no_mapping_is_refused_in_domain_terms(self, query: object) -> None:
+        """A raw string answers a containment check, so without this the caller gets the standard library's error."""
+        with pytest.raises(ConfigurationError, match="must be a mapping"):
+            AuthorizationCallback.from_query(query)  # ty: ignore[invalid-argument-type]
+
     def test_an_absent_parameter_reads_as_none(self) -> None:
         assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
 
