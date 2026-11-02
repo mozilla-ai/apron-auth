@@ -10,6 +10,7 @@ import traceback
 from collections.abc import Callable
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
+from urllib.parse import parse_qs
 
 import pytest
 from pydantic import BaseModel, SecretStr
@@ -19,6 +20,7 @@ from apron_auth.errors import ConfigurationError, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
     ApplicationType,
+    AuthorizationCallback,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -86,6 +88,75 @@ class TestTokenEndpointAuthMethod:
         self, method: TokenEndpointAuthMethod, requires_secret: bool
     ) -> None:
         assert method.requires_secret is requires_secret
+
+
+class TestAuthorizationCallback:
+    """The authorization response, read once by this library instead of in pieces by the caller."""
+
+    def test_reads_the_parameters_a_response_states(self) -> None:
+        callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example.com"))
+
+        assert callback.code == "abc"
+        assert callback.state == "xyz"
+        assert callback.iss == "https://issuer.example.com"
+        assert callback.error is None
+        assert callback.error_description is None
+
+    def test_reads_an_error_response(self) -> None:
+        """A refused request states no code, so the exchange has to tell the two apart."""
+        callback = AuthorizationCallback.from_query(
+            parse_qs("error=access_denied&error_description=The+user+said+no&state=xyz")
+        )
+
+        assert callback.code is None
+        assert callback.error == "access_denied"
+        assert callback.error_description == "The user said no"
+
+    def test_a_parameter_it_does_not_name_is_ignored(self) -> None:
+        """An authorization server may return parameters of its own, which are no business of this model."""
+        callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&session_state=s&scope=openid"))
+
+        assert callback.code == "abc"
+        assert callback.state == "xyz"
+
+    @pytest.mark.parametrize("name", ["code", "state", "iss", "error", "error_description"])
+    def test_a_parameter_stated_more_than_once_is_refused(self, name: str) -> None:
+        """Two values disagree about one response, and nothing here may choose between them."""
+        with pytest.raises(ConfigurationError, match=f"must state {name} exactly once"):
+            AuthorizationCallback.from_query({name: ["first", "second"]})
+
+    def test_a_refusal_does_not_repeat_the_code_it_was_given(self) -> None:
+        """The query carries the authorization code, so a caller recording a refusal must not record it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            AuthorizationCallback.from_query({"code": ["live-code-one", "live-code-two"]})
+
+        assert "live-code-one" not in str(refusal.value)
+        assert "live-code-two" not in str(refusal.value)
+
+    def test_a_sequence_holding_one_value_states_that_value(self) -> None:
+        """A parser that preserves repeats returns every value in a sequence, including a single one."""
+        assert AuthorizationCallback.from_query({"code": ["abc"]}).code == "abc"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(7, id="a number"),
+            pytest.param({"code": "abc"}, id="a mapping"),
+            pytest.param(b"abc", id="bytes"),
+        ],
+    )
+    def test_a_value_that_is_no_string_is_refused(self, value: object) -> None:
+        with pytest.raises(ConfigurationError, match="must state code as a string"):
+            AuthorizationCallback.from_query({"code": value})
+
+    def test_an_absent_parameter_reads_as_none(self) -> None:
+        assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
+
+    def test_it_is_frozen(self) -> None:
+        callback = AuthorizationCallback(code="abc", state="xyz")
+
+        with pytest.raises(ConfigurationError):
+            callback.code = "other"  # ty: ignore[invalid-assignment]
 
 
 class TestClientRegistration:
@@ -540,6 +611,7 @@ class TestUnknownFieldRefusals:
         refusing = {model.__name__ for model in MODELS if model.model_config.get("extra") == "forbid"}
 
         assert refusing == {
+            "AuthorizationCallback",
             "ClientRegistration",
             "FreshTokenSet",
             "OAuthPendingState",

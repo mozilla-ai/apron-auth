@@ -32,6 +32,7 @@ from apron_auth.errors import (
 )
 from apron_auth.models import (
     ApplicationType,
+    AuthorizationCallback,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -61,6 +62,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 __all__ = [
     "ApplicationType",
     "ClientRegistration",
+    "AuthorizationCallback",
     "AuthorizationResponseError",
     "ConfigurationError",
     "FailureKind",
