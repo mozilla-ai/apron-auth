@@ -236,7 +236,10 @@ async def test_a_host_the_config_does_not_permit_is_refused_before_anything_is_s
 
     assert asked == [], "the token must not reach a host that cannot answer for it"
     assert refusal.value.kind.retryable is False
-    assert "attacker.example.com" in str(refusal.value)
+    assert str(refusal.value) == (
+        "Revocation refused: the host attacker.example.com cannot answer for this token. "
+        "A Slack token is revoked at the host that issued it, or at another Slack host."
+    )
 
 
 async def test_a_url_built_on_another_host_is_refused_although_the_endpoint_is_the_providers() -> None:
