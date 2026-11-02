@@ -336,6 +336,15 @@ class TestPickling:
         assert back.kind is FailureKind.REJECTED
         assert back.error_code == "invalid_grant"
 
+    def test_an_authorization_response_error_keeps_its_kind_and_code(self) -> None:
+        err = AuthorizationResponseError("refused", kind=FailureKind.REJECTED, error_code="access_denied")
+        back = pickle.loads(pickle.dumps(err))
+        assert type(back) is AuthorizationResponseError
+        assert str(back) == "refused"
+        assert back.kind is FailureKind.REJECTED
+        assert back.error_code == "access_denied"
+        assert back.retryable is False
+
     def test_a_validation_error_keeps_its_reason(self) -> None:
         err = TokenValidationError("bad signature", reason=TokenValidationReason.SIGNATURE)
         back = pickle.loads(pickle.dumps(err))

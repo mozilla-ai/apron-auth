@@ -187,8 +187,8 @@ When the user comes back, exchange the authorization response for tokens. Pass t
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
 ```python
-# `query` is the callback's query parameters, as a mapping of each name to its
-# list of values, which is what the standard library's query reader returns.
+# `query` is the callback's query parameters: your framework's own query
+# mapping, or any mapping of the names to their values.
 callback = AuthorizationCallback.from_query(query)
 tokens = await client.exchange_code(callback, pending_state=pending_state)
 print(tokens.access_token)
@@ -644,7 +644,7 @@ When using CIMD, you host the `client-metadata.json` yourself at the `client_id`
 
 Unlike DCR or pre-registered credentials — which are bound to the authorization server that issued them and must be re-registered when that server changes — a CIMD `client_id` is a self-hosted URL, portable across authorization servers with no re-registration.
 
-`discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. The callback's `iss` parameter (RFC 9207) rides on the `AuthorizationCallback` you pass to `exchange_code`, which validates it against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, `to_provider_config` sets `require_iss`, so a callback that omits `iss` is rejected too. There is nothing to remember per call. Presets carry no issuer and are unaffected.
+`discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. The callback's `iss` parameter (RFC 9207) rides on the `AuthorizationCallback` you pass to `exchange_code`, which validates it against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, `to_provider_config` sets `require_iss`, so a callback that omits `iss` is rejected too. There is nothing to remember per call. A preset that names its provider's issuer, such as Slack's sign-in preset, is held to the same rule; one that names none is unaffected.
 
 The registration's `token_endpoint_auth_method` is a `TokenEndpointAuthMethod` validated out of the registration response. It lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration you build yourself states no method, so the method is derived from the client's secret and the server's advertised set.
 
