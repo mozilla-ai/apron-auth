@@ -529,10 +529,15 @@ class OAuthClient:
             The code.
 
         Raises:
-            AuthorizationResponseError: If the response states no code. Its kind says whether a new
-                authorization request may pass later, which only a code in the retryable set reports.
-                The message states nothing the server sent, because the server chose that text.
+            AuthorizationResponseError: If the response states no code, or states both a code and an
+                error. Its kind tells a response this library refused from a request the server
+                rejected. The message states nothing the server sent, because the server chose that text.
         """
+        if callback.code and callback.error is not None:
+            # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says
+            # two things at once and nothing here may choose between them.
+            msg = "the authorization response states both a code and an error"
+            raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
         if callback.code:
             return callback.code
         if callback.error is None:

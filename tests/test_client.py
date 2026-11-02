@@ -1134,15 +1134,16 @@ class TestExchangeCodeAuthorizationResponse:
         assert "Trust me" not in str(refusal.value)
 
     @pytest.mark.parametrize(
-        ("error", "retryable"),
+        ("error", "kind"),
         [
-            pytest.param("temporarily_unavailable", True, id="an outage may pass later"),
-            pytest.param("server_error", True, id="a server error may pass later"),
-            pytest.param("access_denied", False, id="a refusal does not"),
-            pytest.param("unauthorized_client", False, id="nor does a rejected client"),
+            pytest.param("temporarily_unavailable", FailureKind.SERVER_ERROR, id="an outage"),
+            pytest.param("server_error", FailureKind.SERVER_ERROR, id="a server error"),
+            pytest.param("access_denied", FailureKind.REJECTED, id="a refusal"),
+            pytest.param("unauthorized_client", FailureKind.REJECTED, id="a rejected client"),
         ],
     )
-    async def test_the_error_code_decides_whether_a_new_request_may_pass(self, error: str, retryable: bool) -> None:
+    async def test_the_error_code_says_what_went_wrong(self, error: str, kind: FailureKind) -> None:
+        """An outage reads differently from a refusal, which a caller logs or alerts on."""
         client = OAuthClient(config=_make_config())
 
         with pytest.raises(AuthorizationResponseError) as refusal:
@@ -1150,7 +1151,32 @@ class TestExchangeCodeAuthorizationResponse:
                 AuthorizationCallback(state="pending-state", error=error), pending_state=_pending_state()
             )
 
-        assert refusal.value.retryable is retryable
+        assert refusal.value.kind is kind
+
+    @pytest.mark.parametrize("error", ["temporarily_unavailable", "access_denied"])
+    async def test_no_error_code_makes_the_response_worth_presenting_again(self, error: str) -> None:
+        """Presenting this response again fails the same way, so a new authorization is the remedy."""
+        client = OAuthClient(config=_make_config())
+
+        with pytest.raises(AuthorizationResponseError) as refusal:
+            await client.exchange_code(
+                AuthorizationCallback(state="pending-state", error=error), pending_state=_pending_state()
+            )
+
+        assert refusal.value.retryable is False
+
+    async def test_a_response_stating_both_a_code_and_an_error_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 6749 section 4.1.2 states one or the other, so a response stating both says two things at once."""
+        client = OAuthClient(config=_make_config())
+
+        with pytest.raises(AuthorizationResponseError, match="both a code and an error") as refusal:
+            await client.exchange_code(
+                AuthorizationCallback(code="auth-code-123", state="pending-state", error="access_denied"),
+                pending_state=_pending_state(),
+            )
+
+        assert refusal.value.kind is FailureKind.REFUSED
+        assert httpx_mock.get_requests() == []
 
     async def test_a_response_stating_neither_a_code_nor_an_error_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """RFC 6749 section 4.1.2 states one or the other, so this library refuses the response itself."""
