@@ -36,6 +36,7 @@ from apron_auth.mcp import (
 )
 from apron_auth.models import (
     ApplicationType,
+    AuthorizationCallback,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -1612,9 +1613,7 @@ class TestEndToEndFlow:
         assert authorize_url.startswith("https://auth.example.com/authorize")
 
         tokens = await client.exchange_code(
-            code="auth-code",
-            state=pending.state,
-            pending_state=pending,
+            AuthorizationCallback(code="auth-code", state=pending.state), pending_state=pending
         )
         assert tokens.access_token == "final-token"
 

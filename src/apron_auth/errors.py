@@ -110,9 +110,11 @@ class OAuthError(Exception):
 
 
 class AuthorizationResponseError(OAuthError):
-    """The authorization server answered the authorization request with an error (RFC 6749 section 4.1.2.1).
+    """The authorization response states no code to redeem.
 
-    No code was issued, so nothing was redeemed and there is nothing to revoke.
+    The server either refused the request and said why (RFC 6749 section 4.1.2.1), or answered with
+    neither a code nor an error, which RFC 6749 section 4.1.2 does not allow.
+    Either way no code was issued, so nothing was redeemed and there is nothing to revoke.
     ``kind`` says whether a new authorization request may pass later.
 
     This class owns the shape of ``error_code``, so no raise decides it.
