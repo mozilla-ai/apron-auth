@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hmac
-import json
 import logging
 import secrets
 import time
@@ -1069,9 +1068,15 @@ class OAuthClient:
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             failure = _TokenEndpointError(transport.description, transport.kind)
-        # NOTE: The token client decodes a success body itself, so a deeply nested body surfaces here as RecursionError.
-        except (json.JSONDecodeError, RecursionError):
-            failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
+        # NOTE: The token client decodes a success body itself, so a body it cannot read surfaces
+        # here rather than as an HTTP error: as a ValueError it raises, or as a RecursionError on a
+        # deeply nested one. A response must have arrived for the body to be what failed, so one of
+        # those raised before then is reported as the unexpected failure it is.
+        except (ValueError, RecursionError):
+            if responses:
+                failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
+            else:
+                failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         except Exception:
             failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         # NOTE: The caught error can hold the request, which carries the client secret and the grant.
