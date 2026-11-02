@@ -179,6 +179,11 @@ class TestAuthorizationCallback:
         with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
             AuthorizationCallback.from_query(polluted)
 
+    def test_a_parameter_stated_with_no_value_at_all_is_the_caller_s(self) -> None:
+        """A query states one string per name it holds, so an empty sequence came from the caller's mapping."""
+        with pytest.raises(ConfigurationError, match="states code with no value at all"):
+            AuthorizationCallback.from_query({"code": []})
+
     def test_a_mapping_with_a_reader_and_no_repeat_is_read(self) -> None:
         callback = AuthorizationCallback.from_query(_MultiValueQuery([("code", "abc"), ("state", "s")]))
 

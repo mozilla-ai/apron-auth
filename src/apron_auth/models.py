@@ -1840,8 +1840,9 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             AuthorizationResponseError: If a parameter this model names is stated more than once. That
                 can only come from the response, so it is a response this library refuses rather than
                 an argument that cannot work.
-            ConfigurationError: If a parameter states a value that is no string. A query states strings,
-                so such a value came from the caller rather than from the response.
+            ConfigurationError: If a parameter states a value that is no string, or states none at all.
+                A query states one string per name it holds, so such a value came from the caller
+                rather than from the response.
                 Neither refusal names the value, only the parameter.
         """
         stated: dict[str, str] = {}
@@ -1849,7 +1850,10 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             if name not in query:
                 continue
             values = _stated_values(query, name)
-            if len(values) != 1:
+            if not values:
+                msg = f"the callback query states {name} with no value at all"
+                raise ConfigurationError(msg)
+            if len(values) > 1:
                 msg = f"the callback query must state {name} exactly once"
                 raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
             value = values[0]
