@@ -1240,6 +1240,8 @@ class OAuthClient(_OAuthClientBase):
                 server refused the request and said why, or because it stated neither a code nor an
                 error. Its ``error_code`` carries the code the server named, where it named one in the
                 shape a code takes.
+            ConfigurationError: If no pending state is passed, which an untyped caller can do by handing
+                over a session lookup that found nothing.
             IdTokenValidationError: If the response carries an ID token that cannot be read, names another
                 audience or authorized party, has expired, or names another issuer when the config has one.
                 Every ID token the response carries is checked, whether or not the request sent a nonce.
@@ -1262,6 +1264,11 @@ class OAuthClient(_OAuthClientBase):
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
+        # The annotation states a pending state, and an untyped caller can still pass none. A session
+        # lookup that found nothing is the usual way, so the refusal says so rather than failing a read.
+        if pending_state is None:
+            msg = "Pass the pending state the authorization request returned"
+            raise ConfigurationError(msg)
         return await self._redeem(callback, partial(_kept_pending_state, pending_state))
 
     async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:

@@ -141,6 +141,12 @@ class TestTheExchangeShapeIsPerClient:
         with pytest.raises(TypeError):
             await client.exchange_code(_callback())
 
+    async def test_a_caller_kept_client_refuses_an_absent_pending_state_in_domain_terms(self):
+        client = OAuthClient(_make_config())
+        session: dict[str, object] = {}
+        with pytest.raises(ConfigurationError):
+            await client.exchange_code(_callback(), pending_state=session.get("pending"))
+
     async def test_a_stored_state_client_refuses_an_exchange_given_a_pending_state(self):
         client = StoredStateClient(_make_config(), AsyncMock())
         with pytest.raises(TypeError):
