@@ -38,6 +38,9 @@ MULTI_KIND_CLASSES = (
     TokenRefreshError,
 )
 
+# The phases whose request is never presented again, so their kind never makes them retryable.
+NEVER_RETRYABLE_CLASSES = (AuthorizationResponseError, TokenExchangeError)
+
 SINGLE_KIND_CLASSES = {
     ConfigurationError: FailureKind.CONFIGURATION,
     IdentityNotSupportedError: FailureKind.CONFIGURATION,
@@ -102,8 +105,7 @@ class TestKindOnErrors:
     def test_multi_kind_class_carries_the_given_kind(self, cls: type[OAuthError]) -> None:
         err = cls("boom", kind=FailureKind.TIMEOUT)
         assert err.kind is FailureKind.TIMEOUT
-        # The exchange is the one phase whose request is never repeated.
-        assert err.retryable is (cls is not TokenExchangeError)
+        assert err.retryable is (cls not in NEVER_RETRYABLE_CLASSES)
 
     def test_a_given_kind_overrides_the_default(self) -> None:
         err = ConfigurationError("boom", kind=FailureKind.UNEXPECTED)
@@ -154,12 +156,15 @@ class TestAuthorizationResponseError:
         assert isinstance(err, OAuthError)
         assert not isinstance(err, TokenEndpointError)
 
-    def test_the_kind_decides_whether_a_new_request_may_pass(self) -> None:
+    def test_the_kind_says_what_went_wrong_without_promising_a_retry(self) -> None:
+        """An outage and a refusal read differently, and neither is answered by presenting this response again."""
         refused = AuthorizationResponseError("boom", kind=FailureKind.REJECTED, error_code="access_denied")
         outage = AuthorizationResponseError("boom", kind=FailureKind.SERVER_ERROR, error_code="temporarily_unavailable")
 
+        assert refused.kind is FailureKind.REJECTED
+        assert outage.kind is FailureKind.SERVER_ERROR
         assert refused.retryable is False
-        assert outage.retryable is True
+        assert outage.retryable is False
 
 
 class TestTokenEndpointErrors:
@@ -306,9 +311,13 @@ class TestClassificationIsReadOnly:
 
 
 class TestExchangeIsNeverRetryable:
+    @pytest.mark.parametrize("cls", NEVER_RETRYABLE_CLASSES)
     @pytest.mark.parametrize("kind", list(FailureKind))
-    def test_an_exchange_error_is_not_retryable_whatever_its_kind(self, kind: FailureKind) -> None:
-        err = TokenExchangeError("boom", kind=kind)
+    def test_a_phase_whose_request_is_never_repeated_is_not_retryable(
+        self, cls: type[OAuthError], kind: FailureKind
+    ) -> None:
+        """The remedy for both is a new authorization, so neither may report that a retry would do."""
+        err = cls("boom", kind=kind)
         assert err.kind is kind
         assert err.retryable is False
 

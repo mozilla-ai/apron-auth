@@ -110,12 +110,15 @@ class OAuthError(Exception):
 
 
 class AuthorizationResponseError(OAuthError):
-    """The authorization response states no code to redeem.
+    """The authorization response cannot be acted on.
 
-    The server either refused the request and said why (RFC 6749 section 4.1.2.1), or answered with
-    neither a code nor an error, which RFC 6749 section 4.1.2 does not allow.
-    Either way no code was issued, so nothing was redeemed and there is nothing to revoke.
-    ``kind`` says whether a new authorization request may pass later.
+    The server refused the request and said why (RFC 6749 section 4.1.2.1), or answered with neither a
+    code nor an error, which RFC 6749 section 4.1.2 does not allow, or stated one parameter more than
+    once, which leaves its values in disagreement about one response.
+    In every case no code was redeemed, so there is nothing to revoke.
+    ``kind`` says what went wrong, and tells a response this library refused from a request the server
+    rejected. ``retryable`` is always ``False``: this response states no code, so presenting it again
+    can only fail the same way. The recovery is a new authorization request.
 
     This class owns the shape of ``error_code``, so no raise decides it.
     It holds the OAuth error code when one is given as a lowercase identifier, and is the empty string
@@ -133,6 +136,11 @@ class AuthorizationResponseError(OAuthError):
     def error_code(self) -> str:
         """The OAuth error code of the failure, fixed when the error is raised."""
         return self._error_code
+
+    @property
+    def retryable(self) -> bool:
+        """Always ``False``. This response is never presented again; the caller starts a new authorization."""
+        return False
 
 
 class ConfigurationError(OAuthError):
