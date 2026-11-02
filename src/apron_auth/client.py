@@ -7,8 +7,9 @@ import hmac
 import logging
 import secrets
 import time
-from collections.abc import Sequence
-from functools import cached_property
+from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable, Sequence
+from functools import cached_property, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
@@ -61,6 +62,9 @@ logger = logging.getLogger(__name__)
 
 # The refusal of a token-endpoint response carrying no access token, which RFC 6749 section 5.1 requires.
 _NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
+
+# The pending state a callback's state belongs to, which each client answers from wherever it keeps one.
+_PendingStateLookup = Callable[[str], Awaitable[OAuthPendingState]]
 
 # The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
 # NOTE: The exchange_code docstring states this value.
@@ -284,6 +288,25 @@ def _id_token_claims(id_token: object) -> dict[str, Any]:
     raise IdTokenValidationError(msg)
 
 
+async def _kept_pending_state(pending_state: OAuthPendingState, state: str) -> OAuthPendingState:
+    """Return a caller's own pending state, refusing a callback state that is not the one it was issued for.
+
+    Args:
+        pending_state: The pending state the caller kept from the authorization request.
+        state: The ``state`` the callback carried.
+
+    Returns:
+        The given pending state.
+
+    Raises:
+        StateError: If ``state`` is not the pending state's own.
+    """
+    if not _same_secret(state, pending_state.state):
+        msg = "OAuth state does not match the pending authorization request"
+        raise StateError(msg)
+    return pending_state
+
+
 def _read_task_exception(task: asyncio.Task[None]) -> None:
     """Mark a finished task's exception as retrieved, so asyncio never logs it with its text.
 
@@ -356,6 +379,24 @@ def _states_an_access_token(response: Mapping[str, Any]) -> bool:
     return isinstance(access_token := response.get("access_token"), str) and bool(access_token)
 
 
+def _usable_state(state: str | None) -> str:
+    """Return the state a callback carried, refusing a response that carries none to match against.
+
+    Args:
+        state: The ``state`` the callback carried.
+
+    Returns:
+        The state.
+
+    Raises:
+        StateError: If the callback carried no state, or an empty one.
+    """
+    if not isinstance(state, str) or not state:
+        msg = "OAuth callback carried no usable state"
+        raise StateError(msg)
+    return state
+
+
 def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     """Return the user token a nested member of a token response carries.
 
@@ -390,8 +431,10 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     return UserToken(**named, extras=extras)
 
 
-class OAuthClient:
-    """OAuth 2.0 client for authorization code flows, which keeps no per-user state.
+class _OAuthClientBase(ABC):
+    """Everything an OAuth 2.0 authorization code client does apart from where the pending state is kept.
+
+    Where it is kept is the one thing a subclass decides, and ``_keep_pending_state`` is where it says so.
 
     NOTE: Callers must not use one client from event loops in several threads at once,
     because the identity handler it builds may keep caches that are not thread-safe.
@@ -403,7 +446,6 @@ class OAuthClient:
         self,
         config: ProviderConfig,
         *,
-        state_store: StateStore | None = None,
         revocation_handler: RevocationHandler | None = None,
         identity_handler: IdentityHandler | None = None,
         retryable_error_codes: set[str] | None = None,
@@ -413,7 +455,6 @@ class OAuthClient:
 
         Args:
             config: Provider endpoints, credentials, and behavior.
-            state_store: Optional persistence for OAuth state across requests.
             revocation_handler: Optional provider-specific token revocation.
             identity_handler: Optional provider-specific identity fetcher.
             retryable_error_codes: Additional OAuth error codes that name an outage rather than a fault
@@ -428,7 +469,6 @@ class OAuthClient:
                 when the token endpoint comes from untrusted discovery.
         """
         self._config = config
-        self._state_store = state_store
         self._revocation_handler = revocation_handler
         self._identity_handler = identity_handler
         self._retryable_error_codes = self.DEFAULT_RETRYABLE_ERROR_CODES | (retryable_error_codes or set())
@@ -441,8 +481,7 @@ class OAuthClient:
     ) -> tuple[str, OAuthPendingState]:
         """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
 
-        If a ``StateStore`` is configured, the pending state is saved
-        automatically before returning.
+        The pending state is saved before returning, where this client keeps one of its own.
 
         Args:
             redirect_uri: Override the redirect URI from ``ProviderConfig``.
@@ -518,10 +557,17 @@ class OAuthClient:
             context=context or {},
         )
 
-        if self._state_store is not None:
-            await self._state_store.save(pending_state)
+        await self._keep_pending_state(pending_state)
 
         return url, pending_state
+
+    @abstractmethod
+    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
+        """Keep the pending state of an authorization request, wherever this client keeps one.
+
+        Args:
+            pending_state: The pending state the authorization request was built with.
+        """
 
     def _code_to_redeem(self, callback: AuthorizationCallback) -> str:
         """Return the authorization code to redeem, refusing a response that states none.
@@ -555,77 +601,52 @@ class OAuthClient:
         msg = "the authorization server refused the authorization request"
         raise AuthorizationResponseError(msg, kind=kind, error_code=error_code)
 
-    async def exchange_code(
+    async def _redeem(
         self,
         callback: AuthorizationCallback,
-        *,
-        pending_state: OAuthPendingState | None = None,
+        pending_state_for: _PendingStateLookup,
     ) -> FreshTokenSet:
-        """Exchange an authorization response for tokens.
+        """Redeem an authorization response for tokens, against the pending state the lookup answers with.
 
-        A client with a ``StateStore`` consumes the pending state for the response's ``state`` from it.
-        A client without one takes ``pending_state``.
-        Either way, a response whose ``state`` does not match the pending state,
-        or a pending state older than the configured maximum age, is refused before the code is redeemed.
-        When the authorization request sent a nonce, the response must carry an ID token with that nonce,
-        or no tokens are returned.
-
-        A response that states no code to redeem is refused first, before any state is consumed, because
-        there is nothing to exchange.
-        NOTE: The pending state is deliberately left alone on that refusal. Consuming it would let a
-        forged error response end a live authorization, so a caller holding its own pending state
-        discards it, and a store keeps the entry until a later callback consumes it or it ages out.
-        When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is validated next.
-        A mix-up attempt is refused before any state is consumed and before the token endpoint is called.
-        The response carries its own ``iss``, so no caller has to remember to pass one.
-
-        NOTE: Callers must keep their own pending state where the user cannot change it,
-        because every check here trusts it.
-        Callers must also discard it after one exchange attempt, even a failed one,
-        because only a ``StateStore`` refuses a pending state that is reused.
+        The order of the checks is itself a rule. A response that states no code is refused before the
+        lookup runs, and the issuer is validated before it runs, so neither a forged error response nor a
+        mix-up attempt reaches the pending state.
 
         Args:
             callback: The authorization response returned to the redirect URI.
-                :meth:`~apron_auth.models.AuthorizationCallback.from_query` reads one from a callback query.
-            pending_state: The pending state that :meth:`get_authorization_url` returned, when the client has no store.
+            pending_state_for: The lookup of the pending state the callback's state belongs to.
 
         Returns:
-            The exchanged token set, which identity can be established from.
-            Any caller context stored with the pending state is surfaced on :attr:`TokenSet.context`.
+            The exchanged token set, carrying any caller context the pending state held.
 
         Raises:
-            AuthorizationResponseError: If the response states no code to redeem, whether because the
-                server refused the request and said why, or because it stated neither a code nor an
-                error. Its ``error_code`` carries the code the server named, where it named one in the
-                shape a code takes.
-            ConfigurationError: If ``pending_state`` is given to a client with a ``StateStore``,
-                or is not given to a client without one.
-            IdTokenValidationError: If the response carries an ID token that cannot be read, names another
-                audience or authorized party, has expired, or names another issuer when the config has one.
-                Every ID token the response carries is checked, whether or not the request sent a nonce.
-                The response's tokens are revoked first.
-            IssuerValidationError: If the response's ``iss`` fails validation against the provider's
-                expected issuer.
-            NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
-                The response's tokens are revoked first when it failed the check against the nonce the request sent.
-                A revocation unfinished after 10 seconds is canceled,
-                but a revocation handler that does not stop when canceled can delay the error longer.
-                At some providers a revocation ends the whole grant, so the user has to authorize again.
-            StateError: If the callback carried no state, ``state`` does not match ``pending_state``,
-                the store holds no pending state for it because it is invalid, expired, or already consumed,
-                or the pending state is older than ``max_pending_age_seconds``,
-                carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
-            TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
-                access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
-                its remaining tokens revoked first, under the same time limit as a refused ID token.
-                It does not chain the failed request's error, and its message states nothing the endpoint sent.
+            StateError: If the callback carried no usable state. Every other failure is raised by the
+                lookup, by the age rule, or by the token request.
         """
         code = self._code_to_redeem(callback)
         self._config.validate_issuer(callback.iss)
-        pending = await self._resolve_pending_state(callback.state, pending_state)
+        pending = await pending_state_for(_usable_state(callback.state))
+        return await self._redeem_against(code, pending)
+
+    async def _redeem_against(self, code: str, pending: OAuthPendingState) -> FreshTokenSet:
+        """Redeem an authorization code against the pending state of the request it answers.
+
+        Args:
+            code: The authorization code to redeem.
+            pending: The pending state the authorization request was built with.
+
+        Returns:
+            The exchanged token set, carrying any caller context the pending state held.
+
+        Raises:
+            NonceValidationError: If the request sent a nonce and the response carries no ID token,
+                or an ID token that does not carry that nonce,
+                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+            StateError: If the pending state is older than ``max_pending_age_seconds``,
+                carries no usable creation time,
+                or was created further ahead of this client's clock than the allowed difference.
+            TokenExchangeError: If the token endpoint rejects the exchange, or its response states no access token.
+        """
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
 
         if not pending.nonce and self._requests_openid():
@@ -963,44 +984,6 @@ class OAuthClient:
         """
         return self._sends_openid(self._authorization_query(self._scope_params()))
 
-    async def _resolve_pending_state(
-        self, state: str | None, pending_state: OAuthPendingState | None
-    ) -> OAuthPendingState:
-        """Return the pending state that matches the callback's state.
-
-        Args:
-            state: The ``state`` parameter from the callback.
-            pending_state: The pending state the caller kept, or ``None`` when the ``StateStore`` keeps it.
-
-        Returns:
-            The pending state consumed from the store for ``state``, or the given one when the client has no store.
-
-        Raises:
-            ConfigurationError: If ``pending_state`` is given to a client with a ``StateStore``,
-                or is not given to a client without one.
-            StateError: If the callback carried no state, the store holds no pending state for it,
-                or ``state`` does not match ``pending_state``.
-        """
-        if not isinstance(state, str) or not state:
-            msg = "OAuth callback carried no usable state"
-            raise StateError(msg)
-        if self._state_store is not None:
-            if pending_state is not None:
-                msg = "This client looks up the pending state in its state store, so pass only the callback"
-                raise ConfigurationError(msg)
-            pending = await self._state_store.consume(state)
-            if pending is None or not _same_secret(state, pending.state):
-                msg = "OAuth state is invalid, expired, or already consumed"
-                raise StateError(msg)
-            return pending
-        if pending_state is None:
-            msg = "Pass the pending state, or configure a state store to look it up"
-            raise ConfigurationError(msg)
-        if not _same_secret(state, pending_state.state):
-            msg = "OAuth state does not match the pending authorization request"
-            raise StateError(msg)
-        return pending_state
-
     def _scope_params(self) -> dict[str, str]:
         """Return the ``scope`` request parameter for the configured scopes.
 
@@ -1208,3 +1191,213 @@ class OAuthClient:
             context=context or {},
             **named,
         )
+
+
+# OAuthClient and StoredStateClient follow their base class instead of A-Z order, because Python needs the
+# base defined first.
+class OAuthClient(_OAuthClientBase):
+    """OAuth 2.0 client for authorization code flows whose caller keeps the pending state.
+
+    The caller holds the pending state between the authorization request and the callback, so this client
+    fits a flow where one process spans both, such as a native or command-line sign-in.
+    A browser flow serves the two from separate HTTP requests and should keep the pending state in a
+    ``StateStore``, which ``StoredStateClient`` does.
+    """
+
+    async def exchange_code(
+        self,
+        callback: AuthorizationCallback,
+        *,
+        pending_state: OAuthPendingState,
+    ) -> FreshTokenSet:
+        """Exchange an authorization response for tokens, against the pending state the caller kept.
+
+        A response whose ``state`` is not the pending state's own, or a pending state older than the
+        configured maximum age, is refused before the code is redeemed.
+        When the authorization request sent a nonce, the response must carry an ID token with that nonce,
+        or no tokens are returned.
+
+        A response that states no code to redeem is refused first, because there is nothing to exchange.
+        When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is
+        validated next, so a mix-up attempt is refused before the token endpoint is called.
+        The response carries its own ``iss``, so no caller has to remember to pass one.
+
+        NOTE: Callers must keep the pending state where the user cannot change it, because every check
+        here trusts it. Callers must also discard it after one exchange attempt, even a failed one,
+        because nothing here refuses a pending state that is reused.
+
+        Args:
+            callback: The authorization response returned to the redirect URI.
+                :meth:`~apron_auth.models.AuthorizationCallback.from_query` reads one from a callback query.
+            pending_state: The pending state that :meth:`get_authorization_url` returned.
+
+        Returns:
+            The exchanged token set, which identity can be established from.
+            Any caller context stored with the pending state is surfaced on :attr:`TokenSet.context`.
+
+        Raises:
+            AuthorizationResponseError: If the response states no code to redeem, whether because the
+                server refused the request and said why, or because it stated neither a code nor an
+                error. Its ``error_code`` carries the code the server named, where it named one in the
+                shape a code takes.
+            IdTokenValidationError: If the response carries an ID token that cannot be read, names another
+                audience or authorized party, has expired, or names another issuer when the config has one.
+                Every ID token the response carries is checked, whether or not the request sent a nonce.
+                The response's tokens are revoked first.
+            IssuerValidationError: If the response's ``iss`` fails validation against the provider's
+                expected issuer.
+            NonceValidationError: If the request sent a nonce and the response carries no ID token,
+                or an ID token that does not carry that nonce,
+                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                The response's tokens are revoked first when it failed the check against the nonce the request sent.
+                A revocation unfinished after 10 seconds is canceled,
+                but a revocation handler that does not stop when canceled can delay the error longer.
+                At some providers a revocation ends the whole grant, so the user has to authorize again.
+            StateError: If the callback carried no state, ``state`` is not the pending state's own,
+                or the pending state is older than ``max_pending_age_seconds``,
+                carries no usable creation time,
+                or was created further ahead of this client's clock than the allowed difference.
+            TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
+                access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
+                its remaining tokens revoked first, under the same time limit as a refused ID token.
+                It does not chain the failed request's error, and its message states nothing the endpoint sent.
+        """
+        return await self._redeem(callback, partial(_kept_pending_state, pending_state))
+
+    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
+        """Keep nothing. The caller holds the pending state this client returns to them.
+
+        Args:
+            pending_state: The pending state the authorization request was built with.
+        """
+
+
+class StoredStateClient(_OAuthClientBase):
+    """OAuth 2.0 client for authorization code flows that keeps the pending state in a ``StateStore``.
+
+    The store holds the pending state between the authorization request and the callback, so a browser
+    flow can serve the two from separate HTTP requests, and a ``state`` presented twice is refused because
+    the store consumes the entry.
+    A flow where one process spans both can keep the pending state itself, which ``OAuthClient`` takes.
+    """
+
+    def __init__(
+        self,
+        config: ProviderConfig,
+        state_store: StateStore,
+        *,
+        revocation_handler: RevocationHandler | None = None,
+        identity_handler: IdentityHandler | None = None,
+        retryable_error_codes: set[str] | None = None,
+        transport_factory: TransportFactory | None = None,
+    ) -> None:
+        """Create an OAuth client that keeps the pending state of every authorization request in a store.
+
+        Args:
+            config: Provider endpoints, credentials, and behavior.
+            state_store: Persistence for the pending state of each authorization request.
+            revocation_handler: Optional provider-specific token revocation.
+            identity_handler: Optional provider-specific identity fetcher.
+            retryable_error_codes: Additional OAuth error codes that name an outage rather than a fault
+                in the request as sent. They merge with, rather than replace,
+                ``DEFAULT_RETRYABLE_ERROR_CODES``, and every other code is a rejection of the request.
+                They decide the kind of a token-endpoint failure, where they also decide whether the
+                same request may be sent again, and the kind of an authorization response, where no
+                code is ever presented again whatever the kind says.
+            transport_factory: Optional factory returning an httpx transport for
+                a URL, used for token-endpoint requests. Lets the caller control
+                the outbound connection (e.g. pin DNS to validated public IPs)
+                when the token endpoint comes from untrusted discovery.
+        """
+        super().__init__(
+            config,
+            revocation_handler=revocation_handler,
+            identity_handler=identity_handler,
+            retryable_error_codes=retryable_error_codes,
+            transport_factory=transport_factory,
+        )
+        self._state_store = state_store
+
+    async def exchange_code(self, callback: AuthorizationCallback) -> FreshTokenSet:
+        """Exchange an authorization response for tokens, against the pending state the store holds.
+
+        The pending state for the response's ``state`` is consumed from the store, so a ``state``
+        presented a second time finds nothing and is refused. A pending state older than the configured
+        maximum age is refused before the code is redeemed.
+        When the authorization request sent a nonce, the response must carry an ID token with that nonce,
+        or no tokens are returned.
+
+        A response that states no code to redeem is refused first, before the store is consulted, because
+        there is nothing to exchange.
+        NOTE: The stored pending state is deliberately left alone on that refusal. Consuming it would let
+        a forged error response end a live authorization, so the entry stays until a later callback
+        consumes it or it ages out.
+        When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is
+        validated next, so a mix-up attempt is refused before the store is consumed and before the token
+        endpoint is called.
+        The response carries its own ``iss``, so no caller has to remember to pass one.
+
+        Args:
+            callback: The authorization response returned to the redirect URI.
+                :meth:`~apron_auth.models.AuthorizationCallback.from_query` reads one from a callback query.
+
+        Returns:
+            The exchanged token set, which identity can be established from.
+            Any caller context stored with the pending state is surfaced on :attr:`TokenSet.context`.
+
+        Raises:
+            AuthorizationResponseError: If the response states no code to redeem, whether because the
+                server refused the request and said why, or because it stated neither a code nor an
+                error. Its ``error_code`` carries the code the server named, where it named one in the
+                shape a code takes.
+            IdTokenValidationError: If the response carries an ID token that cannot be read, names another
+                audience or authorized party, has expired, or names another issuer when the config has one.
+                Every ID token the response carries is checked, whether or not the request sent a nonce.
+                The response's tokens are revoked first.
+            IssuerValidationError: If the response's ``iss`` fails validation against the provider's
+                expected issuer.
+            NonceValidationError: If the request sent a nonce and the response carries no ID token,
+                or an ID token that does not carry that nonce,
+                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                The response's tokens are revoked first when it failed the check against the nonce the request sent.
+                A revocation unfinished after 10 seconds is canceled,
+                but a revocation handler that does not stop when canceled can delay the error longer.
+                At some providers a revocation ends the whole grant, so the user has to authorize again.
+            StateError: If the callback carried no state, the store holds no pending state for it because
+                it is invalid, expired, or already consumed,
+                or the pending state is older than ``max_pending_age_seconds``,
+                carries no usable creation time,
+                or was created further ahead of this client's clock than the allowed difference.
+            TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
+                access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
+                its remaining tokens revoked first, under the same time limit as a refused ID token.
+                It does not chain the failed request's error, and its message states nothing the endpoint sent.
+        """
+        return await self._redeem(callback, self._consume_pending_state)
+
+    async def _consume_pending_state(self, state: str) -> OAuthPendingState:
+        """Consume the stored pending state a callback's state belongs to.
+
+        Args:
+            state: The ``state`` the callback carried.
+
+        Returns:
+            The consumed pending state.
+
+        Raises:
+            StateError: If the store holds no pending state for ``state``, because it is invalid, expired,
+                or already consumed.
+        """
+        pending = await self._state_store.consume(state)
+        if pending is None or not _same_secret(state, pending.state):
+            msg = "OAuth state is invalid, expired, or already consumed"
+            raise StateError(msg)
+        return pending
+
+    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
+        """Save the pending state of an authorization request to the store.
+
+        Args:
+            pending_state: The pending state the authorization request was built with.
+        """
+        await self._state_store.save(pending_state)

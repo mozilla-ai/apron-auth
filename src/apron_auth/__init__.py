@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from apron_auth.client import OAuthClient
+from apron_auth.client import OAuthClient, StoredStateClient
 from apron_auth.errors import (
     INVALID_CLIENT,
     INVALID_GRANT,
@@ -95,6 +95,7 @@ __all__ = [
     "StandardRevocationHandler",
     "StateError",
     "StateStore",
+    "StoredStateClient",
     "TEMPORARILY_UNAVAILABLE",
     "TenancyContext",
     "TokenEndpointAuthMethod",

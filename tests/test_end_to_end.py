@@ -28,6 +28,7 @@ from apron_auth import (
     StandardRevocationHandler,
     StateError,
     StateStore,
+    StoredStateClient,
     TokenExchangeError,
     TokenRefreshError,
     TokenSet,
@@ -58,7 +59,7 @@ class TestFullOAuthFlow:
         )
         store = MemoryStateStore()
         handler = StandardRevocationHandler()
-        client = OAuthClient(config=config, state_store=store, revocation_handler=handler)
+        client = StoredStateClient(config=config, state_store=store, revocation_handler=handler)
 
         # Step 1: Build authorization URL.
         url, pending_state = await client.get_authorization_url(
@@ -118,7 +119,7 @@ class TestContextFlowsThroughStateStore:
             use_pkce=True,
         )
         store = MemoryStateStore()
-        client = OAuthClient(config=config, state_store=store)
+        client = StoredStateClient(config=config, state_store=store)
 
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
         _, pending_state = await client.get_authorization_url(
@@ -143,7 +144,7 @@ class TestContextFlowsThroughStateStore:
             use_pkce=True,
         )
         store = MemoryStateStore()
-        client = OAuthClient(config=config, state_store=store)
+        client = StoredStateClient(config=config, state_store=store)
 
         meta = {"user_id": "U123", "tenant_id": "T456"}
         _, pending_state = await client.get_authorization_url(
@@ -190,7 +191,7 @@ class TestSlackSignInFlow:
     """Sign in with Slack runs on Slack's OpenID endpoints, which are the ones that return an ID token."""
 
     @staticmethod
-    def _client() -> OAuthClient:
+    def _client() -> StoredStateClient:
         from apron_auth.providers.slack import sign_in_preset
 
         config = sign_in_preset(
@@ -198,7 +199,7 @@ class TestSlackSignInFlow:
             client_secret="slack-secret",  # pragma: allowlist secret
             scopes=["email"],
         )
-        return OAuthClient(config=config, state_store=MemoryStateStore())
+        return StoredStateClient(config=config, state_store=MemoryStateStore())
 
     async def test_the_authorization_url_is_slacks_openid_endpoint_and_carries_a_nonce(self) -> None:
         client = self._client()
@@ -298,6 +299,7 @@ class TestPublicApiExports:
         assert TokenSet is not None
         assert OAuthPendingState is not None
         assert StateStore is not None
+        assert StoredStateClient is not None
         assert MemoryStateStore is not None
         assert RevocationHandler is not None
         assert StandardRevocationHandler is not None
