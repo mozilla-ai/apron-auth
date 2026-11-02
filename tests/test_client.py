@@ -1165,6 +1165,28 @@ class TestExchangeCodeAuthorizationResponse:
 
         assert refusal.value.retryable is False
 
+    async def test_a_blank_error_beside_a_code_is_no_error(self, httpx_mock: HTTPXMock) -> None:
+        """A provider that appends an empty error to a success redirect states no error, so the code stands."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", json={"access_token": "access-abc", "token_type": "Bearer"}
+        )
+        client = OAuthClient(config=_make_oauth_config())
+
+        tokens = await client.exchange_code(_callback(error=""), pending_state=_pending_state())
+
+        assert tokens.access_token == "access-abc"
+
+    async def test_a_blank_error_alone_states_neither(self) -> None:
+        """An empty error names no condition, so the response states neither a code nor an error."""
+        client = OAuthClient(config=_make_config())
+
+        with pytest.raises(AuthorizationResponseError, match="neither a code nor an error") as refusal:
+            await client.exchange_code(
+                AuthorizationCallback(state="pending-state", error=""), pending_state=_pending_state()
+            )
+
+        assert refusal.value.kind is FailureKind.REFUSED
+
     async def test_a_response_stating_both_a_code_and_an_error_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """RFC 6749 section 4.1.2 states one or the other, so a response stating both says two things at once."""
         client = OAuthClient(config=_make_config())

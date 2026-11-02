@@ -536,14 +536,14 @@ class OAuthClient:
                 error. Its kind tells a response this library refused from a request the server
                 rejected. The message states nothing the server sent, because the server chose that text.
         """
-        if callback.code and callback.error is not None:
+        if callback.code and callback.error:
             # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says
             # two things at once and nothing here may choose between them.
             msg = "the authorization response states both a code and an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
         if callback.code:
             return callback.code
-        if callback.error is None:
+        if not callback.error:
             msg = "the authorization response states neither a code nor an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
         error_code = recognized_error_code(callback.error)
