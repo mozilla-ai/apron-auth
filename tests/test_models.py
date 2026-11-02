@@ -7,18 +7,21 @@ import math
 import pickle
 import time
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
+from urllib.parse import parse_qs
 
+import httpx
 import pytest
 from pydantic import BaseModel, SecretStr
 
 from apron_auth import models, providers
-from apron_auth.errors import ConfigurationError, IssuerValidationError
+from apron_auth.errors import AuthorizationResponseError, ConfigurationError, FailureKind, IssuerValidationError
 from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
     ApplicationType,
+    AuthorizationCallback,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -86,6 +89,150 @@ class TestTokenEndpointAuthMethod:
         self, method: TokenEndpointAuthMethod, requires_secret: bool
     ) -> None:
         assert method.requires_secret is requires_secret
+
+
+class _MultiValueQuery(Mapping[str, str]):
+    """A query mapping shaped like a web framework's: one value per name, every value through a reader."""
+
+    def __init__(self, pairs: list[tuple[str, str]], reader: str = "getlist") -> None:
+        self._pairs = pairs
+        setattr(self, reader, self._every)
+
+    def __getitem__(self, name: str) -> str:
+        for stated, value in self._pairs:
+            if stated == name:
+                return value
+        raise KeyError(name)
+
+    def __iter__(self) -> Iterator[str]:
+        seen: list[str] = []
+        for name, _ in self._pairs:
+            if name not in seen:
+                seen.append(name)
+                yield name
+
+    def __len__(self) -> int:
+        return len(list(iter(self)))
+
+    def _every(self, name: str) -> list[str]:
+        return [value for stated, value in self._pairs if stated == name]
+
+
+class TestAuthorizationCallback:
+    """The authorization response, read once by this library instead of in pieces by the caller."""
+
+    def test_reads_the_parameters_a_response_states(self) -> None:
+        callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example.com"))
+
+        assert callback.code == "abc"
+        assert callback.state == "xyz"
+        assert callback.iss == "https://issuer.example.com"
+        assert callback.error is None
+        assert callback.error_description is None
+
+    def test_reads_an_error_response(self) -> None:
+        """A refused request states no code, so the exchange has to tell the two apart."""
+        callback = AuthorizationCallback.from_query(
+            parse_qs("error=access_denied&error_description=The+user+said+no&state=xyz")
+        )
+
+        assert callback.code is None
+        assert callback.error == "access_denied"
+        assert callback.error_description == "The user said no"
+
+    def test_a_parameter_it_does_not_name_is_ignored(self) -> None:
+        """An authorization server may return parameters of its own, which are no business of this model."""
+        callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&session_state=s&scope=openid"))
+
+        assert callback.code == "abc"
+        assert callback.state == "xyz"
+
+    @pytest.mark.parametrize("name", ["code", "state", "iss", "error", "error_description"])
+    def test_a_parameter_stated_more_than_once_is_refused(self, name: str) -> None:
+        """Two values disagree about one response, and nothing here may choose between them."""
+        with pytest.raises(AuthorizationResponseError, match=f"must state {name} exactly once") as refusal:
+            AuthorizationCallback.from_query({name: ["first", "second"]})
+
+        assert refusal.value.kind is FailureKind.REFUSED
+
+    def test_a_repeat_is_read_through_the_mapping_s_own_reader(self) -> None:
+        """A web framework's query mapping keeps one value per name, and states the rest only through its reader."""
+        polluted = _MultiValueQuery([("code", "attacker-code"), ("code", "victim-code"), ("state", "s")])
+
+        assert polluted["code"] == "attacker-code", "the mapping alone shows one value, which is the trap"
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    @pytest.mark.parametrize("reader", ["get_list", "getall", "getlist"], ids=["get_list", "getall", "getlist"])
+    def test_every_spelling_of_the_reader_is_read(self, reader: str) -> None:
+        """The reader is named by convention, so a mapping is only safe if each spelling in use is known."""
+        polluted = _MultiValueQuery([("code", "attacker-code"), ("code", "victim-code")], reader=reader)
+
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    def test_a_repeat_in_this_library_s_own_query_type_is_read(self) -> None:
+        """The likeliest caller holds the client's own parsed query, which spells the reader its own way."""
+        polluted = httpx.QueryParams("code=attacker-code&code=victim-code&state=s")
+
+        assert polluted["code"] == "attacker-code", "the mapping alone shows one value, which is the trap"
+        with pytest.raises(AuthorizationResponseError, match="must state code exactly once"):
+            AuthorizationCallback.from_query(polluted)
+
+    def test_a_parameter_stated_with_no_value_at_all_is_the_caller_s(self) -> None:
+        """A query states one string per name it holds, so an empty sequence came from the caller's mapping."""
+        with pytest.raises(ConfigurationError, match="states code with no value at all"):
+            AuthorizationCallback.from_query({"code": []})
+
+    def test_a_mapping_with_a_reader_and_no_repeat_is_read(self) -> None:
+        callback = AuthorizationCallback.from_query(_MultiValueQuery([("code", "abc"), ("state", "s")]))
+
+        assert callback.code == "abc"
+        assert callback.state == "s"
+
+    def test_a_refusal_does_not_repeat_the_code_it_was_given(self) -> None:
+        """The query carries the authorization code, so a caller recording a refusal must not record it."""
+        with pytest.raises(AuthorizationResponseError) as refusal:
+            AuthorizationCallback.from_query({"code": ["live-code-one", "live-code-two"]})
+
+        assert "live-code-one" not in str(refusal.value)
+        assert "live-code-two" not in str(refusal.value)
+
+    def test_a_sequence_holding_one_value_states_that_value(self) -> None:
+        """A parser that preserves repeats returns every value in a sequence, including a single one."""
+        assert AuthorizationCallback.from_query({"code": ["abc"]}).code == "abc"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(7, id="a number"),
+            pytest.param({"code": "abc"}, id="a mapping"),
+            pytest.param(b"abc", id="bytes"),
+            pytest.param(bytearray(b"abc"), id="a bytearray"),
+            pytest.param(memoryview(b"abc"), id="a memoryview"),
+        ],
+    )
+    def test_a_value_that_is_no_string_is_refused(self, value: object) -> None:
+        with pytest.raises(ConfigurationError, match="must state code as a string"):
+            AuthorizationCallback.from_query({"code": value})
+
+    @pytest.mark.parametrize(
+        "query",
+        [pytest.param("?code=xyz&state=s", id="a raw query string"), pytest.param(["code", "xyz"], id="a sequence")],
+    )
+    def test_a_query_that_is_no_mapping_is_refused_in_domain_terms(self, query: object) -> None:
+        """A raw string answers a containment check, so without this the caller gets the standard library's error."""
+        with pytest.raises(ConfigurationError, match="must be a mapping"):
+            AuthorizationCallback.from_query(query)  # ty: ignore[invalid-argument-type]
+
+    def test_an_absent_parameter_reads_as_none(self) -> None:
+        assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
+
+    def test_it_is_frozen(self) -> None:
+        callback = AuthorizationCallback(code="abc", state="xyz")
+
+        with pytest.raises(ConfigurationError):
+            callback.code = "other"  # ty: ignore[invalid-assignment]
 
 
 class TestClientRegistration:
@@ -540,6 +687,7 @@ class TestUnknownFieldRefusals:
         refusing = {model.__name__ for model in MODELS if model.model_config.get("extra") == "forbid"}
 
         assert refusing == {
+            "AuthorizationCallback",
             "ClientRegistration",
             "FreshTokenSet",
             "OAuthPendingState",

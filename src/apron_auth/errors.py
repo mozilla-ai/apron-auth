@@ -1,7 +1,8 @@
 """Exception hierarchy for apron-auth OAuth operations.
 
 Every error is organized on two axes.
-The class says which step failed: the code exchange, a refresh, a revocation, an identity fetch, or a discovery.
+The class says which step failed: the authorization response, the code exchange, a refresh, a revocation,
+an identity fetch, or a discovery.
 The ``kind`` says what went wrong in a way a caller can act on, and ``retryable`` follows from it.
 """
 
@@ -12,8 +13,8 @@ from typing import Any
 
 from apron_auth._error_codes import recognized_error_code
 
-# Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in
-# token-endpoint responses. ``error_code`` is a plain ``str`` because a provider
+# Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in a token-endpoint
+# response and in an authorization response. ``error_code`` is a plain ``str`` because a provider
 # may return codes outside this set; these names let callers and this library
 # compare against the common values without bare string literals.
 INVALID_CLIENT = "invalid_client"
@@ -107,6 +108,40 @@ class OAuthError(Exception):
     def retryable(self) -> bool:
         """Whether the same request may succeed later without any change."""
         return self.kind.retryable
+
+
+class AuthorizationResponseError(OAuthError):
+    """The authorization response cannot be acted on.
+
+    The server refused the request and said why (RFC 6749 section 4.1.2.1), or answered with neither a
+    code nor an error, which RFC 6749 section 4.1.2 does not allow, or stated one parameter more than
+    once, which leaves its values in disagreement about one response.
+    In every case no code was redeemed, so there is nothing to revoke.
+    ``kind`` says what went wrong, and tells a response this library refused from a request the server
+    rejected. ``retryable`` is always ``False``: this response states no code, so presenting it again
+    can only fail the same way. The recovery is a new authorization request.
+
+    This class owns the shape of ``error_code``, so no raise decides it.
+    It holds the OAuth error code when one is given as a lowercase identifier, and is the empty string
+    otherwise, because the field a code arrives in admits any printable text.
+    NOTE: The description the server sent is not carried here and is never put in the message, because it
+    is text a server chose. A caller reads it off the callback it passed in.
+    """
+
+    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
+        """Record the failure, keeping the error code only where it states one in the shape a code takes."""
+        super().__init__(*args, kind=kind)
+        self._error_code = recognized_error_code(error_code)
+
+    @property
+    def error_code(self) -> str:
+        """The OAuth error code of the failure, fixed when the error is raised."""
+        return self._error_code
+
+    @property
+    def retryable(self) -> bool:
+        """Always ``False``. This response is never presented again; the caller starts a new authorization."""
+        return False
 
 
 class ConfigurationError(OAuthError):

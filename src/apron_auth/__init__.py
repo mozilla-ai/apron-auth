@@ -11,6 +11,7 @@ from apron_auth.errors import (
     SERVER_ERROR,
     TEMPORARILY_UNAVAILABLE,
     UNAUTHORIZED_CLIENT,
+    AuthorizationResponseError,
     ConfigurationError,
     FailureKind,
     IdentityFetchError,
@@ -31,6 +32,7 @@ from apron_auth.errors import (
 )
 from apron_auth.models import (
     ApplicationType,
+    AuthorizationCallback,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -59,6 +61,8 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "ApplicationType",
+    "AuthorizationCallback",
+    "AuthorizationResponseError",
     "ClientRegistration",
     "ConfigurationError",
     "FailureKind",

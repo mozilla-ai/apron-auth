@@ -26,7 +26,14 @@ from apron_auth.errors import (
     TokenExchangeError,
     TokenRefreshError,
 )
-from apron_auth.models import FreshTokenSet, IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
+from apron_auth.models import (
+    AuthorizationCallback,
+    FreshTokenSet,
+    IdentityMaterial,
+    IdentityProfile,
+    OAuthPendingState,
+    ProviderConfig,
+)
 
 CLIENT_SECRET = "client-SECRET-xyz"  # pragma: allowlist secret
 CODE = "code-SECRET-xyz"
@@ -121,7 +128,9 @@ class TestTokenRequestErrors:
     async def _exchange_error(self) -> TokenExchangeError:
         client = OAuthClient(_config())
         with pytest.raises(TokenExchangeError) as exc_info:
-            await client.exchange_code(code=CODE, state="pending-state", pending_state=_pending_state())
+            await client.exchange_code(
+                AuthorizationCallback(code=CODE, state="pending-state"), pending_state=_pending_state()
+            )
         return exc_info.value
 
     async def _refresh_error(self) -> TokenRefreshError:
@@ -350,7 +359,8 @@ class TestTokenRequestErrors:
 
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                code=code, state="pending-state", pending_state=_pending_state(code_verifier=verifier)
+                AuthorizationCallback(code=code, state="pending-state"),
+                pending_state=_pending_state(code_verifier=verifier),
             )
 
         assert exc_info.value.error_code == ""

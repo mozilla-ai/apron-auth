@@ -85,9 +85,9 @@ client = OAuthClient(
 
 The issuer is a trust anchor, not just an address: `discover` refuses a configuration
 document that names a different one (OpenID Connect Discovery 1.0, section 4.3), and the
-discovered issuer carries onto the config. The authorization-response `iss` (RFC 9207) is
-validated before a code is redeemed only when the provider sends `iss` or advertises
-`authorization_response_iss_parameter_supported`. An ID token whose `iss` differs from the
+discovered issuer carries onto the config. The authorization-response `iss` (RFC 9207) rides on the
+`AuthorizationCallback` and is validated before a code is redeemed, whenever the provider
+sends `iss` or advertises `authorization_response_iss_parameter_supported`. An ID token whose `iss` differs from the
 configured issuer is refused at the code exchange, and its tokens are revoked.
 
 Entra needs a tenant-specific issuer such as `https://login.microsoftonline.com/<tid>/v2.0`.
@@ -182,16 +182,17 @@ url, pending_state = await client.get_authorization_url(
 
 ### Code exchange
 
-When the user comes back with an authorization code, exchange it for tokens. Pass the callback's `state` with the `pending_state`, and `exchange_code` refuses a `state` that does not match it. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only `state` (see below).
+When the user comes back, exchange the authorization response for tokens. Pass the whole response as an `AuthorizationCallback` with the `pending_state`, and `exchange_code` reads every parameter it needs off it: it refuses a `state` that does not match the pending state, validates `iss` against the configured issuer, and refuses a response that states no code before it consumes anything. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only the callback (see below).
 
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
 ```python
-tokens = await client.exchange_code(
-    code="authorization-code-from-callback",
-    state="state-from-callback",
-    pending_state=pending_state,
-)
+from apron_auth import AuthorizationCallback
+
+# `query` is the callback's query parameters: your framework's own query
+# mapping, or any mapping of the names to their values.
+callback = AuthorizationCallback.from_query(query)
+tokens = await client.exchange_code(callback, pending_state=pending_state)
 print(tokens.access_token)
 print(tokens.refresh_token)
 ```
@@ -203,9 +204,7 @@ fetch them after token exchange:
 
 ```python
 tokens = await client.exchange_code(
-    code="authorization-code-from-callback",
-    state="state-from-callback",
-    pending_state=pending_state,
+    AuthorizationCallback.from_query(query), pending_state=pending_state
 )
 identity = await client.fetch_identity(tokens)
 print(identity.provider)        # google, github, etc. (a Provider member for a built-in provider)
@@ -571,9 +570,9 @@ url, pending_state = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
 )
 
-# When the callback arrives, pass the state parameter and the code.
-# The store is consumed automatically.
-tokens = await client.exchange_code(code="...", state="state-from-callback")
+# When the callback arrives, pass the response. The store is consumed
+# automatically, because the response carries the state it was sent.
+tokens = await client.exchange_code(AuthorizationCallback.from_query(query))
 ```
 
 #### Carrying context through the flow
@@ -587,7 +586,7 @@ url, pending_state = await client.get_authorization_url(
 )
 
 # On callback, context comes back on the TokenSet.
-tokens = await client.exchange_code(code="...", state="state-from-callback")
+tokens = await client.exchange_code(AuthorizationCallback.from_query(query))
 print(tokens.context["user_id"])    # "U123"
 print(tokens.context["tenant_id"])  # "T456"
 
@@ -628,13 +627,10 @@ else:
 config = mcp.to_provider_config(meta, registration, redirect_uri=redirect_uri)
 client = OAuthClient(config, transport_factory=my_transport_factory)
 url, pending = await client.get_authorization_url()
-# Redirect the user to `url`; on the callback, pass the `iss` query
-# parameter so the issuer can be validated before the code is redeemed:
+# Redirect the user to `url`. The callback's response carries the `iss`
+# parameter, so the issuer is validated before the code is redeemed:
 tokens = await client.exchange_code(
-    code="code-from-callback",
-    state="state-from-callback",
-    pending_state=pending,
-    iss="iss-from-callback",
+    AuthorizationCallback.from_query(query), pending_state=pending
 )
 ```
 
@@ -650,7 +646,7 @@ When using CIMD, you host the `client-metadata.json` yourself at the `client_id`
 
 Unlike DCR or pre-registered credentials — which are bound to the authorization server that issued them and must be re-registered when that server changes — a CIMD `client_id` is a self-hosted URL, portable across authorization servers with no re-registration.
 
-`discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. Pass the callback's `iss` parameter (RFC 9207) to `exchange_code` and it is validated against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, a callback that omits `iss` is also rejected. Presets carry no issuer and are unaffected.
+`discover` refuses authorization server metadata whose `issuer` is not the server the document was fetched from (RFC 8414 section 3.3), records that issuer, and `to_provider_config` carries it onto the `ProviderConfig`. The callback's `iss` parameter (RFC 9207) rides on the `AuthorizationCallback` you pass to `exchange_code`, which validates it against that issuer **before** the code is redeemed, refusing an authorization-server mix-up. When the server advertises `iss` support, `to_provider_config` sets `require_iss`, so a callback that omits `iss` is rejected too. There is nothing to remember per call. A preset that names its provider's issuer, such as Slack's sign-in preset, is held to the same rule; one that names none is unaffected.
 
 The registration's `token_endpoint_auth_method` is a `TokenEndpointAuthMethod` validated out of the registration response. It lets the server's per-client choice (RFC 7591) win over the derivation from the advertised set — for example a server that supports both `client_secret_post` and `client_secret_basic` but registers a given client as `basic`-only. A registration you build yourself states no method, so the method is derived from the client's secret and the server's advertised set.
 
@@ -730,9 +726,7 @@ config = slack.preset(
 client = OAuthClient(config=config)
 url, pending_state = await client.get_authorization_url()
 tokens = await client.exchange_code(
-    code="authorization-code-from-callback",
-    state="state-from-callback",
-    pending_state=pending_state,
+    AuthorizationCallback.from_query(query), pending_state=pending_state
 )
 ```
 
@@ -801,6 +795,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 
 | Exception                      | When it's raised                                                                                                |
 |--------------------------------|-----------------------------------------------------------------------------------------------------------------|
+| `AuthorizationResponseError`   | The authorization response cannot be acted on: the server refused the request and said why, or answered with neither a code nor an error, or with both, or stated one parameter twice. Carries `error_code` where the server named one. Nothing was redeemed, so nothing needs revoking. `AuthorizationCallback.from_query` raises the twice-stated case, so wrap that call too. |
 | `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused. Carries `error_code`. Never `retryable`: a code is single-use, so start a new authorization. |
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |

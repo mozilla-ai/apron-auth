@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto, unique
 from typing import Any, Literal, NoReturn, Self, TypeVar, assert_never
@@ -30,7 +30,7 @@ from apron_auth._urls import (
     url_host,
     uses_allowed_transport,
 )
-from apron_auth.errors import ConfigurationError, IssuerValidationError
+from apron_auth.errors import AuthorizationResponseError, ConfigurationError, FailureKind, IssuerValidationError
 from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scopes
 
 logger = logging.getLogger(__name__)
@@ -588,6 +588,35 @@ _URLS_STATE_THEIR_TRANSPORT = model_validator(mode="after")(_refuse_a_url_withou
 
 # Attach this to every model that records a plain-HTTP waiver, so only code can state one.
 _WAIVER_COMES_FROM_CODE = model_validator(mode="after")(_refuse_a_waiver_that_did_not_come_from_code)
+
+
+def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
+    """Return every value ``query`` states for ``name``.
+
+    A query may state one name more than once, and a mapping built from one keeps those values in its
+    own way: through a reader for repeated values, or as a sequence under the name. A mapping that
+    kept only one of them states only that one, and nothing here can tell that it did.
+    NOTE: The readers are named by convention rather than by any protocol, so the spellings are listed
+    rather than derived. ``get_list`` is the one this library's own HTTP client uses, ``getall`` is
+    aiohttp's and WebOb's, and ``getlist`` is Starlette's, Werkzeug's and Django's. A mapping naming
+    its reader a fourth way reads as having kept one value, which cannot be told apart from having
+    been given one.
+
+    Args:
+        query: The query to read, which must state ``name``.
+        name: The parameter to read.
+
+    Returns:
+        The values, in the order the query states them.
+    """
+    for reader in ("get_list", "getall", "getlist"):
+        read_every = getattr(query, reader, None)
+        if callable(read_every):
+            return list(read_every(name))
+    value = query[name]
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray | memoryview):
+        return list(value)
+    return [value]
 
 
 class _RefusesWithoutRepeating(BaseModel):
@@ -1755,6 +1784,91 @@ class IdentityProfile(_RefusesWithoutRepeating, frozen=True):
 
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
+
+
+class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """The authorization response a provider returned to the redirect URI.
+
+    Construction and validation refuse a field this model does not define, and a refusal repeats no
+    value it was given, because a response carries the authorization code.
+    NOTE: That covers a refusal alone. This model holds the code as it arrived, so rendering one, or
+    dumping it, states the code as any other model holding a credential does.
+
+    Every member is optional, because a response states a different subset depending on how it turned
+    out. RFC 6749 section 4.1.2 states ``code`` where the request succeeded, section 4.1.2.1 states
+    ``error`` instead, and either states ``state`` only where the request sent one. The exchange decides
+    what a given subset means.
+
+    Attributes:
+        code: The authorization code to redeem.
+        state: The ``state`` the authorization request sent, returned unchanged.
+        iss: The issuer that answered (RFC 9207).
+        error: The error code a refused request is answered with (RFC 6749 section 4.1.2.1).
+        error_description: The text the server sent beside ``error``.
+            NOTE: This library never reads this value and never puts it in a message, because the
+            server chose its text. It is here for a caller to show or record.
+    """
+
+    code: str | None = None
+    state: str | None = None
+    iss: str | None = None
+    error: str | None = None
+    error_description: str | None = None
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
+    @classmethod
+    def from_query(cls, query: Mapping[str, Any]) -> AuthorizationCallback:
+        """Read an authorization response out of the query a callback arrived with.
+
+        A parameter this model does not name is ignored, because an authorization server may return
+        parameters of its own.
+        A parameter stated more than once is refused, because its values disagree about one response
+        and nothing here may choose between them. Every value a parameter states is read, through the
+        mapping's own reader for repeated values where it offers one, as a web framework's query
+        mapping does through ``getlist`` or ``getall``, and out of a sequence otherwise.
+
+        NOTE: A mapping that offers no such reader and has already kept one value per name cannot
+        report a repeat, and this reads the one value it kept.
+
+        Args:
+            query: The callback's query parameters. A value is the parameter's own value, or a sequence
+                holding it, as a parser that preserves repeats returns.
+
+        Returns:
+            The response the query states.
+
+        Raises:
+            AuthorizationResponseError: If a parameter this model names is stated more than once. That
+                can only come from the response, so it is a response this library refuses rather than
+                an argument that cannot work.
+            ConfigurationError: If ``query`` is no mapping, or a parameter states a value that is no
+                string, or states none at all.
+                A query states one string per name it holds, so such a value came from the caller
+                rather than from the response.
+                Neither refusal names the value, only the parameter.
+        """
+        if not isinstance(query, Mapping):
+            msg = "the callback query must be a mapping of each parameter name to its value"
+            raise ConfigurationError(msg)
+        stated: dict[str, str] = {}
+        for name in cls.model_fields:
+            if name not in query:
+                continue
+            values = _stated_values(query, name)
+            if not values:
+                msg = f"the callback query states {name} with no value at all"
+                raise ConfigurationError(msg)
+            if len(values) > 1:
+                msg = f"the callback query must state {name} exactly once"
+                raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
+            value = values[0]
+            if not isinstance(value, str):
+                msg = f"the callback query must state {name} as a string"
+                raise ConfigurationError(msg)
+            stated[name] = value
+        return cls(**stated)
 
 
 class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
