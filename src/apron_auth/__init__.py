@@ -61,9 +61,9 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())
 
 __all__ = [
     "ApplicationType",
-    "ClientRegistration",
     "AuthorizationCallback",
     "AuthorizationResponseError",
+    "ClientRegistration",
     "ConfigurationError",
     "FailureKind",
     "FreshTokenSet",

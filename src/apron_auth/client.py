@@ -415,9 +415,12 @@ class OAuthClient:
             state_store: Optional persistence for OAuth state across requests.
             revocation_handler: Optional provider-specific token revocation.
             identity_handler: Optional provider-specific identity fetcher.
-            retryable_error_codes: Additional OAuth error codes from the token endpoint that mean
-                the same request may succeed later. They merge with, rather than replace,
-                ``DEFAULT_RETRYABLE_ERROR_CODES``. Every other code is a rejection of the request as sent.
+            retryable_error_codes: Additional OAuth error codes that name an outage rather than a fault
+                in the request as sent. They merge with, rather than replace,
+                ``DEFAULT_RETRYABLE_ERROR_CODES``, and every other code is a rejection of the request.
+                They decide the kind of a token-endpoint failure, where they also decide whether the
+                same request may be sent again, and the kind of an authorization response, where no
+                code is ever presented again whatever the kind says.
             transport_factory: Optional factory returning an httpx transport for
                 a URL, used for token-endpoint requests. Lets the caller control
                 the outbound connection (e.g. pin DNS to validated public IPs)
@@ -556,16 +559,18 @@ class OAuthClient:
     ) -> FreshTokenSet:
         """Exchange an authorization response for tokens.
 
-        A client with a ``StateStore`` consumes the pending state for ``state`` from it.
+        A client with a ``StateStore`` consumes the pending state for the response's ``state`` from it.
         A client without one takes ``pending_state``.
-        Either way, a ``state`` that does not match the pending state,
+        Either way, a response whose ``state`` does not match the pending state,
         or a pending state older than the configured maximum age, is refused before the code is redeemed.
         When the authorization request sent a nonce, the response must carry an ID token with that nonce,
         or no tokens are returned.
 
         A response that states no code to redeem is refused first, before any state is consumed, because
-        there is nothing to exchange. The pending state is left for the caller to discard, as it must
-        after any attempt.
+        there is nothing to exchange.
+        NOTE: The pending state is deliberately left alone on that refusal. Consuming it would let a
+        forged error response end a live authorization, so a caller holding its own pending state
+        discards it, and a store keeps the entry until a later callback consumes it or it ages out.
         When the provider carries an expected issuer, the authorization-response ``iss`` (RFC 9207) is validated next.
         A mix-up attempt is refused before any state is consumed and before the token endpoint is called.
         The response carries its own ``iss``, so no caller has to remember to pass one.
@@ -595,8 +600,8 @@ class OAuthClient:
                 audience or authorized party, has expired, or names another issuer when the config has one.
                 Every ID token the response carries is checked, whether or not the request sent a nonce.
                 The response's tokens are revoked first.
-            IssuerValidationError: If ``iss`` fails validation against the
-                provider's expected issuer.
+            IssuerValidationError: If the response's ``iss`` fails validation against the provider's
+                expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
                 or an ID token that does not carry that nonce,
                 or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
@@ -977,7 +982,7 @@ class OAuthClient:
             raise StateError(msg)
         if self._state_store is not None:
             if pending_state is not None:
-                msg = "This client looks up the pending state in its state store, so pass only the state"
+                msg = "This client looks up the pending state in its state store, so pass only the callback"
                 raise ConfigurationError(msg)
             pending = await self._state_store.consume(state)
             if pending is None or not _same_secret(state, pending.state):

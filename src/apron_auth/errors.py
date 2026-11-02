@@ -1,7 +1,8 @@
 """Exception hierarchy for apron-auth OAuth operations.
 
 Every error is organized on two axes.
-The class says which step failed: the code exchange, a refresh, a revocation, an identity fetch, or a discovery.
+The class says which step failed: the authorization response, the code exchange, a refresh, a revocation,
+an identity fetch, or a discovery.
 The ``kind`` says what went wrong in a way a caller can act on, and ``retryable`` follows from it.
 """
 
@@ -12,8 +13,8 @@ from typing import Any
 
 from apron_auth._error_codes import recognized_error_code
 
-# Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in
-# token-endpoint responses. ``error_code`` is a plain ``str`` because a provider
+# Well-known OAuth 2.0 error codes (RFC 6749 §5.2 and §4.1.2.1) seen in a token-endpoint
+# response and in an authorization response. ``error_code`` is a plain ``str`` because a provider
 # may return codes outside this set; these names let callers and this library
 # compare against the common values without bare string literals.
 INVALID_CLIENT = "invalid_client"

@@ -1,4 +1,4 @@
-"""The shape a token-endpoint error code takes."""
+"""The shape an OAuth error code takes."""
 
 from __future__ import annotations
 
@@ -13,9 +13,10 @@ _MAX_CODE_LENGTH = 64
 
 
 def recognized_error_code(value: object) -> str:
-    """Return the token-endpoint error code when ``value`` states one in the shape a code takes.
+    """Return the OAuth error code when ``value`` states one in the shape a code takes.
 
-    RFC 6749 section 5.2 names six codes and then restricts only the characters the field may hold,
+    RFC 6749 sections 4.1.2.1 and 5.2 name the codes and then restrict only the characters the field
+    may hold,
     so a response can carry anything printable there, including a value the request sent.
     Every code the registries define, and every code a provider defines of its own, is a lowercase
     identifier, which the hex, base32 and URL-safe forms a credential takes are not.
@@ -23,7 +24,8 @@ def recognized_error_code(value: object) -> str:
     so it is reported as absent.
 
     Args:
-        value: The ``error`` member of a token endpoint's response, as it arrived.
+        value: The ``error`` member of an authorization response or a token endpoint's response,
+            as it arrived.
 
     Returns:
         The code, or an empty string when the value states none in the shape a code takes.

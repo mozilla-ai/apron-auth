@@ -1786,6 +1786,8 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
 
     Construction and validation refuse a field this model does not define, and a refusal repeats no
     value it was given, because a response carries the authorization code.
+    NOTE: That covers a refusal alone. This model holds the code as it arrived, so rendering one, or
+    dumping it, states the code as any other model holding a credential does.
 
     Every member is optional, because a response states a different subset depending on how it turned
     out. RFC 6749 section 4.1.2 states ``code`` where the request succeeded, section 4.1.2.1 states
