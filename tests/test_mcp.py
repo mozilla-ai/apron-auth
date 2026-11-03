@@ -1034,14 +1034,59 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
 
         assert not isinstance(exc_info.value, ConfigurationError)
 
-    async def test_a_hint_the_callers_own_policy_refuses_still_ends_discovery(self) -> None:
-        """The caller's validator is the caller speaking, so what it refuses is not a candidate losing its turn."""
+    async def test_a_hint_the_callers_own_policy_refuses_loses_its_turn(self, httpx_mock: HTTPXMock) -> None:
+        """A hook refusing one URL says nothing about the rest, and the hint is the one URL with a fallback."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        refused: list[str] = []
+
+        def validator(url: str) -> None:
+            if url == "https://mcp.example.com/prm":
+                refused.append(url)
+                raise ValueError(_VALIDATOR_MESSAGE)
+
+        meta = await discover(
+            "https://mcp.example.com", resource_metadata_url="https://mcp.example.com/prm", url_validator=validator
+        )
+
+        assert refused == ["https://mcp.example.com/prm"]
+        assert meta.token_url == "https://auth.example.com/token"
+
+    async def test_a_hint_the_callers_transport_refuses_loses_its_turn(self) -> None:
+        """A DNS-pinning transport is the real defense, so a server naming an internal host must not end it."""
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            if str(request.url) == _PRM_ROOT:
+                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
+            return httpx.Response(200, json=_asm_payload())
+
+        def pinning_factory(url: str) -> httpx.MockTransport:
+            if url == "https://internal.corp.example/prm":
+                raise RuntimeError(_FACTORY_MESSAGE)
+            return httpx.MockTransport(serve)
+
+        meta = await discover(
+            "https://mcp.example.com",
+            resource_metadata_url="https://internal.corp.example/prm",
+            transport_factory=pinning_factory,
+        )
+
+        assert meta.token_url == "https://auth.example.com/token"
+
+    async def test_a_hooks_refusal_of_a_url_with_no_fallback_still_ends_discovery(self) -> None:
+        """Only a hint has a fallback, so every other URL a hook refuses ends the fetch as it did."""
         with pytest.raises(OAuthError, match="caller policy"):
-            await discover(
-                "https://mcp.example.com",
-                resource_metadata_url="https://mcp.example.com/prm",
-                url_validator=_refusing_validator,
-            )
+            await discover("https://mcp.example.com", url_validator=_refusing_validator)
+
+    async def test_a_hooks_own_error_class_reaches_the_caller(self) -> None:
+        """A hook raising one of this library's errors states its own kind, which must not be relabeled."""
+
+        def refusing_factory(url: str) -> httpx.MockTransport:
+            del url
+            raise IdentityNotSupportedError("my own policy refused this host")
+
+        with pytest.raises(IdentityNotSupportedError, match="my own policy"):
+            await discover("https://mcp.example.com", transport_factory=refusing_factory)
 
     async def test_a_registration_url_stays_the_callers_own(self, httpx_mock: HTTPXMock) -> None:
         """One read by discovery was already held to the document rules there, so a refusal here is the caller's."""

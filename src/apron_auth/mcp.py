@@ -80,7 +80,6 @@ class _MetadataFault(Enum):
     A member's value says what the error reports about the document, after the document's name.
     """
 
-    REFUSED = "names no URL this library will fetch"
     UNAVAILABLE = "could not be fetched"
     UNPUBLISHED = "is not published"
     UNREADABLE = "is not a JSON object"
@@ -136,7 +135,7 @@ async def discover(
         server_url: Base URL of the MCP server.
         resource_metadata_url: Optional hint from a ``WWW-Authenticate``
             challenge, tried before the well-known locations. Its value is the
-            server's, so one this library will not fetch loses its turn and the
+            server's, so one that cannot be used loses its turn and the
             well-known locations are still tried.
         url_validator: Optional policy invoked on each URL before it is
             requested; raising rejects the URL and fails discovery.
@@ -157,8 +156,9 @@ async def discover(
             authorization server metadata does not declare the server it was
             fetched from as its issuer. The first document fetched is
             authoritative, so a mismatched issuer ends discovery rather than
-            trying the next candidate URL.
-        OAuthError: As raised by ``url_validator``, unchanged.
+            trying the next candidate URL. A ``transport_factory`` that fails is
+            reported here too, as a fault that is never retried.
+        OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
     """
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
@@ -390,8 +390,9 @@ async def register_client(
             or a method that contradicts the secret the response states. Every
             refusal after a success status leaves a registration standing at the
             authorization server, because the server issued credentials this call
-            then discards.
-        OAuthError: As raised by ``url_validator``, unchanged.
+            then discards. A ``transport_factory`` that fails is reported here too,
+            as a fault that is never retried.
+        OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
     """
     _validate_url(registration_url, url_validator, subject="registration_url", caller_supplied=True)
     _require_no_authority_credential(redirect_uri, subject="redirect_uri", caller_supplied=True)
@@ -737,10 +738,13 @@ def _opened_client(
         The client, which the caller closes.
 
     Raises:
-        OAuthError: Of ``error_cls``, if the client cannot be built.
+        OAuthError: Of ``error_cls``, if the client cannot be built, or as the transport factory raised it
+            when that is one of this library's errors, so a caller's own class reaches the caller.
     """
     try:
         return discovery_client(url, transport_factory, timeouts)
+    except OAuthError:
+        raise
     except Exception as exc:
         # Building the client calls the caller's transport factory. Whether it refused the connection by
         # policy or failed, the fault is not the server's and is not an outage, so it is never retried.
@@ -973,9 +977,10 @@ async def _fetch_first_metadata(
     """Fetch and return the first candidate URL that yields a JSON object.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
-    skipping request errors, non-200 responses, and non-object bodies. A hint this
-    library will not fetch loses its turn the same way. Each skip is logged at debug
-    with a non-sensitive reason.
+    skipping request errors, non-200 responses, and non-object bodies. A hint that
+    cannot be used at all loses its turn the same way, whatever made it unusable,
+    so one hint cannot decide the whole fetch. Each skip is logged at debug with a
+    non-sensitive reason.
 
     Args:
         candidates: The URLs to try, in order, each with its source.
@@ -988,28 +993,28 @@ async def _fetch_first_metadata(
         The first candidate's body that is a JSON object.
 
     Raises:
-        ConfigurationError: If a candidate the caller chose is refused.
-        McpDiscoveryError: If a candidate the other side chose is refused and is no hint, or if no
-            candidate succeeds. The error names ``what`` and the fault the candidates showed. Its
-            ``kind`` tells a fetch that may pass later from one that cannot.
-        OAuthError: As raised by ``url_validator``, unchanged.
+        ConfigurationError: If a candidate the caller chose, and that is no hint, cannot be used.
+        McpDiscoveryError: If a candidate the other side chose, and that is no hint, cannot be used, or
+            if no candidate succeeds. The error names ``what`` and the fault the candidates showed. Its
+            ``kind`` tells a fetch that may pass later from one that cannot, except where a caller's own
+            hook failed, which is never retried.
+        OAuthError: As a caller's own hook raised it, for a candidate that is no hint.
     """
     # The seed is not retryable, so the first candidate's outcome replaces it.
     outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
-    refused = _MetadataOutcome(_MetadataFault.REFUSED, FailureKind.REFUSED)
     for candidate in candidates:
         url, caller_supplied = candidate.url, candidate.caller_supplied
+        subject = f"{what} URL"
         try:
-            _require_a_fetchable_url(url, subject=f"{what} URL", caller_supplied=caller_supplied)
+            _require_a_fetchable_url(url, subject=subject, caller_supplied=caller_supplied)
+            _require_caller_policy(url, url_validator, subject=subject, caller_supplied=caller_supplied)
+            client = _opened_client(url, transport_factory, timeouts, subject=subject, error_cls=McpDiscoveryError)
         except OAuthError:
             if not candidate.is_hint:
                 raise
-            logger.debug("MCP discovery: %s hint is not a URL this library will fetch", what)
-            outcome = _reported_outcome(outcome, refused)
+            logger.debug("MCP discovery: %s hint cannot be used, so the remaining candidates are tried", what)
             continue
-        _require_caller_policy(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
-        client = _opened_client(url, transport_factory, timeouts, subject=f"{what} URL", error_cls=McpDiscoveryError)
         async with client:
             try:
                 response = await within_request_limit(client.get(url), timeouts)
