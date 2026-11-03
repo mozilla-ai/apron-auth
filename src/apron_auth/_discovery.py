@@ -119,8 +119,9 @@ def str_list(value: object) -> list[str]:
 def strict_str_list(document: Mapping[str, object], key: str) -> list[str]:
     """Return a metadata list member that gates a decision, refusing a malformed one.
 
-    A present but malformed value is an error rather than an absence. Read leniently it would become an
-    empty list, which is what an unadvertised member looks like, and the permissive branch would follow.
+    A present but malformed value is an error rather than an absence. Read leniently it becomes an empty
+    list, which is what an unadvertised member looks like, so a reader cannot tell a server that advertised
+    nothing from one whose value it could not read, and the default for the first is applied to the second.
 
     Args:
         document: The metadata document.
