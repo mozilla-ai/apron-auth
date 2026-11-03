@@ -22,6 +22,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     TenancyContext,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
@@ -212,6 +213,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Notion OAuth provider configuration.
 
@@ -227,9 +229,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``owner=user`` default.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )

@@ -230,6 +230,7 @@ def to_provider_config(
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
     resource: str | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Fold discovered metadata and client credentials into a ProviderConfig with no identity handler of its own.
 
@@ -268,6 +269,8 @@ def to_provider_config(
             it — a discovered resource cannot be suppressed here. The resulting
             config carries no resource indicator only when ``resource`` is
             ``None`` and none was discovered.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
@@ -307,6 +310,7 @@ def to_provider_config(
         require_iss=metadata.iss_parameter_supported,
         resource=resource if resource is not None else metadata.resource,
         use_builtin_identity_handler=False,
+        timeouts=timeouts or TimeoutPolicy(),
     )
 
 

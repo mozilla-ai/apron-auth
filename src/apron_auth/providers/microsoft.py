@@ -531,6 +531,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Microsoft OAuth provider configuration.
 
@@ -546,6 +547,8 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``prompt=consent`` default.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. It declares no revocation endpoint, because Microsoft
@@ -555,4 +558,6 @@ def preset(
     if _GUID_RE.match(client_id):
         client_id = client_id.lower()
 
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )

@@ -14,7 +14,15 @@ from urllib.parse import urlparse
 
 from apron_auth._urls import matches_suffix
 from apron_auth.errors import ConfigurationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    Provider,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+    TimeoutPolicy,
+)
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 
@@ -163,6 +171,7 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     host: str = "login.salesforce.com",
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Salesforce OAuth provider configuration.
 
@@ -183,6 +192,8 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
         host: The Salesforce login host, as described above.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -209,6 +220,6 @@ def preset(
         scope_metadata=BASE_SCOPE_METADATA,
     )
     config = declared.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
     )
     return config

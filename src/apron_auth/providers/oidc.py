@@ -258,6 +258,7 @@ def preset(
     extra_params: dict[str, str] | None = None,
     metadata: ServerMetadata,
     allow_insecure_http: bool = False,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a provider configuration from a discovered OpenID provider.
 
@@ -283,6 +284,8 @@ def preset(
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
         metadata: The provider's discovered metadata, from :func:`discover`.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. It declares a revocation endpoint where the server
@@ -338,6 +341,7 @@ def preset(
         # OpenID Connect standardizes no claim for an organization owning an email domain.
         "can_assert_domain_ownership": False,
         "use_builtin_identity_handler": False,
+        "timeouts": timeouts or TimeoutPolicy(),
     }
     waived = (
         _fields_needing_a_waiver(

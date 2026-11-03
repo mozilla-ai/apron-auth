@@ -11,6 +11,10 @@ from apron_auth._http_errors import http_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind
 from apron_auth.models import TimeoutPolicy
+from apron_auth.providers import google
+
+# The functions that build a provider configuration, each of which a caller states its limits through.
+_CONFIG_BUILDERS = {"preset", "sign_in_preset", "to_provider_config"}
 
 # The library's source tree, walked to keep every request path bounded.
 _SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
@@ -76,3 +80,31 @@ class TestEveryClientTheLibraryBuildsStatesItsLimits:
                     unbounded.append(f"{path.relative_to(_SRC)}:{node.lineno}")
 
         assert unbounded == []
+
+
+class TestEveryBuilderTakesThePolicy:
+    def test_every_configuration_builder_takes_the_callers_policy(self) -> None:
+        """A builder added later is where this is missed, and its users can then set no limit at all."""
+        missing = []
+        for path in sorted(_SRC.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.FunctionDef) or node.col_offset:
+                    continue
+                if node.name not in _CONFIG_BUILDERS:
+                    continue
+                if not any(argument.arg == "timeouts" for argument in node.args.kwonlyargs):
+                    missing.append(f"{path.relative_to(_SRC)}:{node.name}")
+
+        assert missing == []
+
+    def test_a_preset_carries_the_policy_onto_the_configuration(self) -> None:
+        policy = TimeoutPolicy(request_seconds=30.0)
+
+        config = google.preset("client", "secret", scopes=["openid"], timeouts=policy)  # pragma: allowlist secret
+
+        assert config.timeouts == policy
+
+    def test_a_preset_defaults_to_the_policys_own_limits(self) -> None:
+        config = google.preset("client", "secret", scopes=["openid"])  # pragma: allowlist secret
+
+        assert config.timeouts == TimeoutPolicy()

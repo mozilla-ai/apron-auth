@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TimeoutPolicy
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
@@ -108,6 +108,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Typeform OAuth provider configuration.
 
@@ -120,9 +121,13 @@ def preset(
         scopes: The scopes to request.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. It declares no revocation endpoint, because Typeform
         exposes none.
     """
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )

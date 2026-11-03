@@ -644,6 +644,7 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     user_scopes: Sequence[str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
@@ -671,6 +672,8 @@ def preset(
         extra_params: Extra authorization-request parameters.
         user_scopes: The user scopes to request via Slack's ``user_scope``
             parameter, if any.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -716,7 +719,7 @@ def preset(
 
     declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
     config = declared.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra, timeouts=timeouts
     )
     return config
 
@@ -728,6 +731,7 @@ def sign_in_preset(
     scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for Sign in with Slack.
 
@@ -746,6 +750,8 @@ def sign_in_preset(
         scopes: The further scopes to request beside ``openid``, which are ``email`` and ``profile``.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -776,5 +782,10 @@ def sign_in_preset(
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
     return _SIGN_IN_PRESET.config(
-        client_id, client_secret, scopes=requested, redirect_uri=redirect_uri, extra_params=merged_extra
+        client_id,
+        client_secret,
+        scopes=requested,
+        redirect_uri=redirect_uri,
+        extra_params=merged_extra,
+        timeouts=timeouts,
     )
