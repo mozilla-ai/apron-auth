@@ -21,6 +21,7 @@ CONFIDENTIAL_AUTH_METHODS = (
     TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
 )
 
+
 class IssuerRefusalReason(Enum):
     """Each member is one issuer condition a metadata document can fail."""
 

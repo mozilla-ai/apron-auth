@@ -14,11 +14,11 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
-from apron_auth._timeouts import within_request_limit
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth._loop_lock import LoopLock
+from apron_auth._timeouts import within_request_limit
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -307,6 +307,7 @@ class IssuerSigningKeys:
         Args:
             checked_keys: The key set the token was checked against.
                 No fetch is needed when another caller has replaced it since.
+            timeouts: The limits in force for the fetch.
 
         Raises:
             IdentityFetchError: If the key set cannot be fetched.

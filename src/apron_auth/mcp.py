@@ -35,8 +35,8 @@ from apron_auth._discovery import (
     str_list,
 )
 from apron_auth._http_errors import http_failure, status_failure
-from apron_auth._timeouts import within_request_limit
 from apron_auth._json_body import decode_json_body
+from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -119,10 +119,11 @@ async def discover(
             challenge, tried before the well-known locations.
         url_validator: Optional policy invoked on each URL before it is
             requested; raising rejects the URL and fails discovery.
-        timeouts: The limits on every request this makes. Defaults to :class:`TimeoutPolicy`'s own.
         transport_factory: Optional factory returning an httpx transport for a
             URL, letting the caller control the outbound connection (e.g. pin
             DNS to validated public IPs to prevent SSRF via rebinding).
+        timeouts: The limits on every request this makes.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The discovered metadata.
@@ -339,7 +340,7 @@ async def register_client(
             otherwise left unset. Registering ``native`` lets servers that gate
             ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
-        timeouts: The limits on the registration request. Defaults to :class:`TimeoutPolicy`'s own.
+        timeouts: The limits on the registration request. Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
         transport_factory: Optional factory controlling the outbound connection.
 
     Returns:
@@ -861,6 +862,7 @@ async def _fetch_first_metadata(
         candidate_urls: The URLs to try, in order.
         url_validator: Optional policy invoked on each URL before it is requested.
         transport_factory: Optional factory controlling the outbound connection.
+        timeouts: The limits in force for each candidate's fetch.
         what: The document this fetches, for the error and the debug lines.
         caller_supplied: The candidates derive from an argument of this library's
             caller, not from a fetched document.

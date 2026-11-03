@@ -153,6 +153,7 @@ async def discover(
             The issuer check still applies, so an override moves the document without loosening what it may claim.
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+        timeouts: The limits on the document fetch. Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
             It is off by default, because the client secret and every token travel over these URLs,
             and the signing key set authenticates every ID token.

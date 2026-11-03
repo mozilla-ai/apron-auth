@@ -96,8 +96,9 @@ class WorkloadTokenVerifier:
             issuer: The issuer identifier, exactly as its tokens carry it in ``iss``.
             jwks_url: The issuer's signing key set, when it is not to be discovered.
             transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
-            timeouts: The limits on the document and key set fetches. Defaults to ``TimeoutPolicy``'s own.
                 Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+            timeouts: The limits on the document and key set fetches.
+                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
             allow_insecure_http: Accept ``http`` for the issuer and the URLs it publishes, for local development only.
             clock: The monotonic clock that ages the cached keys and paces rediscovery.
 
