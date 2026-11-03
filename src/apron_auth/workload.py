@@ -10,17 +10,20 @@ so the token is checked as a JSON Web Token (RFC 7519), not as the ID token of a
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Collection
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from joserfc.errors import ExpiredTokenError, JoseError
-from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
+from joserfc.jwt import JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth._jwt import claim_refusal_reason, parse_compact
+from apron_auth._jwt import claim_refusal_reason, compact_claims, parse_compact
 from apron_auth._loop_lock import LoopLock
+from apron_auth._numbers import finite_number
+from apron_auth._urls import is_plain_http, uses_allowed_transport
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -30,8 +33,8 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import TimeoutPolicy
-from apron_auth.providers._jwks import IssuerSigningKeys
+from apron_auth.models import TimeoutPolicy, UrlField, WorkloadIssuer
+from apron_auth.providers._jwks import IssuerSigningKeys, VerifiedToken
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
 
@@ -39,6 +42,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from apron_auth.protocols import TransportFactory
+
+logger = logging.getLogger(__name__)
 
 # The longest token read, in characters. A platform's token is a few kilobytes even with a certificate chain.
 _MAX_TOKEN_LENGTH = 16384
@@ -67,132 +72,123 @@ class WorkloadIdentity(BaseModel, frozen=True):
     claims: dict[str, Any]
 
 
-class WorkloadTokenVerifier:
-    """Verify the identity tokens one issuer signs for its workloads.
+class VerifiedWorkloadToken:
+    """A token whose signature and claims verified, before any audience was matched against it.
 
-    The issuer's signing keys are found through its OpenID configuration document, unless ``jwks_url`` names them.
-    Only the document's ``issuer`` and ``jwks_uri`` are read,
-    so an issuer that publishes no authorization endpoint, as most workload issuers do, is discovered too.
-    The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute.
-    The document is read once, so an issuer that moves its key set needs a new verifier.
-    An RSA key shorter than 2048 bits is never used.
+    It offers the issuer that signed it and the audiences it names, so a server can narrow a lookup by a
+    verified value, and it offers the workload's identity only from :meth:`accept`, which an audience the
+    server accepts has to reach. A token minted for another service names a workload this server has no
+    business trusting, so the step that rules one out comes before the step that names it.
 
-    NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
+    NOTE: That ordering is the interface, not a boundary the language enforces. A caller that reaches past
+    it, or that calls the first step and ignores the second, decides for itself what it trusts.
     """
 
-    def __init__(
-        self,
-        issuer: str,
-        *,
-        jwks_url: str | None = None,
-        transport_factory: TransportFactory | None = None,
-        timeouts: TimeoutPolicy | None = None,
-        allow_insecure_http: bool = False,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        """Bind the verifier to one issuer.
+    def __init__(self, identity: WorkloadIdentity) -> None:
+        """Hold a verified identity back until an audience is accepted for it."""
+        self._identity = identity
 
-        Args:
-            issuer: The issuer identifier, exactly as its tokens carry it in ``iss``.
-            jwks_url: The issuer's signing key set, when it is not to be discovered.
-            transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
-                Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
-            timeouts: The limits on the document and key set fetches.
-                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
-            allow_insecure_http: Accept ``http`` for the issuer and the URLs it publishes, for local development only.
-            clock: The monotonic clock that ages the cached keys and paces rediscovery.
-
-        Raises:
-            ConfigurationError: If ``issuer`` or ``jwks_url`` is not an acceptable URL.
-        """
-        try:
-            self._document_url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
-            if jwks_url is not None:
-                require_url(
-                    jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http, caller_supplied=True
-                )
-        except OidcDiscoveryError as exc:
-            raise ConfigurationError(str(exc)) from exc
-        self._issuer = issuer
-        self._transport_factory = transport_factory
-        self._timeouts = timeouts or TimeoutPolicy()
-        self._allow_insecure_http = allow_insecure_http
-        self._clock = clock
-        self._signing_keys = self._key_set(jwks_url) if jwks_url else None
-        self._discovery_failure: tuple[str, FailureKind] | None = None
-        self._discovery_failed_at: float | None = None
-        self._discovery_lock = LoopLock()
+    @property
+    def audiences(self) -> tuple[str, ...]:
+        """The audiences the token names, as a tuple even when it names one."""
+        return self._identity.audiences
 
     @property
     def issuer(self) -> str:
-        """The issuer identifier this verifier accepts tokens from."""
-        return self._issuer
+        """The issuer that signed the token."""
+        return self._identity.issuer
 
-    async def verify(self, token: str, *, audience: str | Collection[str] | None) -> WorkloadIdentity:
-        """Return what a token says about its workload, once its signature and claims verify.
-
-        The signature is checked against the issuer's published keys before any claim is read.
-        ``iss`` must name this issuer, and ``sub``, ``aud``, ``exp`` and ``iat`` are required.
-        ``nbf`` is checked when present.
+    def accept(self, audience: str | Collection[str]) -> WorkloadIdentity:
+        """Return what the token says about its workload, once it names an audience the caller accepts.
 
         Args:
-            token: A compact signed token.
             audience: The audience the token must name, or a non-empty collection of which it must name one.
-                ``None`` checks only that it names some audience, for a caller that matches the audience itself,
-                which it must then do before trusting the token.
 
         Returns:
             The verified identity.
 
         Raises:
-            ConfigurationError: If ``audience`` is an empty collection or holds anything but non-empty strings.
-                An empty one would accept every audience, so ``None`` must say that instead.
-            TokenExpiredError: If the token verifies but has expired.
-            TokenValidationError: If the token is refused for any other reason.
-            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
-                so no token from it can be verified now. A failed discovery is reported again for a minute.
+            ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+                One that named none would accept a token minted for any service.
+            TokenValidationError: If the token names none of the accepted audiences.
         """
-        audience_rule: ClaimsOption = {"essential": True}
-        if audience is not None:
-            values = [audience] if isinstance(audience, str) else list(audience)
-            if not values or not all(isinstance(value, str) and value for value in values):
-                msg = "audience must name one or more audiences, or be None to leave the match to the caller"
-                raise ConfigurationError(msg)
-            audience_rule["values"] = values
-        if len(token) > _MAX_TOKEN_LENGTH:
-            msg = "Workload token is longer than any issuer signs"
-            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
-        # A token that is not one is refused before discovery, so it is never reported as an outage.
-        try:
-            parse_compact(token)
-        except ValueError as exc:
-            msg = "Workload token is not a compact signed token"
-            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
-        signing_keys = await self._keys()
-        claims = (await signing_keys.verify(token, self._timeouts)).claims
-        registry = JWTClaimsRegistry(
-            leeway=CLOCK_SKEW_SECONDS,
-            iss={"essential": True, "value": self._issuer},
-            sub={"essential": True},
-            aud=audience_rule,
-            exp={"essential": True},
-            iat={"essential": True},
-        )
-        try:
-            registry.validate(claims)
-        except ExpiredTokenError as exc:
-            msg = "Workload token has expired"
-            raise TokenExpiredError(msg) from exc
-        except (JoseError, TypeError, ValueError) as exc:
-            msg = "Workload token claims did not validate"
-            raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
-        # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
-        if claims.get("iss") != self._issuer:
-            msg = "Workload token claims did not validate"
-            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
-        return _identity(self._issuer, claims)
+        accepted = _accepted_audiences(audience)
+        if accepted.isdisjoint(self._identity.audiences):
+            msg = "Workload token names none of the audiences this server accepts"
+            raise TokenValidationError(msg, reason=TokenValidationReason.AUDIENCE)
+        return self._identity
 
-    async def _keys(self) -> IssuerSigningKeys:
+
+class _MovedKeySet(NamedTuple):
+    """A key set an issuer has started publishing elsewhere, before anything it holds has verified a token."""
+
+    url: str
+    keys: IssuerSigningKeys
+
+
+class _TrustedIssuer:
+    """One accepted issuer, and the signing keys its tokens are checked against.
+
+    The keys are found through the issuer's OpenID configuration document, unless the issuer names them.
+    Only the document's ``issuer`` and ``jwks_uri`` are read, so an issuer that publishes no authorization
+    endpoint, as most workload issuers do, is discovered too.
+    A failed read is reported again for a minute before another is attempted.
+    The document is read again for a token naming a key the published set lacks, at most once a minute, so an
+    issuer that moves its key set is followed without a restart.
+    """
+
+    def __init__(
+        self,
+        issuer: WorkloadIssuer,
+        *,
+        transport_factory: TransportFactory | None,
+        timeouts: TimeoutPolicy,
+        clock: Callable[[], float],
+    ) -> None:
+        """Bind to one issuer, refusing a URL this library could not fetch from.
+
+        Args:
+            issuer: The issuer to accept tokens from.
+            transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
+            timeouts: The limits on the document and key set fetches.
+            clock: The monotonic clock that paces rediscovery.
+
+        Raises:
+            ConfigurationError: If the issuer identifier or the key set URL is not one a request can be sent to.
+        """
+        self._plain_http_key_set = UrlField.JWKS_URL in issuer.allow_insecure_http_for
+        plain_http_issuer = UrlField.ISSUER in issuer.allow_insecure_http_for
+        try:
+            self._document_url = discovery_url(
+                issuer.issuer, allow_insecure_http=_allows_plain_http(issuer.issuer, waived=plain_http_issuer)
+            )
+            if issuer.jwks_url is not None:
+                require_url(
+                    issuer.jwks_url,
+                    field="signing key set",
+                    allow_insecure_http=_allows_plain_http(issuer.jwks_url, waived=self._plain_http_key_set),
+                    caller_supplied=True,
+                )
+        except OidcDiscoveryError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        self._issuer = issuer.issuer
+        self._transport_factory = transport_factory
+        self._timeouts = timeouts
+        self._clock = clock
+        self._key_set_url = issuer.jwks_url
+        self._discovers_the_key_set = issuer.jwks_url is None
+        self._signing_keys = self._key_set(issuer.jwks_url) if issuer.jwks_url else None
+        self._discovery_failure: tuple[str, FailureKind] | None = None
+        self._discovery_failed_at: float | None = None
+        self._rediscovered_at: float | None = None
+        self._discovery_lock = LoopLock()
+
+    @property
+    def issuer(self) -> str:
+        """The issuer identifier, exactly as this issuer's tokens carry it in ``iss``."""
+        return self._issuer
+
+    async def keys(self) -> IssuerSigningKeys:
         """Return the issuer's signing keys, discovering where they are published on first use.
 
         Raises:
@@ -212,14 +208,7 @@ class WorkloadTokenVerifier:
                 message, kind = self._discovery_failure
                 raise IdentityFetchError(message, kind=kind)
             try:
-                document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
-                require_openid_issuer(document, self._issuer)
-                jwks_url = optional_url(
-                    document, key="jwks_uri", field="signing key set", allow_insecure_http=self._allow_insecure_http
-                )
-                if jwks_url is None:
-                    msg = "OpenID provider configuration names no signing key set"
-                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+                jwks_url = await self._published_key_set_url()
             except OidcDiscoveryError as exc:
                 msg = f"Failed to discover the issuer's signing keys: {exc}"
                 # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
@@ -227,32 +216,351 @@ class WorkloadTokenVerifier:
                 self._discovery_failed_at = self._clock()
                 raise IdentityFetchError(msg, kind=exc.kind) from exc
             self._discovery_failure = None
+            self._key_set_url = jwks_url
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys
+
+    async def verified_against_a_moved_key_set(self, token: str) -> VerifiedToken | None:
+        """Return what a key set this issuer has moved to says about a token, putting that key set in use.
+
+        This answers a token naming a key the published set lacks, which is the one signal an issuer gives
+        that its key set has moved. The configuration document is read again at most once a minute, so such
+        a token cannot drive repeated discovery, and the key set it names replaces the one in use only once
+        a key of it verified this token. The token that asks for this is unauthenticated, so nothing it can
+        do unseats keys that still verify what the issuer has not moved.
+
+        Args:
+            token: A compact signed token no published key verified.
+
+        Returns:
+            The token's protected header and claims, and the key that verified it, or ``None`` when this
+            issuer named its key set itself, when the document cannot be read or names the same key set,
+            when one was read within the minute, or when the key set it names did not verify this token
+            either.
+        """
+        if not self._discovers_the_key_set:
+            return None
+        moved = await self._moved_key_set()
+        if moved is None:
+            return None
+        try:
+            verified = await moved.keys.verify(token, self._timeouts)
+        except (IdentityFetchError, TokenValidationError):
+            # NOTE: The failure is not logged with its value, because a failed request can render itself.
+            logger.warning(
+                "The issuer's signing keys at the URL it has moved to did not verify the token, "
+                "so the keys in use stay in use"
+            )
+            return None
+        logger.info("The issuer publishes its signing keys at another URL, which is now in use")
+        self._key_set_url, self._signing_keys = moved.url, moved.keys
+        return verified
+
+    async def _moved_key_set(self) -> _MovedKeySet | None:
+        """Return the key set the issuer has started publishing elsewhere, without putting it in use.
+
+        Returns:
+            The key set published at the new URL, or ``None`` when the URL is unchanged, when the document
+            cannot be read, or when one was read within the minute.
+        """
+        async with self._discovery_lock():
+            if self._is_younger_than(self._rediscovered_at, _REDISCOVER_INTERVAL_SECONDS):
+                return None
+            self._rediscovered_at = self._clock()
+            try:
+                jwks_url = await self._published_key_set_url()
+            except OidcDiscoveryError:
+                # NOTE: The failure is not logged with its value, because a failed request can render itself.
+                logger.warning("The issuer's configuration could not be read again for an unverified token")
+                return None
+            if jwks_url == self._key_set_url:
+                return None
+            return _MovedKeySet(jwks_url, self._key_set(jwks_url))
+
+    async def _published_key_set_url(self) -> str:
+        """Return the key set URL the issuer's configuration document names.
+
+        Raises:
+            OidcDiscoveryError: If the document cannot be fetched or read, names another issuer, or names
+                no key set.
+        """
+        document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
+        require_openid_issuer(document, self._issuer)
+        jwks_url = optional_url(
+            document,
+            key="jwks_uri",
+            field="signing key set",
+            # A URL read out of a document was never held to the issuer model's rule, so it is held to it here.
+            allow_insecure_http=_allows_plain_http(document.get("jwks_uri"), waived=self._plain_http_key_set),
+        )
+        if jwks_url is None:
+            msg = "OpenID provider configuration names no signing key set"
+            raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+        return jwks_url
+
+    def _is_younger_than(self, moment: float | None, seconds: int) -> bool:
+        """Return whether ``moment`` is set and less than ``seconds`` ago."""
+        return moment is not None and self._clock() - moment < seconds
 
     def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
         """Return the signing keys published at ``jwks_url``."""
         return IssuerSigningKeys(jwks_url, transport_factory=self._transport_factory, clock=self._clock)
 
 
+class WorkloadTokenVerifier:
+    """Verify the identity tokens one or more issuers sign for their workloads.
+
+    A token is checked against the published keys of the issuer its ``iss`` names, and against no other
+    accepted issuer's, so accepting several issuers never lets one of them sign for another.
+    An RSA key shorter than 2048 bits is never used.
+
+    NOTE: Callers must not use one instance from event loops in several threads at once, because its caches
+    are unguarded.
+    """
+
+    def __init__(
+        self,
+        issuers: Collection[WorkloadIssuer],
+        *,
+        transport_factory: TransportFactory | None = None,
+        timeouts: TimeoutPolicy | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Bind the verifier to the issuers whose tokens it accepts.
+
+        Args:
+            issuers: The issuers to accept tokens from, each named once.
+            transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
+                Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+            timeouts: The limits on the document and key set fetches.
+                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+            clock: The monotonic clock that ages the cached keys and paces rediscovery.
+
+        Raises:
+            ConfigurationError: If ``issuers`` states no issuer or anything but an issuer, names one issuer
+                more than once, or names one whose URLs a request could not be sent to.
+        """
+        stated = list(issuers) if isinstance(issuers, Collection) and not isinstance(issuers, str) else []
+        if not stated or not all(isinstance(entry, WorkloadIssuer) for entry in stated):
+            msg = "A verifier accepts one or more issuers, each stated as a WorkloadIssuer"
+            raise ConfigurationError(msg)
+        self._timeouts = timeouts or TimeoutPolicy()
+        self._issuers: dict[str, _TrustedIssuer] = {}
+        for entry in stated:
+            if entry.issuer in self._issuers:
+                msg = "A verifier accepts each issuer once, and one of them is named more than once"
+                raise ConfigurationError(msg)
+            self._issuers[entry.issuer] = _TrustedIssuer(
+                entry, transport_factory=transport_factory, timeouts=self._timeouts, clock=clock
+            )
+
+    @property
+    def issuers(self) -> tuple[str, ...]:
+        """The issuer identifiers this verifier accepts tokens from, in alphabetical order.
+
+        The issuers are stated as a collection, which need not have an order of its own, and this verifier
+        gives none of them precedence over another.
+        """
+        return tuple(sorted(self._issuers))
+
+    async def verify(self, token: str, *, audience: str | Collection[str]) -> WorkloadIdentity:
+        """Return what a token says about its workload, once it verifies and names an accepted audience.
+
+        This is :meth:`check` followed by :meth:`VerifiedWorkloadToken.accept`, for a server whose accepted
+        audiences are fixed. A server that has to look its accepted audiences up calls the two steps itself.
+
+        Args:
+            token: A compact signed token.
+            audience: The audience the token must name, or a non-empty collection of which it must name one.
+
+        Returns:
+            The verified identity.
+
+        Raises:
+            ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+            TokenExpiredError: If the token verifies but has expired.
+            TokenValidationError: If the token is refused for any other reason.
+            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
+                so no token from it can be verified now. A failed discovery is reported again for a minute.
+        """
+        # The caller's own argument is checked before any request is sent for the token.
+        accepted = _accepted_audiences(audience)
+        return (await self.check(token)).accept(accepted)
+
+    async def check(self, token: str) -> VerifiedWorkloadToken:
+        """Return a verified token, once its signature and every claim but the audience match verify.
+
+        The token's unverified ``iss`` selects the issuer, which is all that claim decides, and the
+        signature is checked against that issuer's published keys before any claim is acted on. ``iss``
+        must then name the selected issuer, and ``sub``, ``aud``, ``exp`` and ``iat`` are required.
+        ``nbf`` is checked when present.
+
+        The audience is required to be present and is not matched here, so a server whose accepted audiences
+        depend on it reads the verified value and matches it in the second step.
+
+        Args:
+            token: A compact signed token.
+
+        Returns:
+            The verified token, which states its issuer and its audiences.
+
+        Raises:
+            TokenExpiredError: If the token verifies but has expired.
+            TokenValidationError: If the token is refused for any other reason.
+            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
+                so no token from it can be verified now. A failed discovery is reported again for a minute.
+        """
+        if len(token) > _MAX_TOKEN_LENGTH:
+            msg = "Workload token is longer than any issuer signs"
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
+        # A token that is not one is refused before discovery, so it is never reported as an outage.
+        try:
+            compact = parse_compact(token)
+        except ValueError as exc:
+            msg = "Workload token is not a compact signed token"
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
+        unverified = compact_claims(compact)
+        if unverified is None:
+            msg = "Workload token claims are not a JSON object"
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
+        trusted = self._issuer_for_claim(unverified.get("iss"))
+        claims = (await self._verified(token, trusted)).claims
+        registry = JWTClaimsRegistry(
+            leeway=CLOCK_SKEW_SECONDS,
+            iss={"essential": True, "value": trusted.issuer},
+            sub={"essential": True},
+            aud={"essential": True},
+            exp={"essential": True},
+            iat={"essential": True},
+        )
+        try:
+            registry.validate(claims)
+        except ExpiredTokenError as exc:
+            msg = "Workload token has expired"
+            raise TokenExpiredError(msg) from exc
+        except (JoseError, TypeError, ValueError) as exc:
+            msg = "Workload token claims did not validate"
+            raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
+        # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
+        if claims.get("iss") != trusted.issuer:
+            msg = "Workload token claims did not validate"
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
+        return VerifiedWorkloadToken(_identity(trusted.issuer, claims))
+
+    async def _verified(self, token: str, trusted: _TrustedIssuer) -> VerifiedToken:
+        """Return the token's header and claims, once a key the issuer publishes verifies its signature.
+
+        A token naming a key the published set lacks is offered to the issuer once more, in case the issuer
+        has moved its key set, and the refusal stands wherever that answers nothing.
+
+        Args:
+            token: A compact signed token.
+            trusted: The issuer the token names.
+
+        Returns:
+            The token's protected header and claims, and the published key that verified it.
+
+        Raises:
+            TokenValidationError: If the token is refused.
+            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read.
+        """
+        signing_keys = await trusted.keys()
+        try:
+            return await signing_keys.verify(token, self._timeouts)
+        except TokenValidationError as refusal:
+            if refusal.reason is not TokenValidationReason.UNKNOWN_KEY:
+                raise
+            verified = await trusted.verified_against_a_moved_key_set(token)
+            if verified is None:
+                raise
+            return verified
+
+    def _issuer_for_claim(self, issuer_claim: object) -> _TrustedIssuer:
+        """Return the accepted issuer that a token's ``iss`` names.
+
+        NOTE: The claim is read before any signature is checked, so it only selects which published keys the
+        token is then checked against. It grants nothing: the signature check and the claim validation that
+        follow both hold the token to the issuer selected here.
+
+        Args:
+            issuer_claim: The token's ``iss``, as it arrived.
+
+        Returns:
+            The accepted issuer the claim names.
+
+        Raises:
+            TokenValidationError: If the claim is not the identifier of an accepted issuer.
+        """
+        trusted = self._issuers.get(issuer_claim) if isinstance(issuer_claim, str) else None
+        if trusted is None:
+            msg = "Workload token names an issuer this verifier does not accept"
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
+        return trusted
+
+
+def _allows_plain_http(url: object, *, waived: bool) -> bool:
+    """Return whether plain HTTP is to be allowed for ``url``.
+
+    This is the rule an issuer's own URL fields are held to, stated once so it also covers a URL read out
+    of a document and a URL a copy made without validation may have changed.
+    A loopback host is allowed plain HTTP with no waiver, because a request to it reaches no network.
+
+    Args:
+        url: The URL to read, as it arrived.
+        waived: Plain HTTP was waived in code for the field this URL came from.
+
+    Returns:
+        Whether an allowance is to be made for this URL. An ``https`` URL needs none, so it reads as
+            ``False`` rather than as rejected.
+    """
+    if not isinstance(url, str):
+        return False
+    return is_plain_http(url) and uses_allowed_transport(url, plain_http_allowed=waived)
+
+
+def _accepted_audiences(audience: object) -> frozenset[str]:
+    """Return the audiences a caller accepts.
+
+    Args:
+        audience: One audience, or a collection of them, as it arrived.
+
+    Returns:
+        The accepted audiences.
+
+    Raises:
+        ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+    """
+    if isinstance(audience, str):
+        stated: list[object] = [audience]
+    elif isinstance(audience, Collection):
+        stated = list(audience)
+    else:
+        stated = []
+    if not stated or not all(isinstance(value, str) and value for value in stated):
+        msg = "An accepted audience states one or more audiences, each a non-empty name"
+        raise ConfigurationError(msg)
+    # The members were checked above, so this only narrows the type.
+    return frozenset(value for value in stated if isinstance(value, str))
+
+
 def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
     """Lift the identity out of validated claims.
 
     Raises:
-        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
+        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it,
+            or ``exp`` is not a finite number.
     """
     subject = claims["sub"]
     audience = claims["aud"]
     audiences = (audience,) if isinstance(audience, str) else audience
-    expires_at = claims["exp"]
+    expires_at = finite_number(claims["exp"])
     if (
         not isinstance(subject, str)
         or not subject
         or not isinstance(audiences, list | tuple)
         or not audiences
         or not all(isinstance(value, str) for value in audiences)
-        or isinstance(expires_at, bool)
-        or not isinstance(expires_at, int | float)
+        or expires_at is None
     ):
         msg = "Workload token claims did not validate"
         raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)

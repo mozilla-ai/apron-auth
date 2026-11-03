@@ -38,6 +38,7 @@ from apron_auth.models import (
     TokenSet,
     UrlField,
     UrlTransport,
+    WorkloadIssuer,
 )
 
 # Every model the library offers, so a new one cannot be added without the refusal rules below.
@@ -700,6 +701,7 @@ class TestUnknownFieldRefusals:
             "TimeoutPolicy",
             "TokenSet",
             "UserToken",
+            "WorkloadIssuer",
         }
 
 
@@ -723,7 +725,7 @@ class TestUrlFields:
         """A pending state records a request that was made, so it declares no endpoint and states no rule."""
         declaring = {model.__name__ for model in MODELS if models._PLAIN_HTTP_WAIVER in model.model_fields}
 
-        assert declaring == {"ProviderConfig", "ServerMetadata"}
+        assert declaring == {"ProviderConfig", "ServerMetadata", "WorkloadIssuer"}
 
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
     def test_a_model_recording_a_waiver_states_the_rule_the_waiver_waives(self, model: type[BaseModel]) -> None:
@@ -2565,6 +2567,82 @@ class TestBrowserBoundAuthorization:
         )
         with pytest.raises(ConfigurationError):
             authorization.browser_token = "another-browsers-token"
+
+
+class TestWorkloadIssuer:
+    def test_it_carries_the_issuer_and_discovers_the_key_set_by_default(self) -> None:
+        issuer = WorkloadIssuer(issuer="https://token.actions.example.com")
+
+        assert issuer.issuer == "https://token.actions.example.com"
+        assert issuer.jwks_url is None
+        assert issuer.allow_insecure_http_for == frozenset()
+
+    def test_it_carries_a_stated_key_set(self) -> None:
+        issuer = WorkloadIssuer(
+            issuer="https://token.actions.example.com", jwks_url="https://token.actions.example.com/jwks"
+        )
+
+        assert issuer.jwks_url == "https://token.actions.example.com/jwks"
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError):
+            WorkloadIssuer(issuer="https://token.actions.example.com", allow_insecure_http=True)
+
+    def test_frozen(self) -> None:
+        issuer = WorkloadIssuer(issuer="https://token.actions.example.com")
+
+        with pytest.raises(ConfigurationError):
+            issuer.issuer = "https://other.example.com"
+
+    @pytest.mark.parametrize(
+        ("field", "values"),
+        [
+            pytest.param("issuer", {"issuer": "http://token.actions.example.com"}, id="issuer"),
+            pytest.param(
+                "jwks_url",
+                {"issuer": "https://token.actions.example.com", "jwks_url": "http://keys.example.com/jwks"},
+                id="key set",
+            ),
+        ],
+    )
+    def test_a_url_on_the_network_must_state_its_transport(self, field: str, values: dict[str, str]) -> None:
+        with pytest.raises(ConfigurationError, match=f"{field} must use https"):
+            WorkloadIssuer(**values)
+
+    def test_a_loopback_issuer_needs_no_waiver(self) -> None:
+        """A request to the loopback interface reaches no network, so plain http states nothing about it."""
+        issuer = WorkloadIssuer(issuer="http://localhost:8080")
+
+        assert issuer.issuer == "http://localhost:8080"
+        assert issuer.allow_insecure_http_for == frozenset()
+
+    def test_a_waiver_accepts_plain_http_for_the_field_it_names(self) -> None:
+        issuer = WorkloadIssuer.unsafe.allow_plain_http(UrlField.ISSUER, issuer="http://keycloak:8080")
+
+        assert issuer.issuer == "http://keycloak:8080"
+        assert issuer.allow_insecure_http_for == frozenset({UrlField.ISSUER})
+
+    def test_a_waiver_reaches_no_field_it_does_not_name(self) -> None:
+        with pytest.raises(ConfigurationError, match="jwks_url must use https"):
+            WorkloadIssuer.unsafe.allow_plain_http(
+                UrlField.ISSUER, issuer="http://keycloak:8080", jwks_url="http://keys.example.com/jwks"
+            )
+
+    def test_a_waiver_that_did_not_come_from_code_is_refused(self) -> None:
+        """A waiver read back out of storage would carry one machine's exception to wherever the data went."""
+        with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
+            WorkloadIssuer.model_validate(
+                {"issuer": "http://keycloak:8080", "allow_insecure_http_for": frozenset({UrlField.ISSUER})}
+            )
+
+    def test_the_namespace_builds_a_workload_issuer(self) -> None:
+        built = WorkloadIssuer.unsafe.allow_plain_http(UrlField.ISSUER, issuer="http://keycloak:8080")
+
+        assert type(built) is WorkloadIssuer
+
+    def test_an_issuer_carrying_a_credential_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="issuer must not carry userinfo"):
+            WorkloadIssuer(issuer="https://user:secret@token.actions.example.com")  # pragma: allowlist secret
 
 
 class TestTimeoutPolicy:
