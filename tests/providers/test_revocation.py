@@ -9,7 +9,7 @@ from types import ModuleType
 import httpx
 import pytest
 from pydantic import SecretStr
-from support import REVOKED_STATUS
+from support import revoked_status
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import Provider, ProviderConfig
@@ -136,7 +136,7 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
 
     def factory(url: str) -> httpx.MockTransport:
         pinned.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(REVOKED_STATUS[provider], json={"ok": True}))
+        return httpx.MockTransport(lambda request: httpx.Response(revoked_status(provider), json={"ok": True}))
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
@@ -191,11 +191,6 @@ def _answering_transport(status_code: int) -> Callable[[str], httpx.MockTranspor
         return httpx.MockTransport(lambda request: httpx.Response(status_code, json={"ok": False}))
 
     return factory
-
-
-def test_every_provider_states_a_status_its_handler_reads_as_revoked() -> None:
-    """A member with no entry would be probed with a status its own handler may refuse."""
-    assert set(REVOKED_STATUS) == set(Provider)
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -268,28 +263,6 @@ def test_the_shared_rule_reads_a_status_by_what_it_states(status: int, expected:
     assert refusal.value.kind is expected
 
 
-@pytest.mark.parametrize(
-    "status",
-    [
-        pytest.param(403, id="a forbidden status"),
-        pytest.param(400, id="a bad request"),
-        pytest.param(422, id="an unprocessable request"),
-    ],
-)
-def test_the_shared_rule_reads_a_statement_of_when_to_come_back(status: int) -> None:
-    """A provider that answers both a throttle and a refusal with one status says which in retry-after."""
-    with pytest.raises(RevocationError) as throttled:
-        refuse_an_unexpected_status(httpx.Response(status, headers={"Retry-After": "60"}), label="Example")
-
-    with pytest.raises(RevocationError) as refused:
-        refuse_an_unexpected_status(httpx.Response(status), label="Example")
-
-    assert throttled.value.kind is FailureKind.SERVER_ERROR
-    assert throttled.value.retryable
-    assert refused.value.kind is FailureKind.REJECTED
-    assert refused.value.retryable is False
-
-
 async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryable() -> None:
     """GitHub answers a secondary rate limit with 403 and names retry-after, which its own docs say wins."""
 
@@ -352,7 +325,7 @@ async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Pro
 
     def factory(url: str) -> httpx.MockTransport:
         seen.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(REVOKED_STATUS[provider], json={"ok": True}))
+        return httpx.MockTransport(lambda request: httpx.Response(revoked_status(provider), json={"ok": True}))
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)

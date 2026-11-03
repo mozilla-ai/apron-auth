@@ -188,6 +188,30 @@ class TestSlackIdentityHandler:
         assert exc_info.value.kind is FailureKind.REJECTED
 
     @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"ok": False}, id="no error member"),
+            pytest.param({"ok": False, "error": ""}, id="an empty code"),
+            pytest.param({"ok": False, "error": ["x"]}, id="a code that is not a string"),
+        ],
+    )
+    async def test_a_body_stating_no_readable_code_names_none(
+        self, body: dict[str, object], httpx_mock: HTTPXMock
+    ) -> None:
+        """A message must not name an error code the other side never sent."""
+        from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
+
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json=body)
+        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+        assert "unknown_error" not in str(refusal.value)
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
         "error",
         [
             pytest.param(["ratelimited"], id="a list"),

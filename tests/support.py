@@ -6,21 +6,28 @@ from typing import Protocol
 
 from apron_auth.models import Provider
 
-# One status each provider's revocation handler reads as the token revoked. No single status serves
-# them all, because each provider documents its own and a handler refuses every status it does not
-# state. A test about the request rather than the answer reads this so it reaches the happy path.
-REVOKED_STATUS: dict[Provider, int] = {
-    Provider.ATLASSIAN: 200,
-    Provider.GITHUB: 204,
-    Provider.GOOGLE: 200,
-    Provider.HUBSPOT: 204,
-    Provider.LINEAR: 200,
-    Provider.MICROSOFT: 200,
-    Provider.NOTION: 200,
-    Provider.SALESFORCE: 200,
-    Provider.SLACK: 200,
-    Provider.TYPEFORM: 200,
-}
+# A success status every revocation handler reads as the token revoked, unless its provider is named below.
+ANY_SUCCESS_STATUS = 200
+
+# The providers whose own handler reads a narrower set, because each provider documents its own statuses
+# and a handler refuses every status it does not state. A provider absent from here takes RFC 7009
+# revocation, or its own handler reads any success.
+_NARROWER_REVOKED_STATUS: dict[Provider, int] = {Provider.GITHUB: 204, Provider.HUBSPOT: 204}
+
+
+def revoked_status(provider: Provider) -> int:
+    """Return a status ``provider``'s revocation handler reads as the token revoked.
+
+    A test about the request rather than the answer reads this, so it reaches the happy path instead of a
+    refusal of a status the handler under test does not state.
+
+    Args:
+        provider: The provider whose handler answers.
+
+    Returns:
+        The status to answer with.
+    """
+    return _NARROWER_REVOKED_STATUS.get(provider, ANY_SUCCESS_STATUS)
 
 
 class VaryFacts(Protocol):

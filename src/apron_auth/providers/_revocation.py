@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
 
-from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
@@ -25,9 +25,6 @@ if TYPE_CHECKING:
 
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
-
-# The header a response states to say the condition is temporary and when to come back.
-_RETRY_AFTER_HEADER = "retry-after"
 
 
 class HttpMethod(StrEnum):
@@ -144,12 +141,10 @@ def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) 
     """Refuse a revocation response whose status the provider states nothing about.
 
     A provider documents the statuses it answers with, and any other status leaves the outcome
-    unknown. A failure status is classified by the status, so a rate limit or an outage is not reported
-    as the provider refusing to revoke a token it would revoke a minute later. A failure that states
-    when to come back is classified by that statement instead, because a status alone cannot tell a
-    throttle from a refusal where a provider answers both with one status. A success the provider does
-    not document states no outcome at all, and is refused as an answer this library cannot read rather
-    than as the other side refusing the request.
+    unknown. A failure is classified as this library classifies any failed response, so a rate limit or
+    an outage is not reported as the provider refusing to revoke a token it would revoke a minute later.
+    A success the provider does not document states no outcome at all, and is refused as an answer this
+    library cannot read rather than as the other side refusing the request.
 
     Args:
         response: The response whose status is classified.
@@ -158,13 +153,12 @@ def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) 
     Raises:
         RevocationError: Always. Its kind says whether the same request may pass later.
     """
-    failure = status_failure(response.status_code)
+    failure = response_failure(response)
     subject = "token" if label is None else f"{label} token"
     if response.is_success:
         msg = f"Failed to revoke {subject}: the endpoint answered {failure.description}, which states no outcome"
         raise RevocationError(msg, kind=FailureKind.REFUSED)
-    kind = FailureKind.SERVER_ERROR if _RETRY_AFTER_HEADER in response.headers else failure.kind
-    raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=kind)
+    raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
 def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfig) -> None:

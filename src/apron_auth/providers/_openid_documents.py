@@ -14,7 +14,7 @@ from apron_auth._discovery import (
     discovery_client,
     require_declared_issuer,
 )
-from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential
@@ -197,7 +197,7 @@ async def fetch_document(
                     "followed, so pass the canonical document URL as document_url"
                 )
                 raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
-            status = status_failure(response.status_code)
+            status = response_failure(response)
             msg = f"OpenID provider configuration returned {status.description}"
             raise OidcDiscoveryError(msg, kind=status.kind)
         try:

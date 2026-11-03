@@ -129,6 +129,9 @@ _SIGN_IN_PRESET = Preset(
     scope_metadata=SIGN_IN_SCOPE_METADATA,
 )
 
+# What a message names where an ``ok=false`` body states no error code this library can read.
+_NO_ERROR_CODE = "no error code stated"
+
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
@@ -268,10 +271,11 @@ def _slack_error_code(payload: Mapping[str, object]) -> str:
         payload: The decoded response body.
 
     Returns:
-        The code the body states, or ``"unknown_error"`` where it states none readable.
+        The code the body states, or a phrase naming its absence where it states none readable. The result
+        never reads as a code, so a message carrying it cannot name one the other side did not send.
     """
     code = payload.get("error")
-    return code if isinstance(code, str) and code else "unknown_error"
+    return code if isinstance(code, str) and code else _NO_ERROR_CODE
 
 
 def _slack_failure_kind(error: str) -> FailureKind:
@@ -664,11 +668,11 @@ class SlackRevocationHandler:
                 msg = "Slack revocation response was not a JSON object"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
             ok = data.get("ok")
-            if ok is True:
-                return True
-            if ok is not False:
+            if not isinstance(ok, bool):
                 msg = "Failed to revoke Slack token: the response states no outcome"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
+            if ok:
+                return True
             code = _slack_error_code(data)
             kind = _slack_failure_kind(code)
             if kind.retryable:

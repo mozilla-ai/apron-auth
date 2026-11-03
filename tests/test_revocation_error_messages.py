@@ -15,7 +15,7 @@ from urllib.parse import unquote, unquote_plus
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
-from support import REVOKED_STATUS
+from support import ANY_SUCCESS_STATUS, revoked_status
 
 from apron_auth.errors import RevocationError
 from apron_auth.models import Provider, ProviderConfig
@@ -126,7 +126,7 @@ async def test_token_that_cannot_be_sent_is_refused_without_a_request(name: str,
 def _revoked_status(name: str) -> int:
     """Return a status the configuration named by ``name`` has its token read as revoked by."""
     # The standard handler is not a provider and reads any success status as the token revoked.
-    return 200 if name == STANDARD else REVOKED_STATUS[Provider(name)]
+    return ANY_SUCCESS_STATUS if name == STANDARD else revoked_status(Provider(name))
 
 
 @pytest.mark.parametrize("name", sorted(set(CONFIGS) - SENDS_TOKEN_IN_HEADER))

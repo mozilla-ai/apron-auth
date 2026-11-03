@@ -582,7 +582,7 @@ await client.revoke_token(tokens.access_token)
 
 The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to either client to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
 
-A revocation that fails says whether to try again. `RevocationError.retryable` is true for a rate limit or an outage and false for a refusal, so a caller that honors it does not abandon a token the same request would revoke a minute later. Every handler decides this the same way. A status the provider documents is read as that provider documents it. Any other failure status is classified by the status, unless the response states a `Retry-After`, which is the provider saying the condition is temporary and is read ahead of the status; GitHub answers a secondary rate limit with 403 and names that header. A success status the provider does not document states no outcome at all, so it is refused as an answer this library cannot read rather than as the provider refusing. Slack also reports its own outages, rate limits and workspace migrations as a success status with `ok=false`, and those are retryable too, while a body carrying no boolean `ok` states no outcome either.
+A revocation that fails says whether to try again. `RevocationError.retryable` is true for a rate limit or an outage and false for a refusal, so a caller that honors it does not abandon a token the same request would revoke a minute later. Every handler decides this the same way. A status the provider documents is read as that provider documents it, and any other failure status is read as [any failed response is](#error-hierarchy). A success status the provider does not document states no outcome at all, so it is refused as an answer this library cannot read rather than as the provider refusing. Slack also reports its own outages, rate limits and workspace migrations as a success status with `ok=false`, and those are retryable too, while a body carrying no boolean `ok` states no outcome either.
 
 Two statuses are read less precisely than you may expect. GitHub answers 422 both for a validation failure and for a spam throttle, and nothing in the status tells them apart, so it reports a refusal and logs a WARNING. Google answers 400 with `invalid_token` for a token that was already revoked, which GitHub, HubSpot and Notion each report as success for their own equivalents; Google's reports a refusal.
 
@@ -893,12 +893,14 @@ When Trello ships OAuth 2.0, a preset will be added here.
 
 All exceptions inherit from `OAuthError`. The class says which step failed. Every error also carries a `kind`, a `FailureKind` that says what went wrong in a form code can read, and `retryable`, which is `True` when the same request may succeed later without any change.
 
+A response that states a `Retry-After` is read as temporary whatever its status is, on every request this library sends. A status alone cannot tell a throttle from a refusal where a server answers both with one status, and GitHub answers a secondary rate limit with 403. A redirect is the one exception: this library follows none, so no wait makes an endpoint stop redirecting. A header that states nothing states no condition.
+
 | `kind`          | Meaning                                                                                  | `retryable` |
 |-----------------|------------------------------------------------------------------------------------------|-------------|
 | `CONFIGURATION` | Your configuration or an argument cannot work.                                           | no          |
 | `REFUSED`       | apron-auth refused what the other side sent: a token, a document or a response that does not validate. | no |
 | `REJECTED`      | The other side refused the request as sent: a client error status or an OAuth error code. | no          |
-| `SERVER_ERROR`  | The other side answered with a server error or a rate limit.                             | yes         |
+| `SERVER_ERROR`  | The other side answered with a server error or a rate limit, or asked to be called again later. | yes |
 | `TIMEOUT`       | The request ran out of time.                                                             | yes         |
 | `UNEXPECTED`    | An error apron-auth does not classify, such as a fault in a handler you supplied.        | no          |
 | `UNREACHABLE`   | The other side could not be reached.                                                     | yes         |
