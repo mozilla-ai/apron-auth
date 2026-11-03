@@ -169,6 +169,8 @@ config = ProviderConfig(
 
 Build the URL to redirect the user to. State and PKCE are included automatically, and so is a nonce when the request asks for the `openid` scope. Keep the whole pending state, not only some of its fields.
 
+`OAuthClient` hands the pending state back to you to keep. A browser flow has nowhere to hold it between the redirect and the callback, so it uses `StoredStateClient` and a `StateStore` instead, which the next section shows. Do not return the state to the browser to compare there instead: a server that leaves the comparison to the browser redeems whatever code reaches its callback. A store does not finish the job on its own either, and the next section says what it leaves to you.
+
 ```python
 from apron_auth import OAuthClient
 
@@ -182,15 +184,62 @@ url, pending_state = await client.get_authorization_url(
 
 ### Code exchange
 
-When the user comes back, exchange the authorization response for tokens. Pass the whole response as an `AuthorizationCallback` with the `pending_state`, and `exchange_code` reads every parameter it needs off it: it refuses a `state` that does not match the pending state, validates `iss` against the configured issuer, and refuses a response that states no code before it consumes anything. Keep the pending state where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt. `exchange_code` refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) in either mode, before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below). With a `StateStore`, pass only the callback (see below).
+When the user comes back, exchange the authorization response for tokens. Pass the whole response as an `AuthorizationCallback`, and `exchange_code` reads every parameter it needs off it: it refuses a `state` that does not match the pending state, validates `iss` against the configured issuer, and refuses a response that states no code before it consumes anything. It also refuses a pending state older than `max_pending_age_seconds` (ten minutes by default) before it redeems the code. A `StateStore` that expires entries of its own can refuse one sooner (see below).
 
 When the authorization request asks for the `openid` scope, the authorization URL carries a nonce, and `exchange_code` raises `NonceValidationError` if the response carries no ID token, or one that does not carry the nonce. A custom `StateStore` must therefore keep the pending state's `nonce`. This binds the ID token to the request your application started, even when the provider does not enforce PKCE. `exchange_code` also raises `IdTokenValidationError` if the ID token's audience does not name your client, or names other parties without your client as the authorized party, or the token has expired, or it names another issuer when the config has one (OpenID Connect Core section 3.1.3.7). Either way the response's tokens are revoked first. The signature is not checked there, which the specification allows for a token received from the token endpoint over TLS; the OpenID and Microsoft identity handlers verify it.
 
+Where the pending state comes from is a property of the client you built, not something to remember at the call site. A client that holds a `StateStore` takes the callback alone. A client that does not takes the pending state with it.
+
+A browser flow serves the redirect and the callback from two separate requests, so the pending state belongs in a `StateStore` (see below) and the client is a `StoredStateClient`.
+
+The store settles that the `state` was minted by this application, has not expired, and is spent once, so a code presented with a state this application never issued, and a state presented twice, are both refused. It does not settle which browser is presenting the callback, because `consume` is given the state and nothing else. RFC 6749 section 10.12 puts that binding on the client, and without it an attacker who completes a provider login with their own account can send the resulting callback URL to a victim: the victim's request redeems the attacker's code, and an application that signs the victim in with those tokens has signed them in as the attacker. PKCE does not help here, because the stored code verifier belongs to the attacker's own flow.
+
+Bind the flow to the browser yourself. Pass a per-flow random value as `context` when you build the authorization URL, and set the same value in a `Secure`, `HttpOnly` cookie. Compare them before you exchange: the store is yours, so read your own record for the callback's `state` without consuming it, and a callback from another browser then redeems nothing.
+
 ```python
-from apron_auth import AuthorizationCallback
+import hmac
+import secrets
+
+from apron_auth import AuthorizationCallback, StoredStateClient
+
+store = MyStateStore()
+client = StoredStateClient(config, store)
+
+browser_id = secrets.token_urlsafe(32)
+url, _ = await client.get_authorization_url(
+    redirect_uri="https://yourapp.com/callback",
+    context={"browser_id": browser_id},
+)
+# Redirect the user to `url`. The store holds the pending state.
+# Set `browser_id` in a Secure, HttpOnly cookie, and read it back as `cookie_browser_id`.
 
 # `query` is the callback's query parameters: your framework's own query
 # mapping, or any mapping of the names to their values.
+callback = AuthorizationCallback.from_query(query)
+
+# `peek` is a read of your own store that does not consume the entry. The protocol
+# below does not require it, because only your application needs it.
+started_here = await store.peek(callback.state) if callback.state else None
+if started_here is None or not hmac.compare_digest(
+    str(started_here.context.get("browser_id", "")), cookie_browser_id
+):
+    raise PermissionError("this callback did not start in this browser")
+
+tokens = await client.exchange_code(callback)
+print(tokens.access_token)
+print(tokens.refresh_token)
+```
+
+Where your framework leaves you no room to check first, read the value off `tokens.context` after the exchange and compare it the same way, then revoke the tokens rather than dropping them. The code is spent by then and the tokens are live, so discarding your only reference to them leaves them valid at the provider.
+
+A flow that one process spans, such as a native or command-line sign-in, can hold the pending state itself and use `OAuthClient`. Keep it where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A server-side session is already keyed to one browser, so holding the pending state there binds the flow to that browser as well, and the check the store-backed flow above has to make by hand comes for free. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt, because only a `StateStore` refuses a pending state that is reused.
+
+```python
+from apron_auth import AuthorizationCallback, OAuthClient
+
+client = OAuthClient(config)
+url, pending_state = await client.get_authorization_url(redirect_uri="https://yourapp.com/callback")
+
 callback = AuthorizationCallback.from_query(query)
 tokens = await client.exchange_code(callback, pending_state=pending_state)
 print(tokens.access_token)
@@ -231,7 +280,7 @@ first. A model you persist must hold a `TokenSet`, not a
 before being handed to the provider's identity handler, so handlers
 never receive the refresh token or caller context.
 
-A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
+A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to the client. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
 OAuth protocol endpoints come from the provider config; identity API
 endpoints are provider-specific internals handled by the identity
 handler.
@@ -545,7 +594,7 @@ client = OAuthClient(config)
 await client.revoke_token(tokens.access_token)
 ```
 
-The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to `OAuthClient` to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
+The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to either client to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
 
 A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there. Construction refuses one that names another host, and the request refuses the host it is about to reach, so a handler that builds its URL per token, and a copy that rewrites the revocation endpoint past validation, are both held to the rule. A copy that rewrites the token endpoint as well states a different issuer, and the rule then holds it to that issuer rather than to the provider it is labeled with. A config that names no provider states no hosts to hold it to, and the caller passing one owns where its token is sent. The request also refuses a URL that does not state `https`, whatever provider the config names, unless the URL names a loopback host or the config waived plain HTTP for `revocation_url` through `ProviderConfig.unsafe.allow_plain_http`, and it refuses a URL carrying a credential in its authority, because an HTTP client presents that credential in place of the token.
 
@@ -554,7 +603,7 @@ A config whose provider exposes no revocation endpoint, such as Microsoft's or T
 If you need to persist OAuth state across requests (e.g. between the redirect and the callback), implement the `StateStore` protocol. `exchange_code` enforces `max_pending_age_seconds` itself, so a store expires entries only to bound its own storage. `MemoryStateStore` expires one past its `max_age`, ten minutes by default, drawing the boundary where the exchange draws it, so with it the shorter of the two limits applies.
 
 ```python
-from apron_auth import StateStore, OAuthPendingState
+from apron_auth import OAuthPendingState, StateStore, StoredStateClient
 
 class MyStateStore:
     async def save(self, state: OAuthPendingState) -> None:
@@ -565,7 +614,12 @@ class MyStateStore:
         # Look up and invalidate in one step. Return None if it's missing, or if your store expired it.
         ...
 
-client = OAuthClient(config, state_store=MyStateStore())
+    async def peek(self, state_key: str) -> OAuthPendingState | None:
+        # Not part of the protocol. Add a read that leaves the entry in place when you
+        # check the browser binding before exchanging, as the code exchange section shows.
+        ...
+
+client = StoredStateClient(config, MyStateStore())
 url, pending_state = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
 )
@@ -634,7 +688,7 @@ tokens = await client.exchange_code(
 )
 ```
 
-The config that `to_provider_config` returns names no built-in provider and allows no provider's identity handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to `OAuthClient`. An authorization server on a built-in provider's host gets no handler either, which would otherwise send the MCP server's access token to that provider's API.
+The config that `to_provider_config` returns names no built-in provider and allows no provider's identity handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to the client. An authorization server on a built-in provider's host gets no handler either, which would otherwise send the MCP server's access token to that provider's API.
 
 A `ProviderConfig` that you build by hand from `discover` output names no provider either, so it gets no built-in handler. Pass a handler for the MCP server's own identity contract. Pass a built-in handler, such as `linear.LinearIdentityHandler()` from `apron_auth.providers`, only when that provider's API accepts the MCP server's tokens.
 
@@ -652,7 +706,7 @@ The registration's `token_endpoint_auth_method` is a `TokenEndpointAuthMethod` v
 
 ### SSRF safety
 
-Discovery, registration, the token request, and token revocation all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and `OAuthClient` each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection; the `OAuthClient` factory governs both the token request and revocation. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
+Discovery, registration, the token request, and token revocation all fetch URLs taken from server-supplied metadata. `discover`, `register_client`, and either client each accept a **`transport_factory`** (`Callable[[str], httpx.AsyncBaseTransport]`) so the caller controls the actual outbound connection; the client's factory governs both the token request and revocation. For an **untrusted** `server_url` — for example one a user pasted — supply a transport that resolves DNS once and pins the connection to validated public addresses. The built-in HTTPS-only requirement and non-public-IP-literal block are defense-in-depth; they do **not** stop a hostname that resolves to an internal address. A `url_validator` hook is also accepted for URL-string policy.
 
 ## Verifying workload identity tokens
 
