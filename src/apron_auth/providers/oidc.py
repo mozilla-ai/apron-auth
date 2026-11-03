@@ -46,7 +46,12 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
+from apron_auth._discovery import (
+    CONFIDENTIAL_AUTH_METHODS,
+    MetadataListNotStringsError,
+    str_list,
+    strict_str_list,
+)
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
@@ -201,6 +206,13 @@ async def discover(
         document, key="registration_endpoint", field="registration endpoint", allow_insecure_http=allow_insecure_http
     )
 
+    try:
+        code_challenge_methods = strict_str_list(document, "code_challenge_methods_supported")
+        auth_methods = strict_str_list(document, "token_endpoint_auth_methods_supported")
+    except MetadataListNotStringsError as exc:
+        msg = f"OpenID provider configuration has a malformed {exc.key}"
+        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
+
     values: dict[str, Any] = {
         "authorize_url": authorize_url,
         "token_url": token_url,
@@ -208,8 +220,8 @@ async def discover(
         "revocation_url": revocation_url,
         # An advisory list that a provider malforms should not fail discovery, so it is read leniently.
         "scopes_supported": str_list(document.get("scopes_supported")),
-        "code_challenge_methods": _strict_str_list(document, "code_challenge_methods_supported"),
-        "token_endpoint_auth_methods": _strict_str_list(document, "token_endpoint_auth_methods_supported"),
+        "code_challenge_methods": code_challenge_methods,
+        "token_endpoint_auth_methods": auth_methods,
         "issuer": issuer,
         "iss_parameter_supported": document.get("authorization_response_iss_parameter_supported") is True,
         "userinfo_url": userinfo_url,
@@ -830,31 +842,6 @@ def _claim_str(source: dict[str, Any] | None, name: str) -> str | None:
         return None
     value = source.get(name)
     return value if isinstance(value, str) and value else None
-
-
-def _strict_str_list(document: dict[str, Any], key: str) -> list[str]:
-    """Return a security-relevant list member, refusing a malformed one.
-
-    A present but malformed value is an error, because these lists gate a refusal.
-    Treating ``"plain"`` as "not advertised" would take the permissive branch.
-
-    Args:
-        document: The configuration document.
-        key: The member to read.
-
-    Returns:
-        The strings, or ``[]`` when the member is absent.
-
-    Raises:
-        OidcDiscoveryError: If the member is present but not a list of strings.
-    """
-    value = document.get(key)
-    if value is None:
-        return []
-    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
-        msg = f"OpenID provider configuration has a malformed {key}"
-        raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
-    return value
 
 
 def _select_auth_method(advertised: Sequence[str]) -> TokenEndpointAuthMethod:

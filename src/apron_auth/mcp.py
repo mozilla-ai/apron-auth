@@ -30,9 +30,11 @@ from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
     IssuerNotDeclaredError,
     IssuerRefusalReason,
+    MetadataListNotStringsError,
     discovery_client,
     require_declared_issuer,
     str_list,
+    strict_str_list,
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
@@ -208,14 +210,21 @@ async def discover(
     resource = resource_meta.get("resource")
     if isinstance(resource, str):
         _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
+    try:
+        code_challenge_methods = strict_str_list(server_meta, "code_challenge_methods_supported")
+        auth_methods = strict_str_list(server_meta, "token_endpoint_auth_methods_supported")
+    except MetadataListNotStringsError as exc:
+        msg = f"authorization server metadata has a malformed {exc.key}"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
     return ServerMetadata(
         authorize_url=authorize_url,
         token_url=token_url,
         registration_url=registration_url,
         revocation_url=revocation_url,
+        # An advisory list that a server malforms should not fail discovery, so it is read leniently.
         scopes_supported=str_list(server_meta.get("scopes_supported")),
-        code_challenge_methods=str_list(server_meta.get("code_challenge_methods_supported")),
-        token_endpoint_auth_methods=str_list(server_meta.get("token_endpoint_auth_methods_supported")),
+        code_challenge_methods=code_challenge_methods,
+        token_endpoint_auth_methods=auth_methods,
         issuer=auth_server,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,

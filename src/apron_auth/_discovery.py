@@ -47,6 +47,25 @@ class IssuerNotDeclaredError(Exception):
         self.reason = reason
 
 
+class MetadataListNotStringsError(Exception):
+    """Internal refusal of a metadata list member that gates a decision and is not a list of strings.
+
+    NOTE: This is not one of the library's errors, so each caller must wrap it in the error for its own phase.
+
+    Attributes:
+        key: The member that was refused.
+    """
+
+    def __init__(self, key: str) -> None:
+        """Create the refusal.
+
+        Args:
+            key: The member that is not a list of strings.
+        """
+        super().__init__(key)
+        self.key = key
+
+
 def require_declared_issuer(document: Mapping[str, object], expected: str) -> None:
     """Check that a metadata document declares ``expected`` as its issuer.
 
@@ -95,3 +114,27 @@ def str_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
     return []
+
+
+def strict_str_list(document: Mapping[str, object], key: str) -> list[str]:
+    """Return a metadata list member that gates a decision, refusing a malformed one.
+
+    A present but malformed value is an error rather than an absence. Read leniently it would become an
+    empty list, which is what an unadvertised member looks like, and the permissive branch would follow.
+
+    Args:
+        document: The metadata document.
+        key: The member to read.
+
+    Returns:
+        The strings the member states, or ``[]`` when it is absent.
+
+    Raises:
+        MetadataListNotStringsError: If the member is present and is not a list of strings.
+    """
+    value = document.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+        raise MetadataListNotStringsError(key)
+    return value

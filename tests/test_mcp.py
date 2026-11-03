@@ -966,6 +966,54 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.CONFIGURATION
 
 
+class TestTheGatingMetadataListsAreParsedStrictly:
+    """Test that a malformed list gating a security decision is refused, not read as "not advertised"."""
+
+    @pytest.mark.parametrize("key", ["code_challenge_methods_supported", "token_endpoint_auth_methods_supported"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("S256", id="a string"),
+            pytest.param(42, id="a number"),
+            pytest.param({"S256": True}, id="an object"),
+            pytest.param(["S256", 42], id="a list with a number"),
+            pytest.param(["S256", None], id="a list with a null"),
+            pytest.param([["S256"]], id="a list of lists"),
+        ],
+    )
+    async def test_a_malformed_value_is_refused(self, httpx_mock: HTTPXMock, key: str, value: object) -> None:
+        """Read leniently, a malformed value becomes an empty list, which takes the permissive branch."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(**{key: value}))
+
+        with pytest.raises(McpDiscoveryError, match=f"malformed {key}") as exc_info:
+            await discover("https://mcp.example.com")
+
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize("key", ["code_challenge_methods_supported", "token_endpoint_auth_methods_supported"])
+    async def test_an_absent_member_keeps_the_default(self, httpx_mock: HTTPXMock, key: str) -> None:
+        """An absent member is not advertised, which the permissive branch is for."""
+        payload = _asm_payload()
+        del payload[key]
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=payload)
+
+        meta = await discover("https://mcp.example.com")
+
+        assert getattr(meta, "code_challenge_methods" if "challenge" in key else "token_endpoint_auth_methods") == []
+
+    @pytest.mark.parametrize("value", [pytest.param("read", id="a string"), pytest.param(["read", 42], id="a list")])
+    async def test_an_advisory_list_is_still_read_leniently(self, httpx_mock: HTTPXMock, value: object) -> None:
+        """``scopes_supported`` gates nothing, so a provider malforming it must not fail discovery."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(scopes_supported=value))
+
+        meta = await discover("https://mcp.example.com")
+
+        assert meta.scopes_supported == ([] if value == "read" else ["read"])
+
+
 class TestIsBlockedHost:
     @pytest.mark.parametrize(
         ("host", "blocked"),
