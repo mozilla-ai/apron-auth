@@ -727,11 +727,19 @@ Discovery, registration, the token request, and token revocation all fetch URLs 
 
 A workload on Google Cloud, GitHub Actions or Kubernetes can fetch a token its platform signed, naming the workload and an audience it chose. A server that trusts the platform can accept that token in place of a secret the workload would otherwise hold, as the OAuth 2.0 JWT bearer grant does (RFC 7523). `apron_auth.workload` is the server side of that: it checks the token, and the server decides what the identity it names may do.
 
+### What this verifies, and what it leaves to you
+
+apron-auth verifies a credential as the protocol defines it: the signature against the issuer's published keys, then `iss`, `aud`, `exp`, `iat` and `nbf`, then the identity the token names. It decides nothing about what a workload may do, finds no credentials for you, and holds no trust list of its own. The issuers you accept and the audiences you answer to are your configuration, passed in as typed values.
+
 ```python
+from apron_auth import WorkloadIssuer
 from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError
 from apron_auth.workload import WorkloadTokenVerifier
 
-verifier = WorkloadTokenVerifier("https://accounts.google.com", transport_factory=my_transport_factory)
+verifier = WorkloadTokenVerifier(
+    [WorkloadIssuer(issuer="https://accounts.google.com")],
+    transport_factory=my_transport_factory,
+)
 
 try:
     identity = await verifier.verify(token, audience="https://gateway.example.com")
@@ -746,13 +754,40 @@ identity.subject  # the platform's stable identifier for the workload
 identity.email  # set only when the token marks it verified, as Google does for a service account
 ```
 
-The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Pass `jwks_url` to skip discovery. The document is read once, so an issuer that moves its key set needs a new verifier. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. Only public-key algorithms are accepted, and a published RSA key shorter than 2048 bits is skipped, here and in every OpenID sign-in. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
+`verify` is the one-shot for a server whose accepted audience is fixed. It is the two steps below, called one after the other.
 
-`audience` is required. Pass the audience your server answers to, or several of which the token must name one; an empty collection is a `ConfigurationError`, because it would accept every audience. `audience=None` checks only that the token names some audience, for a server that matches the audience itself, for example against rules it stores. Such a server must then match it before trusting the token, because a token minted for another service would otherwise pass.
+### When the accepted audiences come from a lookup
+
+A server that decides its accepted audiences per tenant calls the two steps itself, so the signature is checked before the lookup runs:
+
+```python
+# Step one checks the signature and every claim but the audience match.
+checked = await verifier.check(token)
+
+# `checked` states only `issuer` and `audiences` — enough to narrow a lookup by a verified value.
+accepted = await my_store.audiences_for(checked.issuer, checked.audiences)
+
+# Step two names the workload, and only once an audience you accept is among them.
+identity = checked.accept(accepted)
+```
+
+The subject is not readable until `accept` returns an identity, so a lookup cannot act on a workload whose token was minted for another service.
+
+### Accepting several issuers
+
+Pass one `WorkloadIssuer` per platform you trust. A token is checked against the published keys of the issuer its `iss` names and against no other, so accepting several never lets one of them sign for another. The claim is read before any signature is checked and only selects which keys to use: the signature check and the claim validation that follow both hold the token to the issuer it selected. A token naming an issuer you did not pass is refused before any request is sent. Each issuer keeps its own discovery state, so one that is unreachable refuses only its own tokens.
+
+### Keys, and the audience rule
+
+The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Set `WorkloadIssuer.jwks_url` to skip discovery. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. A token naming a key the key set lacks also has the configuration document read again, at most once a minute, so an issuer that moves its key set is followed without a restart. Only public-key algorithms are accepted, and a published RSA key shorter than 2048 bits is skipped, here and in every OpenID sign-in. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
+
+`audience` is required, at both entry points. Pass the audience your server answers to, or several of which the token must name one. One that names nothing — an empty collection, an empty name, or `None` — is a `ConfigurationError`, because it would accept a token minted for any service.
 
 A matching audience proves the token was minted for your server, not that the workload is one you trust: on a shared platform anyone can mint a token for any audience, so any Google Cloud service account or any GitHub repository can present one. Decide what the token may do from its subject and the claims that name its owner. Prefer a platform's immutable identifiers to names that can be reused, such as GitHub's `repository_id` and `repository_owner_id` over a `sub` built from the repository name, which a renamed or recreated repository takes over.
 
 The configuration document and key set URLs are fetched through `transport_factory`, as in [SSRF safety](#ssrf-safety). The issuer is the caller's, but the key set URL comes from the issuer's document.
+
+An issuer on the loopback interface may use `http` with no opt-in, because a request to it reaches no network. For a development issuer that is not loopback, build it with `WorkloadIssuer.unsafe.allow_plain_http("issuer", issuer="http://keycloak:8080")`. A waiver names one field at a time, cannot arrive as data, and is for local development only.
 
 ## Provider presets
 
