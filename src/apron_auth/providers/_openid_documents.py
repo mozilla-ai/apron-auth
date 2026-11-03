@@ -46,8 +46,7 @@ def require_url(
         allow_insecure_http: Let an ``http`` URL through, logging a WARNING.
         caller_supplied: The caller chose this value, or this library derived it from one the caller
             chose. A value the other side chose is not the caller's even where the caller passes it on,
-            because a refusal of it names no fault the caller can fix. No entry point here takes such a
-            value today; MCP discovery's metadata hint is one.
+            because a refusal of it names no fault the caller can fix.
         is_issuer: Apply the stricter issuer rules.
 
     Returns:
