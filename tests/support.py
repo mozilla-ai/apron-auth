@@ -2,10 +2,25 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from apron_auth.models import Provider
+from apron_auth.models import Provider
+
+# One status each provider's revocation handler reads as the token revoked. No single status serves
+# them all, because each provider documents its own and a handler refuses every status it does not
+# state. A test about the request rather than the answer reads this so it reaches the happy path.
+REVOKED_STATUS: dict[Provider, int] = {
+    Provider.ATLASSIAN: 200,
+    Provider.GITHUB: 204,
+    Provider.GOOGLE: 200,
+    Provider.HUBSPOT: 204,
+    Provider.LINEAR: 200,
+    Provider.MICROSOFT: 200,
+    Provider.NOTION: 200,
+    Provider.SALESFORCE: 200,
+    Provider.SLACK: 200,
+    Provider.TYPEFORM: 200,
+}
 
 
 class VaryFacts(Protocol):

@@ -64,7 +64,12 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset, scope_sequence
-from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
+from apron_auth.providers._revocation import (
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 from apron_auth.scopes import scope_words
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
@@ -621,14 +626,17 @@ class SlackRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when Slack confirms revocation with the boolean ``"ok": true``.
-            ``False`` for an error status, or for an ``ok`` value that is missing or anything other than ``true``.
+            ``True`` when Slack confirms revocation with the boolean ``"ok": true``, and ``False`` where
+            the body states a condition no retry clears.
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
                 sending a token to.
-            RevocationError: If the revocation URL is invalid, the request cannot be sent,
-                the request fails to reach the endpoint, or its response body is not a valid JSON object.
+            RevocationError: If the revocation URL is invalid, the request cannot be sent, the request
+                fails to reach the endpoint, its response body is not a valid JSON object, the endpoint
+                answers a status other than a success, or the body names one of Slack's own outages or
+                rate limits.
+                Its kind says whether the same request may pass later.
                 The caught error is not attached as its cause or context.
         """
         request = RevocationRequest(
@@ -638,7 +646,7 @@ class SlackRevocationHandler:
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:
-            return False
+            refuse_an_unexpected_status(response, label="Slack")
         try:
             data = decode_json_body(response)
         except ValueError:
@@ -647,7 +655,12 @@ class SlackRevocationHandler:
             if not isinstance(data, dict):
                 msg = "Slack revocation response was not a JSON object"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
-            return data.get("ok") is True
+            if data.get("ok") is True:
+                return True
+            code = _slack_error_code(data)
+            if _slack_failure_kind(code) is FailureKind.SERVER_ERROR:
+                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=FailureKind.SERVER_ERROR)
+            return False
         # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise RevocationError(unparsed, kind=FailureKind.REFUSED)

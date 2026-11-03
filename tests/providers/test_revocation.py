@@ -9,6 +9,7 @@ from types import ModuleType
 import httpx
 import pytest
 from pydantic import SecretStr
+from support import REVOKED_STATUS
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import Provider, ProviderConfig
@@ -26,24 +27,9 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
-from apron_auth.providers._revocation import StandardRevocationHandler
+from apron_auth.providers._revocation import StandardRevocationHandler, refuse_an_unexpected_status
 
 TOKEN = "live-access-token"  # pragma: allowlist secret
-
-# One status each provider's handler reads as the token revoked. No single status serves them all,
-# because each provider documents its own, and a handler now refuses every status it does not state.
-REVOKED_STATUS: dict[Provider, int] = {
-    Provider.ATLASSIAN: 200,
-    Provider.GITHUB: 204,
-    Provider.GOOGLE: 200,
-    Provider.HUBSPOT: 204,
-    Provider.LINEAR: 200,
-    Provider.MICROSOFT: 200,
-    Provider.NOTION: 200,
-    Provider.SALESFORCE: 200,
-    Provider.SLACK: 200,
-    Provider.TYPEFORM: 200,
-}
 
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
@@ -261,6 +247,38 @@ async def test_every_handler_reports_a_retryable_status_as_retryable(provider: P
 
     assert refusal.value.kind is FailureKind.SERVER_ERROR
     assert refusal.value.retryable
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        pytest.param(200, FailureKind.REFUSED, id="a success the provider does not state"),
+        pytest.param(204, FailureKind.REFUSED, id="another success"),
+        pytest.param(302, FailureKind.REFUSED, id="a redirect"),
+        pytest.param(418, FailureKind.REJECTED, id="a client error"),
+        pytest.param(429, FailureKind.SERVER_ERROR, id="a rate limit"),
+        pytest.param(503, FailureKind.SERVER_ERROR, id="an outage"),
+    ],
+)
+def test_the_shared_rule_reads_a_status_by_what_it_states(status: int, expected: FailureKind) -> None:
+    """A success states no outcome, so refusing the answer is this library's refusal, not the other side's."""
+    with pytest.raises(RevocationError) as refusal:
+        refuse_an_unexpected_status(httpx.Response(status), label="Example")
+
+    assert refusal.value.kind is expected
+
+
+async def test_a_success_a_provider_does_not_state_is_not_read_as_a_rejection() -> None:
+    """GitHub answers 204 or 404, so a 200 leaves the outcome unknown rather than stating a refusal."""
+    config = _config(Provider.GITHUB)
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(200))
+    assert handler is not None
+
+    with pytest.raises(RevocationError, match="states no outcome") as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REFUSED
+    assert refusal.value.retryable is False
 
 
 @pytest.mark.parametrize("provider", list(Provider))

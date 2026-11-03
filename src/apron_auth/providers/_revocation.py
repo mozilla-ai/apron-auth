@@ -141,9 +141,10 @@ def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) 
     """Refuse a revocation response whose status the provider states nothing about.
 
     A provider documents the statuses it answers with, and any other status leaves the outcome
-    unknown. The kind the status decides says whether the same request may pass later, so a rate
-    limit or an outage is not reported as the provider refusing to revoke a token it would revoke a
-    minute later.
+    unknown. A failure status is classified by the status, so a rate limit or an outage is not reported
+    as the provider refusing to revoke a token it would revoke a minute later. A success the provider
+    does not document states no outcome at all, and is refused as an answer this library cannot read
+    rather than as the other side refusing the request.
 
     Args:
         response: The response whose status is classified.
@@ -154,6 +155,9 @@ def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) 
     """
     failure = status_failure(response.status_code)
     subject = "token" if label is None else f"{label} token"
+    if response.is_success:
+        msg = f"Failed to revoke {subject}: the endpoint answered {failure.description}, which states no outcome"
+        raise RevocationError(msg, kind=FailureKind.REFUSED)
     raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
