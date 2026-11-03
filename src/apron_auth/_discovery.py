@@ -47,6 +47,25 @@ class IssuerNotDeclaredError(Exception):
         self.reason = reason
 
 
+class MetadataListNotStringsError(Exception):
+    """Internal refusal of a metadata list member that gates a decision and is not a list of strings.
+
+    NOTE: This is not one of the library's errors, so each caller must wrap it in the error for its own phase.
+
+    Attributes:
+        key: The member that was refused.
+    """
+
+    def __init__(self, key: str) -> None:
+        """Create the refusal.
+
+        Args:
+            key: The member that is not a list of strings.
+        """
+        super().__init__(key)
+        self.key = key
+
+
 def require_declared_issuer(document: Mapping[str, object], expected: str) -> None:
     """Check that a metadata document declares ``expected`` as its issuer.
 
@@ -95,3 +114,31 @@ def str_list(value: object) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
     return []
+
+
+def strict_str_list(document: Mapping[str, object], key: str) -> list[str]:
+    """Return a metadata list member that gates a decision, refusing a malformed one.
+
+    A present but malformed value is an error rather than an absence. Read leniently it becomes an empty
+    list, which is what an unadvertised member looks like, so a reader cannot tell a server that advertised
+    nothing from one whose value it could not read, and the default for the first is applied to the second.
+
+    Args:
+        document: The metadata document.
+        key: The member to read.
+
+    Returns:
+        The strings the member states, or ``[]`` when the document states the member not at all.
+
+    Raises:
+        MetadataListNotStringsError: If the member is present and is not a list of strings. A member
+            written as ``null`` is present, because a document stating one says something about it, and
+            reading that as an absence is the ambiguity this refuses.
+    """
+    if key not in document:
+        return []
+    value = document[key]
+    if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
+        raise MetadataListNotStringsError(key)
+    # A new list, so a caller cannot reach back into the document through it, as the lenient reader also does not.
+    return list(value)

@@ -701,7 +701,7 @@ class TestSecurityRelevantLists:
     """Lists that gate a security refusal must be well-formed when present."""
 
     @pytest.mark.parametrize("field", ["code_challenge_methods_supported", "token_endpoint_auth_methods_supported"])
-    @pytest.mark.parametrize("bad", ["plain", 5, {"S256": True}, ["S256", 1]])
+    @pytest.mark.parametrize("bad", ["plain", 5, {"S256": True}, ["S256", 1], None])
     async def test_refuses_a_malformed_list(self, httpx_mock: HTTPXMock, field: str, bad: object):
         """A string would otherwise read as "not advertised" and take the permissive branch."""
         httpx_mock.add_response(url=DOCUMENT_URL, json=document(**{field: bad}))
