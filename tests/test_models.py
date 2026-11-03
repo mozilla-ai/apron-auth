@@ -33,6 +33,7 @@ from apron_auth.models import (
     ScopeMetadata,
     ServerMetadata,
     TenancyContext,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
     TokenSet,
     UrlField,
@@ -696,6 +697,7 @@ class TestUnknownFieldRefusals:
             "OAuthPendingState",
             "ProviderConfig",
             "ServerMetadata",
+            "TimeoutPolicy",
             "TokenSet",
             "UserToken",
         }
@@ -2527,6 +2529,36 @@ class TestBrowserBoundAuthorization:
         )
         with pytest.raises(ConfigurationError):
             authorization.browser_token = "another-browsers-token"
+
+
+class TestTimeoutPolicy:
+    def test_the_defaults_bound_a_connect_a_whole_request_and_the_cleanup(self) -> None:
+        policy = TimeoutPolicy()
+
+        assert policy.connect_seconds == 5.0
+        assert policy.request_seconds == 10.0
+        assert policy.cleanup_seconds == 10.0
+
+    @pytest.mark.parametrize("limit", ["cleanup_seconds", "connect_seconds", "request_seconds"])
+    @pytest.mark.parametrize(
+        "value",
+        [0, -1.0, float("inf"), float("nan")],
+        ids=["zero", "negative", "infinite", "not-a-number"],
+    )
+    def test_a_limit_that_waits_forever_or_refuses_every_request_is_refused(self, limit: str, value: float) -> None:
+        """A limit a caller can turn off is a limit that is not there, which is what this policy exists to stop."""
+        with pytest.raises(ConfigurationError, match=f"{limit} must be a positive finite number"):
+            TimeoutPolicy(**{limit: value})
+
+    def test_an_unknown_field_is_refused(self) -> None:
+        """A caller writes this model, so a mistyped limit cannot be dropped and leave the default in force."""
+        with pytest.raises(ConfigurationError):
+            TimeoutPolicy(read_seconds=1.0)
+
+    def test_frozen(self) -> None:
+        policy = TimeoutPolicy()
+        with pytest.raises(ConfigurationError):
+            policy.request_seconds = 1.0
 
 
 class TestProviderFactsAreDerived:

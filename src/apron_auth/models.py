@@ -59,6 +59,15 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# The default wall clock, in seconds, allowed for revoking the tokens of a refused response.
+_DEFAULT_CLEANUP_SECONDS = 10.0
+
+# The default limit, in seconds, on establishing the connection for an outbound request.
+_DEFAULT_CONNECT_SECONDS = 5.0
+
+# The default limit, in seconds, on a whole outbound request.
+_DEFAULT_REQUEST_SECONDS = 10.0
+
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
 
@@ -718,6 +727,44 @@ class _RefusesWithoutRepeating(BaseModel):
             refusals = _refusal_text(error)
         # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
         raise ConfigurationError(refusals)
+
+
+class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """How long this library waits for an outbound request, and for the cleanup after a refused one.
+
+    One policy governs every request this library sends. Each limit is a positive finite number of
+    seconds, so no limit can be turned off.
+
+    Attributes:
+        cleanup_seconds: The wall clock allowed for revoking the tokens of a response this library
+            refuses. The revocation is canceled past it, so the refusal is reported rather than waited on.
+        connect_seconds: The limit on establishing a connection, which counts toward the whole-request limit.
+        request_seconds: The limit on a whole request, however many steps it takes.
+    """
+
+    cleanup_seconds: float = _DEFAULT_CLEANUP_SECONDS
+    connect_seconds: float = _DEFAULT_CONNECT_SECONDS
+    request_seconds: float = _DEFAULT_REQUEST_SECONDS
+
+    @model_validator(mode="after")
+    def _every_limit_is_positive_and_finite(self) -> TimeoutPolicy:
+        """Reject a limit that waits forever or refuses every request.
+
+        Returns:
+            The validated policy, unchanged.
+
+        Raises:
+            ValueError: If a limit is zero, negative, infinite, or not a number.
+        """
+        for name in type(self).model_fields:
+            limit = getattr(self, name)
+            if not math.isfinite(limit) or limit <= 0:
+                msg = f"{name} must be a positive finite number"
+                raise ValueError(msg)
+        return self
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
 
 
 class ScopeMetadata(_RefusesWithoutRepeating, frozen=True):
