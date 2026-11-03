@@ -35,7 +35,7 @@ stored = StoredStateClient(config, store)
 
 async def each_client_accepts_its_own_shape() -> None:
     await caller_kept.exchange_code(callback, pending_state=pending_state)
-    await stored.exchange_code(callback)
+    await stored.exchange_code(callback, browser_token="browser-token")
 
 
 async def a_caller_kept_client_needs_the_pending_state() -> None:
@@ -43,7 +43,15 @@ async def a_caller_kept_client_needs_the_pending_state() -> None:
 
 
 async def a_stored_state_client_takes_no_pending_state() -> None:
-    await stored.exchange_code(callback, pending_state=pending_state)  # ty: ignore[unknown-argument]
+    await stored.exchange_code(
+        callback,
+        pending_state=pending_state,  # ty: ignore[unknown-argument]
+        browser_token="browser-token",
+    )
+
+
+async def a_stored_state_client_needs_the_browser_token() -> None:
+    await stored.exchange_code(callback)  # ty: ignore[missing-argument]
 
 
 def a_caller_kept_client_takes_no_store() -> None:

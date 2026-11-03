@@ -1899,3 +1899,34 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
+
+
+class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """An authorization request built for one browser, with the token that binds its callback to it.
+
+    Construction and validation refuse a field this model does not define, and a refusal repeats no
+    value it was given, because this model holds a secret.
+    NOTE: That covers a refusal alone. Rendering this model, or dumping it, states the browser token as
+    any other model holding a credential does, and it belongs in nothing the browser can read.
+
+    Attributes:
+        url: The authorization URL to send the browser to.
+        state: The ``state`` the request sends, which the callback returns unchanged. It is derived from
+            the browser token and reveals nothing the token can be recovered from, so it names this flow
+            wherever the application records or looks one up.
+        browser_token: The secret that binds the request to the browser it was built for, which the code
+            exchange needs back.
+            NOTE: Callers must keep this where only that browser can present it, such as a ``Secure``,
+            ``HttpOnly`` cookie, and must keep it out of the authorization URL and out of any page the
+            browser renders. A token another browser can read binds the request to nothing.
+    """
+
+    url: str
+    state: str
+    browser_token: str
+
+    # No URL rule: UrlField names no field of this model, and the config the authorization URL is built
+    # from states its transport under rules of its own.
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE

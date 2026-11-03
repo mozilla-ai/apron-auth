@@ -22,6 +22,7 @@ from apron_auth.models import (
     RESERVED_AUTHORIZATION_PARAMS,
     ApplicationType,
     AuthorizationCallback,
+    BrowserBoundAuthorization,
     ClientRegistration,
     FreshTokenSet,
     IdentityMaterial,
@@ -681,6 +682,7 @@ class TestUnknownFieldRefusals:
     def test_the_models_a_caller_states_are_the_ones_that_refuse_an_unknown_field(self) -> None:
         """A model a caller writes or reloads refuses an unknown field, so a mistyped one cannot be dropped.
 
+        So does one this library states from values of its own, which no response reaches.
         The rest are built from a provider's response by this library, and every field they drop
         fails closed, so a refusal there would reject data rather than protect anything.
         """
@@ -688,6 +690,7 @@ class TestUnknownFieldRefusals:
 
         assert refusing == {
             "AuthorizationCallback",
+            "BrowserBoundAuthorization",
             "ClientRegistration",
             "FreshTokenSet",
             "OAuthPendingState",
@@ -2487,6 +2490,43 @@ class TestOAuthPendingState:
         )
         with pytest.raises(ConfigurationError):
             state.state = "other"
+
+
+class TestBrowserBoundAuthorization:
+    def test_it_carries_the_url_the_state_and_the_browser_token(self) -> None:
+        authorization = BrowserBoundAuthorization(
+            url="https://provider.example.com/authorize?state=state-for-this-browser",
+            state="state-for-this-browser",
+            browser_token="browser-token-abc",
+        )
+        assert authorization.url == "https://provider.example.com/authorize?state=state-for-this-browser"
+        assert authorization.state == "state-for-this-browser"
+        assert authorization.browser_token == "browser-token-abc"
+
+    def test_it_states_no_pending_state(self) -> None:
+        """The store holds the pending state, so the PKCE verifier never travels beside the browser token."""
+        assert "pending_state" not in BrowserBoundAuthorization.model_fields
+
+    def test_an_unknown_field_is_refused_without_repeating_the_browser_token(self) -> None:
+        """This model carries the token an exchange authenticates a callback with, so a refusal states none of it."""
+        with pytest.raises(ConfigurationError) as refusal:
+            BrowserBoundAuthorization(
+                url="https://provider.example.com/authorize",
+                state="state-for-this-browser",
+                browser_token="browser-token-abc",
+                browser_id="browser-token-abc",
+            )
+
+        assert "browser-token-abc" not in str(refusal.value)
+
+    def test_frozen(self) -> None:
+        authorization = BrowserBoundAuthorization(
+            url="https://provider.example.com/authorize",
+            state="state-for-this-browser",
+            browser_token="browser-token-abc",
+        )
+        with pytest.raises(ConfigurationError):
+            authorization.browser_token = "another-browsers-token"
 
 
 class TestProviderFactsAreDerived:
