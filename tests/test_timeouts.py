@@ -13,8 +13,8 @@ from apron_auth.errors import FailureKind
 from apron_auth.models import TimeoutPolicy
 from apron_auth.providers import google
 
-# What bounds a request as a whole. A request awaited outside one of these is bounded by nothing.
-_BOUNDERS = {"fetch_identity_json", "within_request_limit"}
+# The HTTP clients this library builds, each of which states the policy's per-step limits.
+_CLIENTS = {"AsyncClient", "AsyncOAuth2Client"}
 
 # The client methods that send a request.
 _SENDERS = {"fetch_token", "get", "post", "request", "send"}
@@ -51,7 +51,7 @@ class TestWithinRequestLimit:
             return "answered"
 
         with pytest.raises(httpx.TimeoutException):
-            await within_request_limit(never(), TimeoutPolicy(request_seconds=0.01))
+            await within_request_limit(never(), TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
 
     async def test_the_refusal_is_classified_as_a_timeout(self) -> None:
         async def never() -> str:
@@ -59,7 +59,7 @@ class TestWithinRequestLimit:
             return "answered"
 
         with pytest.raises(httpx.TimeoutException) as refusal:
-            await within_request_limit(never(), TimeoutPolicy(request_seconds=0.01))
+            await within_request_limit(never(), TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
 
         assert http_failure(refusal.value) == (FailureKind.TIMEOUT, "request timed out")
 
@@ -72,18 +72,40 @@ class TestWithinRequestLimit:
 
 
 class TestEveryClientTheLibraryBuildsStatesItsLimits:
-    def test_no_request_path_builds_a_client_without_limits(self) -> None:
-        """A client built without limits bounds nothing, and a request path added later is where that is missed."""
-        unbounded = []
+    def test_no_request_path_builds_a_client_outside_the_policy(self) -> None:
+        """A client built with limits of its own, or with none, is a request path the policy does not reach."""
+        outside = []
         for path in sorted(_SRC.rglob("*.py")):
             for node in ast.walk(ast.parse(path.read_text())):
                 if not isinstance(node, ast.Call):
                     continue
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
-                if name not in {"AsyncClient", "AsyncOAuth2Client"}:
+                if name not in _CLIENTS:
                     continue
-                if not any(keyword.arg == "timeout" for keyword in node.keywords):
-                    unbounded.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+                limits = next((keyword.value for keyword in node.keywords if keyword.arg == "timeout"), None)
+                from_the_policy = isinstance(limits, ast.Call) and getattr(limits.func, "id", "") == "httpx_timeout"
+                if not from_the_policy:
+                    outside.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+
+        assert outside == []
+
+
+class TestEveryRequestIsBoundedAsAWhole:
+    def test_no_request_is_awaited_where_nothing_bounds_it(self) -> None:
+        """A client's own limits bound one step each, so a request awaited where it is made is unbounded.
+
+        NOTE: This sees a request awaited at the point it is made. It cannot see one stored and awaited
+        later, nor a send inside a third-party client, such as authlib's own token request.
+        """
+        unbounded = [
+            f"{path.relative_to(_SRC)}:{node.value.lineno}"
+            for path in sorted(_SRC.rglob("*.py"))
+            for node in ast.walk(ast.parse(path.read_text()))
+            if isinstance(node, ast.Await)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr in _SENDERS
+        ]
 
         assert unbounded == []
 
@@ -114,31 +136,3 @@ class TestEveryBuilderTakesThePolicy:
         config = google.preset("client", "secret", scopes=["openid"])  # pragma: allowlist secret
 
         assert config.timeouts == TimeoutPolicy()
-
-
-class TestEveryRequestIsBoundedAsAWhole:
-    def test_no_request_is_awaited_outside_a_whole_request_limit(self) -> None:
-        """A client's own limits bound one step each, so a request awaited outside one of these is unbounded."""
-        unbounded = []
-        for path in sorted(_SRC.rglob("*.py")):
-            tree = ast.parse(path.read_text())
-            bounded = {
-                (argument.lineno, argument.col_offset)
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Call)
-                and (node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", ""))
-                in _BOUNDERS
-                for argument in node.args
-                if isinstance(argument, ast.Call)
-            }
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
-                    continue
-                call = node.value
-                if not isinstance(call.func, ast.Attribute) or call.func.attr not in _SENDERS:
-                    continue
-                if (call.lineno, call.col_offset) in bounded:
-                    continue
-                unbounded.append(f"{path.relative_to(_SRC)}:{call.lineno}")
-
-        assert unbounded == []
