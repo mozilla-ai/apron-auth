@@ -590,6 +590,8 @@ One policy bounds every request this library sends: the code exchange and the re
 
 A whole-request limit is not a per-step one. An HTTP client's own limits bound a single read or write, so a response arriving slowly in many steps outlives all of them. `request_seconds` bounds the request itself, and a request that passes it fails with the `TIMEOUT` failure kind.
 
+The token, revocation and identity requests had no whole-request limit before 0.21.0, so a provider that takes longer than ten seconds in total now fails where it used to be waited on. Raise `request_seconds` for a provider known to be slow: a cold-starting self-hosted OpenID provider, an Atlassian identity lookup that fans out across a user's sites, or a HubSpot introspection call.
+
 Set it where you build the configuration, and every request for that provider runs under it. Each builder takes it as a keyword, and a configuration written by hand takes it as a field:
 
 ```python
