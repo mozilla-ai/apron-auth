@@ -734,7 +734,7 @@ class _OAuthClientBase:
         for task in tasks:
             task.add_done_callback(_read_task_exception)
         try:
-            _, timed_out = await asyncio.wait(tasks, timeout=self._config.timeouts.cleanup_seconds)
+            _, timed_out = await asyncio.wait(tasks, timeout=self._config.revocation_cleanup_seconds)
         finally:
             await _cancel_and_wait(tasks)
         error: BaseException | None = None

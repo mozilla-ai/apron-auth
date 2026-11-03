@@ -278,7 +278,7 @@ class TestTheTimeoutPolicyBoundsTheIdentityRequest:
             client_id="gid",
             client_secret="gsecret",  # pragma: allowlist secret
             scopes=["openid"],
-            timeouts=TimeoutPolicy(request_seconds=0.05),
+            timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
         )
 
         with pytest.raises(IdentityFetchError) as refusal:

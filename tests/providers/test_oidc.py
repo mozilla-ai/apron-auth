@@ -2000,7 +2000,7 @@ class TestTheTimeoutPolicyBoundsTheDocumentFetch:
             await discover(
                 ISSUER,
                 transport_factory=lambda url: httpx.MockTransport(crawl),
-                timeouts=TimeoutPolicy(request_seconds=0.05),
+                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT

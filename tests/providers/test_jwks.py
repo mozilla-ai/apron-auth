@@ -817,6 +817,6 @@ class TestTheTimeoutPolicyBoundsTheKeySetFetch:
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=_crawling_transport)
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await keys.verify(signed(RSA_KEY), TimeoutPolicy(request_seconds=0.05))
+            await keys.verify(signed(RSA_KEY), TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
 
         assert refusal.value.kind is FailureKind.TIMEOUT

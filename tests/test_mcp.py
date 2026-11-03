@@ -1680,7 +1680,7 @@ class TestTheTimeoutPolicyBoundsMcpRequests:
             await discover(
                 "https://mcp.example.com",
                 transport_factory=_crawling_transport,
-                timeouts=TimeoutPolicy(request_seconds=0.05),
+                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT
@@ -1691,7 +1691,7 @@ class TestTheTimeoutPolicyBoundsMcpRequests:
                 "https://as.example.com/register",
                 "https://app.example.com/callback",
                 transport_factory=_crawling_transport,
-                timeouts=TimeoutPolicy(request_seconds=0.05),
+                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT

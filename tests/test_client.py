@@ -1249,7 +1249,7 @@ class TestTheTimeoutPolicyBoundsTheTokenRequest:
 
     async def test_a_token_endpoint_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
         """A step limit bounds one read, so only the whole-request limit refuses a response that never lands."""
-        config = _make_oauth_config(timeouts=TimeoutPolicy(request_seconds=0.05))
+        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
         client = OAuthClient(config=config, transport_factory=self._crawling_transport)
 
         with pytest.raises(TokenExchangeError) as refusal:
@@ -1282,7 +1282,7 @@ class TestTheTimeoutPolicyBoundsTheTokenRequest:
         assert refusal.value.kind is FailureKind.TIMEOUT
 
     async def test_a_refresh_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
-        config = _make_oauth_config(timeouts=TimeoutPolicy(request_seconds=0.05))
+        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
         client = OAuthClient(config=config, transport_factory=self._crawling_transport)
 
         with pytest.raises(TokenRefreshError) as refusal:
@@ -1922,7 +1922,7 @@ class TestExchangeCodeNonceRevocation:
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            config=_make_config(revocation_url=self.REVOKE_URL, revocation_cleanup_seconds=0.05),
             revocation_handler=SlowRefreshHandler(),
         )
 
@@ -1955,7 +1955,7 @@ class TestExchangeCodeNonceRevocation:
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            config=_make_config(revocation_url=self.REVOKE_URL, revocation_cleanup_seconds=0.05),
             revocation_handler=MixedHandler(),
         )
 
@@ -1995,7 +1995,7 @@ class TestExchangeCodeNonceRevocation:
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            config=_make_config(revocation_url=self.REVOKE_URL, revocation_cleanup_seconds=0.05),
             revocation_handler=SwallowingHandler(),
         )
 
@@ -2031,7 +2031,7 @@ class TestExchangeCodeNonceRevocation:
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            config=_make_config(revocation_url=self.REVOKE_URL, revocation_cleanup_seconds=0.05),
             revocation_handler=AbortingHandler(),
         )
 

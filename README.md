@@ -586,7 +586,7 @@ A config whose provider exposes no revocation endpoint, such as Microsoft's or T
 
 ### Timeouts
 
-One policy bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, MCP registration, and the revocation that cleans up a refused response. `TimeoutPolicy` states three limits in seconds. `connect_seconds` bounds establishing a connection, `request_seconds` bounds a whole request however many steps it takes, and `cleanup_seconds` bounds revoking the tokens of a response this library refuses. Each must be a positive finite number, so no limit can be turned off. The defaults are 5, 10 and 10.
+One policy bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, and MCP registration. `TimeoutPolicy` states two limits in seconds. `connect_seconds` bounds establishing a connection, and `request_seconds` bounds a whole request however many steps it takes. Each must be a positive finite number, so no limit can be turned off, and a connect limit longer than the request limit is refused rather than accepted and ignored. The defaults are 5 and 10.
 
 A whole-request limit is not a per-step one. An HTTP client's own limits bound a single read or write, so a response arriving slowly in many steps outlives all of them. `request_seconds` bounds the request itself, and a request that passes it fails with the `TIMEOUT` failure kind.
 
@@ -607,7 +607,9 @@ client = OAuthClient(config)
 
 The functions that run before a configuration exists take the same keyword, because they have none to read it from: `mcp.discover`, `mcp.register_client`, `oidc.discover` and `WorkloadTokenVerifier`.
 
-A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.timeouts` is the policy in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and only `cleanup_seconds` still applies, because that is this library's own wall clock around a revocation it asked for.
+A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.timeouts` is the policy in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and nothing in this library bounds them for it.
+
+`ProviderConfig.revocation_cleanup_seconds` is a separate limit, because it bounds this library's own work rather than one request: when a token response is refused, the tokens it carried are revoked, and each revocation is canceled past that limit so the refusal is reported rather than waited on. It defaults to ten seconds. A revocation handler that does not stop when it is canceled can still delay the refusal, because this library waits for the cancellation it asked for.
 
 ### State management
 
