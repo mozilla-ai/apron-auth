@@ -912,6 +912,10 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
+        timeouts: The time limits on every request sent for this provider.
+            This library reads them wherever it sends one.
+            An identity or revocation handler of a caller's own reads them from the config it is given.
+            Defaults to :class:`TimeoutPolicy`'s own limits.
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
@@ -951,6 +955,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     resource: str | None = None
     use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
+    timeouts: TimeoutPolicy = TimeoutPolicy()
     provider: Provider | None = None
     allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
 

@@ -1845,6 +1845,32 @@ class TestProviderConfigCanAssertDomainOwnership:
         assert config.can_assert_domain_ownership is True
 
 
+class TestProviderConfigTimeouts:
+    @staticmethod
+    def _config(**overrides: object) -> ProviderConfig:
+        defaults: dict[str, object] = {
+            "client_id": "cid",
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
+            "authorize_url": "https://provider.example.com/authorize",
+            "token_url": "https://provider.example.com/token",
+        }
+        defaults.update(overrides)
+        return ProviderConfig(**defaults)
+
+    def test_a_config_carries_the_default_policy(self) -> None:
+        assert self._config().timeouts == TimeoutPolicy()
+
+    def test_a_caller_states_a_policy_of_its_own(self) -> None:
+        policy = TimeoutPolicy(connect_seconds=1.0, request_seconds=30.0)
+
+        assert self._config(timeouts=policy).timeouts == policy
+
+    def test_a_policy_that_is_not_one_is_refused(self) -> None:
+        """Every request reads these limits, so a config cannot carry something that states none."""
+        with pytest.raises(ConfigurationError):
+            self._config(timeouts=None)
+
+
 class TestProviderConfigProvider:
     def test_defaults_to_none(self) -> None:
         config = ProviderConfig(
