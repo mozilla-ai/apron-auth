@@ -161,6 +161,8 @@ async def discover(
             trying the next candidate URL. A ``transport_factory`` that fails is
             reported here too, as a fault that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
+            NOTE: None of these refusals ends discovery for the ``resource_metadata_url``
+            hint, which costs only its turn however it proves unusable.
     """
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 

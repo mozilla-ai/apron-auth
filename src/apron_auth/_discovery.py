@@ -140,4 +140,5 @@ def strict_str_list(document: Mapping[str, object], key: str) -> list[str]:
     value = document[key]
     if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
         raise MetadataListNotStringsError(key)
-    return value
+    # A new list, so a caller cannot reach back into the document through it, as the lenient reader also does not.
+    return list(value)
