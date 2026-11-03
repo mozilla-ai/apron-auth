@@ -2027,7 +2027,8 @@ class WorkloadIssuer(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         allow_insecure_http_for: The URL fields this issuer accepts plain HTTP for. Empty by default,
             and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back out of
             storage is refused. A loopback host needs no waiver, because a request to one reaches no
-            network.
+            network. The waiver for ``jwks_url`` covers a key set URL discovered from this issuer as
+            well, because a discovered URL has no field of its own to be waived for.
             NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
             ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
     """

@@ -77,7 +77,8 @@ def require_url(
         # rule has already accepted.
         logger.warning("OpenID %s is plain http; use for local development only", field)
     elif scheme != "https":
-        msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
+        # The opt-in is not named, because callers of this rule do not share one.
+        msg = f"OpenID {field} must use https (plain http is for local development, and has to be opted into)"
         raise OidcDiscoveryError(msg, kind=kind)
     if "#" in value:
         msg = f"OpenID {field} must not carry a fragment"

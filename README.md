@@ -787,7 +787,7 @@ A matching audience proves the token was minted for your server, not that the wo
 
 The configuration document and key set URLs are fetched through `transport_factory`, as in [SSRF safety](#ssrf-safety). The issuer is the caller's, but the key set URL comes from the issuer's document.
 
-An issuer on the loopback interface may use `http` with no opt-in, because a request to it reaches no network. For a development issuer that is not loopback, build it with `WorkloadIssuer.unsafe.allow_plain_http("issuer", issuer="http://keycloak:8080")`. A waiver names one field at a time, cannot arrive as data, and is for local development only.
+An issuer on the loopback interface may use `http` with no opt-in, because a request to it reaches no network, and so may a key set URL discovered from it. For a development issuer that is not loopback, build it with `WorkloadIssuer.unsafe.allow_plain_http("issuer", "jwks_url", issuer="http://keycloak:8080")`: the first name covers the issuer and its configuration document, the second covers the key set URL that document names. A waiver has to be stated in code, cannot arrive as data, and is for local development only.
 
 ## Provider presets
 

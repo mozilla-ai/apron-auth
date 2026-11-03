@@ -632,6 +632,47 @@ class TestConfiguration:
 
         assert trusting(waived).issuers == ("http://keycloak:8080",)
 
+    @pytest.mark.parametrize(
+        "issuer",
+        [
+            pytest.param(WorkloadIssuer(issuer="http://localhost:8080"), id="loopback, no waiver"),
+            pytest.param(
+                WorkloadIssuer.unsafe.allow_plain_http(
+                    UrlField.ISSUER, UrlField.JWKS_URL, issuer="http://keycloak:8080"
+                ),
+                id="off loopback, both fields waived",
+            ),
+        ],
+    )
+    async def test_a_plain_http_issuer_can_be_discovered_from(
+        self, httpx_mock: HTTPXMock, issuer: WorkloadIssuer
+    ) -> None:
+        """A development setup publishes its key set over plain http too, so discovery has to reach it."""
+        httpx_mock.add_response(
+            url=f"{issuer.issuer}/.well-known/openid-configuration",
+            json={"issuer": issuer.issuer, "jwks_uri": f"{issuer.issuer}/jwks"},
+        )
+        httpx_mock.add_response(url=f"{issuer.issuer}/jwks", json=published(RSA_KEY))
+
+        identity = await trusting(issuer).verify(signed(claims(iss=issuer.issuer)), audience=AUDIENCE)
+
+        assert identity.issuer == issuer.issuer
+
+    async def test_a_discovered_key_set_on_the_network_must_state_its_transport(self, httpx_mock: HTTPXMock) -> None:
+        """A key set URL comes from the issuer's document, so nothing but the waiver can accept plain http for it."""
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": "http://keys.example.com/jwks"})
+
+        with pytest.raises(IdentityFetchError, match="signing key set must use https"):
+            await trusting().verify(signed(claims()), audience=AUDIENCE)
+
+    @pytest.mark.parametrize("field", ["issuer", "jwks_url"])
+    def test_a_copy_that_rewrote_a_url_past_validation_is_refused(self, field: str) -> None:
+        """A copy runs no validator, so the verifier holds its URLs to the rule the model would have."""
+        forged = WorkloadIssuer(issuer=ISSUER).model_copy(update={field: "http://attacker.example.com/path"})
+
+        with pytest.raises(ConfigurationError, match="must use https"):
+            trusting(forged)
+
 
 class TestTheTimeoutPolicyBoundsDiscovery:
     async def test_a_document_that_never_lands_is_refused_as_a_timeout(self) -> None:

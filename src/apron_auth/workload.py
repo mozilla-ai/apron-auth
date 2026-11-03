@@ -23,7 +23,7 @@ from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._jwt import claim_refusal_reason, compact_claims, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth._numbers import finite_number
-from apron_auth._urls import is_plain_http
+from apron_auth._urls import is_plain_http, uses_allowed_transport
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -145,21 +145,22 @@ class _TrustedIssuer:
         Raises:
             ConfigurationError: If the issuer identifier or the key set URL is not one a request can be sent to.
         """
-        # The issuer model has settled what transport its URLs may state, so the URL rule is asked only for
-        # what it adds: an issuer identifier carries no query, and either URL has to be requestable as written.
+        self._plain_http_key_set = UrlField.JWKS_URL in issuer.allow_insecure_http_for
+        plain_http_issuer = UrlField.ISSUER in issuer.allow_insecure_http_for
         try:
-            self._document_url = discovery_url(issuer.issuer, allow_insecure_http=is_plain_http(issuer.issuer))
+            self._document_url = discovery_url(
+                issuer.issuer, allow_insecure_http=_plain_http_is_acceptable(issuer.issuer, waived=plain_http_issuer)
+            )
             if issuer.jwks_url is not None:
                 require_url(
                     issuer.jwks_url,
                     field="signing key set",
-                    allow_insecure_http=is_plain_http(issuer.jwks_url),
+                    allow_insecure_http=_plain_http_is_acceptable(issuer.jwks_url, waived=self._plain_http_key_set),
                     caller_supplied=True,
                 )
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer.issuer
-        self._plain_http_key_set = UrlField.JWKS_URL in issuer.allow_insecure_http_for
         self._transport_factory = transport_factory
         self._timeouts = timeouts
         self._clock = clock
@@ -250,7 +251,11 @@ class _TrustedIssuer:
         document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
         require_openid_issuer(document, self._issuer)
         jwks_url = optional_url(
-            document, key="jwks_uri", field="signing key set", allow_insecure_http=self._plain_http_key_set
+            document,
+            key="jwks_uri",
+            field="signing key set",
+            # A URL read out of a document was never held to the issuer model's rule, so it is held to it here.
+            allow_insecure_http=_plain_http_is_acceptable(document.get("jwks_uri"), waived=self._plain_http_key_set),
         )
         if jwks_url is None:
             msg = "OpenID provider configuration names no signing key set"
@@ -450,6 +455,26 @@ class WorkloadTokenVerifier:
             msg = "Workload token names an issuer this verifier does not accept"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return trusted
+
+
+def _plain_http_is_acceptable(url: object, *, waived: bool) -> bool:
+    """Return whether ``url`` states plain HTTP that a request may still be sent to.
+
+    This is the rule an issuer's own URL fields are held to, stated once so it also covers a URL read out
+    of a document and a URL a copy made without validation may have changed.
+    A loopback host is acceptable with no waiver, because a request to it reaches no network.
+
+    Args:
+        url: The URL to read, as it arrived.
+        waived: Plain HTTP was waived in code for the field this URL came from.
+
+    Returns:
+        Whether the URL states plain HTTP that is acceptable here. An ``https`` URL states none, so it is
+            reported as no such URL rather than as acceptable.
+    """
+    if not isinstance(url, str):
+        return False
+    return is_plain_http(url) and uses_allowed_transport(url, plain_http_allowed=waived)
 
 
 def _accepted_audiences(audience: object) -> frozenset[str]:
