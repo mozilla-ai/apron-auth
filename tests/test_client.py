@@ -990,8 +990,11 @@ class TestExchangeCode:
         client = StoredStateClient(config=config, state_store=store)
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state="bad-state"), browser_token=_BROWSER_TOKEN
+                AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
             )
+
+        # The state is the one the browser token mints, so the refusal is the store's own answer.
+        store.consume.assert_awaited_once_with(_STATE)
 
     async def test_exchange_token_endpoint_error(self, httpx_mock):
         httpx_mock.add_response(
