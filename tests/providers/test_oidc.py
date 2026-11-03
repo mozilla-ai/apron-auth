@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -31,6 +32,7 @@ from apron_auth.models import (
     IdentityMaterial,
     ProviderConfig,
     ServerMetadata,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
     UrlField,
 )
@@ -1986,3 +1988,19 @@ class TestBearerError:
     def test_a_malformed_header_gives_no_code(self, header: str) -> None:
         """A header that does not parse in full is never read as a scope refusal."""
         assert _bearer_error(header) is None
+
+
+class TestTheTimeoutPolicyBoundsTheDocumentFetch:
+    async def test_a_document_that_never_lands_is_refused_as_a_timeout(self) -> None:
+        async def crawl(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={})
+
+        with pytest.raises(OidcDiscoveryError) as refusal:
+            await discover(
+                ISSUER,
+                transport_factory=lambda url: httpx.MockTransport(crawl),
+                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+            )
+
+        assert refusal.value.kind is FailureKind.TIMEOUT

@@ -12,11 +12,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import httpx
-
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    Provider,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+    TimeoutPolicy,
+)
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 
@@ -75,14 +81,14 @@ class GoogleIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        del config
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _GOOGLE_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token}"},
                 ),
                 "Google identity",
+                config.timeouts,
             )
         # Honor email_verified only as a genuine boolean; a bare bool()
         # would coerce a non-boolean (e.g. the string "false") to True.
@@ -170,6 +176,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Google OAuth provider configuration.
 
@@ -184,9 +191,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``access_type=offline`` and ``prompt=consent`` defaults.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )

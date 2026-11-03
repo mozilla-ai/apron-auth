@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError
-from apron_auth.models import ProviderConfig, TokenEndpointAuthMethod
+from apron_auth.models import ProviderConfig, TimeoutPolicy, TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -81,6 +81,7 @@ class Preset:
         scopes: Sequence[str],
         redirect_uri: str | None = None,
         extra_params: Mapping[str, str] | None = None,
+        timeouts: TimeoutPolicy | None = None,
     ) -> ProviderConfig:
         """Build the provider configuration this preset states, from the values a caller passes.
 
@@ -91,6 +92,8 @@ class Preset:
             redirect_uri: The redirect URI for the authorization flow.
             extra_params: Authorization-request parameters, which take precedence over the ones
                 this preset states under the same key.
+            timeouts: The limits on every request sent for this provider.
+                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
         Returns:
             The configuration, naming this preset's provider.
@@ -114,6 +117,7 @@ class Preset:
             implicit_scopes=dict(self.implicit_scopes),
             issuer=self.issuer,
             required_scope_families=[list(family) for family in self.required_scope_families],
+            timeouts=timeouts or TimeoutPolicy(),
         )
 
     def _requested_scopes(self, scopes: Sequence[str]) -> list[str]:

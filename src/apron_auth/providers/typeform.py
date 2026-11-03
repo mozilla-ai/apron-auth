@@ -9,11 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import httpx
-
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TimeoutPolicy
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
 
@@ -71,13 +69,14 @@ class TypeformIdentityHandler:
             if _TYPEFORM_USERINFO_SCOPE not in granted:
                 raise IdentityScopeNotGrantedError(f"Typeform identity requires the {_TYPEFORM_USERINFO_SCOPE} scope")
 
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _TYPEFORM_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token}"},
                 ),
                 "Typeform identity",
+                config.timeouts,
             )
 
         if not isinstance(payload, dict):
@@ -109,6 +108,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a Typeform OAuth provider configuration.
 
@@ -121,9 +121,13 @@ def preset(
         scopes: The scopes to request.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. It declares no revocation endpoint, because Typeform
         exposes none.
     """
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )

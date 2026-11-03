@@ -30,6 +30,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
+from apron_auth.models import TimeoutPolicy
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
@@ -85,6 +86,7 @@ class WorkloadTokenVerifier:
         *,
         jwks_url: str | None = None,
         transport_factory: TransportFactory | None = None,
+        timeouts: TimeoutPolicy | None = None,
         allow_insecure_http: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -95,6 +97,8 @@ class WorkloadTokenVerifier:
             jwks_url: The issuer's signing key set, when it is not to be discovered.
             transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
                 Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+            timeouts: The limits on the document and key set fetches.
+                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
             allow_insecure_http: Accept ``http`` for the issuer and the URLs it publishes, for local development only.
             clock: The monotonic clock that ages the cached keys and paces rediscovery.
 
@@ -111,6 +115,7 @@ class WorkloadTokenVerifier:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer
         self._transport_factory = transport_factory
+        self._timeouts = timeouts or TimeoutPolicy()
         self._allow_insecure_http = allow_insecure_http
         self._clock = clock
         self._signing_keys = self._key_set(jwks_url) if jwks_url else None
@@ -164,7 +169,7 @@ class WorkloadTokenVerifier:
             msg = "Workload token is not a compact signed token"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
         signing_keys = await self._keys()
-        claims = (await signing_keys.verify(token)).claims
+        claims = (await signing_keys.verify(token, self._timeouts)).claims
         registry = JWTClaimsRegistry(
             leeway=CLOCK_SKEW_SECONDS,
             iss={"essential": True, "value": self._issuer},
@@ -207,7 +212,7 @@ class WorkloadTokenVerifier:
                 message, kind = self._discovery_failure
                 raise IdentityFetchError(message, kind=kind)
             try:
-                document = await fetch_document(self._document_url, self._transport_factory)
+                document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
                 require_openid_issuer(document, self._issuer)
                 jwks_url = optional_url(
                     document, key="jwks_uri", field="signing key set", allow_insecure_http=self._allow_insecure_http

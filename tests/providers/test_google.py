@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import traceback
 
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import RevocationError
-from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext
+from apron_auth.errors import FailureKind, IdentityFetchError, RevocationError
+from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext, TimeoutPolicy
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.google import GoogleRevocationHandler
@@ -260,3 +261,27 @@ class TestGoogleRevocationHandler:
         assert secret not in formatted
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+
+class TestTheTimeoutPolicyBoundsTheIdentityRequest:
+    async def test_a_userinfo_response_that_never_lands_is_refused_as_a_timeout(self, httpx_mock: HTTPXMock) -> None:
+        """A handler builds its own client, so this is the only place a caller's limits can reach the request."""
+
+        async def crawl(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={"sub": "g-1"})
+
+        httpx_mock.add_callback(crawl, url=GOOGLE_USERINFO_URL)
+        from apron_auth.providers.google import GoogleIdentityHandler, preset
+
+        config = preset(
+            client_id="gid",
+            client_secret="gsecret",  # pragma: allowlist secret
+            scopes=["openid"],
+            timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+        )
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await GoogleIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert refusal.value.kind is FailureKind.TIMEOUT

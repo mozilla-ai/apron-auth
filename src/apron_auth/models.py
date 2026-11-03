@@ -59,6 +59,15 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# The default wall clock, in seconds, allowed for revoking the tokens of a refused response.
+_DEFAULT_REVOCATION_CLEANUP_SECONDS = 10.0
+
+# The default limit, in seconds, on establishing the connection for an outbound request.
+_DEFAULT_CONNECT_SECONDS = 5.0
+
+# The default limit, in seconds, on a whole outbound request.
+_DEFAULT_REQUEST_SECONDS = 10.0
+
 # The part a validation refusal puts in a field's path for a mapping key, which names no field of ours.
 _DICT_KEY_MARKER = "[key]"
 
@@ -720,6 +729,57 @@ class _RefusesWithoutRepeating(BaseModel):
         raise ConfigurationError(refusals)
 
 
+class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """How long this library waits for one outbound request.
+
+    One policy governs every request this library sends. Each limit is a positive finite number of
+    seconds, so no limit can be turned off.
+
+    Attributes:
+        connect_seconds: The limit on establishing a connection, which counts toward the whole-request
+            limit and so cannot exceed it.
+        request_seconds: The limit on a whole request, however many steps it takes.
+    """
+
+    connect_seconds: float = _DEFAULT_CONNECT_SECONDS
+    request_seconds: float = _DEFAULT_REQUEST_SECONDS
+
+    @model_validator(mode="after")
+    def _every_limit_is_positive_and_finite(self) -> TimeoutPolicy:
+        """Reject a limit that waits forever or refuses every request.
+
+        Returns:
+            The validated policy, unchanged.
+
+        Raises:
+            ValueError: If a limit is zero, negative, infinite, or not a number.
+        """
+        for name in type(self).model_fields:
+            limit = getattr(self, name)
+            if not math.isfinite(limit) or limit <= 0:
+                msg = f"{name} must be a positive finite number"
+                raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _connecting_fits_inside_the_request(self) -> TimeoutPolicy:
+        """Reject a connect limit the whole-request limit would cancel before it could ever elapse.
+
+        Returns:
+            The validated policy, unchanged.
+
+        Raises:
+            ValueError: If ``connect_seconds`` is longer than ``request_seconds``.
+        """
+        if self.connect_seconds > self.request_seconds:
+            msg = "connect_seconds must not exceed request_seconds"
+            raise ValueError(msg)
+        return self
+
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
+
+
 class ScopeMetadata(_RefusesWithoutRepeating, frozen=True):
     """Consent-UI metadata for a single OAuth scope.
 
@@ -865,6 +925,15 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         max_pending_age_seconds: The age, in seconds, past which a pending authorization request is refused
             at the code exchange. A pending state exactly this old still passes that check.
             Must be a positive finite number. Defaults to 600 (ten minutes).
+        revocation_cleanup_seconds: The wall clock allowed for revoking the tokens of a response this
+            library refuses. Each revocation is canceled past it.
+            NOTE: A revocation handler that does not stop when it is canceled can still delay the
+            refusal, because this library waits for the cancellation it asked for.
+            Must be a positive finite number. Defaults to 10.
+        timeouts: The time limits on every request sent for this provider.
+            This library reads them wherever it sends one.
+            An identity or revocation handler of a caller's own reads them from the config it is given.
+            Defaults to :class:`TimeoutPolicy`'s own limits.
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
@@ -904,6 +973,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     resource: str | None = None
     use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
+    revocation_cleanup_seconds: float = _DEFAULT_REVOCATION_CLEANUP_SECONDS
+    timeouts: TimeoutPolicy = TimeoutPolicy()
     provider: Provider | None = None
     allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
 
@@ -1010,6 +1081,21 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         if not math.isfinite(self.max_pending_age_seconds) or self.max_pending_age_seconds <= 0:
             msg = "max_pending_age_seconds must be a positive finite number"
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _revocation_cleanup_is_positive_and_finite(self) -> ProviderConfig:
+        """Reject a cleanup limit that would cancel every revocation or wait forever for one.
+
+        Returns:
+            The validated config, unchanged.
+
+        Raises:
+            ValueError: If ``revocation_cleanup_seconds`` is zero, negative, infinite, or not a number.
+        """
+        if not math.isfinite(self.revocation_cleanup_seconds) or self.revocation_cleanup_seconds <= 0:
+            msg = "revocation_cleanup_seconds must be a positive finite number"
             raise ValueError(msg)
         return self
 

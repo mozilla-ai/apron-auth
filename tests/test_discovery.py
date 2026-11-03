@@ -7,7 +7,15 @@ from typing import TYPE_CHECKING
 import pytest
 
 import apron_auth
-from apron_auth._discovery import IssuerNotDeclaredError, IssuerRefusalReason, require_declared_issuer, str_list
+from apron_auth._discovery import (
+    IssuerNotDeclaredError,
+    IssuerRefusalReason,
+    discovery_client,
+    require_declared_issuer,
+    str_list,
+)
+from apron_auth._timeouts import httpx_timeout
+from apron_auth.models import TimeoutPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -111,3 +119,20 @@ class TestTheIssuerRefusalStaysInternal:
     def test_the_refusal_is_not_published(self) -> None:
         assert not hasattr(apron_auth, IssuerNotDeclaredError.__name__)
         assert IssuerNotDeclaredError.__name__ not in apron_auth.__all__
+
+
+class TestTheDiscoveryClientTakesThePolicysLimits:
+    async def test_every_step_of_a_discovery_request_is_bounded(self) -> None:
+        """A mock transport applies no limit of its own, so only the client it is given states these."""
+        policy = TimeoutPolicy(connect_seconds=2.0, request_seconds=7.0)
+
+        async with discovery_client("https://as.example.com/.well-known/openid-configuration", None, policy) as client:
+            assert client.timeout == httpx_timeout(policy)
+            assert client.timeout.connect == 2.0
+            assert client.timeout.read == 7.0
+
+    async def test_it_follows_no_redirect(self) -> None:
+        async with discovery_client(
+            "https://as.example.com/.well-known/openid-configuration", None, TimeoutPolicy()
+        ) as client:
+            assert client.follow_redirects is False

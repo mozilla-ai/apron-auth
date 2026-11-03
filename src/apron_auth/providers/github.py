@@ -15,11 +15,9 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
-import httpx
-
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TimeoutPolicy
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
 
@@ -156,15 +154,16 @@ class GitHubIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        del config
         headers = {
             "Authorization": f"Bearer {material.access_token}",
             **_GITHUB_API_HEADERS,
         }
-        async with httpx.AsyncClient() as client:
-            user_payload = await fetch_identity_json(client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity")
+        async with identity_client(config.timeouts) as client:
+            user_payload = await fetch_identity_json(
+                client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity", config.timeouts
+            )
             emails_payload = await fetch_identity_json(
-                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity"
+                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity", config.timeouts
             )
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
@@ -264,6 +263,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a GitHub OAuth provider configuration.
 
@@ -278,6 +278,8 @@ def preset(
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -289,6 +291,6 @@ def preset(
         implicit_scopes=IMPLICIT_SCOPES,
     )
     config = declared.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
     )
     return config

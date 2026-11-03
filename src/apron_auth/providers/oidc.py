@@ -50,6 +50,7 @@ from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
+from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,
@@ -67,9 +68,11 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     ServerMetadata,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
     UrlField,
 )
+from apron_auth.providers._identity_requests import identity_client
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers._presets import scope_sequence
@@ -105,9 +108,6 @@ _AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
 _AUTH_SCHEME = re.compile(_TOKEN)
 _TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
 
-# The time limits, in seconds, on each userinfo request: 5 to connect and 10 for each other step.
-_USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-
 
 def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
     """The document URL for ``issuer``, per OpenID Connect Discovery 1.0 section 4.
@@ -137,6 +137,7 @@ async def discover(
     *,
     document_url: str | None = None,
     transport_factory: TransportFactory | None = None,
+    timeouts: TimeoutPolicy | None = None,
     allow_insecure_http: bool = False,
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
@@ -151,6 +152,7 @@ async def discover(
             The issuer check still applies, so an override moves the document without loosening what it may claim.
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+        timeouts: The limits on the document fetch. Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
             It is off by default, because the client secret and every token travel over these URLs,
             and the signing key set authenticates every ID token.
@@ -169,7 +171,7 @@ async def discover(
     if document_url is not None:
         require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http, caller_supplied=True)
         url = document_url
-    document = await fetch_document(url, transport_factory)
+    document = await fetch_document(url, transport_factory, timeouts or TimeoutPolicy())
 
     require_openid_issuer(document, issuer)
 
@@ -256,6 +258,7 @@ def preset(
     extra_params: dict[str, str] | None = None,
     metadata: ServerMetadata,
     allow_insecure_http: bool = False,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a provider configuration from a discovered OpenID provider.
 
@@ -281,6 +284,8 @@ def preset(
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
         metadata: The provider's discovered metadata, from :func:`discover`.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. It declares a revocation endpoint where the server
@@ -336,6 +341,7 @@ def preset(
         # OpenID Connect standardizes no claim for an organization owning an email domain.
         "can_assert_domain_ownership": False,
         "use_builtin_identity_handler": False,
+        "timeouts": timeouts or TimeoutPolicy(),
     }
     waived = (
         _fields_needing_a_waiver(
@@ -516,7 +522,7 @@ class OidcIdentityHandler:
             raise ConfigurationError(msg)
         issuer = config.issuer
         claims = (
-            await self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
+            await self._validated_claims(material.id_token, material.access_token, config)
             if material.id_token
             else None
         )
@@ -524,7 +530,7 @@ class OidcIdentityHandler:
         userinfo_fetched = False
         if self._userinfo_url:
             try:
-                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token)
+                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token, config.timeouts)
                 userinfo_fetched = True
             except IdentityFetchError as exc:
                 if claims is None:
@@ -572,7 +578,7 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    async def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any]:
+    async def _validated_claims(self, id_token: str, access_token: str, config: ProviderConfig) -> dict[str, Any]:
         """Return the ID token's claims once its signature and claims check out.
 
         The signature is checked against the issuer's published keys before any claim is read.
@@ -585,8 +591,8 @@ class OidcIdentityHandler:
             id_token: The ID token from the token-endpoint response.
             access_token: The access token from the same response.
                 A present ``at_hash`` is verified against it.
-            issuer: The issuer the token's ``iss`` must name.
-            client_id: The client identifier the token's ``aud`` must name.
+            config: The provider configuration, which states the client the token's ``aud`` must name
+                and the limits on a key set fetch. The ``iss`` is checked against this handler's issuer.
 
         Returns:
             The validated claims.
@@ -595,7 +601,8 @@ class OidcIdentityHandler:
             IdentityFetchError: If the signature or any claim does not validate,
                 or the issuer's signing keys cannot be fetched or read.
         """
-        verified = await self._signing_keys.verify(id_token)
+        issuer, client_id = self._issuer, config.client_id
+        verified = await self._signing_keys.verify(id_token, config.timeouts)
         header, claims = verified.header, verified.claims
         token = CodeIDToken(
             claims,
@@ -624,12 +631,13 @@ class OidcIdentityHandler:
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return claims
 
-    async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
+    async def _fetch_userinfo(self, userinfo_url: str, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 
         Args:
             userinfo_url: The userinfo endpoint.
             access_token: The bearer access token for the userinfo request.
+            timeouts: The limits in force for the request.
 
         Returns:
             The userinfo payload as a JSON object.
@@ -650,10 +658,9 @@ class OidcIdentityHandler:
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         failure: IdentityFetchError | None = None
         try:
-            async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
-                response = await client.get(
-                    userinfo_url,
-                    headers={"Authorization": f"Bearer {access_token}"},
+            async with identity_client(timeouts, transport=transport) as client:
+                response = await within_request_limit(
+                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token}"}), timeouts
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:

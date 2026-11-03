@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import FailureKind, IdentityFetchError
+from apron_auth.models import TimeoutPolicy
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 URL = "https://provider.example.com/me"
 TOKEN = "access-SECRET-xyz"  # pragma: allowlist secret
+
+# The limits every request in these tests runs under.
+_TIMEOUTS = TimeoutPolicy()
 
 
 async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchError:
@@ -17,6 +23,7 @@ async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchErr
             await fetch_identity_json(
                 client.get(request_url, headers={"Authorization": f"Bearer {token}"}),
                 "Example identity",
+                _TIMEOUTS,
             )
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
@@ -27,7 +34,7 @@ async def test_returns_the_decoded_body(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(url=URL, json={"sub": "u-1"})
 
     async with httpx.AsyncClient() as client:
-        payload = await fetch_identity_json(client.get(URL), "Example identity")
+        payload = await fetch_identity_json(client.get(URL), "Example identity", _TIMEOUTS)
 
     assert payload == {"sub": "u-1"}
 
@@ -77,3 +84,18 @@ async def test_deeply_nested_body_is_a_parse_failure(httpx_mock: HTTPXMock) -> N
     error = await _error()
 
     assert str(error) == "Failed to parse Example identity response"
+
+
+async def test_a_request_that_outlives_the_limit_is_a_timeout(httpx_mock: HTTPXMock) -> None:
+    """Every identity request is bounded by this one await, which no walk of the source can see."""
+
+    async def never() -> httpx.Response:
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={})
+
+    with pytest.raises(IdentityFetchError) as refusal:
+        await fetch_identity_json(
+            never(), "Example identity", TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05)
+        )
+
+    assert refusal.value.kind is FailureKind.TIMEOUT

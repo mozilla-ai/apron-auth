@@ -5,6 +5,7 @@ import json
 import time
 from typing import Any
 
+import httpx
 import pytest
 from joserfc import jwk, jws
 from joserfc.jws import JWSRegistry
@@ -18,6 +19,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
+from apron_auth.models import TimeoutPolicy
 from apron_auth.workload import WorkloadTokenVerifier
 
 ISSUER = "https://token.actions.example.com"
@@ -315,3 +317,21 @@ class TestConfiguration:
         verifier = WorkloadTokenVerifier("http://localhost:8080", allow_insecure_http=True)
 
         assert verifier.issuer == "http://localhost:8080"
+
+
+class TestTheTimeoutPolicyBoundsDiscovery:
+    async def test_a_document_that_never_lands_is_refused_as_a_timeout(self) -> None:
+        async def crawl(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={})
+
+        verifier = WorkloadTokenVerifier(
+            ISSUER,
+            transport_factory=lambda url: httpx.MockTransport(crawl),
+            timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+        )
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await verifier.verify(signed(claims()), audience=AUDIENCE)
+
+        assert refusal.value.kind is FailureKind.TIMEOUT

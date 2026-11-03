@@ -32,8 +32,6 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
-import httpx
-
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -41,9 +39,10 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
+    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
 
@@ -121,9 +120,8 @@ class HubSpotIdentityHandler:
                 response cannot be parsed. Messages never include the
                 request URL, which embeds the token.
         """
-        del config
         introspect_url = f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(material.access_token, safe='')}"
-        payload = await self._introspect(introspect_url)
+        payload = await self._introspect(introspect_url, config.timeouts)
 
         user_id = payload.get("user_id")
         hub_id = payload.get("hub_id")
@@ -158,11 +156,12 @@ class HubSpotIdentityHandler:
             raw=payload,
         )
 
-    async def _introspect(self, introspect_url: str) -> Any:
+    async def _introspect(self, introspect_url: str, timeouts: TimeoutPolicy) -> Any:
         """Request the introspection endpoint and return the decoded body.
 
         Args:
             introspect_url: The introspection URL, which carries the access token.
+            timeouts: The limits in force for the introspection request.
 
         Returns:
             The decoded JSON body.
@@ -171,8 +170,8 @@ class HubSpotIdentityHandler:
             IdentityFetchError: If the request fails or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        async with httpx.AsyncClient() as client:
-            return await fetch_identity_json(client.get(introspect_url), "HubSpot identity")
+        async with identity_client(timeouts) as client:
+            return await fetch_identity_json(client.get(introspect_url), "HubSpot identity", timeouts)
 
 
 class HubSpotRevocationHandler:
@@ -244,6 +243,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ProviderConfig:
     """Create a HubSpot OAuth provider configuration.
 
@@ -264,9 +264,13 @@ def preset(
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
+        timeouts: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
-    return _PRESET.config(client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params)
+    return _PRESET.config(
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+    )
