@@ -351,10 +351,22 @@ class TestRefusals:
             await trusting().verify(signed(payload), audience=AUDIENCE)
         assert exc_info.value.reason is reason
 
-    @pytest.mark.parametrize("literal", [b"NaN", b"Infinity", b"-Infinity"])
-    async def test_claims_naming_a_json_constant(self, httpx_mock: HTTPXMock, literal: bytes) -> None:
-        """RFC 8259 defines no such literal, so claims naming one cannot be read, and name no issuer either."""
-        token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":' + literal + b"}")
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param(b"NaN", id="the literal NaN"),
+            pytest.param(b"Infinity", id="the literal Infinity"),
+            pytest.param(b"-Infinity", id="the literal -Infinity"),
+            pytest.param(b"1e400", id="an exponent that overflows a float"),
+            pytest.param(b"-1e400", id="an exponent that underflows a float"),
+        ],
+    )
+    async def test_a_claim_that_is_not_a_finite_number(self, httpx_mock: HTTPXMock, value: bytes) -> None:
+        """A non-finite number compares false against every bound, so claims stating one cannot be read at all.
+
+        A token whose claims cannot be read names no issuer either, so it is refused before any request.
+        """
+        token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":' + value + b"}")
 
         with pytest.raises(TokenValidationError, match="claims are not a JSON object") as exc_info:
             await trusting().verify(token, audience="a")
@@ -362,14 +374,17 @@ class TestRefusals:
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
         assert not httpx_mock.get_requests()
 
-    async def test_an_expiry_that_overflows_a_float(self, httpx_mock: HTTPXMock) -> None:
-        """An overflowing exponent is valid JSON that reads as infinity, which compares false against every time."""
-        discoverable(httpx_mock)
-        token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":1e400}')
+    @pytest.mark.parametrize("claim", [b"iat", b"nbf"])
+    async def test_another_claim_that_is_not_a_finite_number(self, httpx_mock: HTTPXMock, claim: bytes) -> None:
+        """Every claim is held to the rule, so none reaches a caller reading the claims it does not lift out."""
+        token = signed_text(
+            b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","exp":9999999999,"' + claim + b'":-1e400}'
+        )
 
-        with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
+        with pytest.raises(TokenValidationError, match="claims are not a JSON object"):
             await trusting().verify(token, audience="a")
-        assert exc_info.value.reason is TokenValidationReason.CLAIMS
+
+        assert not httpx_mock.get_requests()
 
     async def test_an_expired_token(self, httpx_mock: HTTPXMock) -> None:
         """An expired token raises its own refusal, so the caller can say to fetch a fresh one."""

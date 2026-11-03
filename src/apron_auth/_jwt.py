@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, NoReturn
 
 from joserfc import jws
@@ -19,9 +20,6 @@ _MAX_SIGNATURE_LENGTH = 2048
 def _refuse_a_non_json_constant(name: str) -> NoReturn:
     """Refuse a literal that is not a JSON value, so no claim can hold one.
 
-    A non-finite number compares false against every bound, so a claim holding one passes a range
-    check it should fail.
-
     Args:
         name: The literal the decoder read: ``NaN``, ``Infinity`` or ``-Infinity``.
 
@@ -32,6 +30,28 @@ def _refuse_a_non_json_constant(name: str) -> NoReturn:
     raise ValueError(msg)
 
 
+def _finite_claim_number(text: str) -> float:
+    """Return the number ``text`` states, refusing one no finite number can hold.
+
+    A non-finite number compares false against every bound, so a claim holding one passes a range check
+    it should fail, and no JSON document can carry it back out.
+
+    Args:
+        text: The number as the document writes it.
+
+    Returns:
+        The number.
+
+    Raises:
+        ValueError: If the text states a number too large or too small for a float to hold.
+    """
+    value = float(text)
+    if not math.isfinite(value):
+        msg = "The token's claims state a number that is not finite"
+        raise ValueError(msg)
+    return value
+
+
 def compact_claims(compact: CompactSignature) -> dict[str, Any] | None:
     """Return the claims of a parsed compact token.
 
@@ -39,11 +59,14 @@ def compact_claims(compact: CompactSignature) -> dict[str, Any] | None:
         compact: The parsed compact token.
 
     Returns:
-        The token's claims, or ``None`` when they are not a JSON object, or name a literal that is not
-            a JSON value.
+        The token's claims, or ``None`` when they are not a JSON object, or state a number no finite
+            number can hold, whether as a literal RFC 8259 does not define or as an exponent that
+            overflows one.
     """
     try:
-        claims = json.loads(compact.payload, parse_constant=_refuse_a_non_json_constant)
+        claims = json.loads(
+            compact.payload, parse_constant=_refuse_a_non_json_constant, parse_float=_finite_claim_number
+        )
     except (RecursionError, ValueError):
         return None
     return claims if isinstance(claims, dict) else None

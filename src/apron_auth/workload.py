@@ -545,7 +545,6 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
     subject = claims["sub"]
     audience = claims["aud"]
     audiences = (audience,) if isinstance(audience, str) else audience
-    # A non-finite expiry compares false against every time, so the claim validator does not refuse it.
     expires_at = finite_number(claims["exp"])
     if (
         not isinstance(subject, str)

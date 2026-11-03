@@ -1524,6 +1524,7 @@ class TestExchangeCodeNonce:
             _id_token(b'{"nonce":"sent-nonce","exp":NaN}'),
             _id_token(b'{"nonce":"sent-nonce","exp":Infinity}'),
             _id_token(b'{"nonce":"sent-nonce","exp":-Infinity}'),
+            _id_token(b'{"nonce":"sent-nonce","exp":1e400}'),
         ],
         ids=[
             "claims-not-object",
@@ -1531,6 +1532,7 @@ class TestExchangeCodeNonce:
             "claims-naming-nan",
             "claims-naming-infinity",
             "claims-naming-negative-infinity",
+            "claims-overflowing-a-float",
         ],
     )
     async def test_unreadable_id_token_is_refused(self, httpx_mock: HTTPXMock, id_token: object) -> None:
@@ -1730,13 +1732,6 @@ class TestExchangeCodeIdTokenClaims:
     ) -> None:
         with pytest.raises(IdTokenValidationError, match=message):
             await self._exchange(httpx_mock, self._claims(extra))
-
-    async def test_an_expiry_that_overflows_a_float_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        """An overflowing exponent is valid JSON that reads as infinity, which compares false against every time."""
-        claims = b'{"sub":"u-1","aud":"test-client","nonce":"sent-nonce","exp":1e400}'
-
-        with pytest.raises(IdTokenValidationError, match="expired or carries no usable expiry"):
-            await self._exchange(httpx_mock, claims)
 
     async def test_the_issuer_is_checked_when_the_config_names_one(self, httpx_mock: HTTPXMock) -> None:
         claims = _openid_claims(nonce="sent-nonce", iss="https://issuer.example.com")
