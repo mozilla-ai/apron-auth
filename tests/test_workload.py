@@ -312,9 +312,17 @@ class TestIssuerRouting:
         assert identity.issuer == OTHER_ISSUER
 
     def test_the_issuers_it_accepts_are_readable(self) -> None:
+        """They read back alphabetically, because none of them has precedence over another."""
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
-        assert trusting_both.issuers == (ISSUER, OTHER_ISSUER)
+        assert trusting_both.issuers == (OTHER_ISSUER, ISSUER)
+
+    def test_the_issuers_read_back_the_same_whatever_collection_stated_them(self) -> None:
+        """A set states no order, so one must not make the answer depend on how it happened to iterate."""
+        entries = [WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER)]
+
+        assert WorkloadTokenVerifier(set(entries)).issuers == WorkloadTokenVerifier(entries).issuers
+        assert WorkloadTokenVerifier(tuple(reversed(entries))).issuers == WorkloadTokenVerifier(entries).issuers
 
 
 class TestRefusals:

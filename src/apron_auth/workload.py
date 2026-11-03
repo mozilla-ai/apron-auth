@@ -337,8 +337,12 @@ class WorkloadTokenVerifier:
 
     @property
     def issuers(self) -> tuple[str, ...]:
-        """The issuer identifiers this verifier accepts tokens from, in the order they were stated."""
-        return tuple(self._issuers)
+        """The issuer identifiers this verifier accepts tokens from, in alphabetical order.
+
+        The issuers are stated as a collection, which need not have an order of its own, and this verifier
+        gives none of them precedence over another.
+        """
+        return tuple(sorted(self._issuers))
 
     async def verify(self, token: str, *, audience: str | Collection[str]) -> WorkloadIdentity:
         """Return what a token says about its workload, once it verifies and names an accepted audience.
