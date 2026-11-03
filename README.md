@@ -910,7 +910,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, or did not come from the browser that started the flow. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
-| `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead. |
+| `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead, except the `resource_metadata_url` hint, whose value is the server's and which loses only its turn. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
 | `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal.                                     |
@@ -943,24 +943,29 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | Logger                           | Emits                                                       |
 |----------------------------------|-------------------------------------------------------------|
 | `apron_auth.client`              | Refused tokens that could not be revoked.                    |
+| `apron_auth.mcp`                 | What each discovery candidate answered, and a metadata hint that could not be used (DEBUG). |
 | `apron_auth.models`              | Plain `http` accepted for a model's named URL fields.        |
-| `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
-| `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
 | `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
 | `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
+| `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
 | `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; userinfo failure degraded; a refused discovery redirect (DEBUG). |
+| `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
+| `apron_auth.workload`            | A workload issuer's signing keys now read from another URL, and a move that did not verify. |
 
-Two levels are used. `WARNING` marks a capability that degraded without
+Three levels are used. `WARNING` marks a capability that degraded without
 raising — a revocation the provider would not confirm, or a
 domain-ownership assertion withheld because a directory lookup failed.
 Both deserve an operator's attention precisely because they do not
 surface as exceptions: the call returns, and the effect is silent. A
 withheld assertion in particular makes domain-gated access refuse.
-`DEBUG` carries diagnostic detail: expired state, and provider response
-parsing that is useful when a response format changes.
+`INFO` records a change this library made for itself that an operator may
+want to see, such as a workload issuer's signing keys being read from
+another URL. `DEBUG` carries diagnostic detail: expired state, what each
+discovery candidate answered, and provider response parsing that is useful
+when a response format changes.
 
 There is no `logger` parameter to inject. The logging hierarchy is the
 injection point: because every module logs to its own `__name__`,
