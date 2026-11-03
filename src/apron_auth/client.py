@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
 import secrets
@@ -41,6 +42,7 @@ from apron_auth.errors import (
 )
 from apron_auth.models import (
     AuthorizationCallback,
+    BrowserBoundAuthorization,
     FreshTokenSet,
     IdentityMaterial,
     OAuthPendingState,
@@ -346,6 +348,21 @@ def _same_secret(given: str, expected: str) -> bool:
         ``True`` when the strings are equal.
     """
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
+
+
+def _state_for_browser_token(browser_token: str) -> str:
+    """Return the ``state`` an authorization request sends for a browser token.
+
+    The digest reveals nothing the token can be recovered from, so a request may send it to the
+    authorization server while the token stays with the browser the request was built for.
+
+    Args:
+        browser_token: The token minted for the browser the authorization request is built for.
+
+    Returns:
+        The state, as hexadecimal digits.
+    """
+    return hashlib.sha256(browser_token.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _stated_error_member(response: httpx.Response | None) -> object:
@@ -1293,6 +1310,8 @@ class StoredStateClient(_OAuthClientBase):
     The store holds the pending state between the authorization request and the callback, so a browser
     flow can serve the two from separate HTTP requests, and a ``state`` presented twice is refused because
     the store consumes the entry.
+    The ``state`` it sends is derived from a token it mints for the browser each request is built for,
+    so a callback presented by another browser is refused as well.
     A flow where one process spans both can keep the pending state itself, which ``OAuthClient`` takes.
     """
 
@@ -1333,7 +1352,7 @@ class StoredStateClient(_OAuthClientBase):
         )
         self._state_store = state_store
 
-    async def exchange_code(self, callback: AuthorizationCallback) -> FreshTokenSet:
+    async def exchange_code(self, callback: AuthorizationCallback, *, browser_token: str | None) -> FreshTokenSet:
         """Exchange an authorization response for tokens, against the pending state the store holds.
 
         The pending state for the response's ``state`` is consumed from the store, so a ``state``
@@ -1352,9 +1371,19 @@ class StoredStateClient(_OAuthClientBase):
         endpoint is called.
         The response carries its own ``iss``, so no caller has to remember to pass one.
 
+        The response's ``state`` must then be the one ``browser_token`` mints.
+        That is the binding to the browser that started the flow, which RFC 6749 section 10.12 asks a
+        client for.
+        The comparison takes time that does not depend on where two values differ, and it runs before
+        the store is consumed and before the token endpoint is called, so a callback presented by any
+        other browser redeems nothing and leaves the flow it was taken from live.
+
         Args:
             callback: The authorization response returned to the redirect URI.
                 :meth:`~apron_auth.models.AuthorizationCallback.from_query` reads one from a callback query.
+            browser_token: The token :meth:`get_authorization_url` minted for the browser it built the
+                authorization request for, as that browser presented it, or ``None`` where it presented
+                none.
 
         Returns:
             The exchanged token set, which identity can be established from.
@@ -1378,8 +1407,10 @@ class StoredStateClient(_OAuthClientBase):
                 A revocation unfinished after 10 seconds is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
-            StateError: If the callback carried no state, the store holds no pending state for it because
-                it is invalid, expired, or already consumed,
+            StateError: If the callback carried no state,
+                its ``state`` is not the one ``browser_token`` mints, which covers a callback
+                presenting no token at all,
+                the store holds no pending state for it because it is invalid, expired, or already consumed,
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
                 or was created further ahead of this client's clock than the allowed difference.
@@ -1388,24 +1419,26 @@ class StoredStateClient(_OAuthClientBase):
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
-        return await self._redeem(callback, self._consume_pending_state)
+        return await self._redeem(callback, partial(self._bound_pending_state, browser_token))
 
     async def get_authorization_url(
         self,
         redirect_uri: str | None = None,
         context: dict[str, Any] | None = None,
-    ) -> tuple[str, OAuthPendingState]:
-        """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
+    ) -> BrowserBoundAuthorization:
+        """Build an authorization URL for one browser, with optional PKCE and a nonce where it asks for ``openid``.
 
         The pending state is saved to the store before returning, so the callback can be served by
-        another request than the one that built the URL.
+        another request than the one that built the URL. The ``state`` the request sends is derived from
+        a token minted here for the browser this request is for, which is what binds the callback to it.
 
         Args:
             redirect_uri: Override the redirect URI from ``ProviderConfig``.
             context: Opaque caller context attached to the pending state.
 
         Returns:
-            A tuple of the authorization URL and the pending state the store now holds.
+            The authorization URL, the ``state`` it sends, and the browser token the exchange needs back.
+            The pending state itself stays in the store.
 
         Raises:
             ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
@@ -1413,9 +1446,36 @@ class StoredStateClient(_OAuthClientBase):
                 It is also raised when the URI states no ``https`` and names no loopback host, unless
                 the config accepts plain HTTP for its redirect URI.
         """
-        url, pending_state = self._authorization_request(secrets.token_urlsafe(32), redirect_uri, context)
+        browser_token = secrets.token_urlsafe(32)
+        url, pending_state = self._authorization_request(_state_for_browser_token(browser_token), redirect_uri, context)
         await self._state_store.save(pending_state)
-        return url, pending_state
+        return BrowserBoundAuthorization(url=url, state=pending_state.state, browser_token=browser_token)
+
+    async def _bound_pending_state(self, browser_token: str | None, state: str) -> OAuthPendingState:
+        """Consume the stored pending state of a callback whose state the given browser token mints.
+
+        Args:
+            browser_token: The token minted for the browser the authorization request was built for.
+            state: The ``state`` the callback carried.
+
+        Returns:
+            The consumed pending state.
+
+        Raises:
+            StateError: If ``state`` is not the one ``browser_token`` mints, or no token is presented,
+                either of which consumes nothing, or the store holds no pending state for it.
+        """
+        # A callback presenting no token is refused with the same message as a wrong one, because both
+        # mean the callback cannot be bound to a browser. An empty token is refused before it is hashed,
+        # so no state this client mints is ever compared against the digest of nothing.
+        if (
+            not isinstance(browser_token, str)
+            or not browser_token
+            or not _same_secret(state, _state_for_browser_token(browser_token))
+        ):
+            msg = "OAuth callback was not returned to the browser that started the authorization request"
+            raise StateError(msg)
+        return await self._consume_pending_state(state)
 
     async def _consume_pending_state(self, state: str) -> OAuthPendingState:
         """Consume the stored pending state a callback's state belongs to.

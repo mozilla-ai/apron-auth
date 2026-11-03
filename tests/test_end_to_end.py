@@ -35,6 +35,11 @@ from apron_auth import (
 )
 
 
+def _nonce(url: str) -> str:
+    """Return the nonce the authorization URL sends, which is the one the stored pending state carries."""
+    return parse_qs(urlparse(url).query)["nonce"][0]
+
+
 def _id_token(nonce: str | None, *, audience: str = "test-client", issuer: str | None = None) -> str:
     """Return a compact token carrying ``nonce``, with a signature nothing here checks."""
     assert nonce, "an OpenID authorization request always carries a nonce"
@@ -62,12 +67,12 @@ class TestFullOAuthFlow:
         client = StoredStateClient(config=config, state_store=store, revocation_handler=handler)
 
         # Step 1: Build authorization URL.
-        url, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
-        assert "provider.example.com/authorize" in url
-        assert pending_state.code_verifier is not None
-        assert pending_state.state in store._states
+        assert "provider.example.com/authorize" in authorization.url
+        assert store._states[authorization.state].code_verifier is not None
+        assert authorization.state in store._states
 
         # Step 2: Exchange code via state store.
         httpx_mock.add_response(
@@ -78,14 +83,17 @@ class TestFullOAuthFlow:
                 "refresh_token": "refresh-token-xyz",
                 "expires_in": 3600,
                 "scope": "openid email",
-                "id_token": _id_token(pending_state.nonce),
+                "id_token": _id_token(_nonce(authorization.url)),
             },
         )
-        tokens = await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+        tokens = await client.exchange_code(
+            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            browser_token=authorization.browser_token,
+        )
         assert tokens.access_token == "access-token-abc"
         assert tokens.refresh_token == "refresh-token-xyz"
         assert tokens.expires_at is not None
-        assert pending_state.state not in store._states
+        assert authorization.state not in store._states
 
         # Step 3: Refresh token.
         httpx_mock.add_response(
@@ -122,14 +130,12 @@ class TestContextFlowsThroughStateStore:
         client = StoredStateClient(config=config, state_store=store)
 
         meta = {"user_id": "U123", "tenant_id": "T456", "tool_name": "slack"}
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
             context=meta,
         )
-        assert pending_state.context == meta
-
         # Consume from store and verify the context survived round-trip.
-        consumed = await store.consume(pending_state.state)
+        consumed = await store.consume(authorization.state)
         assert consumed is not None
         assert consumed.context == meta
         assert consumed.context["user_id"] == "U123"
@@ -147,7 +153,7 @@ class TestContextFlowsThroughStateStore:
         client = StoredStateClient(config=config, state_store=store)
 
         meta = {"user_id": "U123", "tenant_id": "T456"}
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
             context=meta,
         )
@@ -158,10 +164,13 @@ class TestContextFlowsThroughStateStore:
                 "access_token": "access-token-abc",
                 "token_type": "Bearer",
                 "team_id": "T-provider",
-                "id_token": _id_token(pending_state.nonce),
+                "id_token": _id_token(_nonce(authorization.url)),
             },
         )
-        tokens = await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+        tokens = await client.exchange_code(
+            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            browser_token=authorization.browser_token,
+        )
         assert tokens.context == meta
         assert tokens.context["user_id"] == "U123"
         assert tokens.extras["team_id"] == "T-provider"
@@ -204,20 +213,19 @@ class TestSlackSignInFlow:
     async def test_the_authorization_url_is_slacks_openid_endpoint_and_carries_a_nonce(self) -> None:
         client = self._client()
 
-        url, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
 
-        params = parse_qs(urlparse(url).query)
-        assert url.startswith("https://slack.com/openid/connect/authorize")
+        params = parse_qs(urlparse(authorization.url).query)
+        assert authorization.url.startswith("https://slack.com/openid/connect/authorize")
         assert params["scope"] == ["openid,email"]
-        assert pending_state.nonce is not None
-        assert params["nonce"] == [pending_state.nonce]
+        assert params["nonce"][0]
 
     async def test_a_token_response_without_an_id_token_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """Slack's install endpoint returns no ID token, so a response without one cannot be signed in with."""
         client = self._client()
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
         httpx_mock.add_response(
@@ -228,11 +236,14 @@ class TestSlackSignInFlow:
         httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
 
         with pytest.raises(NonceValidationError):
-            await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+            await client.exchange_code(
+                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                browser_token=authorization.browser_token,
+            )
 
     async def test_a_token_response_carrying_the_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         client = self._client()
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
         httpx_mock.add_response(
@@ -241,18 +252,21 @@ class TestSlackSignInFlow:
                 "ok": True,
                 "access_token": "xoxp-user-token",
                 "token_type": "Bearer",
-                "id_token": _id_token(pending_state.nonce, audience="slack-id", issuer="https://slack.com"),
+                "id_token": _id_token(_nonce(authorization.url), audience="slack-id", issuer="https://slack.com"),
             },
         )
 
-        tokens = await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+        tokens = await client.exchange_code(
+            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            browser_token=authorization.browser_token,
+        )
 
         assert tokens.access_token == "xoxp-user-token"
 
     async def test_an_id_token_from_another_issuer_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """The preset names Slack's issuer, so a token minted elsewhere cannot sign a person in."""
         client = self._client()
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
         httpx_mock.add_response(
@@ -261,19 +275,24 @@ class TestSlackSignInFlow:
                 "ok": True,
                 "access_token": "xoxp-user-token",
                 "token_type": "Bearer",
-                "id_token": _id_token(pending_state.nonce, audience="slack-id", issuer="https://evil.example.com"),
+                "id_token": _id_token(
+                    _nonce(authorization.url), audience="slack-id", issuer="https://evil.example.com"
+                ),
             },
         )
         # The client revokes the tokens of a refused response before it raises.
         httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
 
         with pytest.raises(IdTokenValidationError):
-            await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+            await client.exchange_code(
+                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                browser_token=authorization.browser_token,
+            )
 
     async def test_an_id_token_carrying_another_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A replayed ID token carries the nonce of the request it was minted for, not this one."""
         client = self._client()
-        _, pending_state = await client.get_authorization_url(
+        authorization = await client.get_authorization_url(
             redirect_uri="https://app.example.com/callback",
         )
         httpx_mock.add_response(
@@ -289,7 +308,10 @@ class TestSlackSignInFlow:
         httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
 
         with pytest.raises(NonceValidationError):
-            await client.exchange_code(AuthorizationCallback(code="authorization-code", state=pending_state.state))
+            await client.exchange_code(
+                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                browser_token=authorization.browser_token,
+            )
 
 
 class TestPublicApiExports:
