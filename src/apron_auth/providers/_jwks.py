@@ -14,6 +14,7 @@ from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth._discovery import discovery_client
+from apron_auth._timeouts import within_request_limit
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
@@ -29,6 +30,7 @@ from apron_auth.errors import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from apron_auth.models import TimeoutPolicy
     from apron_auth.protocols import TransportFactory
 
 logger = logging.getLogger(__name__)
@@ -153,13 +155,14 @@ class IssuerSigningKeys:
         self._last_failure: tuple[str, FailureKind] | None = None
         self._loop_lock = LoopLock()
 
-    async def verify(self, token: str) -> VerifiedToken:
+    async def verify(self, token: str, timeouts: TimeoutPolicy) -> VerifiedToken:
         """Return the header and claims of a token whose signature an issuer key verifies.
 
         Only the issuer's published keys are used, so a key or key URL in the token's header is ignored.
 
         Args:
             token: A compact signed token.
+            timeouts: The limits in force for a key set fetch this check needs.
 
         Returns:
             The token's protected header and claims, and the published key that verified it.
@@ -194,12 +197,12 @@ class IssuerSigningKeys:
             raise TokenValidationError(
                 "The token's header is not valid", reason=TokenValidationReason.MALFORMED
             ) from exc
-        await self._refresh_if_stale()
+        await self._refresh_if_stale(timeouts)
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
         if isinstance(result, _Refusal):
             try:
-                await self._refetch_early(checked_keys)
+                await self._refetch_early(checked_keys, timeouts)
             except IdentityFetchError:
                 # The cached key set is still within its hour, so the result against it stands.
                 logger.warning(
@@ -273,7 +276,7 @@ class IssuerSigningKeys:
             return fitting
         return [key for key in fitting if key.kid == kid] or [key for key in fitting if key.kid is None]
 
-    async def _refresh_if_stale(self) -> None:
+    async def _refresh_if_stale(self, timeouts: TimeoutPolicy) -> None:
         """Fetch the key set when it is missing or older than an hour.
 
         Raises:
@@ -290,13 +293,13 @@ class IssuerSigningKeys:
                 message, kind = self._last_failure
                 raise IdentityFetchError(message, kind=kind)
             try:
-                await self._fetch_and_store()
+                await self._fetch_and_store(timeouts)
             except IdentityFetchError as exc:
                 # Only the message and the kind are kept, so the failed request is not held until the next fetch.
                 self._last_failure = (str(exc), exc.kind)
                 raise
 
-    async def _refetch_early(self, checked_keys: list[_SigningKey]) -> None:
+    async def _refetch_early(self, checked_keys: list[_SigningKey], timeouts: TimeoutPolicy) -> None:
         """Fetch the key set ahead of the hour for a token no cached key verifies, at most once a minute.
 
         A failure here is not recorded, because the cached key set is still within its hour.
@@ -311,26 +314,26 @@ class IssuerSigningKeys:
         async with self._loop_lock():
             if self._keys is not checked_keys or self._is_younger_than(self._attempted_at, _REFETCH_INTERVAL_SECONDS):
                 return
-            await self._fetch_and_store()
+            await self._fetch_and_store(timeouts)
 
-    async def _fetch_and_store(self) -> None:
+    async def _fetch_and_store(self, timeouts: TimeoutPolicy) -> None:
         """Fetch the key set and keep it, recording the attempt either way.
 
         Raises:
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         self._attempted_at = self._clock()
-        self._keys = await self._fetch()
+        self._keys = await self._fetch(timeouts)
         self._fetched_at, self._last_failure = self._clock(), None
 
     def _is_younger_than(self, moment: float | None, seconds: int) -> bool:
         """Return whether ``moment`` is set and less than ``seconds`` ago."""
         return moment is not None and self._clock() - moment < seconds
 
-    async def _fetch(self) -> list[_SigningKey]:
+    async def _fetch(self, timeouts: TimeoutPolicy) -> list[_SigningKey]:
         """Fetch the key set and import every key in it that can verify a signature."""
         try:
-            client = discovery_client(self._jwks_url, self._transport_factory)
+            client = discovery_client(self._jwks_url, self._transport_factory, timeouts)
         except Exception as exc:
             # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
             # issuer's and is not an outage, so it is never retried.
@@ -338,7 +341,7 @@ class IssuerSigningKeys:
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             async with client:
-                response = await client.get(self._jwks_url)
+                response = await within_request_limit(client.get(self._jwks_url), timeouts)
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code

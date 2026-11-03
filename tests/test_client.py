@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import time
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
@@ -50,6 +51,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     TenancyContext,
+    TimeoutPolicy,
     TokenSet,
     UserToken,
 )
@@ -1236,6 +1238,59 @@ class TestExchangeCode:
         store.consume.assert_not_awaited()
 
 
+class TestTheTimeoutPolicyBoundsTheTokenRequest:
+    @staticmethod
+    def _crawling_transport(url: str) -> httpx.MockTransport:
+        async def crawl(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={"access_token": "access-abc", "token_type": "Bearer"})
+
+        return httpx.MockTransport(crawl)
+
+    async def test_a_token_endpoint_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
+        """A step limit bounds one read, so only the whole-request limit refuses a response that never lands."""
+        config = _make_oauth_config(timeouts=TimeoutPolicy(request_seconds=0.05))
+        client = OAuthClient(config=config, transport_factory=self._crawling_transport)
+
+        with pytest.raises(TokenExchangeError) as refusal:
+            await client.exchange_code(_callback(), pending_state=_pending_state())
+
+        assert refusal.value.kind is FailureKind.TIMEOUT
+
+    @staticmethod
+    def _trickling_transport(url: str) -> httpx.MockTransport:
+        """Return a transport whose body arrives in steps no step limit refuses, over a total that is too long."""
+
+        async def trickle(request: httpx.Request) -> httpx.Response:
+            async def body() -> AsyncIterator[bytes]:
+                for chunk in (b'{"access_token"', b': "access-abc", "token', b'_type": "Bearer"}'):
+                    await asyncio.sleep(0.03)
+                    yield chunk
+
+            return httpx.Response(200, content=body(), headers={"Content-Type": "application/json"})
+
+        return httpx.MockTransport(trickle)
+
+    async def test_a_response_that_trickles_in_is_refused_by_the_whole_request_limit(self) -> None:
+        """Every step lands inside the step limit, so only a limit on the request itself refuses this."""
+        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
+        client = OAuthClient(config=config, transport_factory=self._trickling_transport)
+
+        with pytest.raises(TokenExchangeError) as refusal:
+            await client.exchange_code(_callback(), pending_state=_pending_state())
+
+        assert refusal.value.kind is FailureKind.TIMEOUT
+
+    async def test_a_refresh_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
+        config = _make_oauth_config(timeouts=TimeoutPolicy(request_seconds=0.05))
+        client = OAuthClient(config=config, transport_factory=self._crawling_transport)
+
+        with pytest.raises(TokenRefreshError) as refusal:
+            await client.refresh_token("refresh-xyz")
+
+        assert refusal.value.kind is FailureKind.TIMEOUT
+
+
 class TestExchangeCodeAuthorizationResponse:
     """A response that states no code is refused before anything is exchanged."""
 
@@ -1854,10 +1909,8 @@ class TestExchangeCodeNonceRevocation:
         assert "(interrupted)" in caplog.text
 
     async def test_a_revocation_that_never_returns_stops_at_the_time_limit(
-        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
-
         class SlowRefreshHandler:
             async def revoke(self, token: str, config: ProviderConfig) -> bool:
                 if token == "refresh-xyz":
@@ -1869,7 +1922,8 @@ class TestExchangeCodeNonceRevocation:
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=SlowRefreshHandler()
+            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            revocation_handler=SlowRefreshHandler(),
         )
 
         with pytest.raises(NonceValidationError):
@@ -1887,10 +1941,8 @@ class TestExchangeCodeNonceRevocation:
         ]
 
     async def test_each_unfinished_revocation_is_logged_with_its_own_reason(
-        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
-
         class MixedHandler:
             async def revoke(self, token: str, config: ProviderConfig) -> bool:
                 if token == "access-abc":
@@ -1902,7 +1954,10 @@ class TestExchangeCodeNonceRevocation:
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
-        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=MixedHandler())
+        client = OAuthClient(
+            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            revocation_handler=MixedHandler(),
+        )
 
         with pytest.raises(NonceValidationError):
             await asyncio.wait_for(
@@ -1924,11 +1979,8 @@ class TestExchangeCodeNonceRevocation:
         self,
         httpx_mock: HTTPXMock,
         caplog: pytest.LogCaptureFixture,
-        monkeypatch: pytest.MonkeyPatch,
         ending: str,
     ) -> None:
-        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
-
         class HandlerAbortError(BaseException):
             pass
 
@@ -1943,7 +1995,8 @@ class TestExchangeCodeNonceRevocation:
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
         client = OAuthClient(
-            config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=SwallowingHandler()
+            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            revocation_handler=SwallowingHandler(),
         )
 
         with pytest.raises(NonceValidationError):
@@ -1961,10 +2014,8 @@ class TestExchangeCodeNonceRevocation:
         ]
 
     async def test_every_outcome_is_logged_before_a_handler_abort_is_raised(
-        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        monkeypatch.setattr("apron_auth.client._REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS", 0.05)
-
         class HandlerAbortError(BaseException):
             pass
 
@@ -1979,7 +2030,10 @@ class TestExchangeCodeNonceRevocation:
             url="https://provider.example.com/token",
             json={"access_token": "access-abc", "refresh_token": "refresh-xyz"},
         )
-        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=AbortingHandler())
+        client = OAuthClient(
+            config=_make_config(revocation_url=self.REVOKE_URL, timeouts=TimeoutPolicy(cleanup_seconds=0.05)),
+            revocation_handler=AbortingHandler(),
+        )
 
         with pytest.raises(HandlerAbortError):
             await asyncio.wait_for(

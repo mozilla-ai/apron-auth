@@ -67,6 +67,7 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     ServerMetadata,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
     UrlField,
 )
@@ -137,6 +138,7 @@ async def discover(
     *,
     document_url: str | None = None,
     transport_factory: TransportFactory | None = None,
+    timeouts: TimeoutPolicy | None = None,
     allow_insecure_http: bool = False,
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
@@ -169,7 +171,7 @@ async def discover(
     if document_url is not None:
         require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http, caller_supplied=True)
         url = document_url
-    document = await fetch_document(url, transport_factory)
+    document = await fetch_document(url, transport_factory, timeouts or TimeoutPolicy())
 
     require_openid_issuer(document, issuer)
 
@@ -516,7 +518,7 @@ class OidcIdentityHandler:
             raise ConfigurationError(msg)
         issuer = config.issuer
         claims = (
-            await self._validated_claims(material.id_token, material.access_token, issuer, config.client_id)
+            await self._validated_claims(material.id_token, material.access_token, config)
             if material.id_token
             else None
         )
@@ -572,7 +574,7 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    async def _validated_claims(self, id_token: str, access_token: str, issuer: str, client_id: str) -> dict[str, Any]:
+    async def _validated_claims(self, id_token: str, access_token: str, config: ProviderConfig) -> dict[str, Any]:
         """Return the ID token's claims once its signature and claims check out.
 
         The signature is checked against the issuer's published keys before any claim is read.
@@ -585,8 +587,8 @@ class OidcIdentityHandler:
             id_token: The ID token from the token-endpoint response.
             access_token: The access token from the same response.
                 A present ``at_hash`` is verified against it.
-            issuer: The issuer the token's ``iss`` must name.
-            client_id: The client identifier the token's ``aud`` must name.
+            config: The provider configuration, which states the client the token's ``aud`` must name
+                and the limits on a key set fetch. The ``iss`` is checked against this handler's issuer.
 
         Returns:
             The validated claims.
@@ -595,7 +597,8 @@ class OidcIdentityHandler:
             IdentityFetchError: If the signature or any claim does not validate,
                 or the issuer's signing keys cannot be fetched or read.
         """
-        verified = await self._signing_keys.verify(id_token)
+        issuer, client_id = self._issuer, config.client_id
+        verified = await self._signing_keys.verify(id_token, config.timeouts)
         header, claims = verified.header, verified.claims
         token = CodeIDToken(
             claims,

@@ -16,10 +16,12 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
+from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import FailureKind, OidcDiscoveryError
 
 if TYPE_CHECKING:
+    from apron_auth.models import TimeoutPolicy
     from apron_auth.protocols import TransportFactory
 
 # The logger name is part of the documented interface, so it does not follow __name__.
@@ -146,7 +148,9 @@ def optional_url(document: dict[str, Any], *, key: str, field: str, allow_insecu
     return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=False)
 
 
-async def fetch_document(url: str, transport_factory: TransportFactory | None) -> dict[str, Any]:
+async def fetch_document(
+    url: str, transport_factory: TransportFactory | None, timeouts: TimeoutPolicy
+) -> dict[str, Any]:
     """Fetch the configuration document at ``url``.
 
     Redirects are not followed, so the request goes to ``url`` and nowhere else.
@@ -154,6 +158,7 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
     Args:
         url: The document URL, already validated.
         transport_factory: Optional factory controlling the outbound connection.
+        timeouts: The limits in force for the fetch.
 
     Returns:
         The document as a JSON object.
@@ -163,7 +168,7 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
             the response is not HTTP 200, or its body is not a JSON object.
     """
     try:
-        client = discovery_client(url, transport_factory)
+        client = discovery_client(url, transport_factory, timeouts)
     except Exception as exc:
         # Building the client calls the caller's transport factory. Whether it refused the connection by policy or
         # failed, the fault is not the provider's and is not an outage, so it is never retried.
@@ -171,7 +176,7 @@ async def fetch_document(url: str, transport_factory: TransportFactory | None) -
         raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from exc
     async with client:
         try:
-            response = await client.get(url)
+            response = await within_request_limit(client.get(url), timeouts)
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"could not fetch the OpenID provider configuration ({transport.description})"

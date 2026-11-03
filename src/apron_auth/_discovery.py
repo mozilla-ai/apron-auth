@@ -8,9 +8,11 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from apron_auth._timeouts import httpx_timeout
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
+    from apron_auth.models import TimeoutPolicy
     from apron_auth.protocols import TransportFactory
 
 # Token-endpoint auth methods this library can perform for a confidential client, in preference order.
@@ -18,10 +20,6 @@ CONFIDENTIAL_AUTH_METHODS = (
     TokenEndpointAuthMethod.CLIENT_SECRET_POST,
     TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
 )
-
-# The time limits, in seconds, on each discovery request: 5 to connect and 10 for each other step.
-DISCOVERY_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
-
 
 class IssuerRefusalReason(Enum):
     """Each member is one issuer condition a metadata document can fail."""
@@ -69,20 +67,26 @@ def require_declared_issuer(document: Mapping[str, object], expected: str) -> No
         raise IssuerNotDeclaredError(IssuerRefusalReason.MISMATCHED)
 
 
-def discovery_client(url: str, transport_factory: TransportFactory | None) -> httpx.AsyncClient:
+def discovery_client(
+    url: str, transport_factory: TransportFactory | None, timeouts: TimeoutPolicy
+) -> httpx.AsyncClient:
     """Build the HTTP client for a metadata or registration fetch.
 
     The client follows no redirects, so a validated URL cannot be bounced to an unvalidated host.
 
+    NOTE: The limits this applies bound each step of a request. A caller must also bound the request
+    itself with ``within_request_limit``, because a document arriving slowly outlives every step limit.
+
     Args:
         url: The URL the client will fetch, which selects the transport.
         transport_factory: Optional factory returning the transport for ``url``.
+        timeouts: The limits in force for the fetch.
 
     Returns:
         A client that routes through the factory's transport when one is given.
     """
     transport = transport_factory(url) if transport_factory is not None else None
-    return httpx.AsyncClient(transport=transport, timeout=DISCOVERY_TIMEOUT, follow_redirects=False)
+    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
 
 
 def str_list(value: object) -> list[str]:

@@ -35,6 +35,7 @@ from apron_auth._discovery import (
     str_list,
 )
 from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._timeouts import within_request_limit
 from apron_auth._json_body import decode_json_body
 from apron_auth._urls import (
     AuthorityCredential,
@@ -51,6 +52,7 @@ from apron_auth.models import (
     ClientRegistration,
     ProviderConfig,
     ServerMetadata,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
@@ -99,6 +101,7 @@ async def discover(
     resource_metadata_url: str | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ServerMetadata:
     """Discover a remote MCP server's OAuth metadata.
 
@@ -116,6 +119,7 @@ async def discover(
             challenge, tried before the well-known locations.
         url_validator: Optional policy invoked on each URL before it is
             requested; raising rejects the URL and fails discovery.
+        timeouts: The limits on every request this makes. Defaults to :class:`TimeoutPolicy`'s own.
         transport_factory: Optional factory returning an httpx transport for a
             URL, letting the caller control the outbound connection (e.g. pin
             DNS to validated public IPs to prevent SSRF via rebinding).
@@ -137,10 +141,12 @@ async def discover(
     """
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
+    limits = timeouts or TimeoutPolicy()
     resource_meta = await _fetch_first_metadata(
         _prm_candidate_urls(resource_metadata_url, server_url),
         url_validator,
         transport_factory,
+        limits,
         "protected resource metadata",
         caller_supplied=True,
     )
@@ -162,6 +168,7 @@ async def discover(
         _asm_candidate_urls(auth_server),
         url_validator,
         transport_factory,
+        limits,
         "authorization server metadata",
         caller_supplied=False,
     )
@@ -310,6 +317,7 @@ async def register_client(
     application_type: ApplicationType | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
+    timeouts: TimeoutPolicy | None = None,
 ) -> ClientRegistration:
     """Dynamically register an OAuth client (RFC 7591) and return its credentials.
 
@@ -331,6 +339,7 @@ async def register_client(
             otherwise left unset. Registering ``native`` lets servers that gate
             ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
+        timeouts: The limits on the registration request. Defaults to :class:`TimeoutPolicy`'s own.
         transport_factory: Optional factory controlling the outbound connection.
 
     Returns:
@@ -368,9 +377,10 @@ async def register_client(
     }
     if application_type is not None:
         payload["application_type"] = application_type
-    async with discovery_client(registration_url, transport_factory) as client:
+    limits = timeouts or TimeoutPolicy()
+    async with discovery_client(registration_url, transport_factory, limits) as client:
         try:
-            response = await client.post(registration_url, json=payload)
+            response = await within_request_limit(client.post(registration_url, json=payload), limits)
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
@@ -836,6 +846,7 @@ async def _fetch_first_metadata(
     candidate_urls: Sequence[str],
     url_validator: UrlValidator | None,
     transport_factory: TransportFactory | None,
+    timeouts: TimeoutPolicy,
     what: str,
     *,
     caller_supplied: bool,
@@ -870,9 +881,9 @@ async def _fetch_first_metadata(
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
         _validate_url(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
-        async with discovery_client(url, transport_factory) as client:
+        async with discovery_client(url, transport_factory, timeouts) as client:
             try:
-                response = await client.get(url)
+                response = await within_request_limit(client.get(url), timeouts)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
                 error_cls, error_kind = _url_fault(caller_supplied=caller_supplied)

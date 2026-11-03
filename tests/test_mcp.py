@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -46,6 +47,7 @@ from apron_auth.models import (
     OAuthPendingState,
     ProviderConfig,
     ServerMetadata,
+    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 
@@ -70,6 +72,16 @@ def _asm_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+def _crawling_transport(url: str) -> httpx.MockTransport:
+    """Return a transport whose answer never arrives within any limit a test sets."""
+
+    async def crawl(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={})
+
+    return httpx.MockTransport(crawl)
 
 
 class TestToProviderConfig:
@@ -1660,3 +1672,26 @@ class TestEndToEndFlow:
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         config = to_provider_config(meta, reg)
         assert config.token_endpoint_auth_method == "client_secret_basic"
+
+
+class TestTheTimeoutPolicyBoundsMcpRequests:
+    async def test_a_metadata_fetch_that_never_lands_is_refused_as_a_timeout(self) -> None:
+        with pytest.raises(McpDiscoveryError) as refusal:
+            await discover(
+                "https://mcp.example.com",
+                transport_factory=_crawling_transport,
+                timeouts=TimeoutPolicy(request_seconds=0.05),
+            )
+
+        assert refusal.value.kind is FailureKind.TIMEOUT
+
+    async def test_a_registration_that_never_lands_is_refused_as_a_timeout(self) -> None:
+        with pytest.raises(McpRegistrationError) as refusal:
+            await register_client(
+                "https://as.example.com/register",
+                "https://app.example.com/callback",
+                transport_factory=_crawling_transport,
+                timeouts=TimeoutPolicy(request_seconds=0.05),
+            )
+
+        assert refusal.value.kind is FailureKind.TIMEOUT

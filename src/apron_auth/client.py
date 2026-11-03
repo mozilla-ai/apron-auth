@@ -23,6 +23,7 @@ from apron_auth._http_errors import http_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
+from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import (
     SERVER_ERROR,
@@ -66,10 +67,6 @@ _NO_ACCESS_TOKEN_REFUSAL = "token response states no access token"
 
 # The pending state a callback's state belongs to, which each client answers from wherever it keeps one.
 _PendingStateLookup = Callable[[str], Awaitable[OAuthPendingState]]
-
-# The wall-clock limit, in seconds, on revoking the tokens of a refused token response.
-# NOTE: The exchange_code docstring states this value.
-_REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS = 10.0
 
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
@@ -737,7 +734,7 @@ class _OAuthClientBase:
         for task in tasks:
             task.add_done_callback(_read_task_exception)
         try:
-            _, timed_out = await asyncio.wait(tasks, timeout=_REFUSED_TOKEN_REVOCATION_TIMEOUT_SECONDS)
+            _, timed_out = await asyncio.wait(tasks, timeout=self._config.timeouts.cleanup_seconds)
         finally:
             await _cancel_and_wait(tasks)
         error: BaseException | None = None
@@ -1077,9 +1074,12 @@ class _OAuthClientBase:
                 client_secret=client_secret.get_secret_value() if client_secret is not None else None,
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
                 transport=transport,
+                timeout=httpx_timeout(self._config.timeouts),
                 event_hooks={"response": [record_response]},
             ) as client:
-                token = await client.fetch_token(self._config.token_url, **data)
+                token = await within_request_limit(
+                    client.fetch_token(self._config.token_url, **data), self._config.timeouts
+                )
             return dict(token)
         except AuthlibOAuthError:
             # A response with an OAuth error body, which an endpoint may send with any status.
@@ -1258,7 +1258,7 @@ class OAuthClient(_OAuthClientBase):
                 or an ID token that does not carry that nonce,
                 or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
-                A revocation unfinished after 10 seconds is canceled,
+                A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state, ``state`` is not the pending state's own,
@@ -1404,7 +1404,7 @@ class StoredStateClient(_OAuthClientBase):
                 or an ID token that does not carry that nonce,
                 or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
-                A revocation unfinished after 10 seconds is canceled,
+                A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
                 At some providers a revocation ends the whole grant, so the user has to authorize again.
             StateError: If the callback carried no state,

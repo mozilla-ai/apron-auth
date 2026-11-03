@@ -268,7 +268,7 @@ class MicrosoftIdentityHandler:
         """
         id_token = None
         if material.id_token:
-            verified = await self._signing_keys.verify(material.id_token)
+            verified = await self._signing_keys.verify(material.id_token, config.timeouts)
             id_token = _checked_id_token(verified.claims, config.client_id, verified.key.get("issuer"))
         payload = await self._fetch_userinfo(material.access_token)
         if id_token is not None:
