@@ -1,6 +1,9 @@
-"""A refused URL is classified by where its value came from.
+"""A refused URL is classified by who chose its value.
 
-A value this library's caller passed is a configuration fault, and one read out of a fetched document is a refusal.
+A value this library's caller chose is a configuration fault, and one the other side chose is a refusal.
+Who chose it is the axis, not how it reached the rule: a value the other side chose and the caller only passed
+on, such as MCP discovery's metadata hint, is the other side's, because a refusal of it names no fault the
+caller can fix.
 Each call to a URL rule therefore names its value's source, and the signature is what enforces that.
 A guard over the library states the convention in one place, and is the weaker of the two.
 It reads a call by name, so it cannot tell whether the source a call names is the right one.
@@ -17,7 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from apron_auth.errors import FailureKind, OidcDiscoveryError
-from apron_auth.mcp import _validate_url
+from apron_auth.mcp import _require_a_fetchable_url, _validate_url
 from apron_auth.providers._openid_documents import require_url
 
 if TYPE_CHECKING:
@@ -28,8 +31,8 @@ if TYPE_CHECKING:
 SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 # Every module of that tree, one parametrized case each.
 MODULES = sorted(SRC.rglob("*.py"))
-# The two URL rules whose refusal follows the source of the value.
-RULES = (_validate_url, require_url)
+# The URL rules whose refusal follows the source of the value.
+RULES = (_require_a_fetchable_url, _validate_url, require_url)
 # The names the guard matches, read off the rules so a rename cannot leave it passing.
 URL_RULES = {rule.__name__ for rule in RULES}
 # A URL whose authority carries a credential the HTTP client would present.
@@ -95,6 +98,7 @@ def test_a_url_rule_takes_no_default_for_the_source(rule: Callable[..., object])
 @pytest.mark.parametrize(
     "call",
     [
+        lambda: _require_a_fetchable_url("https://mcp.example.com/sse"),
         lambda: _validate_url("https://mcp.example.com/sse", None),
         lambda: require_url("https://idp.example/realm", field="endpoint", allow_insecure_http=False),
     ],

@@ -80,6 +80,7 @@ class _MetadataFault(Enum):
     A member's value says what the error reports about the document, after the document's name.
     """
 
+    REFUSED = "names no URL this library will fetch"
     UNAVAILABLE = "could not be fetched"
     UNPUBLISHED = "is not published"
     UNREADABLE = "is not a JSON object"
@@ -95,6 +96,22 @@ class _MetadataOutcome(NamedTuple):
 
     fault: _MetadataFault
     kind: FailureKind
+
+
+class _Candidate(NamedTuple):
+    """One URL a metadata fetch may try, with what its source decides about refusing it.
+
+    Attributes:
+        url: The URL to try.
+        caller_supplied: The caller chose this value, rather than passing on one the other side chose, so
+            a refusal of it is a fault in the caller's own configuration.
+        is_hint: The URL is a hint, so a refusal of it leaves the remaining candidates to try. A hint is
+            what the well-known locations are the fallback for.
+    """
+
+    url: str
+    caller_supplied: bool
+    is_hint: bool
 
 
 async def discover(
@@ -118,7 +135,9 @@ async def discover(
     Args:
         server_url: Base URL of the MCP server.
         resource_metadata_url: Optional hint from a ``WWW-Authenticate``
-            challenge, tried before the well-known locations.
+            challenge, tried before the well-known locations. Its value is the
+            server's, so one this library will not fetch loses its turn and the
+            well-known locations are still tried.
         url_validator: Optional policy invoked on each URL before it is
             requested; raising rejects the URL and fails discovery.
         transport_factory: Optional factory returning an httpx transport for a
@@ -131,11 +150,10 @@ async def discover(
         The discovered metadata.
 
     Raises:
-        ConfigurationError: If a URL the caller passed is rejected: ``server_url``,
-            the ``resource_metadata_url`` hint, or a protected-resource metadata
-            URL derived from ``server_url``.
-        McpDiscoveryError: If a URL the metadata declares is rejected, no metadata
-            document can be fetched, a required field is absent, or the
+        ConfigurationError: If a URL the caller chose is rejected: ``server_url``, or
+            a protected-resource metadata URL derived from it.
+        McpDiscoveryError: If a URL a fetched document declares is rejected, no
+            metadata document can be fetched, a required field is absent, or the
             authorization server metadata does not declare the server it was
             fetched from as its issuer. The first document fetched is
             authoritative, so a mismatched issuer ends discovery rather than
@@ -146,12 +164,11 @@ async def discover(
 
     limits = timeouts or TimeoutPolicy()
     resource_meta = await _fetch_first_metadata(
-        _prm_candidate_urls(resource_metadata_url, server_url),
+        _prm_candidates(resource_metadata_url, server_url),
         url_validator,
         transport_factory,
         limits,
         "protected resource metadata",
-        caller_supplied=True,
     )
     auth_servers = resource_meta.get("authorization_servers")
     auth_server = None
@@ -168,12 +185,11 @@ async def discover(
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
     server_meta = await _fetch_first_metadata(
-        _asm_candidate_urls(auth_server),
+        _asm_candidates(auth_server),
         url_validator,
         transport_factory,
         limits,
         "authorization server metadata",
-        caller_supplied=False,
     )
     try:
         require_declared_issuer(server_meta, auth_server)
@@ -808,24 +824,37 @@ def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]
 
 
 def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str, caller_supplied: bool) -> None:
-    """Validate an MCP OAuth URL before it is requested.
-
-    A URL is rejected when it is malformed, not HTTPS, carries userinfo, or targets
-    a host that is not globally reachable. An ``OAuthError`` from ``url_validator``
-    propagates unchanged, and any other validator exception is wrapped in the class
-    the source decides. The validator sees only a URL that passed these checks.
+    """Validate an MCP OAuth URL before it is requested, by this library's rules and then the caller's.
 
     Args:
         url: The URL to check.
-        url_validator: Optional policy invoked on a URL that passed the checks.
+        url_validator: Optional policy invoked on a URL that passed this library's own rules.
         subject: What the URL is, for a refusal.
-        caller_supplied: The URL is an argument of this library's caller, or derives
-            from one, not a member of a fetched document.
+        caller_supplied: The caller chose this value, rather than passing on one the other side chose.
 
     Raises:
-        ConfigurationError: If a caller-supplied URL is rejected.
-        McpDiscoveryError: If a document-supplied URL is rejected.
+        ConfigurationError: If a URL the caller chose is rejected.
+        McpDiscoveryError: If a URL the other side chose is rejected.
         OAuthError: As raised by ``url_validator``, unchanged.
+    """
+    _require_a_fetchable_url(url, subject=subject, caller_supplied=caller_supplied)
+    _require_caller_policy(url, url_validator, subject=subject, caller_supplied=caller_supplied)
+
+
+def _require_a_fetchable_url(url: str, *, subject: str, caller_supplied: bool) -> None:
+    """Refuse a URL this library will not fetch, by the fault class its source decides.
+
+    A URL is refused when it is malformed, not HTTPS, carries userinfo, or targets a host that is not
+    globally reachable.
+
+    Args:
+        url: The URL to check.
+        subject: What the URL is, for a refusal.
+        caller_supplied: The caller chose this value, rather than passing on one the other side chose.
+
+    Raises:
+        ConfigurationError: If a URL the caller chose is refused.
+        McpDiscoveryError: If a URL the other side chose is refused.
     """
     error_cls, kind = _url_fault(caller_supplied=caller_supplied)
     try:
@@ -839,6 +868,27 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     if _is_blocked_host(parsed.hostname or ""):
         msg = f"MCP OAuth blocked a non-public host ({subject})"
         raise error_cls(msg, kind=kind)
+
+
+def _require_caller_policy(
+    url: str, url_validator: UrlValidator | None, *, subject: str, caller_supplied: bool
+) -> None:
+    """Put a URL to the caller's own policy, which decides for every URL whatever its source.
+
+    NOTE: Whatever the policy raises ends the operation, because it is the caller speaking rather than one
+    candidate URL proving unusable.
+
+    Args:
+        url: The URL to put to the policy, which has passed this library's own rules.
+        url_validator: The caller's policy, or ``None`` when it states none.
+        subject: What the URL is, for a refusal.
+        caller_supplied: The caller chose this value, rather than passing on one the other side chose.
+
+    Raises:
+        ConfigurationError: If the policy refuses a URL the caller chose.
+        McpDiscoveryError: If the policy refuses a URL the other side chose.
+        OAuthError: As raised by ``url_validator``, unchanged.
+    """
     if url_validator is None:
         return
     try:
@@ -846,41 +896,54 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     except OAuthError:
         raise
     except Exception as exc:
-        # Any rejection from the caller's validator fails the operation. Its own text can carry detail the
-        # caller did not mean to surface, so the chain holds it and the message does not.
+        # The policy's own text can carry detail the caller did not mean to surface, so the chain holds it
+        # and the message does not.
+        error_cls, kind = _url_fault(caller_supplied=caller_supplied)
         msg = f"MCP OAuth refused a URL by caller policy ({subject})"
         raise error_cls(msg, kind=kind) from exc
 
 
-def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> list[str]:
-    """Return the ordered RFC 9728 protected-resource-metadata URLs to try."""
-    urls: list[str] = []
+def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[_Candidate]:
+    """Return the ordered RFC 9728 protected-resource-metadata URLs to try, each with its source.
+
+    The hint's value is the server's: the caller reads it out of a ``WWW-Authenticate`` challenge and only
+    passes it on. RFC 9728 makes it a hint, and the well-known locations below it are its fallback.
+    """
+    candidates: list[_Candidate] = []
     if resource_metadata_url:
-        urls.append(resource_metadata_url)
+        candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True))
     parsed = urlparse(server_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     if parsed.path and parsed.path != "/":
-        urls.append(urljoin(base, f"{_WELL_KNOWN_PRM}{parsed.path}"))
-    urls.append(urljoin(base, _WELL_KNOWN_PRM))
-    return urls
+        candidates.append(
+            _Candidate(urljoin(base, f"{_WELL_KNOWN_PRM}{parsed.path}"), caller_supplied=True, is_hint=False)
+        )
+    candidates.append(_Candidate(urljoin(base, _WELL_KNOWN_PRM), caller_supplied=True, is_hint=False))
+    return candidates
 
 
-def _asm_candidate_urls(auth_server: str) -> list[str]:
-    """Return the ordered RFC 8414 metadata URLs to try, with OIDC fallback.
+def _asm_candidates(auth_server: str) -> list[_Candidate]:
+    """Return the ordered RFC 8414 metadata URLs to try, with OIDC fallback, each with its source.
 
     A terminating slash on the identifier's path is removed before the well-known segment is inserted,
     as RFC 8414 section 3.1 requires. The identifier itself is not changed.
+
+    Every candidate derives from the identifier the resource metadata declared, so none is the caller's and
+    none is a hint: they differ only in where this library looks, so a refusal applies to all of them.
     """
     parsed = urlparse(auth_server)
     base = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")
-    if path:
-        return [
+    urls = (
+        [
             urljoin(base, f"{_WELL_KNOWN_ASM}{path}"),
             urljoin(base, f"{_WELL_KNOWN_OIDC}{path}"),
             urljoin(base, f"{path}{_WELL_KNOWN_OIDC}"),
         ]
-    return [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
+        if path
+        else [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
+    )
+    return [_Candidate(url, caller_supplied=False, is_hint=False) for url in urls]
 
 
 def _reported_outcome(reported: _MetadataOutcome, observed: _MetadataOutcome) -> _MetadataOutcome:
@@ -901,45 +964,51 @@ def _reported_outcome(reported: _MetadataOutcome, observed: _MetadataOutcome) ->
 
 
 async def _fetch_first_metadata(
-    candidate_urls: Sequence[str],
+    candidates: Sequence[_Candidate],
     url_validator: UrlValidator | None,
     transport_factory: TransportFactory | None,
     timeouts: TimeoutPolicy,
     what: str,
-    *,
-    caller_supplied: bool,
 ) -> dict[str, Any]:
     """Fetch and return the first candidate URL that yields a JSON object.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
-    skipping request errors, non-200 responses, and non-object bodies. Each skip
-    is logged at debug with a non-sensitive reason.
+    skipping request errors, non-200 responses, and non-object bodies. A hint this
+    library will not fetch loses its turn the same way. Each skip is logged at debug
+    with a non-sensitive reason.
 
     Args:
-        candidate_urls: The URLs to try, in order.
+        candidates: The URLs to try, in order, each with its source.
         url_validator: Optional policy invoked on each URL before it is requested.
         transport_factory: Optional factory controlling the outbound connection.
         timeouts: The limits in force for each candidate's fetch.
         what: The document this fetches, for the error and the debug lines.
-        caller_supplied: The candidates derive from an argument of this library's
-            caller, not from a fetched document.
 
     Returns:
         The first candidate's body that is a JSON object.
 
     Raises:
-        ConfigurationError: If a candidate is rejected and ``caller_supplied`` says
-            the candidates derive from an argument of this library's caller.
-        McpDiscoveryError: If a candidate is rejected and the candidates derive from
-            a fetched document, or if no candidate succeeds. The error names ``what``
-            and the fault the candidates showed. Its ``kind`` tells a fetch that may
-            pass later from one that cannot.
+        ConfigurationError: If a candidate the caller chose is refused.
+        McpDiscoveryError: If a candidate the other side chose is refused and is no hint, or if no
+            candidate succeeds. The error names ``what`` and the fault the candidates showed. Its
+            ``kind`` tells a fetch that may pass later from one that cannot.
+        OAuthError: As raised by ``url_validator``, unchanged.
     """
     # The seed is not retryable, so the first candidate's outcome replaces it.
     outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
-    for url in candidate_urls:
-        _validate_url(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
+    refused = _MetadataOutcome(_MetadataFault.REFUSED, FailureKind.REFUSED)
+    for candidate in candidates:
+        url, caller_supplied = candidate.url, candidate.caller_supplied
+        try:
+            _require_a_fetchable_url(url, subject=f"{what} URL", caller_supplied=caller_supplied)
+        except OAuthError:
+            if not candidate.is_hint:
+                raise
+            logger.debug("MCP discovery: %s hint is not a URL this library will fetch", what)
+            outcome = _reported_outcome(outcome, refused)
+            continue
+        _require_caller_policy(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
         client = _opened_client(url, transport_factory, timeouts, subject=f"{what} URL", error_cls=McpDiscoveryError)
         async with client:
             try:
