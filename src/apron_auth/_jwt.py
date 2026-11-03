@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, NoReturn
 
 from joserfc import jws
 from joserfc.errors import JoseError
@@ -16,6 +16,22 @@ _MAX_HEADER_LENGTH = 16384
 _MAX_SIGNATURE_LENGTH = 2048
 
 
+def _refuse_a_non_json_constant(name: str) -> NoReturn:
+    """Refuse a literal that is not a JSON value, so no claim can hold one.
+
+    A non-finite number compares false against every bound, so a claim holding one passes a range
+    check it should fail.
+
+    Args:
+        name: The literal the decoder read: ``NaN``, ``Infinity`` or ``-Infinity``.
+
+    Raises:
+        ValueError: Always.
+    """
+    msg = f"The token's claims name {name}, which RFC 8259 does not define"
+    raise ValueError(msg)
+
+
 def compact_claims(compact: CompactSignature) -> dict[str, Any] | None:
     """Return the claims of a parsed compact token.
 
@@ -23,10 +39,11 @@ def compact_claims(compact: CompactSignature) -> dict[str, Any] | None:
         compact: The parsed compact token.
 
     Returns:
-        The token's claims, or ``None`` when they are not a JSON object.
+        The token's claims, or ``None`` when they are not a JSON object, or name a literal that is not
+            a JSON value.
     """
     try:
-        claims = json.loads(compact.payload)
+        claims = json.loads(compact.payload, parse_constant=_refuse_a_non_json_constant)
     except (RecursionError, ValueError):
         return None
     return claims if isinstance(claims, dict) else None

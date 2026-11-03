@@ -57,6 +57,9 @@ class TestUnverifiedClaims:
             compact(b'"b64alg"', b"{}", b"sig"),
             UNENCODED_PAYLOAD_TOKEN,
             "\ud800.\ud800.\ud800",
+            compact(b'{"alg":"RS256"}', b'{"exp":NaN}', b"sig"),
+            compact(b'{"alg":"RS256"}', b'{"exp":Infinity}', b"sig"),
+            compact(b'{"alg":"RS256"}', b'{"exp":-Infinity}', b"sig"),
         ],
         ids=[
             "not-compact",
@@ -68,8 +71,20 @@ class TestUnverifiedClaims:
             "header-string",
             "unencoded-payload",
             "unencodable",
+            "claims-naming-nan",
+            "claims-naming-infinity",
+            "claims-naming-negative-infinity",
         ],
     )
     def test_refuses_a_token_it_cannot_read(self, token: str) -> None:
         with pytest.raises(ValueError, match="not a compact signed token|not a JSON object"):
             unverified_claims(token)
+
+    def test_a_number_too_large_for_a_float_is_read_as_a_number(self) -> None:
+        """RFC 8259 sets no range, so an overflowing exponent is valid JSON that reads as infinity.
+
+        It names no JSON constant, so refusing those constants does not cover it.
+        """
+        claims = unverified_claims(compact(b'{"alg":"RS256"}', b'{"exp":1e400}', b"sig"))
+
+        assert claims["exp"] == float("inf")

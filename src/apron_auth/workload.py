@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._jwt import claim_refusal_reason, parse_compact
 from apron_auth._loop_lock import LoopLock
+from apron_auth._numbers import finite_number
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -239,20 +240,21 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
     """Lift the identity out of validated claims.
 
     Raises:
-        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it.
+        TokenValidationError: If ``sub``, ``aud`` or ``exp`` does not have the type RFC 7519 gives it,
+            or ``exp`` is not a finite number.
     """
     subject = claims["sub"]
     audience = claims["aud"]
     audiences = (audience,) if isinstance(audience, str) else audience
-    expires_at = claims["exp"]
+    # A non-finite expiry compares false against every time, so the claim validator does not refuse it.
+    expires_at = finite_number(claims["exp"])
     if (
         not isinstance(subject, str)
         or not subject
         or not isinstance(audiences, list | tuple)
         or not audiences
         or not all(isinstance(value, str) for value in audiences)
-        or isinstance(expires_at, bool)
-        or not isinstance(expires_at, int | float)
+        or expires_at is None
     ):
         msg = "Workload token claims did not validate"
         raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)

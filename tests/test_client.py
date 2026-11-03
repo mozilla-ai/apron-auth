@@ -131,9 +131,13 @@ def _freeze_client_clock(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _id_token(claims: object) -> str:
-    """Return a compact token carrying ``claims``, with a signature nothing here checks."""
-    segments = [{"alg": "RS256"}, claims]
-    encoded = [base64.urlsafe_b64encode(json.dumps(part).encode()).rstrip(b"=").decode() for part in segments]
+    """Return a compact token carrying ``claims``, with a signature nothing here checks.
+
+    ``bytes`` are taken as the payload written out, so a test can state JSON text the encoder would not produce.
+    """
+    payload = claims if isinstance(claims, bytes) else json.dumps(claims).encode()
+    segments = [json.dumps({"alg": "RS256"}).encode(), payload]
+    encoded = [base64.urlsafe_b64encode(segment).rstrip(b"=").decode() for segment in segments]
     return ".".join([*encoded, "c2ln"])
 
 
@@ -1513,7 +1517,21 @@ class TestExchangeCodeNonce:
         assert isinstance(exc_info.value, TokenExchangeError)
 
     @pytest.mark.parametrize(
-        "id_token", [_id_token(["sent-nonce"]), "not-a-token"], ids=["claims-not-object", "not-compact"]
+        "id_token",
+        [
+            _id_token(["sent-nonce"]),
+            "not-a-token",
+            _id_token(b'{"nonce":"sent-nonce","exp":NaN}'),
+            _id_token(b'{"nonce":"sent-nonce","exp":Infinity}'),
+            _id_token(b'{"nonce":"sent-nonce","exp":-Infinity}'),
+        ],
+        ids=[
+            "claims-not-object",
+            "not-compact",
+            "claims-naming-nan",
+            "claims-naming-infinity",
+            "claims-naming-negative-infinity",
+        ],
     )
     async def test_unreadable_id_token_is_refused(self, httpx_mock: HTTPXMock, id_token: object) -> None:
         """A token that cannot be read fails as an ID token, not as a nonce mismatch."""
@@ -1688,8 +1706,6 @@ class TestExchangeCodeIdTokenClaims:
             ({"exp": None}, "expired or carries no usable expiry"),
             ({"exp": "later"}, "expired or carries no usable expiry"),
             ({"exp": True}, "expired or carries no usable expiry"),
-            ({"exp": float("nan")}, "expired or carries no usable expiry"),
-            ({"exp": float("inf")}, "expired or carries no usable expiry"),
         ],
         ids=[
             "other audience",
@@ -1707,8 +1723,6 @@ class TestExchangeCodeIdTokenClaims:
             "no expiry",
             "expiry not a number",
             "expiry a boolean",
-            "expiry not a finite number",
-            "expiry infinite",
         ],
     )
     async def test_a_token_not_issued_to_this_client_is_refused(
@@ -1716,6 +1730,13 @@ class TestExchangeCodeIdTokenClaims:
     ) -> None:
         with pytest.raises(IdTokenValidationError, match=message):
             await self._exchange(httpx_mock, self._claims(extra))
+
+    async def test_an_expiry_that_overflows_a_float_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """An overflowing exponent is valid JSON that reads as infinity, which compares false against every time."""
+        claims = b'{"sub":"u-1","aud":"test-client","nonce":"sent-nonce","exp":1e400}'
+
+        with pytest.raises(IdTokenValidationError, match="expired or carries no usable expiry"):
+            await self._exchange(httpx_mock, claims)
 
     async def test_the_issuer_is_checked_when_the_config_names_one(self, httpx_mock: HTTPXMock) -> None:
         claims = _openid_claims(nonce="sent-nonce", iss="https://issuer.example.com")

@@ -41,10 +41,15 @@ def claims(**overrides: Any) -> dict[str, Any]:
     return {name: value for name, value in {**base, **overrides}.items() if value is not None}
 
 
+def signed_text(payload: bytes, key: Any = RSA_KEY) -> str:
+    """Return a compact RS256 token over ``payload`` as written, so its JSON text reaches the reader unchanged."""
+    registry = JWSRegistry(algorithms=["RS256"])
+    return jws.serialize_compact({"alg": "RS256", "kid": key.kid}, payload, key, registry=registry)
+
+
 def signed(payload: dict[str, Any], key: Any = RSA_KEY) -> str:
     """Return a compact RS256 token over ``payload``, signed with ``key``."""
-    registry = JWSRegistry(algorithms=["RS256"])
-    return jws.serialize_compact({"alg": "RS256", "kid": key.kid}, json.dumps(payload).encode(), key, registry=registry)
+    return signed_text(json.dumps(payload).encode(), key)
 
 
 class FakeClock:
@@ -165,6 +170,25 @@ class TestRefusals:
         with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
             await WorkloadTokenVerifier(ISSUER).verify(signed(payload), audience=AUDIENCE)
         assert exc_info.value.reason is reason
+
+    @pytest.mark.parametrize("literal", [b"NaN", b"Infinity", b"-Infinity"])
+    async def test_claims_naming_a_json_constant(self, httpx_mock: HTTPXMock, literal: bytes) -> None:
+        """RFC 8259 defines no such literal, so claims naming one cannot be read at all."""
+        discoverable(httpx_mock)
+        token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":' + literal + b"}")
+
+        with pytest.raises(TokenValidationError, match="claims are not a JSON object") as exc_info:
+            await WorkloadTokenVerifier(ISSUER).verify(token, audience="a")
+        assert exc_info.value.reason is TokenValidationReason.MALFORMED
+
+    async def test_an_expiry_that_overflows_a_float(self, httpx_mock: HTTPXMock) -> None:
+        """An overflowing exponent is valid JSON that reads as infinity, which compares false against every time."""
+        discoverable(httpx_mock)
+        token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":1e400}')
+
+        with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
+            await WorkloadTokenVerifier(ISSUER).verify(token, audience="a")
+        assert exc_info.value.reason is TokenValidationReason.CLAIMS
 
     async def test_an_expired_token(self, httpx_mock: HTTPXMock) -> None:
         """An expired token raises its own refusal, so the caller can say to fetch a fresh one."""
