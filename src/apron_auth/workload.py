@@ -19,9 +19,10 @@ from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
-from apron_auth._jwt import claim_refusal_reason, parse_compact
+from apron_auth._jwt import claim_refusal_reason, compact_claims, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth._numbers import finite_number
+from apron_auth._urls import is_plain_http
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -31,7 +32,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import TimeoutPolicy
+from apron_auth.models import TimeoutPolicy, UrlField, WorkloadIssuer
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
@@ -68,73 +69,163 @@ class WorkloadIdentity(BaseModel, frozen=True):
     claims: dict[str, Any]
 
 
-class WorkloadTokenVerifier:
-    """Verify the identity tokens one issuer signs for its workloads.
+class _TrustedIssuer:
+    """One accepted issuer, and the signing keys its tokens are checked against.
 
-    The issuer's signing keys are found through its OpenID configuration document, unless ``jwks_url`` names them.
-    Only the document's ``issuer`` and ``jwks_uri`` are read,
-    so an issuer that publishes no authorization endpoint, as most workload issuers do, is discovered too.
-    The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute.
-    The document is read once, so an issuer that moves its key set needs a new verifier.
-    An RSA key shorter than 2048 bits is never used.
-
-    NOTE: Callers must not use one instance from event loops in several threads at once, because its cache is unguarded.
+    The keys are found through the issuer's OpenID configuration document, unless the issuer names them.
+    Only the document's ``issuer`` and ``jwks_uri`` are read, so an issuer that publishes no authorization
+    endpoint, as most workload issuers do, is discovered too.
+    The document is read once, and a failed read is reported again for a minute before another is attempted.
     """
 
     def __init__(
         self,
-        issuer: str,
+        issuer: WorkloadIssuer,
         *,
-        jwks_url: str | None = None,
-        transport_factory: TransportFactory | None = None,
-        timeouts: TimeoutPolicy | None = None,
-        allow_insecure_http: bool = False,
-        clock: Callable[[], float] = time.monotonic,
+        transport_factory: TransportFactory | None,
+        timeouts: TimeoutPolicy,
+        clock: Callable[[], float],
     ) -> None:
-        """Bind the verifier to one issuer.
+        """Bind to one issuer, refusing a URL this library could not fetch from.
 
         Args:
-            issuer: The issuer identifier, exactly as its tokens carry it in ``iss``.
-            jwks_url: The issuer's signing key set, when it is not to be discovered.
+            issuer: The issuer to accept tokens from.
             transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
-                Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
             timeouts: The limits on the document and key set fetches.
-                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
-            allow_insecure_http: Accept ``http`` for the issuer and the URLs it publishes, for local development only.
-            clock: The monotonic clock that ages the cached keys and paces rediscovery.
+            clock: The monotonic clock that paces rediscovery.
 
         Raises:
-            ConfigurationError: If ``issuer`` or ``jwks_url`` is not an acceptable URL.
+            ConfigurationError: If the issuer identifier or the key set URL is not one a request can be sent to.
         """
+        # The issuer model has settled what transport its URLs may state, so the URL rule is asked only for
+        # what it adds: an issuer identifier carries no query, and either URL has to be requestable as written.
         try:
-            self._document_url = discovery_url(issuer, allow_insecure_http=allow_insecure_http)
-            if jwks_url is not None:
+            self._document_url = discovery_url(issuer.issuer, allow_insecure_http=is_plain_http(issuer.issuer))
+            if issuer.jwks_url is not None:
                 require_url(
-                    jwks_url, field="signing key set", allow_insecure_http=allow_insecure_http, caller_supplied=True
+                    issuer.jwks_url,
+                    field="signing key set",
+                    allow_insecure_http=is_plain_http(issuer.jwks_url),
+                    caller_supplied=True,
                 )
         except OidcDiscoveryError as exc:
             raise ConfigurationError(str(exc)) from exc
-        self._issuer = issuer
+        self._issuer = issuer.issuer
+        self._plain_http_key_set = UrlField.JWKS_URL in issuer.allow_insecure_http_for
         self._transport_factory = transport_factory
-        self._timeouts = timeouts or TimeoutPolicy()
-        self._allow_insecure_http = allow_insecure_http
+        self._timeouts = timeouts
         self._clock = clock
-        self._signing_keys = self._key_set(jwks_url) if jwks_url else None
+        self._signing_keys = self._key_set(issuer.jwks_url) if issuer.jwks_url else None
         self._discovery_failure: tuple[str, FailureKind] | None = None
         self._discovery_failed_at: float | None = None
         self._discovery_lock = LoopLock()
 
     @property
     def issuer(self) -> str:
-        """The issuer identifier this verifier accepts tokens from."""
+        """The issuer identifier, exactly as this issuer's tokens carry it in ``iss``."""
         return self._issuer
+
+    async def keys(self) -> IssuerSigningKeys:
+        """Return the issuer's signing keys, discovering where they are published on first use.
+
+        Raises:
+            IdentityFetchError: If discovery fails, or failed less than a minute ago.
+        """
+        if self._signing_keys is not None:
+            return self._signing_keys
+        # Concurrent first calls wait for one discovery, so a burst at startup fetches the document once.
+        async with self._discovery_lock():
+            if self._signing_keys is not None:
+                return self._signing_keys
+            if (
+                self._discovery_failure is not None
+                and self._discovery_failed_at is not None
+                and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
+            ):
+                message, kind = self._discovery_failure
+                raise IdentityFetchError(message, kind=kind)
+            try:
+                document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
+                require_openid_issuer(document, self._issuer)
+                jwks_url = optional_url(
+                    document, key="jwks_uri", field="signing key set", allow_insecure_http=self._plain_http_key_set
+                )
+                if jwks_url is None:
+                    msg = "OpenID provider configuration names no signing key set"
+                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+            except OidcDiscoveryError as exc:
+                msg = f"Failed to discover the issuer's signing keys: {exc}"
+                # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
+                self._discovery_failure = (msg, exc.kind)
+                self._discovery_failed_at = self._clock()
+                raise IdentityFetchError(msg, kind=exc.kind) from exc
+            self._discovery_failure = None
+            self._signing_keys = self._key_set(jwks_url)
+            return self._signing_keys
+
+    def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
+        """Return the signing keys published at ``jwks_url``."""
+        return IssuerSigningKeys(jwks_url, transport_factory=self._transport_factory, clock=self._clock)
+
+
+class WorkloadTokenVerifier:
+    """Verify the identity tokens one or more issuers sign for their workloads.
+
+    A token is checked against the published keys of the issuer its ``iss`` names, and against no other
+    accepted issuer's, so accepting several issuers never lets one of them sign for another.
+    An RSA key shorter than 2048 bits is never used.
+
+    NOTE: Callers must not use one instance from event loops in several threads at once, because its caches
+    are unguarded.
+    """
+
+    def __init__(
+        self,
+        issuers: Collection[WorkloadIssuer],
+        *,
+        transport_factory: TransportFactory | None = None,
+        timeouts: TimeoutPolicy | None = None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        """Bind the verifier to the issuers whose tokens it accepts.
+
+        Args:
+            issuers: The issuers to accept tokens from, each named once.
+            transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
+                Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
+            timeouts: The limits on the document and key set fetches.
+                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+            clock: The monotonic clock that ages the cached keys and paces rediscovery.
+
+        Raises:
+            ConfigurationError: If ``issuers`` states no issuer or anything but an issuer, names one issuer
+                more than once, or names one whose URLs a request could not be sent to.
+        """
+        stated = list(issuers) if isinstance(issuers, Collection) and not isinstance(issuers, str) else []
+        if not stated or not all(isinstance(entry, WorkloadIssuer) for entry in stated):
+            msg = "A verifier accepts one or more issuers, each stated as a WorkloadIssuer"
+            raise ConfigurationError(msg)
+        self._timeouts = timeouts or TimeoutPolicy()
+        self._issuers: dict[str, _TrustedIssuer] = {}
+        for entry in stated:
+            if entry.issuer in self._issuers:
+                msg = "A verifier accepts each issuer once, and one of them is named more than once"
+                raise ConfigurationError(msg)
+            self._issuers[entry.issuer] = _TrustedIssuer(
+                entry, transport_factory=transport_factory, timeouts=self._timeouts, clock=clock
+            )
+
+    @property
+    def issuers(self) -> tuple[str, ...]:
+        """The issuer identifiers this verifier accepts tokens from, in the order they were stated."""
+        return tuple(self._issuers)
 
     async def verify(self, token: str, *, audience: str | Collection[str] | None) -> WorkloadIdentity:
         """Return what a token says about its workload, once its signature and claims verify.
 
-        The signature is checked against the issuer's published keys before any claim is read.
-        ``iss`` must name this issuer, and ``sub``, ``aud``, ``exp`` and ``iat`` are required.
-        ``nbf`` is checked when present.
+        The token's ``iss`` selects the issuer, and the signature is checked against that issuer's published
+        keys before any claim is read. ``iss`` must name the selected issuer, and ``sub``, ``aud``, ``exp``
+        and ``iat`` are required. ``nbf`` is checked when present.
 
         Args:
             token: A compact signed token.
@@ -165,15 +256,20 @@ class WorkloadTokenVerifier:
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         # A token that is not one is refused before discovery, so it is never reported as an outage.
         try:
-            parse_compact(token)
+            compact = parse_compact(token)
         except ValueError as exc:
             msg = "Workload token is not a compact signed token"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED) from exc
-        signing_keys = await self._keys()
+        unverified = compact_claims(compact)
+        if unverified is None:
+            msg = "Workload token claims are not a JSON object"
+            raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
+        trusted = self._trusted_issuer(unverified.get("iss"))
+        signing_keys = await trusted.keys()
         claims = (await signing_keys.verify(token, self._timeouts)).claims
         registry = JWTClaimsRegistry(
             leeway=CLOCK_SKEW_SECONDS,
-            iss={"essential": True, "value": self._issuer},
+            iss={"essential": True, "value": trusted.issuer},
             sub={"essential": True},
             aud=audience_rule,
             exp={"essential": True},
@@ -188,52 +284,32 @@ class WorkloadTokenVerifier:
             msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=claim_refusal_reason(getattr(exc, "claim", None))) from exc
         # RFC 7519 makes ``iss`` one string, but the validator accepts a list holding it.
-        if claims.get("iss") != self._issuer:
+        if claims.get("iss") != trusted.issuer:
             msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
-        return _identity(self._issuer, claims)
+        return _identity(trusted.issuer, claims)
 
-    async def _keys(self) -> IssuerSigningKeys:
-        """Return the issuer's signing keys, discovering where they are published on first use.
+    def _trusted_issuer(self, issuer_claim: object) -> _TrustedIssuer:
+        """Return the accepted issuer that a token's ``iss`` names.
+
+        NOTE: The claim is read before any signature is checked, so it only selects which published keys the
+        token is then checked against. It grants nothing: the signature check and the claim validation that
+        follow both hold the token to the issuer selected here.
+
+        Args:
+            issuer_claim: The token's ``iss``, as it arrived.
+
+        Returns:
+            The accepted issuer the claim names.
 
         Raises:
-            IdentityFetchError: If discovery fails, or failed less than a minute ago.
+            TokenValidationError: If the claim is not the identifier of an accepted issuer.
         """
-        if self._signing_keys is not None:
-            return self._signing_keys
-        # Concurrent first calls wait for one discovery, so a burst at startup fetches the document once.
-        async with self._discovery_lock():
-            if self._signing_keys is not None:
-                return self._signing_keys
-            if (
-                self._discovery_failure is not None
-                and self._discovery_failed_at is not None
-                and self._clock() - self._discovery_failed_at < _REDISCOVER_INTERVAL_SECONDS
-            ):
-                message, kind = self._discovery_failure
-                raise IdentityFetchError(message, kind=kind)
-            try:
-                document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
-                require_openid_issuer(document, self._issuer)
-                jwks_url = optional_url(
-                    document, key="jwks_uri", field="signing key set", allow_insecure_http=self._allow_insecure_http
-                )
-                if jwks_url is None:
-                    msg = "OpenID provider configuration names no signing key set"
-                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
-            except OidcDiscoveryError as exc:
-                msg = f"Failed to discover the issuer's signing keys: {exc}"
-                # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
-                self._discovery_failure = (msg, exc.kind)
-                self._discovery_failed_at = self._clock()
-                raise IdentityFetchError(msg, kind=exc.kind) from exc
-            self._discovery_failure = None
-            self._signing_keys = self._key_set(jwks_url)
-            return self._signing_keys
-
-    def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
-        """Return the signing keys published at ``jwks_url``."""
-        return IssuerSigningKeys(jwks_url, transport_factory=self._transport_factory, clock=self._clock)
+        trusted = self._issuers.get(issuer_claim) if isinstance(issuer_claim, str) else None
+        if trusted is None:
+            msg = "Workload token names an issuer this verifier does not accept"
+            raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
+        return trusted
 
 
 def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:

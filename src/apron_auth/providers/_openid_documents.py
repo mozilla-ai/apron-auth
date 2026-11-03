@@ -73,7 +73,9 @@ def require_url(
         raise OidcDiscoveryError(msg, kind=kind)
     scheme = parsed.scheme.lower()
     if scheme == "http" and allow_insecure_http:
-        logger.warning("OpenID %s is plain http; allowed by allow_insecure_http, use for local development only", field)
+        # The caller's opt-in is not named, because this is also reached for a URL whose transport another
+        # rule has already accepted.
+        logger.warning("OpenID %s is plain http; use for local development only", field)
     elif scheme != "https":
         msg = f"OpenID {field} must use https (pass allow_insecure_http=True for local development)"
         raise OidcDiscoveryError(msg, kind=kind)
