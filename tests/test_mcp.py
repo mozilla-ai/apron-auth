@@ -20,6 +20,7 @@ from apron_auth.errors import (
     IssuerValidationError,
     McpDiscoveryError,
     McpRegistrationError,
+    OAuthError,
 )
 from apron_auth.mcp import (
     _asm_candidate_urls,
@@ -72,6 +73,23 @@ def _asm_payload(**overrides: object) -> dict[str, object]:
     }
     payload.update(overrides)
     return payload
+
+
+# What a caller's own hook puts in its message, which the library's refusal must not repeat.
+_VALIDATOR_MESSAGE = "blocked by policy for tenant acme-42"
+_FACTORY_MESSAGE = "no route to host 10.1.2.3 for tenant acme-42"
+
+
+def _refusing_validator(url: str) -> None:
+    """Refuse every URL the way a caller's own policy hook does, with its own text."""
+    del url
+    raise ValueError(_VALIDATOR_MESSAGE)
+
+
+def _refusing_transport_factory(url: str) -> httpx.MockTransport:
+    """Refuse to build a transport the way a caller's host policy does, with its own text."""
+    del url
+    raise RuntimeError(_FACTORY_MESSAGE)
 
 
 def _crawling_transport(url: str) -> httpx.MockTransport:
@@ -870,7 +888,7 @@ class TestDiscover:
             msg = "blocked by policy"
             raise ValueError(msg)
 
-        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
+        with pytest.raises(ConfigurationError, match="caller policy") as exc_info:
             await discover("https://mcp.example.com", url_validator=validator)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert seen == ["https://mcp.example.com"]
@@ -883,7 +901,7 @@ class TestDiscover:
                 msg = "blocked by policy"
                 raise ValueError(msg)
 
-        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
+        with pytest.raises(ConfigurationError, match="caller policy") as exc_info:
             await discover("https://mcp.example.com", url_validator=validator)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
 
@@ -897,7 +915,7 @@ class TestDiscover:
                 msg = "blocked by policy"
                 raise ValueError(msg)
 
-        with pytest.raises(McpDiscoveryError, match="blocked by policy") as exc_info:
+        with pytest.raises(McpDiscoveryError, match="caller policy") as exc_info:
             await discover("https://mcp.example.com", url_validator=validator)
         assert exc_info.value.kind is FailureKind.REFUSED
 
@@ -964,6 +982,44 @@ class TestDiscover:
         with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
             await discover("https://\x80\x80.example.com")
         assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+
+class TestACallerHookThatFailsIsReportedAsThisPhasesError:
+    """Test that a caller's own hook failing is refused in MCP terms, and that its text is only chained."""
+
+    async def test_a_transport_factory_failure_ends_discovery(self) -> None:
+        with pytest.raises(McpDiscoveryError, match=r"could not open a connection") as exc_info:
+            await discover("https://mcp.example.com", transport_factory=_refusing_transport_factory)
+
+        assert _FACTORY_MESSAGE not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert exc_info.value.kind is FailureKind.UNEXPECTED
+
+    async def test_a_transport_factory_failure_ends_registration(self) -> None:
+        with pytest.raises(McpRegistrationError, match=r"could not open a connection") as exc_info:
+            await register_client(
+                _REGISTER_URL,
+                redirect_uri="https://app.example.com/cb",
+                client_name="app",
+                transport_factory=_refusing_transport_factory,
+            )
+
+        assert _FACTORY_MESSAGE not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, RuntimeError)
+        assert exc_info.value.kind is FailureKind.UNEXPECTED
+
+    async def test_a_validator_failure_ends_registration(self) -> None:
+        """Which error class carries it follows from the URL's source, which this is not about."""
+        with pytest.raises(OAuthError, match="caller policy") as exc_info:
+            await register_client(
+                _REGISTER_URL,
+                redirect_uri="https://app.example.com/cb",
+                client_name="app",
+                url_validator=_refusing_validator,
+            )
+
+        assert _VALIDATOR_MESSAGE not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValueError)
 
 
 class TestTheGatingMetadataListsAreParsedStrictly:
@@ -1193,23 +1249,22 @@ class TestValidateUrl:
         assert seen == ["https://mcp.example.com"]
 
     def test_wraps_validator_rejection(self) -> None:
-        def validator(url: str) -> None:
-            del url
-            msg = "blocked by policy"
-            raise ValueError(msg)
-
-        with pytest.raises(McpDiscoveryError, match="blocked by policy"):
-            _validate_url("https://mcp.example.com", validator, subject="server_url", caller_supplied=False)
+        with pytest.raises(McpDiscoveryError, match=r"caller policy \(server_url\)"):
+            _validate_url("https://mcp.example.com", _refusing_validator, subject="server_url", caller_supplied=False)
 
     def test_wraps_validator_rejection_of_a_caller_supplied_url_as_a_configuration_fault(self) -> None:
-        def validator(url: str) -> None:
-            del url
-            msg = "blocked by policy"
-            raise ValueError(msg)
-
-        with pytest.raises(ConfigurationError, match="blocked by policy") as exc_info:
-            _validate_url("https://mcp.example.com", validator, subject="server_url", caller_supplied=True)
+        with pytest.raises(ConfigurationError, match="caller policy") as exc_info:
+            _validate_url("https://mcp.example.com", _refusing_validator, subject="server_url", caller_supplied=True)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    def test_a_validator_rejection_states_none_of_the_callers_own_text(self) -> None:
+        """The caller's exception can carry detail it did not mean to surface, so only the chain holds it."""
+        with pytest.raises(McpDiscoveryError) as exc_info:
+            _validate_url("https://mcp.example.com", _refusing_validator, subject="server_url", caller_supplied=False)
+
+        assert _VALIDATOR_MESSAGE not in str(exc_info.value)
+        assert isinstance(exc_info.value.__cause__, ValueError)
+        assert _VALIDATOR_MESSAGE in str(exc_info.value.__cause__)
 
     @pytest.mark.parametrize("caller_supplied", [True, False])
     def test_passes_through_validator_discovery_error(self, caller_supplied: bool) -> None:

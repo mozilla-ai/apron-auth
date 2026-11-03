@@ -392,7 +392,14 @@ async def register_client(
     if application_type is not None:
         payload["application_type"] = application_type
     limits = timeouts or TimeoutPolicy()
-    async with discovery_client(registration_url, transport_factory, limits) as client:
+    client = _opened_client(
+        registration_url,
+        transport_factory,
+        limits,
+        subject="registration_url",
+        error_cls=McpRegistrationError,
+    )
+    async with client:
         try:
             response = await within_request_limit(client.post(registration_url, json=payload), limits)
         except httpx.InvalidURL as exc:
@@ -693,6 +700,39 @@ def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
     return ApplicationType.NATIVE if is_loopback_host(host) else None
 
 
+def _opened_client(
+    url: str,
+    transport_factory: TransportFactory | None,
+    timeouts: TimeoutPolicy,
+    *,
+    subject: str,
+    error_cls: type[OAuthError],
+) -> httpx.AsyncClient:
+    """Return the HTTP client for one fetch, refusing in this phase's terms when it cannot be built.
+
+    Args:
+        url: The URL the client will fetch, which selects the transport.
+        transport_factory: Optional factory returning the transport for ``url``.
+        timeouts: The limits in force for the fetch.
+        subject: What the URL is, for a refusal.
+        error_cls: The error this phase refuses with.
+
+    Returns:
+        The client, which the caller closes.
+
+    Raises:
+        OAuthError: Of ``error_cls``, if the client cannot be built.
+    """
+    try:
+        return discovery_client(url, transport_factory, timeouts)
+    except Exception as exc:
+        # Building the client calls the caller's transport factory. Whether it refused the connection by
+        # policy or failed, the fault is not the server's and is not an outage, so it is never retried.
+        # Its own text can carry detail the caller did not mean to surface, so only the chain holds it.
+        msg = f"MCP OAuth could not open a connection ({subject})"
+        raise error_cls(msg, kind=FailureKind.UNEXPECTED) from exc
+
+
 def _malformed_url_message(subject: str) -> str:
     """Return the one wording for a URL this library cannot read or send, naming what the URL is.
 
@@ -806,8 +846,10 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     except OAuthError:
         raise
     except Exception as exc:
-        # Any rejection from the caller's validator fails the operation.
-        raise error_cls(str(exc), kind=kind) from exc
+        # Any rejection from the caller's validator fails the operation. Its own text can carry detail the
+        # caller did not mean to surface, so the chain holds it and the message does not.
+        msg = f"MCP OAuth refused a URL by caller policy ({subject})"
+        raise error_cls(msg, kind=kind) from exc
 
 
 def _prm_candidate_urls(resource_metadata_url: str | None, server_url: str) -> list[str]:
@@ -898,7 +940,8 @@ async def _fetch_first_metadata(
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for url in candidate_urls:
         _validate_url(url, url_validator, subject=f"{what} URL", caller_supplied=caller_supplied)
-        async with discovery_client(url, transport_factory, timeouts) as client:
+        client = _opened_client(url, transport_factory, timeouts, subject=f"{what} URL", error_cls=McpDiscoveryError)
+        async with client:
             try:
                 response = await within_request_limit(client.get(url), timeouts)
             except httpx.InvalidURL as exc:
