@@ -1570,6 +1570,35 @@ class TestCimdClientId:
         with pytest.raises(ConfigurationError, match="path segment"):
             cimd_client_id("https://app.example.com/../client.json")
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://app.example.com/%2e/client.json", id="encoded dot"),
+            pytest.param("https://app.example.com/%2E/client.json", id="encoded dot in upper case"),
+            pytest.param("https://app.example.com/%2e%2e/client.json", id="encoded dot dot"),
+            pytest.param("https://app.example.com/%2E%2E/client.json", id="encoded dot dot in upper case"),
+            pytest.param("https://app.example.com/.%2e/client.json", id="one dot encoded"),
+            pytest.param("https://app.example.com/%2e./client.json", id="the other dot encoded"),
+        ],
+    )
+    def test_an_encoded_dot_path_segment_is_rejected(self, url: str) -> None:
+        """RFC 3986 section 6.2.2 decodes an encoded dot before dot segments are removed, so it is one."""
+        with pytest.raises(ConfigurationError, match="path segment"):
+            cimd_client_id(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            pytest.param("https://app.example.com/.well-known/client.json", id="a name starting with a dot"),
+            pytest.param("https://app.example.com/a.b/client.json", id="a name holding a dot"),
+            pytest.param("https://app.example.com/%2e%2ewell-known/client.json", id="an encoded dot in a name"),
+            pytest.param("https://app.example.com/.../client.json", id="three dots"),
+        ],
+    )
+    def test_a_path_segment_that_only_holds_dots_is_accepted(self, url: str) -> None:
+        """Only a segment that is exactly one or two dots is a dot segment, however it is written."""
+        assert cimd_client_id(url) == url
+
     def test_non_public_host_accepted(self) -> None:
         """The SSRF host block must NOT apply: the caller hosts this URL and the library never fetches it.
 

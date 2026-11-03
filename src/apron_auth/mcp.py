@@ -21,7 +21,7 @@ import logging
 from collections.abc import Callable, Sequence
 from enum import Enum, unique
 from typing import Any, NamedTuple, assert_never
-from urllib.parse import ParseResult, urljoin, urlparse
+from urllib.parse import ParseResult, unquote, urljoin, urlparse
 
 import httpx
 from pydantic import SecretStr
@@ -472,7 +472,9 @@ def cimd_client_id(url: str) -> str:
     if not parsed.path.strip("/"):
         msg = "CIMD client_id must be an https URL with a path component"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
-    if any(segment in (".", "..") for segment in parsed.path.split("/")):
+    # RFC 3986 section 6.2.2 decodes a percent-encoded dot before dot segments are removed, so a segment
+    # is compared in its decoded form.
+    if any(unquote(segment) in (".", "..") for segment in parsed.path.split("/")):
         msg = "CIMD client_id must not contain a . or .. path segment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
