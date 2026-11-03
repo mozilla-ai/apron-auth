@@ -169,7 +169,7 @@ config = ProviderConfig(
 
 Build the URL to redirect the user to. State and PKCE are included automatically, and so is a nonce when the request asks for the `openid` scope. Keep the whole pending state, not only some of its fields.
 
-`OAuthClient` hands the pending state back to you to keep. A browser flow has nowhere to hold it between the redirect and the callback, so it uses `StoredStateClient` and a `StateStore` instead, which the next section shows. Do not return the state to the browser to compare there instead: a server that leaves the comparison to the browser redeems whatever code reaches its callback. A store does not finish the job on its own either, and the next section says what it leaves to you.
+`OAuthClient` hands the pending state back to you to keep. A browser flow has nowhere to hold it between the redirect and the callback, so it uses `StoredStateClient` and a `StateStore` instead, which the next section shows. Do not return the state to the browser to compare there instead: a server that leaves the comparison to the browser redeems whatever code reaches its callback. `StoredStateClient` compares it server-side and binds the flow to the browser it built the URL for, which the next section shows.
 
 ```python
 from apron_auth import OAuthClient
@@ -192,47 +192,33 @@ Where the pending state comes from is a property of the client you built, not so
 
 A browser flow serves the redirect and the callback from two separate requests, so the pending state belongs in a `StateStore` (see below) and the client is a `StoredStateClient`.
 
-The store settles that the `state` was minted by this application, has not expired, and is spent once, so a code presented with a state this application never issued, and a state presented twice, are both refused. It does not settle which browser is presenting the callback, because `consume` is given the state and nothing else. RFC 6749 section 10.12 puts that binding on the client, and without it an attacker who completes a provider login with their own account can send the resulting callback URL to a victim: the victim's request redeems the attacker's code, and an application that signs the victim in with those tokens has signed them in as the attacker. PKCE does not help here, because the stored code verifier belongs to the attacker's own flow.
+The store settles that the `state` was minted by this application, has not expired, and is spent once, so a code presented with a state this application never issued, and a state presented twice, are both refused. `StoredStateClient` settles which browser may present the callback as well: `get_authorization_url` mints a `browser_token` and sends the `state` derived from it, and `exchange_code` refuses a callback whose `state` that token does not mint, before it consumes the store and before it calls the token endpoint. RFC 6749 section 10.12 asks a client for that binding, and without it an attacker who completes a provider login with their own account can send the resulting callback URL to a victim: the victim's request redeems the attacker's code, and an application that signs the victim in with those tokens has signed them in as the attacker. PKCE does not help there, because the stored code verifier belongs to the attacker's own flow.
 
-Bind the flow to the browser yourself. Pass a per-flow random value as `context` when you build the authorization URL, and set the same value in a `Secure`, `HttpOnly` cookie. Compare them before you exchange: the store is yours, so read your own record for the callback's `state` without consuming it, and a callback from another browser then redeems nothing.
+`get_authorization_url` returns a `BrowserBoundAuthorization`, carrying the URL, the `state` the request sends, and the `browser_token`. The token itself never travels to the provider: the request sends its SHA-256 as the `state`, which reveals nothing the token can be recovered from. The pending state stays in the store, so the model carries no PKCE verifier beside the token. Keep the token where only the browser it was minted for can present it, out of the authorization URL and out of any page the browser renders, and drop it once the exchange returns.
+
+A `Secure`, `HttpOnly`, `SameSite=Lax` cookie is the usual place. Name it with the `__Host-` prefix so no other host on the same site can write it, and set `Secure`, `Path=/`, and no `Domain`, because a browser honors that prefix on nothing else and drops such a cookie without a word. Give it a `Max-Age` no longer than `max_pending_age_seconds`, since the exchange refuses an older pending state anyway. One fixed name per callback route is enough while a browser runs one flow at a time to that route: a second flow started in the same browser overwrites the name, so the first callback is refused and that user starts again. To let two run at once, put the `state` in the cookie name, `__Host-flow-{authorization.state}` where you set it and `__Host-flow-{callback.state}` where you read it, because the callback carries the `state` and nothing else of yours. `SameSite=Lax` suits the authorization-code redirect, which reaches you as a top-level GET. A provider answering with a POST to your redirect URI, as `response_mode=form_post` asks for, sends no `Lax` cookie at all, so a flow configured that way needs `SameSite=None` with `Secure`.
 
 ```python
-import hmac
-import secrets
-
 from apron_auth import AuthorizationCallback, StoredStateClient
 
 store = MyStateStore()
 client = StoredStateClient(config, store)
 
-browser_id = secrets.token_urlsafe(32)
-url, _ = await client.get_authorization_url(
-    redirect_uri="https://yourapp.com/callback",
-    context={"browser_id": browser_id},
-)
-# Redirect the user to `url`. The store holds the pending state.
-# Set `browser_id` in a Secure, HttpOnly cookie, and read it back as `cookie_browser_id`.
+authorization = await client.get_authorization_url(redirect_uri="https://yourapp.com/callback")
+# Redirect the user to `authorization.url`. The store holds the pending state.
+# Set `authorization.browser_token` in the cookie, and read it back as `cookie_browser_token`.
 
 # `query` is the callback's query parameters: your framework's own query
 # mapping, or any mapping of the names to their values.
 callback = AuthorizationCallback.from_query(query)
-
-# `peek` is a read of your own store that does not consume the entry. The protocol
-# below does not require it, because only your application needs it.
-started_here = await store.peek(callback.state) if callback.state else None
-if started_here is None or not hmac.compare_digest(
-    str(started_here.context.get("browser_id", "")), cookie_browser_id
-):
-    raise PermissionError("this callback did not start in this browser")
-
-tokens = await client.exchange_code(callback)
+tokens = await client.exchange_code(callback, browser_token=cookie_browser_token)
 print(tokens.access_token)
 print(tokens.refresh_token)
 ```
 
-Where your framework leaves you no room to check first, read the value off `tokens.context` after the exchange and compare it the same way, then revoke the tokens rather than dropping them. The code is spent by then and the tokens are live, so discarding your only reference to them leaves them valid at the provider.
+A callback that reaches your redirect URI with no such cookie is refused with `StateError`, the same refusal as a callback whose `state` the token does not mint. Both mean the callback cannot be bound to a browser, and neither consumes the store nor redeems the code.
 
-A flow that one process spans, such as a native or command-line sign-in, can hold the pending state itself and use `OAuthClient`. Keep it where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A server-side session is already keyed to one browser, so holding the pending state there binds the flow to that browser as well, and the check the store-backed flow above has to make by hand comes for free. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt, because only a `StateStore` refuses a pending state that is reused.
+A flow that one process spans, such as a native or command-line sign-in, can hold the pending state itself and use `OAuthClient`. Keep it where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A server-side session is already keyed to one browser, so holding the pending state there binds the flow to that browser as well, which is what the browser token gives the store-backed flow above. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt, because only a `StateStore` refuses a pending state that is reused.
 
 ```python
 from apron_auth import AuthorizationCallback, OAuthClient
@@ -614,19 +600,17 @@ class MyStateStore:
         # Look up and invalidate in one step. Return None if it's missing, or if your store expired it.
         ...
 
-    async def peek(self, state_key: str) -> OAuthPendingState | None:
-        # Not part of the protocol. Add a read that leaves the entry in place when you
-        # check the browser binding before exchanging, as the code exchange section shows.
-        ...
-
 client = StoredStateClient(config, MyStateStore())
-url, pending_state = await client.get_authorization_url(
+authorization = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
 )
 
-# When the callback arrives, pass the response. The store is consumed
-# automatically, because the response carries the state it was sent.
-tokens = await client.exchange_code(AuthorizationCallback.from_query(query))
+# When the callback arrives, pass the response and the token of the browser
+# presenting it. The store is consumed automatically, because the response
+# carries the state it was sent.
+tokens = await client.exchange_code(
+    AuthorizationCallback.from_query(query), browser_token=cookie_browser_token
+)
 ```
 
 #### Carrying context through the flow
@@ -634,13 +618,15 @@ tokens = await client.exchange_code(AuthorizationCallback.from_query(query))
 If your application needs to carry context through the OAuth flow (e.g. which user or tenant initiated it), pass `context` when building the authorization URL. apron-auth carries it opaquely on `OAuthPendingState.context`, through the `StateStore` or the `pending_state` you pass back, and surfaces it on `TokenSet.context` after the exchange.
 
 ```python
-url, pending_state = await client.get_authorization_url(
+authorization = await client.get_authorization_url(
     redirect_uri="https://yourapp.com/callback",
     context={"user_id": "U123", "tenant_id": "T456"},
 )
 
 # On callback, context comes back on the TokenSet.
-tokens = await client.exchange_code(AuthorizationCallback.from_query(query))
+tokens = await client.exchange_code(
+    AuthorizationCallback.from_query(query), browser_token=cookie_browser_token
+)
 print(tokens.context["user_id"])    # "U123"
 print(tokens.context["tenant_id"])  # "T456"
 
@@ -855,7 +841,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |
 | `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
 | `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
-| `StateError`                   | OAuth state was missing, invalid, expired, already used, or did not match the pending state.                    |
+| `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, or did not come from the browser that started the flow. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead. |
