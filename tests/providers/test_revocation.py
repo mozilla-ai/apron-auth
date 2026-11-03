@@ -30,6 +30,21 @@ from apron_auth.providers._revocation import StandardRevocationHandler
 
 TOKEN = "live-access-token"  # pragma: allowlist secret
 
+# One status each provider's handler reads as the token revoked. No single status serves them all,
+# because each provider documents its own, and a handler now refuses every status it does not state.
+REVOKED_STATUS: dict[Provider, int] = {
+    Provider.ATLASSIAN: 200,
+    Provider.GITHUB: 204,
+    Provider.GOOGLE: 200,
+    Provider.HUBSPOT: 204,
+    Provider.LINEAR: 200,
+    Provider.MICROSOFT: 200,
+    Provider.NOTION: 200,
+    Provider.SALESFORCE: 200,
+    Provider.SLACK: 200,
+    Provider.TYPEFORM: 200,
+}
+
 MODULES: dict[Provider, ModuleType] = {
     Provider.ATLASSIAN: atlassian,
     Provider.GITHUB: github,
@@ -135,7 +150,7 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
 
     def factory(url: str) -> httpx.MockTransport:
         pinned.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        return httpx.MockTransport(lambda request: httpx.Response(REVOKED_STATUS[provider], json={"ok": True}))
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
@@ -192,6 +207,11 @@ def _answering_transport(status_code: int) -> Callable[[str], httpx.MockTranspor
     return factory
 
 
+def test_every_provider_states_a_status_its_handler_reads_as_revoked() -> None:
+    """A member with no entry would be probed with a status its own handler may refuse."""
+    assert set(REVOKED_STATUS) == set(Provider)
+
+
 @pytest.mark.parametrize("provider", list(Provider))
 async def test_every_handler_reports_a_transport_failure_alike(provider: Provider) -> None:
     """Five handlers of six once differed here, so this states the one shape they now share."""
@@ -221,19 +241,40 @@ async def test_every_handler_refuses_an_invalid_url_alike(provider: Provider) ->
     assert refusal.value.kind is FailureKind.REFUSED
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(429, id="a rate limit"),
+        pytest.param(500, id="a server error"),
+        pytest.param(503, id="an outage"),
+    ],
+)
 @pytest.mark.parametrize("provider", list(Provider))
-async def test_no_handler_lets_a_server_error_escape_as_itself(provider: Provider) -> None:
-    """Each provider reads a status its own way, and none of them answers with an HTTP library's error."""
+async def test_every_handler_reports_a_retryable_status_as_retryable(provider: Provider, status: int) -> None:
+    """A caller that honors retryable abandons a token for good, so a condition that passes later must say so."""
     config = _config(provider)
-    handler = revocation_handler_for(config, transport_factory=_answering_transport(500))
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(status))
     assert handler is not None
 
-    try:
-        outcome = await handler.revoke(TOKEN, config)
-    except RevocationError as refusal:
-        assert refusal.kind is FailureKind.SERVER_ERROR
-    else:
-        assert outcome is False
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_no_handler_reads_an_unexpected_status_as_a_refusal_to_revoke(provider: Provider) -> None:
+    """A status no provider states means the outcome is unknown, which is not the provider answering no."""
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(418))
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REJECTED
+    assert TOKEN not in "".join(traceback.format_exception(refusal.value))
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -254,7 +295,7 @@ async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Pro
 
     def factory(url: str) -> httpx.MockTransport:
         seen.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        return httpx.MockTransport(lambda request: httpx.Response(REVOKED_STATUS[provider], json={"ok": True}))
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)

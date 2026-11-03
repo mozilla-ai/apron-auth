@@ -24,7 +24,12 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
-from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
+from apron_auth.providers._revocation import (
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -157,7 +162,9 @@ class GoogleRevocationHandler:
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
                 sending a token to.
-            RevocationError: If the request cannot be sent or fails to arrive.
+            RevocationError: If the request cannot be sent or fails to arrive, or the endpoint answers
+                any status but a success.
+                Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
         request = RevocationRequest(
@@ -166,7 +173,9 @@ class GoogleRevocationHandler:
             params={"token": token},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
-        return response.is_success
+        if response.is_success:
+            return True
+        refuse_an_unexpected_status(response, label="Google")
 
 
 def preset(

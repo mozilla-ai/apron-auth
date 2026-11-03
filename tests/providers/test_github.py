@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import RevocationError
+from apron_auth.errors import FailureKind, RevocationError
 from apron_auth.models import IdentityMaterial, ProviderConfig
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -178,13 +178,16 @@ class TestGitHubRevocationHandler:
         result = await GitHubRevocationHandler().revoke("access-abc", config)
         assert result is False
 
-    async def test_unexpected_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_status_github_does_not_state_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A 422 is GitHub refusing; every other unexpected status leaves the outcome unknown."""
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.github import preset
 
         config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
-        result = await GitHubRevocationHandler().revoke("access-abc", config)
-        assert result is False
+        with pytest.raises(RevocationError) as refusal:
+            await GitHubRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.SERVER_ERROR
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))

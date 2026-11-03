@@ -19,7 +19,13 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, Provi
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
-from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
+from apron_auth.providers._revocation import (
+    HttpMethod,
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -222,14 +228,15 @@ class GitHubRevocationHandler:
                 and client credentials.
 
         Returns:
-            ``True`` when the grant is removed (or already absent), ``False``
-            when GitHub reports a soft failure.
+            ``True`` when the grant is removed or was already absent, and ``False`` for the one status
+            GitHub documents as a soft failure.
 
         Raises:
             ConfigurationError: If ``config`` declares no revocation endpoint, or declares one it
                 does not permit sending a token to.
-            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
-                to arrive.
+            RevocationError: If the endpoint URL is invalid, the request cannot be sent or fails to
+                arrive, or the endpoint answers a status GitHub states nothing about.
+                Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
         request = RevocationRequest(
@@ -252,8 +259,7 @@ class GitHubRevocationHandler:
                 "or spam-throttled); the grant may still exist at GitHub"
             )
             return False
-        logger.warning("GitHub grant revocation returned unexpected status %s", response.status_code)
-        return False
+        refuse_an_unexpected_status(response, label="GitHub")
 
 
 def preset(

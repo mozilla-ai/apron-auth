@@ -9,7 +9,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -204,11 +204,15 @@ class TestNotionRevocationHandler:
         result = await handler.revoke("old-token", TestNotionRevocationHandler._make_config())
         assert result is True
 
-    async def test_other_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_status_notion_does_not_state_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """200 and 400 are the statuses Notion documents, and any other leaves the outcome unknown."""
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=500)
         handler = NotionRevocationHandler()
-        result = await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
-        assert result is False
+
+        with pytest.raises(RevocationError) as refusal:
+            await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
+
+        assert refusal.value.kind is FailureKind.SERVER_ERROR
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))

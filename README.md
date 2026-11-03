@@ -948,9 +948,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
-| `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
-| `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; userinfo failure degraded; a refused discovery redirect (DEBUG). |
 | `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
 | `apron_auth.workload`            | A workload issuer's signing keys now read from another URL, and a move that did not verify. |

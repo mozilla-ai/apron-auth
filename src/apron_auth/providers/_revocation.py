@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import import_module
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
 
@@ -115,9 +115,7 @@ class StandardRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.is_success:
             return True
-        failure = status_failure(response.status_code)
-        subject = "token" if provider is None else f"{provider.display_name} token"
-        raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def revocation_endpoint(config: ProviderConfig) -> str:
@@ -137,6 +135,26 @@ def revocation_endpoint(config: ProviderConfig) -> str:
         msg = "the provider configuration carries no revocation endpoint"
         raise ConfigurationError(msg)
     return config.revocation_url
+
+
+def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) -> NoReturn:
+    """Refuse a revocation response whose status the provider states nothing about.
+
+    A provider documents the statuses it answers with, and any other status leaves the outcome
+    unknown. The kind the status decides says whether the same request may pass later, so a rate
+    limit or an outage is not reported as the provider refusing to revoke a token it would revoke a
+    minute later.
+
+    Args:
+        response: The response whose status is classified.
+        label: The provider's display name, which the message names, or ``None`` to name none.
+
+    Raises:
+        RevocationError: Always. Its kind says whether the same request may pass later.
+    """
+    failure = status_failure(response.status_code)
+    subject = "token" if label is None else f"{label} token"
+    raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
 def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfig) -> None:

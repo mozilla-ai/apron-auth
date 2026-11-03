@@ -7,7 +7,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
-from apron_auth.errors import ConfigurationError, IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -343,7 +343,8 @@ class TestHubSpotRevocationHandler:
         result = await HubSpotRevocationHandler().revoke("refresh-missing", config)
         assert result is True
 
-    async def test_non_success_status_returns_false(self, httpx_mock: HTTPXMock):
+    async def test_a_status_hubspot_does_not_state_is_refused(self, httpx_mock: HTTPXMock):
+        """204 and 404 are the statuses HubSpot documents, and any other leaves the outcome unknown."""
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.hubspot import preset
 
@@ -352,8 +353,10 @@ class TestHubSpotRevocationHandler:
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await HubSpotRevocationHandler().revoke("refresh-abc", config)
-        assert result is False
+        with pytest.raises(RevocationError) as refusal:
+            await HubSpotRevocationHandler().revoke("refresh-abc", config)
+
+        assert refusal.value.kind is FailureKind.SERVER_ERROR
 
     async def test_url_encodes_path_significant_chars(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(status_code=204)
