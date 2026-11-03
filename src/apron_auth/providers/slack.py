@@ -36,7 +36,7 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
@@ -244,6 +244,23 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     return label
 
 
+def _slack_error_code(payload: Mapping[str, object]) -> str:
+    """Return the error code a Slack ``ok=false`` body states.
+
+    A response body is untrusted input, so a member that is absent, empty or not a string states no
+    code this can read, and a stand-in is returned in its place. The result is safe both to classify
+    and to name in a message.
+
+    Args:
+        payload: The decoded response body.
+
+    Returns:
+        The code the body states, or ``"unknown_error"`` where it states none readable.
+    """
+    code = payload.get("error")
+    return code if isinstance(code, str) and code else "unknown_error"
+
+
 def _slack_failure_kind(error: str) -> FailureKind:
     """Return the kind of a Slack ``ok=false`` answer.
 
@@ -369,7 +386,7 @@ class SlackIdentityHandler:
 
         # Slack returns 2xx with ``ok=false`` for auth/scope failures.
         if payload.get("ok") is False:
-            error = payload.get("error") or "unknown_error"
+            error = _slack_error_code(payload)
             if error == _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
             raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
@@ -458,7 +475,7 @@ class SlackIdentityHandler:
             if team_info_payload.get("ok"):
                 return _build_workspace_profile_from_team_info(team_info_payload)
 
-            error = team_info_payload.get("error") or "unknown_error"
+            error = _slack_error_code(team_info_payload)
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
@@ -468,7 +485,7 @@ class SlackIdentityHandler:
             )
 
         if not auth_test_payload.get("ok"):
-            error = auth_test_payload.get("error") or "unknown_error"
+            error = _slack_error_code(auth_test_payload)
             raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)

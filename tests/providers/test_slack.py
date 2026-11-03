@@ -188,6 +188,30 @@ class TestSlackIdentityHandler:
         assert exc_info.value.kind is FailureKind.REJECTED
 
     @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(["ratelimited"], id="a list"),
+            pytest.param({"code": "ratelimited"}, id="an object"),
+            pytest.param(7, id="a number"),
+            pytest.param(True, id="a boolean"),
+        ],
+    )
+    async def test_an_ok_false_error_that_is_not_a_string_is_still_an_identity_failure(
+        self, httpx_mock: HTTPXMock, error: object
+    ) -> None:
+        """A response body is untrusted input, so a code of the wrong JSON type is a refusal, not a crash."""
+        from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
+
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
+        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
         "error", ["fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"]
     )
     async def test_ok_false_with_a_transient_error_is_retryable(self, httpx_mock: HTTPXMock, error: str) -> None:
