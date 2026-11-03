@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Collection
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from joserfc.errors import ExpiredTokenError, JoseError
 from joserfc.jwt import JWTClaimsRegistry
@@ -115,6 +115,13 @@ class VerifiedWorkloadToken:
         return self._identity
 
 
+class _MovedKeySet(NamedTuple):
+    """A key set an issuer has started publishing elsewhere, before anything it holds has verified a token."""
+
+    url: str
+    keys: IssuerSigningKeys
+
+
 class _TrustedIssuer:
     """One accepted issuer, and the signing keys its tokens are checked against.
 
@@ -209,18 +216,21 @@ class _TrustedIssuer:
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys
 
-    async def moved_key_set(self) -> IssuerSigningKeys | None:
-        """Return the issuer's signing keys when it has started publishing them somewhere else.
+    async def moved_key_set(self) -> _MovedKeySet | None:
+        """Return a key set the issuer has started publishing elsewhere, without putting it in use.
 
         This answers a token naming a key the published set lacks, which is the one signal an issuer gives
         that its key set has moved. A read is attempted at most once a minute, so such a token cannot drive
         repeated discovery.
 
+        NOTE: The keys in use are left in use, because the token that asked for this is unauthenticated.
+        A caller that verifies a token against the answer passes it to ``keep``, and a caller that does not
+        leaves this issuer as it was.
+
         Returns:
-            The keys published at the new URL, or ``None`` when the URL is unchanged, when the issuer named
-            its key set itself, when the document cannot be read, or when one was read within the minute.
-            The keys already in use still verify what the issuer has not moved, so none of those refuses
-            anything on its own.
+            The key set published at the new URL, or ``None`` when the URL is unchanged, when the issuer
+            named its key set itself, when the document cannot be read, or when one was read within the
+            minute.
         """
         if not self._discovers_the_key_set:
             return None
@@ -236,10 +246,17 @@ class _TrustedIssuer:
                 return None
             if jwks_url == self._key_set_url:
                 return None
-            logger.info("The issuer publishes its signing keys at another URL, which is now in use")
-            self._key_set_url = jwks_url
-            self._signing_keys = self._key_set(jwks_url)
-            return self._signing_keys
+            return _MovedKeySet(jwks_url, self._key_set(jwks_url))
+
+    def keep(self, moved: _MovedKeySet) -> None:
+        """Put a moved key set in use, which only a caller holding a token it verified may do.
+
+        Args:
+            moved: The key set a key of which verified a token.
+        """
+        logger.info("The issuer publishes its signing keys at another URL, which is now in use")
+        self._key_set_url = moved.url
+        self._signing_keys = moved.keys
 
     async def _published_key_set_url(self) -> str:
         """Return the key set URL the issuer's configuration document names.
@@ -410,7 +427,9 @@ class WorkloadTokenVerifier:
         """Return the token's header and claims, once a key the issuer publishes verifies its signature.
 
         A token naming a key the published set lacks is checked once more against a key set the issuer has
-        moved to, so a moved key set is followed without a restart.
+        moved to, and that key set is put in use only once a key of it verified this token. An
+        unauthenticated token can therefore cost one document read a minute, and can never unseat the keys
+        in use.
 
         Args:
             token: A compact signed token.
@@ -432,7 +451,17 @@ class WorkloadTokenVerifier:
             moved = await trusted.moved_key_set()
             if moved is None:
                 raise
-        return await moved.verify(token, self._timeouts)
+            try:
+                verified = await moved.keys.verify(token, self._timeouts)
+            except (IdentityFetchError, TokenValidationError) as exc:
+                # NOTE: The failure is not logged with its value, because a failed request can render itself.
+                logger.warning(
+                    "The issuer's signing keys at the URL it has moved to did not verify the token, "
+                    "so the keys in use stay in use"
+                )
+                raise refusal from exc
+            trusted.keep(moved)
+            return verified
 
     def _trusted_issuer(self, issuer_claim: object) -> _TrustedIssuer:
         """Return the accepted issuer that a token's ``iss`` names.

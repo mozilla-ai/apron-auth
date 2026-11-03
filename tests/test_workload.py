@@ -537,6 +537,52 @@ class TestAMovedKeySet:
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
 
+    async def test_a_moved_key_set_that_cannot_be_read_leaves_the_keys_in_use(self, httpx_mock: HTTPXMock) -> None:
+        """An unknown key is unauthenticated input, so it must not be able to unseat a working key set."""
+        discoverable(httpx_mock)
+        verifier = trusting(clock=FakeClock())
+        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
+        httpx_mock.add_response(url=MOVED_JWKS_URL, status_code=500)
+        with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        identity = await verifier.verify(signed(claims()), audience=AUDIENCE)
+
+        assert identity.issuer == ISSUER
+
+    async def test_a_moved_key_set_that_lacks_the_key_in_use_does_not_replace_it(self, httpx_mock: HTTPXMock) -> None:
+        """An issuer part-way through a migration still signs with the key its old set publishes."""
+        discoverable(httpx_mock)
+        verifier = trusting(clock=FakeClock())
+        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
+        httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(OTHER_RSA_KEY))
+        with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        identity = await verifier.verify(signed(claims()), audience=AUDIENCE)
+
+        assert identity.issuer == ISSUER
+
+    async def test_a_moved_key_set_that_verified_a_token_stays_in_use(self, httpx_mock: HTTPXMock) -> None:
+        """The move is learned from a key that verified something, so the next token needs no second discovery."""
+        clock = FakeClock()
+        discoverable(httpx_mock)
+        verifier = trusting(clock=clock)
+        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
+        httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(ROTATED_RSA_KEY))
+        clock.now += 61
+        token = signed(claims(), ROTATED_RSA_KEY)
+
+        first = await verifier.verify(token, audience=AUDIENCE)
+        second = await verifier.verify(token, audience=AUDIENCE)
+
+        assert first == second
+        assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
+
     async def test_a_failed_rediscovery_leaves_the_refusal(self, httpx_mock: HTTPXMock) -> None:
         """A document that cannot be read refuses nothing the keys in use still verify."""
         discoverable(httpx_mock)
