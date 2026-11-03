@@ -138,7 +138,9 @@ async def discover(
             server's, so one that cannot be used loses its turn and the
             well-known locations are still tried.
         url_validator: Optional policy invoked on each URL before it is
-            requested; raising rejects the URL and fails discovery.
+            requested; raising rejects that URL. Rejecting any URL but the
+            ``resource_metadata_url`` hint fails discovery, and rejecting the
+            hint costs it its turn.
         transport_factory: Optional factory returning an httpx transport for a
             URL, letting the caller control the outbound connection (e.g. pin
             DNS to validated public IPs to prevent SSRF via rebinding).
@@ -828,7 +830,11 @@ def _url_fault(*, caller_supplied: bool) -> tuple[type[OAuthError], FailureKind]
 
 
 def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str, caller_supplied: bool) -> None:
-    """Validate an MCP OAuth URL before it is requested, by this library's rules and then the caller's.
+    """Refuse an MCP OAuth URL that will not be requested, by this library's rules and then the caller's.
+
+    A URL is refused when it is malformed, not HTTPS, carries userinfo, or targets a host that is not
+    globally reachable. The caller's policy then sees a URL that passed those, and decides for every URL
+    whatever its source.
 
     Args:
         url: The URL to check.
@@ -836,29 +842,13 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
         subject: What the URL is, for a refusal.
         caller_supplied: The caller chose this value, rather than passing on one the other side chose.
 
-    Raises:
-        ConfigurationError: If a URL the caller chose is rejected.
-        McpDiscoveryError: If a URL the other side chose is rejected.
-        OAuthError: As raised by ``url_validator``, unchanged.
-    """
-    _require_a_fetchable_url(url, subject=subject, caller_supplied=caller_supplied)
-    _require_caller_policy(url, url_validator, subject=subject, caller_supplied=caller_supplied)
-
-
-def _require_a_fetchable_url(url: str, *, subject: str, caller_supplied: bool) -> None:
-    """Refuse a URL this library will not fetch, by the fault class its source decides.
-
-    A URL is refused when it is malformed, not HTTPS, carries userinfo, or targets a host that is not
-    globally reachable.
-
-    Args:
-        url: The URL to check.
-        subject: What the URL is, for a refusal.
-        caller_supplied: The caller chose this value, rather than passing on one the other side chose.
+    NOTE: This refuses one URL. Whether that ends the operation is the caller's to decide, and a metadata
+    fetch lets a refused hint cost only its turn.
 
     Raises:
         ConfigurationError: If a URL the caller chose is refused.
         McpDiscoveryError: If a URL the other side chose is refused.
+        OAuthError: As raised by ``url_validator``, unchanged.
     """
     error_cls, kind = _url_fault(caller_supplied=caller_supplied)
     try:
@@ -872,27 +862,6 @@ def _require_a_fetchable_url(url: str, *, subject: str, caller_supplied: bool) -
     if _is_blocked_host(parsed.hostname or ""):
         msg = f"MCP OAuth blocked a non-public host ({subject})"
         raise error_cls(msg, kind=kind)
-
-
-def _require_caller_policy(
-    url: str, url_validator: UrlValidator | None, *, subject: str, caller_supplied: bool
-) -> None:
-    """Put a URL to the caller's own policy, which decides for every URL whatever its source.
-
-    NOTE: Whatever the policy raises ends the operation, because it is the caller speaking rather than one
-    candidate URL proving unusable.
-
-    Args:
-        url: The URL to put to the policy, which has passed this library's own rules.
-        url_validator: The caller's policy, or ``None`` when it states none.
-        subject: What the URL is, for a refusal.
-        caller_supplied: The caller chose this value, rather than passing on one the other side chose.
-
-    Raises:
-        ConfigurationError: If the policy refuses a URL the caller chose.
-        McpDiscoveryError: If the policy refuses a URL the other side chose.
-        OAuthError: As raised by ``url_validator``, unchanged.
-    """
     if url_validator is None:
         return
     try:
@@ -902,7 +871,6 @@ def _require_caller_policy(
     except Exception as exc:
         # The policy's own text can carry detail the caller did not mean to surface, so the chain holds it
         # and the message does not.
-        error_cls, kind = _url_fault(caller_supplied=caller_supplied)
         msg = f"MCP OAuth refused a URL by caller policy ({subject})"
         raise error_cls(msg, kind=kind) from exc
 
@@ -1007,8 +975,7 @@ async def _fetch_first_metadata(
         url, caller_supplied = candidate.url, candidate.caller_supplied
         subject = f"{what} URL"
         try:
-            _require_a_fetchable_url(url, subject=subject, caller_supplied=caller_supplied)
-            _require_caller_policy(url, url_validator, subject=subject, caller_supplied=caller_supplied)
+            _validate_url(url, url_validator, subject=subject, caller_supplied=caller_supplied)
             client = _opened_client(url, transport_factory, timeouts, subject=subject, error_cls=McpDiscoveryError)
         except OAuthError:
             if not candidate.is_hint:
@@ -1019,9 +986,13 @@ async def _fetch_first_metadata(
             try:
                 response = await within_request_limit(client.get(url), timeouts)
             except httpx.InvalidURL as exc:
-                # A URL the client refuses is malformed input, not a dead candidate, so it ends discovery.
+                # A URL the client refuses is malformed input rather than a dead candidate, so it ends the
+                # fetch, unless it is the hint, which cannot decide the fetch however it proves unusable.
+                if candidate.is_hint:
+                    logger.debug("MCP discovery: %s hint cannot be used, so the remaining candidates are tried", what)
+                    continue
                 error_cls, error_kind = _url_fault(caller_supplied=caller_supplied)
-                raise error_cls(_malformed_url_message(f"{what} URL"), kind=error_kind) from exc
+                raise error_cls(_malformed_url_message(subject), kind=error_kind) from exc
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)

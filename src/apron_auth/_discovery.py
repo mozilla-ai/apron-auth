@@ -128,14 +128,16 @@ def strict_str_list(document: Mapping[str, object], key: str) -> list[str]:
         key: The member to read.
 
     Returns:
-        The strings the member states, or ``[]`` when it is absent.
+        The strings the member states, or ``[]`` when the document states the member not at all.
 
     Raises:
-        MetadataListNotStringsError: If the member is present and is not a list of strings.
+        MetadataListNotStringsError: If the member is present and is not a list of strings. A member
+            written as ``null`` is present, because a document stating one says something about it, and
+            reading that as an absence is the ambiguity this refuses.
     """
-    value = document.get(key)
-    if value is None:
+    if key not in document:
         return []
+    value = document[key]
     if not isinstance(value, list) or not all(isinstance(entry, str) for entry in value):
         raise MetadataListNotStringsError(key)
     return value

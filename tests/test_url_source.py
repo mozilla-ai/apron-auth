@@ -20,13 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from apron_auth.errors import FailureKind, OidcDiscoveryError
-from apron_auth.mcp import (
-    _require_a_fetchable_url,
-    _require_caller_policy,
-    _require_no_authority_credential,
-    _require_secure_transport,
-    _validate_url,
-)
+from apron_auth.mcp import _require_no_authority_credential, _require_secure_transport, _validate_url
 from apron_auth.providers._openid_documents import require_url
 
 if TYPE_CHECKING:
@@ -38,14 +32,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 # Every module of that tree, one parametrized case each.
 MODULES = sorted(SRC.rglob("*.py"))
 # Every URL rule whose refusal follows the source of the value.
-RULES = (
-    _require_a_fetchable_url,
-    _require_caller_policy,
-    _require_no_authority_credential,
-    _require_secure_transport,
-    _validate_url,
-    require_url,
-)
+RULES = (_require_no_authority_credential, _require_secure_transport, _validate_url, require_url)
 # The names the guard matches, read off the rules so a rename cannot leave it passing.
 URL_RULES = {rule.__name__ for rule in RULES}
 # A URL whose authority carries a credential the HTTP client would present.
@@ -111,8 +98,6 @@ def test_a_url_rule_takes_no_default_for_the_source(rule: Callable[..., object])
 @pytest.mark.parametrize(
     "call",
     [
-        lambda: _require_a_fetchable_url("https://mcp.example.com/sse"),
-        lambda: _require_caller_policy("https://mcp.example.com/sse", None),
         lambda: _require_no_authority_credential("https://mcp.example.com/sse"),
         lambda: _require_secure_transport("https://mcp.example.com/sse"),
         lambda: _validate_url("https://mcp.example.com/sse", None),

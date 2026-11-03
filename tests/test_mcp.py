@@ -1089,7 +1089,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
             await discover("https://mcp.example.com", transport_factory=refusing_factory)
 
     async def test_a_registration_url_stays_the_callers_own(self, httpx_mock: HTTPXMock) -> None:
-        """One read by discovery was already held to the document rules there, so a refusal here is the caller's."""
+        """The caller chose what to pass here, and one read by discovery was already checked when it was read."""
         del httpx_mock
 
         with pytest.raises(ConfigurationError) as exc_info:
@@ -1165,6 +1165,7 @@ class TestTheGatingMetadataListsAreParsedStrictly:
             pytest.param(["S256", 42], id="a list with a number"),
             pytest.param(["S256", None], id="a list with a null"),
             pytest.param([["S256"]], id="a list of lists"),
+            pytest.param(None, id="an explicit null"),
         ],
     )
     async def test_a_malformed_value_is_refused(self, httpx_mock: HTTPXMock, key: str, value: object) -> None:
