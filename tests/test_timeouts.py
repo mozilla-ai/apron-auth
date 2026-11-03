@@ -13,6 +13,12 @@ from apron_auth.errors import FailureKind
 from apron_auth.models import TimeoutPolicy
 from apron_auth.providers import google
 
+# What bounds a request as a whole. A request awaited outside one of these is bounded by nothing.
+_BOUNDERS = {"fetch_identity_json", "within_request_limit"}
+
+# The client methods that send a request.
+_SENDERS = {"fetch_token", "get", "post", "request", "send"}
+
 # The functions that build a provider configuration, each of which a caller states its limits through.
 _CONFIG_BUILDERS = {"preset", "sign_in_preset", "to_provider_config"}
 
@@ -108,3 +114,31 @@ class TestEveryBuilderTakesThePolicy:
         config = google.preset("client", "secret", scopes=["openid"])  # pragma: allowlist secret
 
         assert config.timeouts == TimeoutPolicy()
+
+
+class TestEveryRequestIsBoundedAsAWhole:
+    def test_no_request_is_awaited_outside_a_whole_request_limit(self) -> None:
+        """A client's own limits bound one step each, so a request awaited outside one of these is unbounded."""
+        unbounded = []
+        for path in sorted(_SRC.rglob("*.py")):
+            tree = ast.parse(path.read_text())
+            bounded = {
+                (argument.lineno, argument.col_offset)
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and (node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", ""))
+                in _BOUNDERS
+                for argument in node.args
+                if isinstance(argument, ast.Call)
+            }
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
+                    continue
+                call = node.value
+                if not isinstance(call.func, ast.Attribute) or call.func.attr not in _SENDERS:
+                    continue
+                if (call.lineno, call.col_offset) in bounded:
+                    continue
+                unbounded.append(f"{path.relative_to(_SRC)}:{call.lineno}")
+
+        assert unbounded == []
