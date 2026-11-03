@@ -59,9 +59,10 @@ from apron_auth.models import (
     ProviderConfig,
     ScopeMetadata,
     TenancyContext,
+    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset, scope_sequence
 from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 from apron_auth.scopes import scope_words
@@ -333,14 +334,15 @@ class SlackIdentityHandler:
             )
             raise ConfigurationError(msg)
         if sign_in_endpoint:
-            return await self._fetch_via_oidc(access_token)
-        return await self._fetch_workspace_only(access_token)
+            return await self._fetch_via_oidc(access_token, config.timeouts)
+        return await self._fetch_workspace_only(access_token, config.timeouts)
 
-    async def _fetch_via_oidc(self, access_token: str) -> IdentityProfile:
+    async def _fetch_via_oidc(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
 
         Args:
             access_token: The bearer access token for the userInfo request.
+            timeouts: The limits in force for each request this makes.
 
         Returns:
             The person identity profile with a single-workspace tenancy.
@@ -351,13 +353,14 @@ class SlackIdentityHandler:
                 parsed, or Slack reports another ``ok=false`` error.
                 The failed request's error is not attached as its cause or context.
         """
-        async with httpx.AsyncClient() as client:
+        async with identity_client(timeouts) as client:
             payload = await fetch_identity_json(
                 client.post(
                     _SLACK_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
                 ),
                 "Slack identity",
+                timeouts,
             )
 
         if not isinstance(payload, dict):
@@ -404,7 +407,7 @@ class SlackIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_workspace_only(self, access_token: str) -> IdentityProfile:
+    async def _fetch_workspace_only(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch workspace tenancy for a non-OIDC (workspace-bot) token.
 
         Endpoint priority is fixed and intentional:
@@ -435,6 +438,7 @@ class SlackIdentityHandler:
 
         Args:
             access_token: The bearer access token for the workspace lookup.
+            timeouts: The limits in force for each request this makes.
 
         Returns:
             A workspace-only identity profile; person-identity fields are
@@ -447,8 +451,10 @@ class SlackIdentityHandler:
         """
         # Reuse one client for the optional fallback to keep the
         # connection pool warm across both calls.
-        async with httpx.AsyncClient() as client:
-            team_info_payload = await self._slack_post(client, _SLACK_TEAM_INFO_URL, access_token, "team.info")
+        async with identity_client(timeouts) as client:
+            team_info_payload = await self._slack_post(
+                client, _SLACK_TEAM_INFO_URL, access_token, "team.info", timeouts
+            )
             if team_info_payload.get("ok"):
                 return _build_workspace_profile_from_team_info(team_info_payload)
 
@@ -457,7 +463,9 @@ class SlackIdentityHandler:
             if error != _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
 
-            auth_test_payload = await self._slack_post(client, _SLACK_AUTH_TEST_URL, access_token, "auth.test")
+            auth_test_payload = await self._slack_post(
+                client, _SLACK_AUTH_TEST_URL, access_token, "auth.test", timeouts
+            )
 
         if not auth_test_payload.get("ok"):
             error = auth_test_payload.get("error") or "unknown_error"
@@ -471,6 +479,7 @@ class SlackIdentityHandler:
         url: str,
         access_token: str,
         endpoint_label: str,
+        timeouts: TimeoutPolicy,
     ) -> dict[str, Any]:
         """POST to a Slack Web API method and return the JSON object payload.
 
@@ -479,6 +488,7 @@ class SlackIdentityHandler:
             url: The Slack Web API method URL to POST to.
             access_token: The bearer access token for the request.
             endpoint_label: A short method label used in error messages.
+            timeouts: The limits in force for the request.
 
         Returns:
             The response payload as a JSON object.
@@ -491,6 +501,7 @@ class SlackIdentityHandler:
         payload = await fetch_identity_json(
             client.post(url, headers={"Authorization": f"Bearer {access_token}"}),
             f"Slack {endpoint_label}",
+            timeouts,
         )
 
         if not isinstance(payload, dict):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import asyncio
+from pathlib import Path
 
 import httpx
 import pytest
@@ -9,6 +11,9 @@ from apron_auth._http_errors import http_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind
 from apron_auth.models import TimeoutPolicy
+
+# The library's source tree, walked to keep every request path bounded.
+_SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
 
 
 class TestHttpxTimeout:
@@ -54,3 +59,20 @@ class TestWithinRequestLimit:
 
         with pytest.raises(httpx.ConnectError):
             await within_request_limit(refuse(), TimeoutPolicy())
+
+
+class TestEveryClientTheLibraryBuildsStatesItsLimits:
+    def test_no_request_path_builds_a_client_without_limits(self) -> None:
+        """A client built without limits bounds nothing, and a request path added later is where that is missed."""
+        unbounded = []
+        for path in sorted(_SRC.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+                if name not in {"AsyncClient", "AsyncOAuth2Client"}:
+                    continue
+                if not any(keyword.arg == "timeout" for keyword in node.keywords):
+                    unbounded.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+
+        assert unbounded == []

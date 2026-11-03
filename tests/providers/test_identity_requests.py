@@ -5,10 +5,14 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
+from apron_auth.models import TimeoutPolicy
 from apron_auth.providers._identity_requests import fetch_identity_json
 
 URL = "https://provider.example.com/me"
 TOKEN = "access-SECRET-xyz"  # pragma: allowlist secret
+
+# The limits every request in these tests runs under.
+_TIMEOUTS = TimeoutPolicy()
 
 
 async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchError:
@@ -17,6 +21,7 @@ async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchErr
             await fetch_identity_json(
                 client.get(request_url, headers={"Authorization": f"Bearer {token}"}),
                 "Example identity",
+                _TIMEOUTS,
             )
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
@@ -27,7 +32,7 @@ async def test_returns_the_decoded_body(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(url=URL, json={"sub": "u-1"})
 
     async with httpx.AsyncClient() as client:
-        payload = await fetch_identity_json(client.get(URL), "Example identity")
+        payload = await fetch_identity_json(client.get(URL), "Example identity", _TIMEOUTS)
 
     assert payload == {"sub": "u-1"}
 

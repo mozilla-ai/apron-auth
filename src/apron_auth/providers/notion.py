@@ -16,8 +16,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 
-import httpx
-
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -27,7 +25,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
 
@@ -82,8 +80,7 @@ class NotionIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        del config
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _NOTION_USERINFO_URL,
@@ -93,6 +90,7 @@ class NotionIdentityHandler:
                     },
                 ),
                 "Notion identity",
+                config.timeouts,
             )
 
         bot = payload.get("bot") if isinstance(payload, dict) else None

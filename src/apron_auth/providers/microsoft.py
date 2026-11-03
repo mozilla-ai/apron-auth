@@ -23,6 +23,7 @@ from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
+from apron_auth._timeouts import within_request_limit
 from apron_auth.errors import (
     FailureKind,
     IdentityFetchError,
@@ -30,8 +31,16 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    Provider,
+    ProviderConfig,
+    ScopeMetadata,
+    TenancyContext,
+    TimeoutPolicy,
+)
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._presets import Preset
 
@@ -270,7 +279,7 @@ class MicrosoftIdentityHandler:
         if material.id_token:
             verified = await self._signing_keys.verify(material.id_token, config.timeouts)
             id_token = _checked_id_token(verified.claims, config.client_id, verified.key.get("issuer"))
-        payload = await self._fetch_userinfo(material.access_token)
+        payload = await self._fetch_userinfo(material.access_token, config.timeouts)
         if id_token is not None:
             _require_matching_subject(id_token, payload)
 
@@ -278,7 +287,7 @@ class MicrosoftIdentityHandler:
 
         tenancies: tuple[TenancyContext, ...] = ()
         if tenant_id is not None:
-            tenancies = await self._fetch_verified_tenancies(material.access_token, tenant_id)
+            tenancies = await self._fetch_verified_tenancies(material.access_token, tenant_id, config.timeouts)
 
         email = payload.get("email")
         return IdentityProfile(
@@ -292,11 +301,12 @@ class MicrosoftIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_userinfo(self, access_token: str) -> dict[str, Any]:
+    async def _fetch_userinfo(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
         """Fetch the OIDC userinfo payload for display fields.
 
         Args:
             access_token: The bearer access token for the userinfo request.
+            timeouts: The limits in force for the userinfo request.
 
         Returns:
             The userinfo payload as a JSON object.
@@ -306,20 +316,21 @@ class MicrosoftIdentityHandler:
                 parsed, or it is not a JSON object.
                 The failed request's error is not attached as its cause or context.
         """
-        async with httpx.AsyncClient() as client:
+        async with identity_client(timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _MICROSOFT_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token}"},
                 ),
                 "Microsoft identity",
+                timeouts,
             )
         if not isinstance(payload, dict):
             msg = "Microsoft identity response was not a JSON object"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
-    async def _fetch_organization(self, access_token: str) -> dict[str, Any] | None:
+    async def _fetch_organization(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
         """Fetch the signed-in user's organization from the directory, or ``None``.
 
         ``None`` means the directory yielded no usable organization: it
@@ -332,16 +343,20 @@ class MicrosoftIdentityHandler:
 
         Args:
             access_token: The bearer access token for the directory request.
+            timeouts: The limits in force for the directory request.
 
         Returns:
             The signed-in user's organization, or ``None`` when the
             directory yields no usable organization.
         """
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    _MICROSOFT_ORGANIZATION_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+            async with identity_client(timeouts) as client:
+                response = await within_request_limit(
+                    client.get(
+                        _MICROSOFT_ORGANIZATION_URL,
+                        headers={"Authorization": f"Bearer {access_token}"},
+                    ),
+                    timeouts,
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -378,7 +393,9 @@ class MicrosoftIdentityHandler:
             return None
         return organization
 
-    async def _fetch_verified_tenancies(self, access_token: str, tenant_id: str) -> tuple[TenancyContext, ...]:
+    async def _fetch_verified_tenancies(
+        self, access_token: str, tenant_id: str, timeouts: TimeoutPolicy
+    ) -> tuple[TenancyContext, ...]:
         """Resolve the validated tenant's admin-verified domains into tenancies.
 
         Emits one :class:`TenancyContext` per verified domain, all sharing
@@ -400,12 +417,13 @@ class MicrosoftIdentityHandler:
             access_token: The bearer access token for the directory request.
             tenant_id: The validated ID-token tenant GUID the directory
                 response must bind back to.
+            timeouts: The limits in force for the directory request.
 
         Returns:
             One domain-owning tenancy per admin-verified domain, or an empty
             tuple when no such tenancy can be established.
         """
-        organization = await self._fetch_organization(access_token)
+        organization = await self._fetch_organization(access_token, timeouts)
         if organization is None:
             return ()
 

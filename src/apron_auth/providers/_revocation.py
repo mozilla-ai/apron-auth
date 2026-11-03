@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, assert_never
 import httpx
 
 from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import UrlField
@@ -242,15 +243,20 @@ async def send_revocation(
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.
         transport = transport_factory(request.endpoint or request.url) if transport_factory is not None else None
         # A redirect would carry the token to a host the gate never read, so none is followed.
-        async with httpx.AsyncClient(transport=transport, follow_redirects=False) as client:
-            return await client.request(
-                request.method,
-                request.url,
-                auth=request.auth,
-                data=request.data,
-                headers=request.headers,
-                json=request.json_body,
-                params=request.params,
+        async with httpx.AsyncClient(
+            transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
+        ) as client:
+            return await within_request_limit(
+                client.request(
+                    request.method,
+                    request.url,
+                    auth=request.auth,
+                    data=request.data,
+                    headers=request.headers,
+                    json=request.json_body,
+                    params=request.params,
+                ),
+                config.timeouts,
             )
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except httpx.InvalidURL:

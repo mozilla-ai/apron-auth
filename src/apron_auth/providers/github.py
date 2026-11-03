@@ -15,11 +15,9 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
-import httpx
-
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
 
@@ -156,15 +154,16 @@ class GitHubIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        del config
         headers = {
             "Authorization": f"Bearer {material.access_token}",
             **_GITHUB_API_HEADERS,
         }
-        async with httpx.AsyncClient() as client:
-            user_payload = await fetch_identity_json(client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity")
+        async with identity_client(config.timeouts) as client:
+            user_payload = await fetch_identity_json(
+                client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity", config.timeouts
+            )
             emails_payload = await fetch_identity_json(
-                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity"
+                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity", config.timeouts
             )
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)

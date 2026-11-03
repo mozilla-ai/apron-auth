@@ -15,11 +15,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import httpx
-
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 
 # The GraphQL endpoint that the identity query goes to.
@@ -63,8 +61,7 @@ class LinearIdentityHandler:
                 unexpected shape.
                 The failed request's error is not attached as its cause or context.
         """
-        del config
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.post(
                     _LINEAR_GRAPHQL_URL,
@@ -75,6 +72,7 @@ class LinearIdentityHandler:
                     json={"query": _LINEAR_VIEWER_QUERY},
                 ),
                 "Linear identity",
+                config.timeouts,
             )
 
         if not isinstance(payload, dict):

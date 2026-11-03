@@ -9,11 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import httpx
-
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
 
@@ -71,13 +69,14 @@ class TypeformIdentityHandler:
             if _TYPEFORM_USERINFO_SCOPE not in granted:
                 raise IdentityScopeNotGrantedError(f"Typeform identity requires the {_TYPEFORM_USERINFO_SCOPE} scope")
 
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _TYPEFORM_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token}"},
                 ),
                 "Typeform identity",
+                config.timeouts,
             )
 
         if not isinstance(payload, dict):

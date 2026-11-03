@@ -12,12 +12,10 @@ import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
-import httpx
-
 from apron_auth._urls import matches_suffix
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TenancyContext
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
 
 # The scopes the preset always requests, with the labels a consent screen shows.
@@ -100,13 +98,14 @@ class SalesforceIdentityHandler:
             raise ConfigurationError(msg)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"
 
-        async with httpx.AsyncClient() as client:
+        async with identity_client(config.timeouts) as client:
             payload = await fetch_identity_json(
                 client.get(
                     userinfo_url,
                     headers={"Authorization": f"Bearer {material.access_token}"},
                 ),
                 "Salesforce identity",
+                config.timeouts,
             )
 
         # Honor email_verified only as a genuine boolean; a bare bool()

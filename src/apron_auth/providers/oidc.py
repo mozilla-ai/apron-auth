@@ -50,6 +50,7 @@ from apron_auth._discovery import CONFIDENTIAL_AUTH_METHODS, str_list
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
+from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,
@@ -71,6 +72,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     UrlField,
 )
+from apron_auth.providers._identity_requests import identity_client
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers._presets import scope_sequence
@@ -105,9 +107,6 @@ _QUOTED_STRING = r'"(?:[\t \x21\x23-\x5b\x5d-\x7e\x80-\U0010ffff]|\\[\t \x21-\x7
 _AUTH_PARAM = re.compile(rf"({_TOKEN})[ \t]*=[ \t]*({_TOKEN}|{_QUOTED_STRING})")
 _AUTH_SCHEME = re.compile(_TOKEN)
 _TOKEN68 = re.compile(r"[0-9A-Za-z._~+/-]+=*")
-
-# The time limits, in seconds, on each userinfo request: 5 to connect and 10 for each other step.
-_USERINFO_TIMEOUT = httpx.Timeout(10.0, connect=5.0)
 
 
 def discovery_url(issuer: str, *, allow_insecure_http: bool = False) -> str:
@@ -527,7 +526,7 @@ class OidcIdentityHandler:
         userinfo_fetched = False
         if self._userinfo_url:
             try:
-                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token)
+                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token, config.timeouts)
                 userinfo_fetched = True
             except IdentityFetchError as exc:
                 if claims is None:
@@ -628,12 +627,13 @@ class OidcIdentityHandler:
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return claims
 
-    async def _fetch_userinfo(self, userinfo_url: str, access_token: str) -> dict[str, Any]:
+    async def _fetch_userinfo(self, userinfo_url: str, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 
         Args:
             userinfo_url: The userinfo endpoint.
             access_token: The bearer access token for the userinfo request.
+            timeouts: The limits in force for the request.
 
         Returns:
             The userinfo payload as a JSON object.
@@ -654,10 +654,9 @@ class OidcIdentityHandler:
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         failure: IdentityFetchError | None = None
         try:
-            async with httpx.AsyncClient(transport=transport, timeout=_USERINFO_TIMEOUT) as client:
-                response = await client.get(
-                    userinfo_url,
-                    headers={"Authorization": f"Bearer {access_token}"},
+            async with identity_client(timeouts, transport=transport) as client:
+                response = await within_request_limit(
+                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token}"}), timeouts
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:
