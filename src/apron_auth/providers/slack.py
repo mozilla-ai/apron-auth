@@ -132,9 +132,17 @@ _SIGN_IN_PRESET = Preset(
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
-# The error codes Slack returns, with HTTP 200 and ``ok=false``, for its own outages and rate limits.
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for a condition that clears on its
+# own: its outages and rate limits, and a workspace migration that suspends the API until it ends.
 _SLACK_TRANSIENT_ERRORS = frozenset(
-    {"fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"}
+    {
+        "fatal_error",
+        "internal_error",
+        "ratelimited",
+        "request_timeout",
+        "service_unavailable",
+        "team_added_to_org",
+    }
 )
 
 # The userinfo claim that holds the workspace domain.
@@ -627,15 +635,15 @@ class SlackRevocationHandler:
 
         Returns:
             ``True`` when Slack confirms revocation with the boolean ``"ok": true``, and ``False`` where
-            the body states a condition no retry clears.
+            it states ``false`` for a condition no retry clears.
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
                 sending a token to.
             RevocationError: If the revocation URL is invalid, the request cannot be sent, the request
                 fails to reach the endpoint, its response body is not a valid JSON object, the endpoint
-                answers a status other than a success, or the body names one of Slack's own outages or
-                rate limits.
+                answers a status other than a success, the body states no boolean ``ok`` and so no
+                outcome, or the body names one of Slack's own outages or rate limits.
                 Its kind says whether the same request may pass later.
                 The caught error is not attached as its cause or context.
         """
@@ -646,7 +654,7 @@ class SlackRevocationHandler:
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:
-            refuse_an_unexpected_status(response, label="Slack")
+            refuse_an_unexpected_status(response, label=request.label)
         try:
             data = decode_json_body(response)
         except ValueError:
@@ -655,11 +663,16 @@ class SlackRevocationHandler:
             if not isinstance(data, dict):
                 msg = "Slack revocation response was not a JSON object"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
-            if data.get("ok") is True:
+            ok = data.get("ok")
+            if ok is True:
                 return True
+            if ok is not False:
+                msg = "Failed to revoke Slack token: the response states no outcome"
+                raise RevocationError(msg, kind=FailureKind.REFUSED)
             code = _slack_error_code(data)
-            if _slack_failure_kind(code) is FailureKind.SERVER_ERROR:
-                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=FailureKind.SERVER_ERROR)
+            kind = _slack_failure_kind(code)
+            if kind.retryable:
+                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=kind)
             return False
         # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.

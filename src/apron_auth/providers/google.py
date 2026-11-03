@@ -175,7 +175,7 @@ class GoogleRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.is_success:
             return True
-        refuse_an_unexpected_status(response, label="Google")
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

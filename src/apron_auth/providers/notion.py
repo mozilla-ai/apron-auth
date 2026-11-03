@@ -204,7 +204,7 @@ class NotionRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (200, 400):
             return True
-        refuse_an_unexpected_status(response, label="Notion")
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

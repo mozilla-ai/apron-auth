@@ -268,6 +268,45 @@ def test_the_shared_rule_reads_a_status_by_what_it_states(status: int, expected:
     assert refusal.value.kind is expected
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(403, id="a forbidden status"),
+        pytest.param(400, id="a bad request"),
+        pytest.param(422, id="an unprocessable request"),
+    ],
+)
+def test_the_shared_rule_reads_a_statement_of_when_to_come_back(status: int) -> None:
+    """A provider that answers both a throttle and a refusal with one status says which in retry-after."""
+    with pytest.raises(RevocationError) as throttled:
+        refuse_an_unexpected_status(httpx.Response(status, headers={"Retry-After": "60"}), label="Example")
+
+    with pytest.raises(RevocationError) as refused:
+        refuse_an_unexpected_status(httpx.Response(status), label="Example")
+
+    assert throttled.value.kind is FailureKind.SERVER_ERROR
+    assert throttled.value.retryable
+    assert refused.value.kind is FailureKind.REJECTED
+    assert refused.value.retryable is False
+
+
+async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryable() -> None:
+    """GitHub answers a secondary rate limit with 403 and names retry-after, which its own docs say wins."""
+
+    def factory(url: str) -> httpx.MockTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(403, headers={"Retry-After": "60"}))
+
+    config = _config(Provider.GITHUB)
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
 async def test_a_success_a_provider_does_not_state_is_not_read_as_a_rejection() -> None:
     """GitHub answers 204 or 404, so a 200 leaves the outcome unknown rather than stating a refusal."""
     config = _config(Provider.GITHUB)

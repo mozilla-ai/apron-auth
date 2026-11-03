@@ -259,7 +259,7 @@ class GitHubRevocationHandler:
                 "or spam-throttled); the grant may still exist at GitHub"
             )
             return False
-        refuse_an_unexpected_status(response, label="GitHub")
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

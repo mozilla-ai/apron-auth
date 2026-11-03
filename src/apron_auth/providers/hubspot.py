@@ -234,7 +234,7 @@ class HubSpotRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (204, 404):
             return True
-        refuse_an_unexpected_status(response, label="HubSpot")
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(
