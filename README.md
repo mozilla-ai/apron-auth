@@ -771,7 +771,7 @@ accepted = await my_store.audiences_for(checked.issuer, checked.audiences)
 identity = checked.accept(accepted)
 ```
 
-The subject is not readable until `accept` returns an identity, so a lookup cannot act on a workload whose token was minted for another service.
+`check` offers no identity, so the step that rules out a token minted for another service comes before the step that names its workload, and a lookup written against this shape cannot act on one it has not accepted. That ordering is the interface rather than a boundary Python enforces: a caller that reaches past it, or that calls `check` and ignores `accept`, decides for itself what it trusts.
 
 ### Accepting several issuers
 
@@ -779,7 +779,7 @@ Pass one `WorkloadIssuer` per platform you trust. A token is checked against the
 
 ### Keys, and the audience rule
 
-The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Set `WorkloadIssuer.jwks_url` to skip discovery. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. A token naming a key the key set lacks also has the configuration document read again, at most once a minute, so an issuer that moves its key set is followed without a restart. Only public-key algorithms are accepted, and a published RSA key shorter than 2048 bits is skipped, here and in every OpenID sign-in. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
+The issuer's signing keys are found through its OpenID configuration document, of which only `issuer` and `jwks_uri` are read, so an issuer with no authorization endpoint, as most workload issuers are, is discovered too. Set `WorkloadIssuer.jwks_url` to skip discovery. The keys are kept for an hour, and a token no cached key verifies refetches them early, at most once a minute. A token naming a key the key set lacks also has the configuration document read again, at most once a minute, and the key set that document names replaces the one in use once a key of it verifies that token. An issuer that moves its key set while the old one still answers is followed that way, without a restart. Two cases are not: an issuer whose old key set URL stops answering altogether is reported as an outage rather than rediscovered, and a token that arrives while the first one is still proving the move is refused and succeeds on retry. Only public-key algorithms are accepted, and a published RSA key shorter than 2048 bits is skipped, here and in every OpenID sign-in. `iss` must name the issuer exactly, and `sub`, `aud`, `exp` and `iat` are required.
 
 `audience` is required, at both entry points. Pass the audience your server answers to, or several of which the token must name one. One that names nothing — an empty collection, an empty name, or `None` — is a `ConfigurationError`, because it would accept a token minted for any service.
 
