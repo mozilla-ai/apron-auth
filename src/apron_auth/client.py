@@ -7,7 +7,6 @@ import hmac
 import logging
 import secrets
 import time
-from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Sequence
 from functools import cached_property, partial
 from types import MappingProxyType
@@ -431,10 +430,11 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     return UserToken(**named, extras=extras)
 
 
-class _OAuthClientBase(ABC):
+class _OAuthClientBase:
     """Everything an OAuth 2.0 authorization code client does apart from where the pending state is kept.
 
-    Where it is kept is the one thing a subclass decides, and ``_keep_pending_state`` is where it says so.
+    Each client states its own authorization request and code exchange, because where the pending state
+    is kept decides the shape of both.
 
     NOTE: Callers must not use one client from event loops in several threads at once,
     because the identity handler it builds may keep caches that are not thread-safe.
@@ -474,21 +474,21 @@ class _OAuthClientBase(ABC):
         self._retryable_error_codes = self.DEFAULT_RETRYABLE_ERROR_CODES | (retryable_error_codes or set())
         self._transport_factory = transport_factory
 
-    async def get_authorization_url(
+    def _authorization_request(
         self,
-        redirect_uri: str | None = None,
-        context: dict[str, Any] | None = None,
+        state: str,
+        redirect_uri: str | None,
+        context: dict[str, Any] | None,
     ) -> tuple[str, OAuthPendingState]:
         """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
 
-        The pending state is saved before returning, where this client keeps one of its own.
-
         Args:
+            state: The ``state`` the request sends, which the authorization response returns unchanged.
             redirect_uri: Override the redirect URI from ``ProviderConfig``.
             context: Opaque caller context attached to the pending state.
 
         Returns:
-            A tuple of the authorization URL and the pending state.
+            A tuple of the authorization URL and the pending state it was built with.
 
         Raises:
             ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
@@ -519,7 +519,6 @@ class _OAuthClientBase(ABC):
             msg = "redirect_uri must use https, or http on a loopback host"
             raise ConfigurationError(msg)
 
-        state = secrets.token_urlsafe(32)
         code_verifier = None
 
         params: dict[str, str] = {
@@ -557,17 +556,7 @@ class _OAuthClientBase(ABC):
             context=context or {},
         )
 
-        await self._keep_pending_state(pending_state)
-
         return url, pending_state
-
-    @abstractmethod
-    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
-        """Keep the pending state of an authorization request, wherever this client keeps one.
-
-        Args:
-            pending_state: The pending state the authorization request was built with.
-        """
 
     def _code_to_redeem(self, callback: AuthorizationCallback) -> str:
         """Return the authorization code to redeem, refusing a response that states none.
@@ -1271,12 +1260,31 @@ class OAuthClient(_OAuthClientBase):
             raise ConfigurationError(msg)
         return await self._redeem(callback, partial(_kept_pending_state, pending_state))
 
-    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
-        """Keep nothing. The caller holds the pending state this client returns to them.
+    async def get_authorization_url(
+        self,
+        redirect_uri: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[str, OAuthPendingState]:
+        """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
+
+        The pending state is returned rather than kept anywhere, so the caller holds it until the
+        callback arrives.
 
         Args:
-            pending_state: The pending state the authorization request was built with.
+            redirect_uri: Override the redirect URI from ``ProviderConfig``.
+            context: Opaque caller context attached to the pending state.
+
+        Returns:
+            A tuple of the authorization URL and the pending state the exchange needs back.
+
+        Raises:
+            ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
+                or cannot be read.
+                It is also raised when the URI states no ``https`` and names no loopback host, unless
+                the config accepts plain HTTP for its redirect URI.
         """
+        # A coroutine although it awaits nothing, because a plain method would break every call site.
+        return self._authorization_request(secrets.token_urlsafe(32), redirect_uri, context)
 
 
 class StoredStateClient(_OAuthClientBase):
@@ -1382,6 +1390,33 @@ class StoredStateClient(_OAuthClientBase):
         """
         return await self._redeem(callback, self._consume_pending_state)
 
+    async def get_authorization_url(
+        self,
+        redirect_uri: str | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> tuple[str, OAuthPendingState]:
+        """Build an authorization URL with state, optional PKCE, and a nonce when the request asks for ``openid``.
+
+        The pending state is saved to the store before returning, so the callback can be served by
+        another request than the one that built the URL.
+
+        Args:
+            redirect_uri: Override the redirect URI from ``ProviderConfig``.
+            context: Opaque caller context attached to the pending state.
+
+        Returns:
+            A tuple of the authorization URL and the pending state the store now holds.
+
+        Raises:
+            ConfigurationError: If no redirect URI is available, or the one in force carries userinfo
+                or cannot be read.
+                It is also raised when the URI states no ``https`` and names no loopback host, unless
+                the config accepts plain HTTP for its redirect URI.
+        """
+        url, pending_state = self._authorization_request(secrets.token_urlsafe(32), redirect_uri, context)
+        await self._state_store.save(pending_state)
+        return url, pending_state
+
     async def _consume_pending_state(self, state: str) -> OAuthPendingState:
         """Consume the stored pending state a callback's state belongs to.
 
@@ -1400,11 +1435,3 @@ class StoredStateClient(_OAuthClientBase):
             msg = "OAuth state is invalid, expired, or already consumed"
             raise StateError(msg)
         return pending
-
-    async def _keep_pending_state(self, pending_state: OAuthPendingState) -> None:
-        """Save the pending state of an authorization request to the store.
-
-        Args:
-            pending_state: The pending state the authorization request was built with.
-        """
-        await self._state_store.save(pending_state)
