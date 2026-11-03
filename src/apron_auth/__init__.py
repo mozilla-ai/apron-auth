@@ -49,6 +49,7 @@ from apron_auth.models import (
     TokenSet,
     UrlField,
     UserToken,
+    WorkloadIssuer,
 )
 from apron_auth.protocols import IdentityHandler, RevocationHandler, StateStore
 from apron_auth.providers._revocation import StandardRevocationHandler
@@ -110,4 +111,5 @@ __all__ = [
     "UNAUTHORIZED_CLIENT",
     "UrlField",
     "UserToken",
+    "WorkloadIssuer",
 ]

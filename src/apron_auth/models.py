@@ -2016,3 +2016,51 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     # Attached last, so it wraps every validator above it.
     _repeats_no_value = _REPEATS_NO_VALUE
+
+
+class WorkloadIssuer(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """One issuer whose signed tokens are accepted, and where its signing keys are published.
+
+    Attributes:
+        issuer: The issuer identifier, exactly as its tokens carry it in ``iss``.
+        jwks_url: The issuer's signing key set, or ``None`` for one to be discovered from the issuer.
+        allow_insecure_http_for: The URL fields this issuer accepts plain HTTP for. Empty by default,
+            and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back out of
+            storage is refused. A loopback host needs no waiver, because a request to one reaches no
+            network.
+            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
+            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
+    """
+
+    issuer: str
+    jwks_url: str | None = None
+    allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
+
+    # The name is lowercase because it reads as a namespace at the call site, not as a type.
+    class unsafe:  # noqa: N801
+        """Builders that give up a protection this issuer otherwise requires."""
+
+        @staticmethod
+        def allow_plain_http(*fields: UrlField | str, **values: Any) -> WorkloadIssuer:
+            """Build an issuer that accepts plain HTTP for the named URL fields.
+
+            Every other URL field still has to state TLS, so a waiver reaches no field it does not name.
+            A loopback host needs no waiver, because a request to it reaches no network.
+
+            Args:
+                *fields: The URL fields plain HTTP is accepted for.
+                **values: The field values to build from.
+
+            Returns:
+                The built issuer, recording the fields it accepts plain HTTP for.
+
+            Raises:
+                ConfigurationError: If the values are refused, or a name is no URL field.
+            """
+            return _build_allowing_plain_http(WorkloadIssuer, fields, values)
+
+    _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
+    _waiver_comes_from_code = _WAIVER_COMES_FROM_CODE
+    _urls_state_their_transport = _URLS_STATE_THEIR_TRANSPORT
+    # Attached last, so it wraps every validator above it.
+    _repeats_no_value = _REPEATS_NO_VALUE
