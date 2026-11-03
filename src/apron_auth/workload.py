@@ -10,6 +10,7 @@ so the token is checked as a JSON Web Token (RFC 7519), not as the ID token of a
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
@@ -33,7 +34,7 @@ from apron_auth.errors import (
     TokenValidationReason,
 )
 from apron_auth.models import TimeoutPolicy, UrlField, WorkloadIssuer
-from apron_auth.providers._jwks import IssuerSigningKeys
+from apron_auth.providers._jwks import IssuerSigningKeys, VerifiedToken
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
 
@@ -41,6 +42,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from apron_auth.protocols import TransportFactory
+
+logger = logging.getLogger(__name__)
 
 # The longest token read, in characters. A platform's token is a few kilobytes even with a certificate chain.
 _MAX_TOKEN_LENGTH = 16384
@@ -118,7 +121,9 @@ class _TrustedIssuer:
     The keys are found through the issuer's OpenID configuration document, unless the issuer names them.
     Only the document's ``issuer`` and ``jwks_uri`` are read, so an issuer that publishes no authorization
     endpoint, as most workload issuers do, is discovered too.
-    The document is read once, and a failed read is reported again for a minute before another is attempted.
+    A failed read is reported again for a minute before another is attempted.
+    The document is read again for a token naming a key the published set lacks, at most once a minute, so an
+    issuer that moves its key set is followed without a restart.
     """
 
     def __init__(
@@ -158,9 +163,12 @@ class _TrustedIssuer:
         self._transport_factory = transport_factory
         self._timeouts = timeouts
         self._clock = clock
+        self._key_set_url = issuer.jwks_url
+        self._discovers_the_key_set = issuer.jwks_url is None
         self._signing_keys = self._key_set(issuer.jwks_url) if issuer.jwks_url else None
         self._discovery_failure: tuple[str, FailureKind] | None = None
         self._discovery_failed_at: float | None = None
+        self._rediscovered_at: float | None = None
         self._discovery_lock = LoopLock()
 
     @property
@@ -188,14 +196,7 @@ class _TrustedIssuer:
                 message, kind = self._discovery_failure
                 raise IdentityFetchError(message, kind=kind)
             try:
-                document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
-                require_openid_issuer(document, self._issuer)
-                jwks_url = optional_url(
-                    document, key="jwks_uri", field="signing key set", allow_insecure_http=self._plain_http_key_set
-                )
-                if jwks_url is None:
-                    msg = "OpenID provider configuration names no signing key set"
-                    raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+                jwks_url = await self._published_key_set_url()
             except OidcDiscoveryError as exc:
                 msg = f"Failed to discover the issuer's signing keys: {exc}"
                 # Only the message and the kind are kept, so the failed request's objects are not held for a minute.
@@ -203,8 +204,62 @@ class _TrustedIssuer:
                 self._discovery_failed_at = self._clock()
                 raise IdentityFetchError(msg, kind=exc.kind) from exc
             self._discovery_failure = None
+            self._key_set_url = jwks_url
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys
+
+    async def moved_key_set(self) -> IssuerSigningKeys | None:
+        """Return the issuer's signing keys when it has started publishing them somewhere else.
+
+        This answers a token naming a key the published set lacks, which is the one signal an issuer gives
+        that its key set has moved. A read is attempted at most once a minute, so such a token cannot drive
+        repeated discovery.
+
+        Returns:
+            The keys published at the new URL, or ``None`` when the URL is unchanged, when the issuer named
+            its key set itself, when the document cannot be read, or when one was read within the minute.
+            The keys already in use still verify what the issuer has not moved, so none of those refuses
+            anything on its own.
+        """
+        if not self._discovers_the_key_set:
+            return None
+        async with self._discovery_lock():
+            if self._is_younger_than(self._rediscovered_at, _REDISCOVER_INTERVAL_SECONDS):
+                return None
+            self._rediscovered_at = self._clock()
+            try:
+                jwks_url = await self._published_key_set_url()
+            except OidcDiscoveryError:
+                # NOTE: The failure is not logged with its value, because a failed request can render itself.
+                logger.warning("The issuer's configuration could not be read again for an unverified token")
+                return None
+            if jwks_url == self._key_set_url:
+                return None
+            logger.info("The issuer publishes its signing keys at another URL, which is now in use")
+            self._key_set_url = jwks_url
+            self._signing_keys = self._key_set(jwks_url)
+            return self._signing_keys
+
+    async def _published_key_set_url(self) -> str:
+        """Return the key set URL the issuer's configuration document names.
+
+        Raises:
+            OidcDiscoveryError: If the document cannot be fetched or read, names another issuer, or names
+                no key set.
+        """
+        document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
+        require_openid_issuer(document, self._issuer)
+        jwks_url = optional_url(
+            document, key="jwks_uri", field="signing key set", allow_insecure_http=self._plain_http_key_set
+        )
+        if jwks_url is None:
+            msg = "OpenID provider configuration names no signing key set"
+            raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED)
+        return jwks_url
+
+    def _is_younger_than(self, moment: float | None, seconds: int) -> bool:
+        """Return whether ``moment`` is set and less than ``seconds`` ago."""
+        return moment is not None and self._clock() - moment < seconds
 
     def _key_set(self, jwks_url: str) -> IssuerSigningKeys:
         """Return the signing keys published at ``jwks_url``."""
@@ -323,8 +378,7 @@ class WorkloadTokenVerifier:
             msg = "Workload token claims are not a JSON object"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         trusted = self._trusted_issuer(unverified.get("iss"))
-        signing_keys = await trusted.keys()
-        claims = (await signing_keys.verify(token, self._timeouts)).claims
+        claims = (await self._verified(token, trusted)).claims
         registry = JWTClaimsRegistry(
             leeway=CLOCK_SKEW_SECONDS,
             iss={"essential": True, "value": trusted.issuer},
@@ -346,6 +400,34 @@ class WorkloadTokenVerifier:
             msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return VerifiedWorkloadToken(_identity(trusted.issuer, claims))
+
+    async def _verified(self, token: str, trusted: _TrustedIssuer) -> VerifiedToken:
+        """Return the token's header and claims, once a key the issuer publishes verifies its signature.
+
+        A token naming a key the published set lacks is checked once more against a key set the issuer has
+        moved to, so a moved key set is followed without a restart.
+
+        Args:
+            token: A compact signed token.
+            trusted: The issuer the token names.
+
+        Returns:
+            The token's protected header and claims, and the published key that verified it.
+
+        Raises:
+            TokenValidationError: If the token is refused.
+            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read.
+        """
+        signing_keys = await trusted.keys()
+        try:
+            return await signing_keys.verify(token, self._timeouts)
+        except TokenValidationError as refusal:
+            if refusal.reason is not TokenValidationReason.UNKNOWN_KEY:
+                raise
+            moved = await trusted.moved_key_set()
+            if moved is None:
+                raise
+        return await moved.verify(token, self._timeouts)
 
     def _trusted_issuer(self, issuer_claim: object) -> _TrustedIssuer:
         """Return the accepted issuer that a token's ``iss`` names.

@@ -28,6 +28,9 @@ JWKS_URL = f"{ISSUER}/.well-known/jwks"
 AUDIENCE = "https://gateway.example.com"
 RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 
+MOVED_JWKS_URL = f"{ISSUER}/.well-known/jwks-2"
+ROTATED_RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-rotated"})
+
 OTHER_ISSUER = "https://oidc.cluster.example.com"
 OTHER_DOCUMENT_URL = f"{OTHER_ISSUER}/.well-known/openid-configuration"
 OTHER_JWKS_URL = f"{OTHER_ISSUER}/.well-known/jwks"
@@ -256,6 +259,8 @@ class TestIssuerRouting:
     async def test_another_trusted_issuers_key_verifies_nothing(self, httpx_mock: HTTPXMock) -> None:
         """Accepting two issuers does not pool their keys, so neither can sign for the other."""
         other_discoverable(httpx_mock)
+        # A key the set lacks has the issuer's configuration read again, in case the key set has moved.
+        httpx_mock.add_response(url=OTHER_DOCUMENT_URL, json={"issuer": OTHER_ISSUER, "jwks_uri": OTHER_JWKS_URL})
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
         with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
@@ -381,6 +386,8 @@ class TestRefusals:
         """A key shorter than 2048 bits is never used, even when the issuer publishes it."""
         short_key = jwk.RSAKey.generate_key(1024, parameters={"kid": "rsa-short"}, auto_kid=False)
         discoverable(httpx_mock, short_key)
+        # A key the set lacks has the issuer's configuration read again, in case the key set has moved.
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})
 
         with pytest.raises(
             TokenValidationError, match="^The token is signed with a key the issuer does not"
@@ -471,6 +478,85 @@ class TestOutages:
             await trusting().verify(signed(claims()), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)
+
+
+class TestAMovedKeySet:
+    """Test that an issuer publishing its keys somewhere new is found again, without a restart."""
+
+    async def test_a_token_naming_an_unpublished_key_rediscovers_the_key_set(self, httpx_mock: HTTPXMock) -> None:
+        clock = FakeClock()
+        discoverable(httpx_mock)
+        verifier = trusting(clock=clock)
+        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        # The issuer moves its key set and signs with a key only the new one holds.
+        httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
+        httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(ROTATED_RSA_KEY))
+        clock.now += 61
+
+        identity = await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        assert identity.subject == "repo:acme/app"
+
+    async def test_rediscovery_happens_at_most_once_a_minute(self, httpx_mock: HTTPXMock) -> None:
+        """A token naming a key no issuer published must not let a caller drive repeated discovery."""
+        clock = FakeClock()
+        discoverable(httpx_mock)
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})
+        verifier = trusting(clock=clock)
+        token = signed(claims(), ROTATED_RSA_KEY)
+
+        for _ in range(3):
+            with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
+                await verifier.verify(token, audience=AUDIENCE)
+
+        assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
+
+    async def test_a_key_set_published_at_the_same_url_leaves_the_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """Rediscovery that finds the same URL refetches nothing, so the keys in use stay in use."""
+        discoverable(httpx_mock)
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": JWKS_URL})
+        verifier = trusting(clock=FakeClock())
+
+        with pytest.raises(TokenValidationError) as exc_info:
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
+        assert len(httpx_mock.get_requests(url=JWKS_URL)) == 1
+
+    async def test_a_moved_key_set_that_lacks_the_key_too_leaves_the_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """The new key set is tried once, so a token no published key verifies is still refused."""
+        discoverable(httpx_mock)
+        httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
+        httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(RSA_KEY))
+        verifier = trusting(clock=FakeClock())
+
+        with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
+        assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
+
+    async def test_a_failed_rediscovery_leaves_the_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """A document that cannot be read refuses nothing the keys in use still verify."""
+        discoverable(httpx_mock)
+        httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
+        verifier = trusting(clock=FakeClock())
+
+        with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
+
+    async def test_a_stated_key_set_is_never_rediscovered(self, httpx_mock: HTTPXMock) -> None:
+        """An issuer that names its own key set was never discovered, so there is nothing to read again."""
+        httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
+        verifier = trusting(WorkloadIssuer(issuer=ISSUER, jwks_url=JWKS_URL), clock=FakeClock())
+
+        with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
+            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+
+        assert not httpx_mock.get_requests(url=DOCUMENT_URL)
 
 
 class TestConfiguration:
