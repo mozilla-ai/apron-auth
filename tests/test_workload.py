@@ -147,13 +147,95 @@ class TestVerify:
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 1
         assert len(httpx_mock.get_requests(url=JWKS_URL)) == 1
 
-    async def test_no_audience_leaves_the_match_to_the_caller(self, httpx_mock: HTTPXMock) -> None:
-        """``audience=None`` accepts any audience, and returns it for the caller to match."""
+
+class TestTheTwoSteps:
+    """Test that a checked token states what a lookup needs, and names the workload only once an audience is in."""
+
+    async def test_a_checked_token_states_its_issuer_and_audiences(self, httpx_mock: HTTPXMock) -> None:
         discoverable(httpx_mock)
 
-        identity = await trusting().verify(signed(claims(aud="anything")), audience=None)
+        checked = await trusting().check(signed(claims(aud=["https://a.example.com", "https://b.example.com"])))
 
-        assert identity.audiences == ("anything",)
+        assert checked.issuer == ISSUER
+        assert checked.audiences == ("https://a.example.com", "https://b.example.com")
+
+    async def test_a_checked_token_states_nothing_else_about_the_workload(self, httpx_mock: HTTPXMock) -> None:
+        """The identity exists only after the audience is accepted, so a caller cannot read it before."""
+        discoverable(httpx_mock)
+
+        checked = await trusting().check(signed(claims()))
+
+        assert not hasattr(checked, "subject")
+        assert not hasattr(checked, "claims")
+        assert not hasattr(checked, "email")
+
+    async def test_accepting_an_audience_the_token_names_states_the_identity(self, httpx_mock: HTTPXMock) -> None:
+        discoverable(httpx_mock)
+        checked = await trusting().check(signed(claims()))
+
+        identity = checked.accept(AUDIENCE)
+
+        assert identity.subject == "repo:acme/app"
+
+    async def test_accepting_one_of_several_audiences_is_enough(self, httpx_mock: HTTPXMock) -> None:
+        discoverable(httpx_mock)
+        checked = await trusting().check(signed(claims()))
+
+        identity = checked.accept(["https://other.example.com", AUDIENCE])
+
+        assert identity.subject == "repo:acme/app"
+
+    async def test_accepting_an_audience_the_token_does_not_name_states_nothing(self, httpx_mock: HTTPXMock) -> None:
+        discoverable(httpx_mock)
+        checked = await trusting().check(signed(claims()))
+
+        with pytest.raises(TokenValidationError, match="names none of the audiences") as exc_info:
+            checked.accept("https://other.example.com")
+        assert exc_info.value.reason is TokenValidationReason.AUDIENCE
+
+    async def test_a_lookup_narrowed_by_the_verified_audiences_runs_after_the_signature(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A server whose accepted audiences live in a store reads it between the two steps, never before."""
+        discoverable(httpx_mock)
+        reads: list[tuple[str, ...]] = []
+
+        def stored_audiences(audiences: tuple[str, ...]) -> list[str]:
+            reads.append(audiences)
+            return [AUDIENCE]
+
+        checked = await trusting().check(signed(claims()))
+        identity = checked.accept(stored_audiences(checked.audiences))
+
+        assert reads == [(AUDIENCE,)]
+        assert identity.subject == "repo:acme/app"
+
+    @pytest.mark.parametrize(
+        "accepted",
+        [
+            pytest.param("https://other.example.com", id="one audience"),
+            pytest.param(["https://other.example.com", "https://third.example.com"], id="several audiences"),
+        ],
+    )
+    async def test_a_token_minted_for_another_service_is_refused_in_one_call(
+        self, httpx_mock: HTTPXMock, accepted: Any
+    ) -> None:
+        """Anyone on a shared platform can mint a token, so the audience is what names this server as its target."""
+        discoverable(httpx_mock)
+
+        with pytest.raises(TokenValidationError, match="names none of the audiences") as exc_info:
+            await trusting().verify(signed(claims()), audience=accepted)
+        assert exc_info.value.reason is TokenValidationReason.AUDIENCE
+
+    async def test_verify_is_the_two_steps_together(self, httpx_mock: HTTPXMock) -> None:
+        discoverable(httpx_mock)
+        token = signed(claims())
+        verifier = trusting()
+
+        in_one_call = await verifier.verify(token, audience=AUDIENCE)
+        in_two_steps = (await verifier.check(token)).accept(AUDIENCE)
+
+        assert in_one_call == in_two_steps
 
 
 class TestIssuerRouting:
@@ -236,9 +318,6 @@ class TestRefusals:
     @pytest.mark.parametrize(
         ("payload", "reason"),
         [
-            pytest.param(
-                claims(aud="https://other.example.com"), TokenValidationReason.AUDIENCE, id="another audience"
-            ),
             pytest.param(claims(sub=None), TokenValidationReason.CLAIMS, id="no subject"),
             pytest.param(claims(sub=""), TokenValidationReason.CLAIMS, id="empty subject"),
             pytest.param(claims(aud=None), TokenValidationReason.AUDIENCE, id="no audience"),
@@ -403,14 +482,29 @@ class TestConfiguration:
             pytest.param([], id="empty list"),
             pytest.param((), id="empty tuple"),
             pytest.param("", id="empty string"),
+            pytest.param(None, id="no audience"),
             pytest.param([AUDIENCE, ""], id="an empty member"),
             pytest.param([AUDIENCE, 1], id="a member that is not a string"),
         ],
     )
-    async def test_an_audience_that_names_nothing(self, audience: Any) -> None:
-        """An empty audience would accept a token minted for any service, so it is refused before any fetch."""
-        with pytest.raises(ConfigurationError, match="or be None"):
+    async def test_an_audience_that_names_nothing(self, httpx_mock: HTTPXMock, audience: Any) -> None:
+        """An audience that names nothing would accept a token minted for any service."""
+        with pytest.raises(ConfigurationError, match="one or more audiences"):
             await trusting().verify(signed(claims()), audience=audience)
+
+        assert not httpx_mock.get_requests()
+
+    @pytest.mark.parametrize(
+        "audience",
+        [pytest.param([], id="empty list"), pytest.param("", id="empty string"), pytest.param(None, id="none")],
+    )
+    async def test_accepting_an_audience_that_names_nothing(self, httpx_mock: HTTPXMock, audience: Any) -> None:
+        """The second step holds the same rule, so neither entry point can be told to accept anything."""
+        discoverable(httpx_mock)
+        checked = await trusting().check(signed(claims()))
+
+        with pytest.raises(ConfigurationError, match="one or more audiences"):
+            checked.accept(audience)
 
     def test_an_issuer_with_a_query_is_refused(self) -> None:
         """OpenID Connect Discovery 1.0 section 4.1 gives an issuer no query, so one with a query names none."""

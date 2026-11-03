@@ -15,7 +15,7 @@ from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 from joserfc.errors import ExpiredTokenError, JoseError
-from joserfc.jwt import ClaimsOption, JWTClaimsRegistry
+from joserfc.jwt import JWTClaimsRegistry
 from pydantic import BaseModel
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
@@ -67,6 +67,49 @@ class WorkloadIdentity(BaseModel, frozen=True):
     email: str | None = None
     expires_at: int
     claims: dict[str, Any]
+
+
+class VerifiedWorkloadToken:
+    """A token whose signature and claims verified, before any audience was matched against it.
+
+    It states the issuer that signed it and the audiences it names, so a server can narrow a lookup by a
+    verified value. It says nothing else about the workload until :meth:`accept` matches an audience,
+    because a token minted for another service names a workload this server has no business trusting.
+    """
+
+    def __init__(self, identity: WorkloadIdentity) -> None:
+        """Hold a verified identity back until an audience is accepted for it."""
+        self._identity = identity
+
+    @property
+    def audiences(self) -> tuple[str, ...]:
+        """The audiences the token names, as a tuple even when it names one."""
+        return self._identity.audiences
+
+    @property
+    def issuer(self) -> str:
+        """The issuer that signed the token."""
+        return self._identity.issuer
+
+    def accept(self, audience: str | Collection[str]) -> WorkloadIdentity:
+        """Return what the token says about its workload, once it names an audience the caller accepts.
+
+        Args:
+            audience: The audience the token must name, or a non-empty collection of which it must name one.
+
+        Returns:
+            The verified identity.
+
+        Raises:
+            ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+                One that named none would accept a token minted for any service.
+            TokenValidationError: If the token names none of the accepted audiences.
+        """
+        accepted = _accepted_audiences(audience)
+        if accepted.isdisjoint(self._identity.audiences):
+            msg = "Workload token names none of the audiences this server accepts"
+            raise TokenValidationError(msg, reason=TokenValidationReason.AUDIENCE)
+        return self._identity
 
 
 class _TrustedIssuer:
@@ -220,37 +263,52 @@ class WorkloadTokenVerifier:
         """The issuer identifiers this verifier accepts tokens from, in the order they were stated."""
         return tuple(self._issuers)
 
-    async def verify(self, token: str, *, audience: str | Collection[str] | None) -> WorkloadIdentity:
-        """Return what a token says about its workload, once its signature and claims verify.
+    async def verify(self, token: str, *, audience: str | Collection[str]) -> WorkloadIdentity:
+        """Return what a token says about its workload, once it verifies and names an accepted audience.
 
-        The token's ``iss`` selects the issuer, and the signature is checked against that issuer's published
-        keys before any claim is read. ``iss`` must name the selected issuer, and ``sub``, ``aud``, ``exp``
-        and ``iat`` are required. ``nbf`` is checked when present.
+        This is :meth:`check` followed by :meth:`VerifiedWorkloadToken.accept`, for a server whose accepted
+        audiences are fixed. A server that has to look its accepted audiences up calls the two steps itself.
 
         Args:
             token: A compact signed token.
             audience: The audience the token must name, or a non-empty collection of which it must name one.
-                ``None`` checks only that it names some audience, for a caller that matches the audience itself,
-                which it must then do before trusting the token.
 
         Returns:
             The verified identity.
 
         Raises:
-            ConfigurationError: If ``audience`` is an empty collection or holds anything but non-empty strings.
-                An empty one would accept every audience, so ``None`` must say that instead.
+            ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
             TokenExpiredError: If the token verifies but has expired.
             TokenValidationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
-        audience_rule: ClaimsOption = {"essential": True}
-        if audience is not None:
-            values = [audience] if isinstance(audience, str) else list(audience)
-            if not values or not all(isinstance(value, str) and value for value in values):
-                msg = "audience must name one or more audiences, or be None to leave the match to the caller"
-                raise ConfigurationError(msg)
-            audience_rule["values"] = values
+        # The caller's own argument is checked before any request is sent for the token.
+        accepted = _accepted_audiences(audience)
+        return (await self.check(token)).accept(accepted)
+
+    async def check(self, token: str) -> VerifiedWorkloadToken:
+        """Return a verified token, once its signature and every claim but the audience match verify.
+
+        The token's ``iss`` selects the issuer, and the signature is checked against that issuer's published
+        keys before any claim is read. ``iss`` must name the selected issuer, and ``sub``, ``aud``, ``exp``
+        and ``iat`` are required. ``nbf`` is checked when present.
+
+        The audience is required to be present and is not matched here, so a server whose accepted audiences
+        depend on it reads the verified value and matches it in the second step.
+
+        Args:
+            token: A compact signed token.
+
+        Returns:
+            The verified token, which states its issuer and its audiences.
+
+        Raises:
+            TokenExpiredError: If the token verifies but has expired.
+            TokenValidationError: If the token is refused for any other reason.
+            IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
+                so no token from it can be verified now. A failed discovery is reported again for a minute.
+        """
         if len(token) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
@@ -271,7 +329,7 @@ class WorkloadTokenVerifier:
             leeway=CLOCK_SKEW_SECONDS,
             iss={"essential": True, "value": trusted.issuer},
             sub={"essential": True},
-            aud=audience_rule,
+            aud={"essential": True},
             exp={"essential": True},
             iat={"essential": True},
         )
@@ -287,7 +345,7 @@ class WorkloadTokenVerifier:
         if claims.get("iss") != trusted.issuer:
             msg = "Workload token claims did not validate"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
-        return _identity(trusted.issuer, claims)
+        return VerifiedWorkloadToken(_identity(trusted.issuer, claims))
 
     def _trusted_issuer(self, issuer_claim: object) -> _TrustedIssuer:
         """Return the accepted issuer that a token's ``iss`` names.
@@ -310,6 +368,31 @@ class WorkloadTokenVerifier:
             msg = "Workload token names an issuer this verifier does not accept"
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return trusted
+
+
+def _accepted_audiences(audience: object) -> frozenset[str]:
+    """Return the audiences a caller accepts.
+
+    Args:
+        audience: One audience, or a collection of them, as it arrived.
+
+    Returns:
+        The accepted audiences.
+
+    Raises:
+        ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+    """
+    if isinstance(audience, str):
+        stated: list[object] = [audience]
+    elif isinstance(audience, Collection):
+        stated = list(audience)
+    else:
+        stated = []
+    if not stated or not all(isinstance(value, str) and value for value in stated):
+        msg = "An accepted audience states one or more audiences, each a non-empty name"
+        raise ConfigurationError(msg)
+    # The members were checked above, so this only narrows the type.
+    return frozenset(value for value in stated if isinstance(value, str))
 
 
 def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:

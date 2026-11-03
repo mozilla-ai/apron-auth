@@ -38,3 +38,12 @@ async def an_audience_is_not_positional() -> None:
         "token",
         "https://gateway.example.com",  # ty: ignore[too-many-positional-arguments]
     )
+
+
+async def the_one_shot_cannot_skip_the_audience() -> None:
+    await verifier.verify("token")  # ty: ignore[missing-argument]
+
+
+async def the_second_step_cannot_skip_the_audience() -> None:
+    checked = await verifier.check("token")
+    checked.accept()  # ty: ignore[missing-argument]
