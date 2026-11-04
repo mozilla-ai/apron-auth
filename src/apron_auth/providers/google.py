@@ -67,6 +67,10 @@ _PRESET = Preset(
 # The endpoint that returns the signed-in user's profile.
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
+# The one status Google answers a revocation error condition with. A revocation request names a
+# token and nothing else, so that status states the token is not valid.
+_TOKEN_NOT_VALID = 400
+
 
 class GoogleIdentityHandler:
     """Fetch identity fields from Google's OIDC userinfo endpoint."""
@@ -136,7 +140,14 @@ class GoogleIdentityHandler:
 
 
 class GoogleRevocationHandler:
-    """Google token revocation via POST with token as query parameter."""
+    """Google token revocation via POST with token as query parameter.
+
+    Google answers one status for every revocation error condition and documents no error codes, so
+    a response body names no condition. A revocation request names a token and nothing else, so
+    that status states the token is not valid, and the request's purpose is then already achieved
+    as RFC 7009 section 2.2 reads it. A request naming no token is refused before it is sent,
+    because the status states nothing about a request that named none.
+    """
 
     def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
         """Configure how revocation requests reach the network.
@@ -158,13 +169,13 @@ class GoogleRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when the endpoint reports success.
+            ``True`` when the endpoint reports success, and when it states the token is not valid.
 
         Raises:
             ConfigurationError: If no token was given to revoke, or ``config`` has no revocation URL,
                 or names one it does not permit sending a token to.
             RevocationError: If the request cannot be sent or fails to arrive, or the endpoint answers
-                any status but a success.
+                a status Google states nothing about.
                 Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
@@ -177,7 +188,7 @@ class GoogleRevocationHandler:
             params={"token": token},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
-        if response.is_success:
+        if response.is_success or response.status_code == _TOKEN_NOT_VALID:
             return True
         refuse_an_unexpected_status(response, label=request.label)
 

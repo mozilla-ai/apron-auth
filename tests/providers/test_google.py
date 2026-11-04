@@ -262,11 +262,44 @@ class TestGoogleRevocationHandler:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"error": "invalid_token"}, id="a code naming the token"),
+            pytest.param({"error": ["invalid_token"]}, id="a code of another JSON type"),
+            pytest.param({}, id="no error member"),
+        ],
+    )
+    async def test_the_error_status_reads_as_the_token_already_being_invalid(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """Google states one error status and no codes, so the body it carries decides nothing."""
+        httpx_mock.add_response(status_code=400, json=body)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        assert await GoogleRevocationHandler().revoke("access-abc", config) is True
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 418])
+    async def test_a_status_google_states_nothing_about_is_still_refused(
+        self, httpx_mock: HTTPXMock, status: int
+    ) -> None:
+        httpx_mock.add_response(status_code=status)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(RevocationError) as refusal:
+            await GoogleRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.REJECTED
+
     @pytest.mark.parametrize("token", ["", " ", "\t"])
     async def test_a_request_naming_no_token_is_refused_before_it_is_sent(
         self, httpx_mock: HTTPXMock, token: str
     ) -> None:
-        """Google answers a request naming no token with the status it answers every other error with."""
+        """The error status states the token, which holds only for a request that named one."""
         from apron_auth.providers.google import preset
 
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
