@@ -3652,14 +3652,29 @@ class TestTheUserTokenAProviderNests:
         assert tokens.user_token is None
         assert tokens.extras["authed_user"] == {"id": "U1"}
 
-    async def test_a_provider_that_nests_no_token_keeps_the_field_in_the_extras(self, httpx_mock: HTTPXMock) -> None:
+    async def test_a_config_naming_no_provider_reads_it_the_same_way(self, httpx_mock: HTTPXMock) -> None:
+        """``provider`` is a field the caller chooses, and the person's token is no less live without it."""
         httpx_mock.add_response(url="https://provider.example.com/token", json=self.BOT_AND_USER)
         client = OAuthClient(config=_make_oauth_config())
 
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
 
+        assert tokens.user_token == UserToken(
+            access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
+        )
+        assert "authed_user" not in tokens.extras
+
+    async def test_a_response_nesting_two_tokens_reads_neither(self, httpx_mock: HTTPXMock) -> None:
+        """Where two members nest a token, the response states no single person, so neither is read."""
+        response = {**self.BOT_AND_USER, "authed_bot": {"access_token": "xoxb-SECOND"}}
+        httpx_mock.add_response(url=self.SLACK_TOKEN_URL, json=response)
+        client = OAuthClient(config=self._config())
+
+        tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
+
         assert tokens.user_token is None
         assert tokens.extras["authed_user"]["access_token"] == "xoxp-USER"
+        assert tokens.extras["authed_bot"]["access_token"] == "xoxb-SECOND"
 
     async def test_a_refused_response_revokes_the_nested_user_token_too(self, httpx_mock: HTTPXMock) -> None:
         """A token the library refuses must not stay valid, wherever the response carried it."""

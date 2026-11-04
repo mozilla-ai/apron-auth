@@ -319,6 +319,24 @@ async def _kept_pending_state(pending_state: OAuthPendingState, state: str) -> O
     return pending_state
 
 
+def _nested_user_token(extras: Mapping[str, Any]) -> tuple[str, UserToken] | None:
+    """Return the member of a token response that nests a user token, with the token it carries.
+
+    Args:
+        extras: The response's members that no named field of a token set reads.
+
+    Returns:
+        The member's name and its token. ``None`` where no member nests a token, and where more than
+        one does, because the response then states no single person to read one for.
+    """
+    nested = [
+        (member, token)
+        for member, value in extras.items()
+        if isinstance(value, dict) and (token := _user_token(value)) is not None
+    ]
+    return nested[0] if len(nested) == 1 else None
+
+
 def _read_task_exception(task: asyncio.Task[None]) -> None:
     """Mark a finished task's exception as retrieved, so asyncio never logs it with its text.
 
@@ -1194,8 +1212,9 @@ class _OAuthClientBase:
             collected into :attr:`TokenSet.extras`, including one whose value is
             not of the type its own field states, and ``expires_at`` is
             derived from ``expires_in`` when the response omits it.
-            A token the provider issues for the authorizing person is read onto
-            :attr:`TokenSet.user_token` and kept out of the extras.
+            A token the response nests in a member of its own is the token the provider issued for
+            the authorizing person, so it is read onto :attr:`TokenSet.user_token` and kept out of
+            the extras. A response nesting more than one states no single person, so it states none.
         """
         known_fields = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
         extras = {k: v for k, v in data.items() if k not in known_fields}
@@ -1223,12 +1242,12 @@ class _OAuthClientBase:
                 named[field] = int(number) if field == "expires_in" else number
 
         # A token left in the extras is a token no caller names, so nothing refreshes or revokes it.
+        # The member is read from the response's own shape rather than from the config, because a
+        # config that names no provider is the one a caller builds by hand and its token is no less live.
         user_token = None
-        nested_field = self._config.provider.user_token_response_field if self._config.provider else None
-        if nested_field is not None and isinstance(nested := extras.get(nested_field), dict):
-            user_token = _user_token(nested)
-            if user_token is not None:
-                del extras[nested_field]
+        if (nested := _nested_user_token(extras)) is not None:
+            member, user_token = nested
+            del extras[member]
 
         named["expires_at"] = _expires_at(named)
 
