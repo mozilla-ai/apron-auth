@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -24,7 +25,12 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
-from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
+from apron_auth.providers._revocation import (
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -60,6 +66,13 @@ _PRESET = Preset(
 
 # The endpoint that returns the signed-in user's profile.
 _GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
+
+# The one status Google answers a revocation error condition with. A revocation request names a
+# token and nothing else, so that status states the token is not valid.
+_TOKEN_NOT_VALID = 400
+
+# The one status Google answers a revocation it processed with.
+_TOKEN_REVOKED = 200
 
 
 class GoogleIdentityHandler:
@@ -130,7 +143,14 @@ class GoogleIdentityHandler:
 
 
 class GoogleRevocationHandler:
-    """Google token revocation via POST with token as query parameter."""
+    """Google token revocation via POST with token as query parameter.
+
+    Google documents one status for a revocation it processed and one for every error condition, and
+    documents no error codes, so a response body names no condition. A revocation request names a
+    token and nothing else, so the error status states the token is not valid, and the request's
+    purpose is then already achieved as RFC 7009 section 2.2 reads it. A request naming no token is
+    refused before it is sent, because the status states nothing about a request that named none.
+    """
 
     def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
         """Configure how revocation requests reach the network.
@@ -152,21 +172,28 @@ class GoogleRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when the endpoint reports success.
+            ``True`` when the endpoint states the token revoked, and when it states the token is not valid.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
-                sending a token to.
-            RevocationError: If the request cannot be sent or fails to arrive.
+            ConfigurationError: If no token was given to revoke, or ``config`` has no revocation URL,
+                or names one it does not permit sending a token to.
+            RevocationError: If the request cannot be sent or fails to arrive, or the endpoint answers
+                a status Google states nothing about.
+                Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
+        if not token.strip():
+            msg = "Revocation refused: no token was given to revoke."
+            raise ConfigurationError(msg)
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label="Google",
             params={"token": token},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
-        return response.is_success
+        if response.status_code in (_TOKEN_REVOKED, _TOKEN_NOT_VALID):
+            return True
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

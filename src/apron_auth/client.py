@@ -19,7 +19,7 @@ import httpx
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
 from apron_auth._error_codes import recognized_error_code
-from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._http_errors import http_failure, response_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
@@ -827,7 +827,7 @@ class _OAuthClientBase:
 
         Raises:
             ConfigurationError: If the provider has no revocation endpoint configured, or if the
-                handler refuses the configuration.
+                handler refuses the configuration or the token it is given.
                 It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
@@ -1086,7 +1086,7 @@ class _OAuthClientBase:
             response = responses[-1] if responses else None
             error_code = self._stated_error_code(response, data)
             status_code = response.status_code if response is not None else None
-            kind = self._kind_for_token_response(status_code, error_code)
+            kind = self._kind_for_token_response(response, error_code)
             if status_code is not None and httpx.codes.is_error(status_code):
                 description = status_failure(status_code).description
             else:
@@ -1097,7 +1097,7 @@ class _OAuthClientBase:
             # An error status without an OAuth error body that the token client recognized.
             # The body may still carry an OAuth error code, which then decides the kind.
             error_code = self._stated_error_code(exc.response, data)
-            kind = self._kind_for_token_response(exc.response.status_code, error_code)
+            kind = self._kind_for_token_response(exc.response, error_code)
             status = status_failure(exc.response.status_code)
             failure = _TokenEndpointError(status.description, kind, error_code=error_code)
         except httpx.RequestError as exc:
@@ -1118,23 +1118,23 @@ class _OAuthClientBase:
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise failure
 
-    def _kind_for_token_response(self, status: int | None, error_code: str) -> FailureKind:
+    def _kind_for_token_response(self, response: httpx.Response | None, error_code: str) -> FailureKind:
         """Return the kind of a failed token-endpoint response.
 
-        A server error or a rate limit status is retryable whatever code the body carries.
+        A response stating a temporary condition is retryable whatever code the body carries.
         Otherwise the code decides. RFC 6749 section 5.2 defines every token-endpoint code as a fault
         in the request as sent, so only a code in the retryable set, such as ``temporarily_unavailable``,
         may pass later.
 
         Args:
-            status: The response status, or ``None`` when it is not known.
+            response: The response the endpoint answered with, or ``None`` when none arrived.
             error_code: The error code the response stated, or an empty string when it stated none
                 in the shape a code takes.
 
         Returns:
             The kind.
         """
-        status_kind = status_failure(status).kind if status is not None else None
+        status_kind = response_failure(response).kind if response is not None else None
         if status_kind is FailureKind.SERVER_ERROR or not error_code:
             return FailureKind.REJECTED if status_kind is None else status_kind
         return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED

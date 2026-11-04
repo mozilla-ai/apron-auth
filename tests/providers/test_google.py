@@ -7,7 +7,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import FailureKind, IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext, TimeoutPolicy
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -243,6 +243,25 @@ class TestGoogleRevocationHandler:
         assert request.method == "POST"
         assert "token=access-abc" in str(request.url)
 
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(202, id="a status stating the work is only accepted"),
+            pytest.param(204, id="another success"),
+        ],
+    )
+    async def test_a_success_google_does_not_state_is_refused(self, httpx_mock: HTTPXMock, status: int) -> None:
+        """Google documents one status for a revocation it processed, so another states no outcome."""
+        httpx_mock.add_response(status_code=status)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(RevocationError, match="states no outcome") as refusal:
+            await GoogleRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.REFUSED
+
     async def test_network_error_raises_revocation_error_without_the_token(self, httpx_mock: HTTPXMock) -> None:
         """The token is in the request URL, so the error has no cause or context."""
         secret = "access-SECRET-xyz"  # pragma: allowlist secret
@@ -261,6 +280,54 @@ class TestGoogleRevocationHandler:
         assert secret not in formatted
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"error": "invalid_token"}, id="a code naming the token"),
+            pytest.param({"error": ["invalid_token"]}, id="a code of another JSON type"),
+            pytest.param({}, id="no error member"),
+        ],
+    )
+    async def test_the_error_status_reads_as_the_token_already_being_invalid(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """Google states one error status and no codes, so the body it carries decides nothing."""
+        httpx_mock.add_response(status_code=400, json=body)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        assert await GoogleRevocationHandler().revoke("access-abc", config) is True
+
+    @pytest.mark.parametrize("status", [401, 403, 404, 418])
+    async def test_a_status_google_states_nothing_about_is_still_refused(
+        self, httpx_mock: HTTPXMock, status: int
+    ) -> None:
+        httpx_mock.add_response(status_code=status)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(RevocationError) as refusal:
+            await GoogleRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize("token", ["", " ", "\t"])
+    async def test_a_request_naming_no_token_is_refused_before_it_is_sent(
+        self, httpx_mock: HTTPXMock, token: str
+    ) -> None:
+        """The error status states the token, which holds only for a request that named one."""
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(ConfigurationError) as refusal:
+            await GoogleRevocationHandler().revoke(token, config)
+
+        assert refusal.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
 
 
 class TestTheTimeoutPolicyBoundsTheIdentityRequest:

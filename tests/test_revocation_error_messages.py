@@ -15,9 +15,10 @@ from urllib.parse import unquote, unquote_plus
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
+from support import ANY_SUCCESS_STATUS, revoked_status
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import ProviderConfig
+from apron_auth.models import Provider, ProviderConfig
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
 
@@ -43,13 +44,16 @@ def _preset(preset: Callable[..., ProviderConfig], scopes: list[str]) -> Callabl
     return build
 
 
+# The configuration that names no provider, which is keyed by no member of Provider.
+STANDARD = "standard"
+
 CONFIGS: dict[str, Callable[[], ProviderConfig]] = {
     "github": _preset(github.preset, ["read:user"]),
     "google": _preset(google.preset, ["openid"]),
     "hubspot": _preset(hubspot.preset, ["contacts"]),
     "notion": _preset(notion.preset, ["read"]),
     "slack": _preset(slack.preset, ["channels:read"]),
-    "standard": _standard,
+    STANDARD: _standard,
 }
 
 
@@ -119,9 +123,15 @@ async def test_token_that_cannot_be_sent_is_refused_without_a_request(name: str,
     assert httpx_mock.get_requests() == []
 
 
+def _revoked_status(name: str) -> int:
+    """Return a status the configuration named by ``name`` has its token read as revoked by."""
+    # The standard handler is not a provider and reads any success status as the token revoked.
+    return ANY_SUCCESS_STATUS if name == STANDARD else revoked_status(Provider(name))
+
+
 @pytest.mark.parametrize("name", sorted(set(CONFIGS) - SENDS_TOKEN_IN_HEADER))
 async def test_token_that_is_not_ascii_reaches_the_endpoint(name: str, httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(json={"ok": True})
+    httpx_mock.add_response(status_code=_revoked_status(name), json={"ok": True})
     config = CONFIGS[name]()
     handler = revocation_handler_for(config) or StandardRevocationHandler()
 

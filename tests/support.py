@@ -2,10 +2,32 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import Protocol
 
-if TYPE_CHECKING:
-    from apron_auth.models import Provider
+from apron_auth.models import Provider
+
+# A success status every revocation handler reads as the token revoked, unless its provider is named below.
+ANY_SUCCESS_STATUS = 200
+
+# The providers whose own handler reads a narrower set, because each provider documents its own statuses
+# and a handler refuses every status it does not state. A provider absent from here takes RFC 7009
+# revocation, or its own handler reads any success.
+_NARROWER_REVOKED_STATUS: dict[Provider, int] = {Provider.GITHUB: 204, Provider.HUBSPOT: 204}
+
+
+def revoked_status(provider: Provider) -> int:
+    """Return a status ``provider``'s revocation handler reads as the token revoked.
+
+    A test about the request rather than the answer reads this, so it reaches the happy path instead of a
+    refusal of a status the handler under test does not state.
+
+    Args:
+        provider: The provider whose handler answers.
+
+    Returns:
+        The status to answer with.
+    """
+    return _NARROWER_REVOKED_STATUS.get(provider, ANY_SUCCESS_STATUS)
 
 
 class VaryFacts(Protocol):

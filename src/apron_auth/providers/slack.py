@@ -36,7 +36,7 @@ References:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
@@ -64,7 +64,12 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset, scope_sequence
-from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
+from apron_auth.providers._revocation import (
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 from apron_auth.scopes import scope_words
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
@@ -124,12 +129,28 @@ _SIGN_IN_PRESET = Preset(
     scope_metadata=SIGN_IN_SCOPE_METADATA,
 )
 
+# What a message names where an ``ok=false`` body states no error code this library can read.
+_NO_ERROR_CODE = "no error code stated"
+
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
-# The error codes Slack returns, with HTTP 200 and ``ok=false``, for its own outages and rate limits.
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for a token that is already
+# unusable: one whose user, workspace or app is gone, and one that has expired.
+_SLACK_TOKEN_ALREADY_INVALID = frozenset({"account_inactive", "token_expired", "token_revoked"})
+
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for a condition that clears on its
+# own: its outages and rate limits, and a workspace migration that suspends the API until it ends.
 _SLACK_TRANSIENT_ERRORS = frozenset(
-    {"fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"}
+    {
+        "fatal_error",
+        "internal_error",
+        "org_login_required",
+        "ratelimited",
+        "request_timeout",
+        "service_unavailable",
+        "team_added_to_org",
+    }
 )
 
 # The userinfo claim that holds the workspace domain.
@@ -242,6 +263,24 @@ def _parse_team_domain_from_url(url: str | None) -> str | None:
     if not label or "." in label:
         return None
     return label
+
+
+def _slack_error_code(payload: Mapping[str, object]) -> str:
+    """Return the error code a Slack ``ok=false`` body states.
+
+    A response body is untrusted input, so a member that is absent, empty or not a string states no
+    code this can read, and a stand-in is returned in its place. The result is safe both to classify
+    and to name in a message.
+
+    Args:
+        payload: The decoded response body.
+
+    Returns:
+        The code the body states, or a phrase naming its absence where it states none readable. The result
+        never reads as a code, so a message carrying it cannot name one the other side did not send.
+    """
+    code = payload.get("error")
+    return code if isinstance(code, str) and code else _NO_ERROR_CODE
 
 
 def _slack_failure_kind(error: str) -> FailureKind:
@@ -369,7 +408,7 @@ class SlackIdentityHandler:
 
         # Slack returns 2xx with ``ok=false`` for auth/scope failures.
         if payload.get("ok") is False:
-            error = payload.get("error") or "unknown_error"
+            error = _slack_error_code(payload)
             if error == _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
             raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
@@ -458,7 +497,7 @@ class SlackIdentityHandler:
             if team_info_payload.get("ok"):
                 return _build_workspace_profile_from_team_info(team_info_payload)
 
-            error = team_info_payload.get("error") or "unknown_error"
+            error = _slack_error_code(team_info_payload)
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
@@ -468,7 +507,7 @@ class SlackIdentityHandler:
             )
 
         if not auth_test_payload.get("ok"):
-            error = auth_test_payload.get("error") or "unknown_error"
+            error = _slack_error_code(auth_test_payload)
             raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)
@@ -604,14 +643,19 @@ class SlackRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when Slack confirms revocation with the boolean ``"ok": true``.
-            ``False`` for an error status, or for an ``ok`` value that is missing or anything other than ``true``.
+            ``True`` when Slack states the token revoked, and when it names a token already unusable,
+            whose revocation needs nothing more as RFC 7009 section 2.2 reads it. ``False`` where Slack
+            states the token was not revoked, and where it names a refusal no retry clears.
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
                 sending a token to.
-            RevocationError: If the revocation URL is invalid, the request cannot be sent,
-                the request fails to reach the endpoint, or its response body is not a valid JSON object.
+            RevocationError: If the revocation URL is invalid, the request cannot be sent, the request
+                fails to reach the endpoint, its response body is not a valid JSON object, the endpoint
+                answers a status other than a success, the body states no boolean ``ok``, or states the
+                call succeeded without a boolean ``revoked``, and so states no outcome, or the body names
+                one of Slack's own outages or rate limits.
+                Its kind says whether the same request may pass later.
                 The caught error is not attached as its cause or context.
         """
         request = RevocationRequest(
@@ -621,7 +665,7 @@ class SlackRevocationHandler:
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:
-            return False
+            refuse_an_unexpected_status(response, label=request.label)
         try:
             data = decode_json_body(response)
         except ValueError:
@@ -630,7 +674,24 @@ class SlackRevocationHandler:
             if not isinstance(data, dict):
                 msg = "Slack revocation response was not a JSON object"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
-            return data.get("ok") is True
+            ok = data.get("ok")
+            if not isinstance(ok, bool):
+                msg = "Failed to revoke Slack token: the response states no outcome"
+                raise RevocationError(msg, kind=FailureKind.REFUSED)
+            # ``ok`` states that the call succeeded, and ``revoked`` whether the token was revoked.
+            if ok:
+                revoked = data.get("revoked")
+                if not isinstance(revoked, bool):
+                    msg = "Failed to revoke Slack token: the response states no outcome for the token"
+                    raise RevocationError(msg, kind=FailureKind.REFUSED)
+                return revoked
+            code = _slack_error_code(data)
+            if code in _SLACK_TOKEN_ALREADY_INVALID:
+                return True
+            kind = _slack_failure_kind(code)
+            if kind.retryable:
+                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=kind)
+            return False
         # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise RevocationError(unparsed, kind=FailureKind.REFUSED)

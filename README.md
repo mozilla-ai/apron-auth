@@ -582,6 +582,12 @@ await client.revoke_token(tokens.access_token)
 
 The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to either client to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
 
+A revocation that fails says whether to try again. `RevocationError.retryable` is true for a rate limit or an outage and false for a refusal, so a caller that honors it does not abandon a token the same request would revoke a minute later. Every handler decides this the same way. A status the provider documents is read as that provider documents it, and any other failure status is read as [any failed response is](#error-hierarchy). A response stating when to come back states a temporary condition instead, whichever status carries it, so no handler reads such a response as one of its own statuses. A success status the provider does not document states no outcome at all, so it is refused as an answer this library cannot read rather than as the provider refusing. RFC 7009 revocation reads the 200 section 2.2 documents, and the 204 that states the same outcome carrying no body, so a server that only accepts the request for later is not reported as having completed it. Slack also reports its own outages, rate limits and workspace migrations as a success status with `ok=false`, and those are retryable too, while a body carrying no boolean `ok` states no outcome either. Slack states whether the token was revoked in a `revoked` member, and `ok` states only that the call succeeded, so a body stating `revoked` false is a failed revocation, and one stating no boolean `revoked` states no outcome.
+
+A token a provider states is already invalid is reported as revoked, because the purpose of the request is then already achieved, as RFC 7009 section 2.2 reads it. GitHub and HubSpot read their own 404 that way, Google and Notion their own 400, and Slack the `account_inactive`, `token_expired` and `token_revoked` codes it names with a success status and `ok=false`. Google answers one status for every error condition and documents no error codes, so its body states nothing this library reads; its request names a token and nothing else, and one naming none is refused with `ConfigurationError` before it is sent, so that status states the token rather than the request. Reading it as revoked says the token is not usable, not that a grant behind it is gone.
+
+GitHub's 422 is read less precisely than you may expect. GitHub answers it both for a validation failure and for a spam throttle, and nothing in the status tells them apart, so it reports a refusal and logs a WARNING.
+
 A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there. Construction refuses one that names another host, and the request refuses the host it is about to reach, so a handler that builds its URL per token, and a copy that rewrites the revocation endpoint past validation, are both held to the rule. A copy that rewrites the token endpoint as well states a different issuer, and the rule then holds it to that issuer rather than to the provider it is labeled with. A config that names no provider states no hosts to hold it to, and the caller passing one owns where its token is sent. The request also refuses a URL that does not state `https`, whatever provider the config names, unless the URL names a loopback host or the config waived plain HTTP for `revocation_url` through `ProviderConfig.unsafe.allow_plain_http`, and it refuses a URL carrying a credential in its authority, because an HTTP client presents that credential in place of the token.
 
 ### Timeouts
@@ -889,12 +895,14 @@ When Trello ships OAuth 2.0, a preset will be added here.
 
 All exceptions inherit from `OAuthError`. The class says which step failed. Every error also carries a `kind`, a `FailureKind` that says what went wrong in a form code can read, and `retryable`, which is `True` when the same request may succeed later without any change.
 
+A response that states a `Retry-After` is read as temporary whatever its status is, on every request this library sends. A status alone cannot tell a throttle from a refusal where a server answers both with one status, and GitHub answers a secondary rate limit with 403. A redirect is the one exception: this library follows none, so no wait makes an endpoint stop redirecting. A header that states nothing states no condition.
+
 | `kind`          | Meaning                                                                                  | `retryable` |
 |-----------------|------------------------------------------------------------------------------------------|-------------|
 | `CONFIGURATION` | Your configuration or an argument cannot work.                                           | no          |
 | `REFUSED`       | apron-auth refused what the other side sent: a token, a document or a response that does not validate. | no |
 | `REJECTED`      | The other side refused the request as sent: a client error status or an OAuth error code. | no          |
-| `SERVER_ERROR`  | The other side answered with a server error or a rate limit.                             | yes         |
+| `SERVER_ERROR`  | The other side answered with a server error or a rate limit, or asked to be called again later. | yes |
 | `TIMEOUT`       | The request ran out of time.                                                             | yes         |
 | `UNEXPECTED`    | An error apron-auth does not classify, such as a fault in a handler you supplied.        | no          |
 | `UNREACHABLE`   | The other side could not be reached.                                                     | yes         |
@@ -906,7 +914,7 @@ All exceptions inherit from `OAuthError`. The class says which step failed. Ever
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce, or the pending state lost it. Subclass of `IdTokenValidationError`. |
 | `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
-| `RevocationError`              | The revocation request could not be sent, or the provider refused it.                                           |
+| `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned. |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, or did not come from the browser that started the flow. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
@@ -948,9 +956,7 @@ logging.getLogger("apron_auth.providers.microsoft").setLevel(logging.DEBUG)
 | `apron_auth.providers._jwks`     | Signing key set refresh failures and skipped keys.           |
 | `apron_auth.providers.atlassian` | Person-level profile withheld after a User Identity API failure. |
 | `apron_auth.providers.github`    | Grant revocation the provider did not confirm.               |
-| `apron_auth.providers.hubspot`   | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.microsoft` | Withheld tenancy assertions.                                 |
-| `apron_auth.providers.notion`    | Revocation returning an unexpected status.                   |
 | `apron_auth.providers.oidc`      | Insecure `http` allowed by opt-in; no PKCE advertised; userinfo failure degraded; a refused discovery redirect (DEBUG). |
 | `apron_auth.stores`              | Expired OAuth state discarded on lookup, and how many the pruning scan discarded. |
 | `apron_auth.workload`            | A workload issuer's signing keys now read from another URL, and a move that did not verify. |

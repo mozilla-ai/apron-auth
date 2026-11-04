@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from importlib import import_module
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
 
-from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
+
+# The statuses an RFC 7009 endpoint states a revocation it completed with. Section 2.2 documents 200,
+# and 204 states the same outcome carrying no body. Any other success states the work is not done.
+_REVOKED_STATUSES = (200, 204)
 
 
 class HttpMethod(StrEnum):
@@ -67,7 +71,11 @@ class RevocationRequest:
 
 
 class StandardRevocationHandler:
-    """RFC 7009 token revocation: a POST whose form body carries the token."""
+    """RFC 7009 token revocation: a POST whose form body carries the token.
+
+    RFC 7009 section 2.2 documents one status for a revocation the endpoint completed, which it
+    answers for an invalid token as well, so a body states no condition this reads.
+    """
 
     def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
         """Configure how revocation requests reach the network.
@@ -90,7 +98,7 @@ class StandardRevocationHandler:
                 the request carries.
 
         Returns:
-            ``True`` when the endpoint reports success.
+            ``True`` when the endpoint states the revocation complete.
 
         Raises:
             ConfigurationError: If the configuration declares no revocation endpoint, or declares one
@@ -113,11 +121,9 @@ class StandardRevocationHandler:
             data=data,
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
-        if response.is_success:
+        if response.status_code in _REVOKED_STATUSES:
             return True
-        failure = status_failure(response.status_code)
-        subject = "token" if provider is None else f"{provider.display_name} token"
-        raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def revocation_endpoint(config: ProviderConfig) -> str:
@@ -137,6 +143,32 @@ def revocation_endpoint(config: ProviderConfig) -> str:
         msg = "the provider configuration carries no revocation endpoint"
         raise ConfigurationError(msg)
     return config.revocation_url
+
+
+def refuse_an_unexpected_status(response: httpx.Response, *, label: str | None) -> NoReturn:
+    """Refuse a revocation response that states no outcome a handler can read.
+
+    A provider documents the statuses it answers with, and any other status leaves the outcome
+    unknown. A failure is classified as this library classifies any failed response, so a rate limit or
+    an outage is not reported as the provider refusing to revoke a token it would revoke a minute later.
+    A success the provider does not document states no outcome at all, and is refused as an answer this
+    library cannot read rather than as the other side refusing the request.
+    A response stating a temporary condition states nothing about the token either, whichever status
+    carries it, so it is refused here rather than read as one of the statuses the provider documents.
+
+    Args:
+        response: The response whose status is classified.
+        label: The provider's display name, which the message names, or ``None`` to name none.
+
+    Raises:
+        RevocationError: Always. Its kind says whether the same request may pass later.
+    """
+    failure = response_failure(response)
+    subject = "token" if label is None else f"{label} token"
+    if response.is_success:
+        msg = f"Failed to revoke {subject}: the endpoint answered {failure.description}, which states no outcome"
+        raise RevocationError(msg, kind=FailureKind.REFUSED)
+    raise RevocationError(f"Failed to revoke {subject}: {failure.description}", kind=failure.kind)
 
 
 def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfig) -> None:
@@ -209,9 +241,11 @@ async def send_revocation(
     *,
     transport_factory: TransportFactory | None = None,
 ) -> httpx.Response:
-    """Send one revocation request and return its response, whatever status it carries.
+    """Send one revocation request and return the answer it gets.
 
     A provider reads success its own way, so this states no success rule and leaves the response to its caller.
+    A response stating a temporary condition states no outcome for any provider to read, so it is
+    refused here instead, and no handler can read it as a status of its own.
     The request carries a token, so this refuses a URL the configuration does not permit sending one
     to before it opens a connection.
 
@@ -226,14 +260,15 @@ async def send_revocation(
             return one it intends to reuse.
 
     Returns:
-        The endpoint's response.
+        The endpoint's response, which states an outcome for its caller to read.
 
     Raises:
         ConfigurationError: If a URL the request names must not be sent the token, because it reaches
             no host, because its authority cannot be read or carries a credential of its own, because
             of the transport it states, or because of the host it names. Nothing is sent.
         RevocationError: If the request cannot be sent or fails to arrive, including where the
-            transport refuses the URL it is given.
+            transport refuses the URL it is given, or the endpoint answers an error status stating a
+            temporary condition.
             Its kind says whether the same request may pass later.
             The caught error is not attached as its cause or context.
     """
@@ -246,7 +281,7 @@ async def send_revocation(
         async with httpx.AsyncClient(
             transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
         ) as client:
-            return await within_request_limit(
+            response = await within_request_limit(
                 client.request(
                     request.method,
                     request.url,
@@ -270,6 +305,10 @@ async def send_revocation(
     except Exception:
         # A failure outside the clauses above can still hold the token-bearing request.
         failure_message, kind = f"Failed to revoke {subject}: request failed", FailureKind.UNEXPECTED
+    else:
+        if httpx.codes.is_error(response.status_code) and response_failure(response).kind.retryable:
+            refuse_an_unexpected_status(response, label=request.label)
+        return response
     # NOTE: The caught error holds the token-bearing request, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
     raise RevocationError(failure_message, kind=kind)

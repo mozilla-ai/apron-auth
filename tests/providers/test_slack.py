@@ -188,7 +188,64 @@ class TestSlackIdentityHandler:
         assert exc_info.value.kind is FailureKind.REJECTED
 
     @pytest.mark.parametrize(
-        "error", ["fatal_error", "internal_error", "ratelimited", "request_timeout", "service_unavailable"]
+        "body",
+        [
+            pytest.param({"ok": False}, id="no error member"),
+            pytest.param({"ok": False, "error": ""}, id="an empty code"),
+            pytest.param({"ok": False, "error": ["x"]}, id="a code that is not a string"),
+        ],
+    )
+    async def test_a_body_stating_no_readable_code_names_none(
+        self, body: dict[str, object], httpx_mock: HTTPXMock
+    ) -> None:
+        """A message must not name an error code the other side never sent."""
+        from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
+
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json=body)
+        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+        assert "unknown_error" not in str(refusal.value)
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(["ratelimited"], id="a list"),
+            pytest.param({"code": "ratelimited"}, id="an object"),
+            pytest.param(7, id="a number"),
+            pytest.param(True, id="a boolean"),
+        ],
+    )
+    async def test_an_ok_false_error_that_is_not_a_string_is_still_an_identity_failure(
+        self, httpx_mock: HTTPXMock, error: object
+    ) -> None:
+        """A response body is untrusted input, so a code of the wrong JSON type is a refusal, not a crash."""
+        from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
+
+        httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
+        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        handler = SlackIdentityHandler()
+
+        with pytest.raises(IdentityFetchError) as refusal:
+            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "fatal_error",
+            "internal_error",
+            "org_login_required",
+            "ratelimited",
+            "request_timeout",
+            "service_unavailable",
+            "team_added_to_org",
+        ],
     )
     async def test_ok_false_with_a_transient_error_is_retryable(self, httpx_mock: HTTPXMock, error: str) -> None:
         """Slack reports its own outages and rate limits as 200 with ok=false, so they stay retryable."""
@@ -850,6 +907,82 @@ class TestSlackRevocationHandler:
         result = await SlackRevocationHandler().revoke("xoxb-access-abc", config)
         assert result is False
 
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "fatal_error",
+            "internal_error",
+            "org_login_required",
+            "ratelimited",
+            "request_timeout",
+            "service_unavailable",
+            "team_added_to_org",
+        ],
+    )
+    async def test_ok_false_with_a_transient_error_is_retryable(self, httpx_mock: HTTPXMock, error: str) -> None:
+        """Slack reports its own outages and rate limits as 200 with ok=false, so they are not a refusal."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": error})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        with pytest.raises(RevocationError) as refusal:
+            await SlackRevocationHandler().revoke("xoxb-access-abc", config)
+
+        assert refusal.value.kind is FailureKind.SERVER_ERROR
+        assert refusal.value.retryable
+
+    async def test_an_ok_false_error_that_is_not_a_string_stays_a_refusal(self, httpx_mock: HTTPXMock) -> None:
+        """A body is untrusted input, so a code of the wrong JSON type names no transient condition."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": ["ratelimited"]})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is False
+
+    @pytest.mark.parametrize("error", ["account_inactive", "token_expired", "token_revoked"])
+    async def test_a_token_slack_states_is_already_unusable_reads_as_revoked(
+        self, httpx_mock: HTTPXMock, error: str
+    ) -> None:
+        """RFC 7009 section 2.2 reads an invalid token as the request's purpose already achieved."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": error})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is True
+
+    async def test_a_body_stating_the_token_was_not_revoked_is_a_failed_revocation(self, httpx_mock: HTTPXMock) -> None:
+        """Slack states the outcome in ``revoked``, and ``ok`` states only that the call succeeded."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": False})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is False
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"ok": True}, id="no revoked member"),
+            pytest.param({"ok": True, "revoked": "false"}, id="a revoked member of another JSON type"),
+            pytest.param({"ok": True, "revoked": None}, id="a revoked member stating nothing"),
+        ],
+    )
+    async def test_a_body_stating_no_boolean_revoked_is_refused(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """A body is untrusted input, so only the boolean Slack documents states the token revoked."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        with pytest.raises(RevocationError, match="states no outcome for the token") as exc_info:
+            await SlackRevocationHandler().revoke("xoxb-access-abc", config)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.slack import preset
@@ -898,11 +1031,28 @@ class TestSlackRevocationHandler:
         [{"ok": "false"}, {"ok": "true"}, {"ok": 1}, {"ok": None}, {}],
         ids=["string-false", "string-true", "int-one", "null", "missing"],
     )
-    async def test_ok_that_is_not_true_returns_false(self, body: dict[str, object], httpx_mock: HTTPXMock) -> None:
+    async def test_a_body_with_no_boolean_ok_states_no_outcome(
+        self, body: dict[str, object], httpx_mock: HTTPXMock
+    ) -> None:
+        """Slack states the outcome in ok, so a body carrying no boolean there is not Slack refusing."""
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
         from apron_auth.providers.slack import preset
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        with pytest.raises(RevocationError, match="states no outcome") as refusal:
+            await SlackRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.REFUSED
+        assert refusal.value.retryable is False
+
+    async def test_ok_false_with_no_readable_code_is_still_slack_refusing(self, httpx_mock: HTTPXMock) -> None:
+        """An ok of false is Slack stating the outcome, whatever it says about why."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
         assert await SlackRevocationHandler().revoke("access-abc", config) is False
 
     async def test_deeply_nested_response_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
@@ -926,12 +1076,17 @@ class TestSlackRevocationHandler:
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
-    async def test_error_status_returns_false(self, httpx_mock: HTTPXMock) -> None:
+    async def test_an_error_status_is_refused_whatever_the_body_claims(self, httpx_mock: HTTPXMock) -> None:
+        """An ok=true body under an error status states two different things, so the status decides."""
         httpx_mock.add_response(url=SLACK_REVOKE_URL, status_code=500, json={"ok": True})
         from apron_auth.providers.slack import preset
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
-        assert await SlackRevocationHandler().revoke("access-abc", config) is False
+
+        with pytest.raises(RevocationError) as refusal:
+            await SlackRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.SERVER_ERROR
 
 
 class TestSlackWorkspaceBotIdentity:

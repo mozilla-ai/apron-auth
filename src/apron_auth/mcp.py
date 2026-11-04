@@ -36,7 +36,7 @@ from apron_auth._discovery import (
     str_list,
     strict_str_list,
 )
-from apron_auth._http_errors import http_failure, status_failure
+from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._timeouts import within_request_limit
 from apron_auth._urls import (
@@ -432,7 +432,7 @@ async def register_client(
             msg = f"client registration request failed: {transport.description}"
             raise McpRegistrationError(msg, kind=transport.kind) from exc
         if response.status_code not in (200, 201):
-            status = status_failure(response.status_code)
+            status = response_failure(response)
             msg = f"client registration failed: {status.description}"
             raise McpRegistrationError(msg, kind=status.kind)
         try:
@@ -1002,7 +1002,7 @@ async def _fetch_first_metadata(
                 outcome = _reported_outcome(outcome, failure)
                 continue
             if response.status_code != 200:
-                status = status_failure(response.status_code)
+                status = response_failure(response)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
                 # A refusal may guard a document that exists.
                 # A redirect this library will not follow says nothing about one either.

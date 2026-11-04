@@ -27,7 +27,6 @@ no human handle in the introspection payload to put there.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
@@ -44,10 +43,13 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
-from apron_auth.providers._revocation import HttpMethod, RevocationRequest, revocation_endpoint, send_revocation
-
-logger = logging.getLogger(__name__)
-
+from apron_auth.providers._revocation import (
+    HttpMethod,
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -211,14 +213,14 @@ class HubSpotRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` on 204 (revoked) or 404 (already gone — idempotent),
-            ``False`` for any other status.
+            ``True`` on 204, where the token is revoked, or 404, where it was already gone.
 
         Raises:
             ConfigurationError: If ``config`` declares no revocation endpoint, or declares one it
                 does not permit sending a token to.
-            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
-                to arrive.
+            RevocationError: If the endpoint URL is invalid, the request cannot be sent or fails to
+                arrive, or the endpoint answers any other status.
+                Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
         endpoint = revocation_endpoint(config)
@@ -232,8 +234,7 @@ class HubSpotRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (204, 404):
             return True
-        logger.warning("HubSpot revocation returned unexpected status %s", response.status_code)
-        return False
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

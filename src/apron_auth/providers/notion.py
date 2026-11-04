@@ -13,7 +13,6 @@ References:
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 
 from apron_auth.models import (
@@ -28,9 +27,12 @@ from apron_auth.models import (
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
-from apron_auth.providers._revocation import RevocationRequest, revocation_endpoint, send_revocation
-
-logger = logging.getLogger(__name__)
+from apron_auth.providers._revocation import (
+    RevocationRequest,
+    refuse_an_unexpected_status,
+    revocation_endpoint,
+    send_revocation,
+)
 
 # The endpoint that revokes a Notion access token.
 NOTION_REVOCATION_URL = "https://api.notion.com/v1/oauth/revoke"
@@ -183,14 +185,14 @@ class NotionRevocationHandler:
                 and client credentials.
 
         Returns:
-            ``True`` when the endpoint reports the token revoked or already
-            invalid.
+            ``True`` when the endpoint reports the token revoked or already invalid.
 
         Raises:
             ConfigurationError: If ``config`` declares no revocation endpoint, or declares one it
                 does not permit sending a token to.
-            RevocationError: If the endpoint URL is invalid, or the request cannot be sent or fails
-                to arrive.
+            RevocationError: If the endpoint URL is invalid, the request cannot be sent or fails to
+                arrive, or the endpoint answers any other status.
+                Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
         request = RevocationRequest(
@@ -202,8 +204,7 @@ class NotionRevocationHandler:
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (200, 400):
             return True
-        logger.warning("Notion revocation returned unexpected status %d", response.status_code)
-        return False
+        refuse_an_unexpected_status(response, label=request.label)
 
 
 def preset(

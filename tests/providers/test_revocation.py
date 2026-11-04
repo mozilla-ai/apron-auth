@@ -9,6 +9,7 @@ from types import ModuleType
 import httpx
 import pytest
 from pydantic import SecretStr
+from support import revoked_status
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import Provider, ProviderConfig
@@ -26,7 +27,7 @@ from apron_auth.providers import (
     slack,
     typeform,
 )
-from apron_auth.providers._revocation import StandardRevocationHandler
+from apron_auth.providers._revocation import StandardRevocationHandler, refuse_an_unexpected_status
 
 TOKEN = "live-access-token"  # pragma: allowlist secret
 
@@ -135,7 +136,9 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
 
     def factory(url: str) -> httpx.MockTransport:
         pinned.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        return httpx.MockTransport(
+            lambda request: httpx.Response(revoked_status(provider), json={"ok": True, "revoked": True})
+        )
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
@@ -221,19 +224,145 @@ async def test_every_handler_refuses_an_invalid_url_alike(provider: Provider) ->
     assert refusal.value.kind is FailureKind.REFUSED
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(429, id="a rate limit"),
+        pytest.param(500, id="a server error"),
+        pytest.param(503, id="an outage"),
+    ],
+)
 @pytest.mark.parametrize("provider", list(Provider))
-async def test_no_handler_lets_a_server_error_escape_as_itself(provider: Provider) -> None:
-    """Each provider reads a status its own way, and none of them answers with an HTTP library's error."""
+async def test_every_handler_reports_a_retryable_status_as_retryable(provider: Provider, status: int) -> None:
+    """A caller that honors retryable abandons a token for good, so a condition that passes later must say so."""
     config = _config(provider)
-    handler = revocation_handler_for(config, transport_factory=_answering_transport(500))
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(status))
     assert handler is not None
 
-    try:
-        outcome = await handler.revoke(TOKEN, config)
-    except RevocationError as refusal:
-        assert refusal.kind is FailureKind.SERVER_ERROR
-    else:
-        assert outcome is False
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        pytest.param(200, FailureKind.REFUSED, id="a success the provider does not state"),
+        pytest.param(204, FailureKind.REFUSED, id="another success"),
+        pytest.param(302, FailureKind.REFUSED, id="a redirect"),
+        pytest.param(418, FailureKind.REJECTED, id="a client error"),
+        pytest.param(429, FailureKind.SERVER_ERROR, id="a rate limit"),
+        pytest.param(503, FailureKind.SERVER_ERROR, id="an outage"),
+    ],
+)
+def test_the_shared_rule_reads_a_status_by_what_it_states(status: int, expected: FailureKind) -> None:
+    """A success states no outcome, so refusing the answer is this library's refusal, not the other side's."""
+    with pytest.raises(RevocationError) as refusal:
+        refuse_an_unexpected_status(httpx.Response(status), label="Example")
+
+    assert refusal.value.kind is expected
+
+
+async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryable() -> None:
+    """GitHub answers a secondary rate limit with 403 and names retry-after, which its own docs say wins."""
+
+    def factory(url: str) -> httpx.MockTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(403, headers={"Retry-After": "60"}))
+
+    config = _config(Provider.GITHUB)
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
+@pytest.mark.parametrize("status", [200, 204])
+async def test_rfc_7009_revocation_reads_a_completed_status_as_revoked(status: int) -> None:
+    """Section 2.2 documents 200, and 204 states the same outcome carrying no body."""
+    config = _config(None)
+    handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
+
+    assert await handler.revoke(TOKEN, config) is True
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(202, id="a status stating the work is only accepted"),
+        pytest.param(206, id="another success"),
+    ],
+)
+async def test_rfc_7009_revocation_refuses_a_success_stating_no_completed_revocation(status: int) -> None:
+    """A revocation an endpoint has only accepted is not a revoked token, and reporting one overstates it."""
+    config = _config(None)
+    handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
+
+    with pytest.raises(RevocationError, match="states no outcome") as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REFUSED
+
+
+@pytest.mark.parametrize(
+    ("provider", "status"),
+    [
+        pytest.param(Provider.GITHUB, 404, id="a GitHub status stating the grant already gone"),
+        pytest.param(Provider.GITHUB, 422, id="a GitHub status stating a validation failure"),
+        pytest.param(Provider.GOOGLE, 400, id="a Google status stating the token not valid"),
+        pytest.param(Provider.HUBSPOT, 404, id="a HubSpot status stating the token already gone"),
+        pytest.param(Provider.NOTION, 400, id="a Notion status stating the token already gone"),
+    ],
+)
+async def test_a_statement_of_when_to_come_back_outranks_a_status_a_provider_states(
+    provider: Provider, status: int
+) -> None:
+    """A wait states a temporary condition, which a status stating the token was never about."""
+
+    def factory(url: str) -> httpx.MockTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(status, headers={"Retry-After": "60"}))
+
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
+async def test_a_success_a_provider_does_not_state_is_not_read_as_a_rejection() -> None:
+    """GitHub answers 204 or 404, so a 200 leaves the outcome unknown rather than stating a refusal."""
+    config = _config(Provider.GITHUB)
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(200))
+    assert handler is not None
+
+    with pytest.raises(RevocationError, match="states no outcome") as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REFUSED
+    assert refusal.value.retryable is False
+
+
+@pytest.mark.parametrize("provider", list(Provider))
+async def test_no_handler_reads_an_unexpected_status_as_a_refusal_to_revoke(provider: Provider) -> None:
+    """A status no provider states means the outcome is unknown, which is not the provider answering no."""
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=_answering_transport(418))
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REJECTED
+    assert TOKEN not in "".join(traceback.format_exception(refusal.value))
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -254,7 +383,9 @@ async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Pro
 
     def factory(url: str) -> httpx.MockTransport:
         seen.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(200, json={"ok": True}))
+        return httpx.MockTransport(
+            lambda request: httpx.Response(revoked_status(provider), json={"ok": True, "revoked": True})
+        )
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
