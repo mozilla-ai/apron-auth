@@ -8,7 +8,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import TimeoutPolicy
-from apron_auth.providers._identity_requests import fetch_identity_json
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 
 URL = "https://provider.example.com/me"
 TOKEN = "access-SECRET-xyz"  # pragma: allowlist secret
@@ -99,3 +99,21 @@ async def test_a_request_that_outlives_the_limit_is_a_timeout(httpx_mock: HTTPXM
         )
 
     assert refusal.value.kind is FailureKind.TIMEOUT
+
+
+async def test_the_client_follows_no_redirect() -> None:
+    """A redirect would carry the token to a host no rule read, so the request goes nowhere else."""
+    reached: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        reached.append(str(request.url))
+        return httpx.Response(302, headers={"Location": "https://attacker.example/me"})
+
+    async with identity_client(_TIMEOUTS, transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(IdentityFetchError) as exc_info:
+            await fetch_identity_json(
+                client.get(URL, headers={"Authorization": f"Bearer {TOKEN}"}), "Example identity", _TIMEOUTS
+            )
+
+    assert reached == [URL], "the token must not follow the redirect"
+    assert exc_info.value.kind is FailureKind.REFUSED

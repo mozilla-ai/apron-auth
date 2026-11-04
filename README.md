@@ -825,7 +825,7 @@ Neither preset accepts a `scope` key in `extra_params`, because each builds that
 
 Run the two flows separately. The install yields a bot token for workspace work, and the sign-in yields a user token that identifies the person.
 
-An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`.
+An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`. A response that nests a second token has it read onto that field whether or not the config names a provider, because `provider` is a field the caller chooses and the person's token is no less live without it.
 
 ```python
 config = slack.preset(

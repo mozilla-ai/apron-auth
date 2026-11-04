@@ -24,9 +24,10 @@ def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransp
         transport: Optional transport controlling the outbound connection.
 
     Returns:
-        A client whose every step is bounded by the policy.
+        A client whose every step is bounded by the policy, and which follows no redirect, so the
+        token goes to the request's own host and nowhere else.
     """
-    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts))
+    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:
