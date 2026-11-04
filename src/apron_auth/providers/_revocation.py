@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
 
+# The statuses an RFC 7009 endpoint states a revocation it completed with. Section 2.2 documents 200,
+# and 204 states the same outcome carrying no body. Any other success states the work is not done.
+_REVOKED_STATUSES = (200, 204)
+
 
 class HttpMethod(StrEnum):
     """The HTTP methods a provider's revocation endpoint answers."""
@@ -67,7 +71,11 @@ class RevocationRequest:
 
 
 class StandardRevocationHandler:
-    """RFC 7009 token revocation: a POST whose form body carries the token."""
+    """RFC 7009 token revocation: a POST whose form body carries the token.
+
+    RFC 7009 section 2.2 documents one status for a revocation the endpoint completed, which it
+    answers for an invalid token as well, so a body states no condition this reads.
+    """
 
     def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
         """Configure how revocation requests reach the network.
@@ -90,7 +98,7 @@ class StandardRevocationHandler:
                 the request carries.
 
         Returns:
-            ``True`` when the endpoint reports success.
+            ``True`` when the endpoint states the revocation complete.
 
         Raises:
             ConfigurationError: If the configuration declares no revocation endpoint, or declares one
@@ -113,7 +121,7 @@ class StandardRevocationHandler:
             data=data,
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
-        if response.is_success:
+        if response.status_code in _REVOKED_STATUSES:
             return True
         refuse_an_unexpected_status(response, label=request.label)
 

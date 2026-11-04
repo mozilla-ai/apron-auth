@@ -280,6 +280,33 @@ async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryab
     assert refusal.value.retryable
 
 
+@pytest.mark.parametrize("status", [200, 204])
+async def test_rfc_7009_revocation_reads_a_completed_status_as_revoked(status: int) -> None:
+    """Section 2.2 documents 200, and 204 states the same outcome carrying no body."""
+    config = _config(None)
+    handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
+
+    assert await handler.revoke(TOKEN, config) is True
+
+
+@pytest.mark.parametrize(
+    "status",
+    [
+        pytest.param(202, id="a status stating the work is only accepted"),
+        pytest.param(206, id="another success"),
+    ],
+)
+async def test_rfc_7009_revocation_refuses_a_success_stating_no_completed_revocation(status: int) -> None:
+    """A revocation an endpoint has only accepted is not a revoked token, and reporting one overstates it."""
+    config = _config(None)
+    handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
+
+    with pytest.raises(RevocationError, match="states no outcome") as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.REFUSED
+
+
 @pytest.mark.parametrize(
     ("provider", "status"),
     [

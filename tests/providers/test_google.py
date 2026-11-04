@@ -243,6 +243,25 @@ class TestGoogleRevocationHandler:
         assert request.method == "POST"
         assert "token=access-abc" in str(request.url)
 
+    @pytest.mark.parametrize(
+        "status",
+        [
+            pytest.param(202, id="a status stating the work is only accepted"),
+            pytest.param(204, id="another success"),
+        ],
+    )
+    async def test_a_success_google_does_not_state_is_refused(self, httpx_mock: HTTPXMock, status: int) -> None:
+        """Google documents one status for a revocation it processed, so another states no outcome."""
+        httpx_mock.add_response(status_code=status)
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(RevocationError, match="states no outcome") as refusal:
+            await GoogleRevocationHandler().revoke("access-abc", config)
+
+        assert refusal.value.kind is FailureKind.REFUSED
+
     async def test_network_error_raises_revocation_error_without_the_token(self, httpx_mock: HTTPXMock) -> None:
         """The token is in the request URL, so the error has no cause or context."""
         secret = "access-SECRET-xyz"  # pragma: allowlist secret
