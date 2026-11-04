@@ -2594,7 +2594,7 @@ class TestRevokeToken:
 
     async def test_a_named_provider_revokes_through_its_own_handler(self, httpx_mock):
         """A caller who passes no handler used to get RFC 7009 revocation, which is wrong for Slack."""
-        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True})
+        httpx_mock.add_response(url="https://slack.com/api/auth.revoke", json={"ok": True, "revoked": True})
         config = ProviderConfig(
             provider=Provider.SLACK,
             client_id="cid",

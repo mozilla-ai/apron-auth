@@ -136,7 +136,9 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
 
     def factory(url: str) -> httpx.MockTransport:
         pinned.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(revoked_status(provider), json={"ok": True}))
+        return httpx.MockTransport(
+            lambda request: httpx.Response(revoked_status(provider), json={"ok": True, "revoked": True})
+        )
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)
@@ -381,7 +383,9 @@ async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Pro
 
     def factory(url: str) -> httpx.MockTransport:
         seen.append(url)
-        return httpx.MockTransport(lambda request: httpx.Response(revoked_status(provider), json={"ok": True}))
+        return httpx.MockTransport(
+            lambda request: httpx.Response(revoked_status(provider), json={"ok": True, "revoked": True})
+        )
 
     config = _config(provider)
     handler = revocation_handler_for(config, transport_factory=factory)

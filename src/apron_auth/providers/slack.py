@@ -652,8 +652,9 @@ class SlackRevocationHandler:
                 sending a token to.
             RevocationError: If the revocation URL is invalid, the request cannot be sent, the request
                 fails to reach the endpoint, its response body is not a valid JSON object, the endpoint
-                answers a status other than a success, the body states no boolean ``ok`` and so no
-                outcome, or the body names one of Slack's own outages or rate limits.
+                answers a status other than a success, the body states no boolean ``ok``, or states the
+                call succeeded without a boolean ``revoked``, and so states no outcome, or the body names
+                one of Slack's own outages or rate limits.
                 Its kind says whether the same request may pass later.
                 The caught error is not attached as its cause or context.
         """
@@ -679,7 +680,11 @@ class SlackRevocationHandler:
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
             # ``ok`` states that the call succeeded, and ``revoked`` whether the token was revoked.
             if ok:
-                return data.get("revoked") is not False
+                revoked = data.get("revoked")
+                if not isinstance(revoked, bool):
+                    msg = "Failed to revoke Slack token: the response states no outcome for the token"
+                    raise RevocationError(msg, kind=FailureKind.REFUSED)
+                return revoked
             code = _slack_error_code(data)
             if code in _SLACK_TOKEN_ALREADY_INVALID:
                 return True
