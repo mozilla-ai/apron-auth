@@ -1075,6 +1075,7 @@ class _OAuthClientBase:
                 token_endpoint_auth_method=self._config.token_endpoint_auth_method,
                 transport=transport,
                 timeout=httpx_timeout(self._config.timeouts),
+                follow_redirects=False,
                 event_hooks={"response": [record_response]},
             ) as client:
                 token = await within_request_limit(

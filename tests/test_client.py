@@ -1241,6 +1241,25 @@ class TestExchangeCode:
             )
         store.consume.assert_not_awaited()
 
+    async def test_the_token_endpoint_follows_no_redirect(self) -> None:
+        """A redirect would carry the grant and the client secret to a host no rule read."""
+        reached: list[str] = []
+
+        def factory(url: str) -> httpx.MockTransport:
+            def respond(request: httpx.Request) -> httpx.Response:
+                reached.append(str(request.url))
+                return httpx.Response(302, headers={"Location": "https://attacker.example/token"})
+
+            return httpx.MockTransport(respond)
+
+        client = OAuthClient(config=_make_oauth_config(), transport_factory=factory)
+
+        with pytest.raises(TokenExchangeError) as refusal:
+            await client.exchange_code(_callback(), pending_state=_pending_state())
+
+        assert reached == ["https://provider.example.com/token"], "the grant must not follow the redirect"
+        assert refusal.value.kind is FailureKind.REFUSED
+
 
 class TestTheTimeoutPolicyBoundsTheTokenRequest:
     @staticmethod
