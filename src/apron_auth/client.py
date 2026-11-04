@@ -85,9 +85,20 @@ _USER_TOKEN_STRINGS = MappingProxyType(
 
 
 class _TokenEndpointError(Exception):
-    """Internal exception carrying the OAuth error code from the token endpoint."""
+    """Internal exception owning the OAuth error code from the token endpoint and the body it refused.
 
-    def __init__(self, message: str, kind: FailureKind, error_code: str = "") -> None:
+    NOTE: ``refused_response`` can hold live tokens, so this error must not be chained onto an error
+    that reaches a caller.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        kind: FailureKind,
+        error_code: str = "",
+        *,
+        refused_response: dict[str, Any] | None = None,
+    ) -> None:
         """Create the error.
 
         Args:
@@ -95,10 +106,13 @@ class _TokenEndpointError(Exception):
             kind: What went wrong.
             error_code: The OAuth error code from the token endpoint when
                 one is available, else an empty string.
+            refused_response: The body of a refused response that may carry tokens the endpoint
+                issued, or ``None`` where no body named any.
         """
         super().__init__(message)
         self.kind = kind
         self.error_code = error_code
+        self.refused_response = refused_response
 
 
 def _audience_names(audience: object) -> set[str] | None:
@@ -313,6 +327,22 @@ def _read_task_exception(task: asyncio.Task[None]) -> None:
     """
     if not task.cancelled():
         task.exception()
+
+
+def _refused_response(response: httpx.Response) -> dict[str, Any] | None:
+    """Return the token-endpoint body of a response the token client refused.
+
+    Args:
+        response: The response the endpoint sent.
+
+    Returns:
+        The body, or ``None`` where it states no object and so names no token.
+    """
+    try:
+        body = decode_json_body(response)
+    except ValueError:
+        return None
+    return body if isinstance(body, dict) else None
 
 
 def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
@@ -668,13 +698,16 @@ class _OAuthClientBase:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            failure = (str(exc), exc.kind, exc.error_code)
+            failure = (str(exc), exc.kind, exc.error_code, exc.refused_response)
         else:
             failure = None
         if failure is not None:
             # NOTE: This raise stays outside the except block and chains nothing, because the internal error's
             # traceback holds the request frame, whose locals carry the grant and the client secret.
-            message, kind, error_code = failure
+            message, kind, error_code, refused = failure
+            if refused is not None:
+                # The response issued these tokens to this exchange, so nothing else holds them.
+                await self._revoke_refused_tokens(refused)
             raise TokenExchangeError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
@@ -798,13 +831,15 @@ class _OAuthClientBase:
         try:
             response = await self._token_request(data)
         except _TokenEndpointError as exc:
-            failure = (str(exc), exc.kind, exc.error_code)
+            failure = (str(exc), exc.kind, exc.error_code, exc.refused_response)
         else:
             failure = None
         if failure is not None:
             # NOTE: This raise stays outside the except block and chains nothing, because the internal error's
             # traceback holds the request frame, whose locals carry the refresh token and the client secret.
-            message, kind, error_code = failure
+            message, kind, error_code, refused = failure
+            if refused is not None:
+                await self._revoke_refused_tokens(refused, keep=refresh_token)
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
         if not _states_an_access_token(response):
             # A refresh response can repeat the token it was sent, which the caller still holds, so
@@ -1054,6 +1089,8 @@ class _OAuthClientBase:
                 fails with a non-success status, or the request otherwise
                 errors; its ``error_code`` carries the OAuth error code
                 when the endpoint states one that this request did not send as a secret.
+                Where a response arrived and its body was refused, the error carries that body, whose
+                tokens the endpoint issued and nothing else holds.
                 The caught error is not attached as its cause or context.
                 Its message is this library's own text and states nothing the endpoint sent.
         """
@@ -1104,13 +1141,17 @@ class _OAuthClientBase:
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             failure = _TokenEndpointError(transport.description, transport.kind)
-        # NOTE: The token client decodes a success body itself, so a body it cannot read surfaces
-        # here rather than as an HTTP error: as a ValueError it raises, or as a RecursionError on a
-        # deeply nested one. A response must have arrived for the body to be what failed, so one of
-        # those raised before then is reported as the unexpected failure it is.
-        except (ValueError, RecursionError):
+        # NOTE: The token client reads a success body itself, so a body it refuses surfaces here
+        # rather than as an HTTP error: as a ValueError or a TypeError where a lifetime states no
+        # number, or as a RecursionError on a deeply nested body. A response must have arrived for
+        # the body to be what failed, so one of those raised before then is the unexpected failure it is.
+        except (RecursionError, TypeError, ValueError):
             if responses:
-                failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
+                failure = _TokenEndpointError(
+                    "token response could not be read",
+                    FailureKind.REFUSED,
+                    refused_response=_refused_response(responses[-1]),
+                )
             else:
                 failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         except Exception:
