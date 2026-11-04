@@ -2253,6 +2253,27 @@ class TestRefreshToken:
             await client.refresh_token(refresh_token="some-refresh")
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
 
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"error": "invalid_grant"}, id="a body stating a code no retry clears"),
+            pytest.param({"error": ["invalid_grant"]}, id="a body stating a code of another JSON type"),
+        ],
+    )
+    async def test_refresh_told_when_to_come_back_may_be_retried(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """A status alone cannot tell a throttle from a refusal where a provider answers both with one."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token", status_code=403, headers={"Retry-After": "60"}, json=body
+        )
+        config = _make_config()
+        client = OAuthClient(config=config)
+        with pytest.raises(TokenRefreshError) as exc_info:
+            await client.refresh_token(refresh_token="some-refresh")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
     async def test_refresh_network_error_may_be_retried(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         config = _make_config()
