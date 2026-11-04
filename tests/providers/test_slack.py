@@ -939,6 +939,18 @@ class TestSlackRevocationHandler:
 
         assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is False
 
+    @pytest.mark.parametrize("error", ["account_inactive", "token_expired", "token_revoked"])
+    async def test_a_token_slack_states_is_already_unusable_reads_as_revoked(
+        self, httpx_mock: HTTPXMock, error: str
+    ) -> None:
+        """RFC 7009 section 2.2 reads an invalid token as the request's purpose already achieved."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": error})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is True
+
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.slack import preset

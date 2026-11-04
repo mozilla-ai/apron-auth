@@ -135,6 +135,10 @@ _NO_ERROR_CODE = "no error code stated"
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
+# The error codes Slack returns, with HTTP 200 and ``ok=false``, for a token that is already
+# unusable: one whose user, workspace or app is gone, and one that has expired.
+_SLACK_TOKEN_ALREADY_INVALID = frozenset({"account_inactive", "token_expired", "token_revoked"})
+
 # The error codes Slack returns, with HTTP 200 and ``ok=false``, for a condition that clears on its
 # own: its outages and rate limits, and a workspace migration that suspends the API until it ends.
 _SLACK_TRANSIENT_ERRORS = frozenset(
@@ -638,8 +642,9 @@ class SlackRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when Slack confirms revocation with the boolean ``"ok": true``, and ``False`` where
-            it states ``false`` for a condition no retry clears.
+            ``True`` when Slack confirms revocation with the boolean ``"ok": true``, and when it names a
+            token already unusable, whose revocation needs nothing more as RFC 7009 section 2.2 reads it.
+            ``False`` where it states ``false`` for a refusal no retry clears.
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
@@ -674,6 +679,8 @@ class SlackRevocationHandler:
             if ok:
                 return True
             code = _slack_error_code(data)
+            if code in _SLACK_TOKEN_ALREADY_INVALID:
+                return True
             kind = _slack_failure_kind(code)
             if kind.retryable:
                 raise RevocationError(f"Failed to revoke Slack token: {code}", kind=kind)
