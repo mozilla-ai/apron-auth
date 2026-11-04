@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -160,13 +161,16 @@ class GoogleRevocationHandler:
             ``True`` when the endpoint reports success.
 
         Raises:
-            ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
-                sending a token to.
+            ConfigurationError: If no token was given to revoke, or ``config`` has no revocation URL,
+                or names one it does not permit sending a token to.
             RevocationError: If the request cannot be sent or fails to arrive, or the endpoint answers
                 any status but a success.
                 Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
+        if not token.strip():
+            msg = "Revocation refused: no token was given to revoke."
+            raise ConfigurationError(msg)
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label="Google",

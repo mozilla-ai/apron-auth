@@ -7,7 +7,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import FailureKind, IdentityFetchError, RevocationError
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
 from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext, TimeoutPolicy
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -261,6 +261,21 @@ class TestGoogleRevocationHandler:
         assert secret not in formatted
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
+
+    @pytest.mark.parametrize("token", ["", " ", "\t"])
+    async def test_a_request_naming_no_token_is_refused_before_it_is_sent(
+        self, httpx_mock: HTTPXMock, token: str
+    ) -> None:
+        """Google answers a request naming no token with the status it answers every other error with."""
+        from apron_auth.providers.google import preset
+
+        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+
+        with pytest.raises(ConfigurationError) as refusal:
+            await GoogleRevocationHandler().revoke(token, config)
+
+        assert refusal.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
 
 
 class TestTheTimeoutPolicyBoundsTheIdentityRequest:

@@ -827,7 +827,7 @@ class _OAuthClientBase:
 
         Raises:
             ConfigurationError: If the provider has no revocation endpoint configured, or if the
-                handler refuses the configuration.
+                handler refuses the configuration or the token it is given.
                 It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
