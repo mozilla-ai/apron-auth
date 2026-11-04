@@ -280,6 +280,35 @@ async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryab
     assert refusal.value.retryable
 
 
+@pytest.mark.parametrize(
+    ("provider", "status"),
+    [
+        pytest.param(Provider.GITHUB, 404, id="a GitHub status stating the grant already gone"),
+        pytest.param(Provider.GITHUB, 422, id="a GitHub status stating a validation failure"),
+        pytest.param(Provider.GOOGLE, 400, id="a Google status stating the token not valid"),
+        pytest.param(Provider.HUBSPOT, 404, id="a HubSpot status stating the token already gone"),
+        pytest.param(Provider.NOTION, 400, id="a Notion status stating the token already gone"),
+    ],
+)
+async def test_a_statement_of_when_to_come_back_outranks_a_status_a_provider_states(
+    provider: Provider, status: int
+) -> None:
+    """A wait states a temporary condition, which a status stating the token was never about."""
+
+    def factory(url: str) -> httpx.MockTransport:
+        return httpx.MockTransport(lambda request: httpx.Response(status, headers={"Retry-After": "60"}))
+
+    config = _config(provider)
+    handler = revocation_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    with pytest.raises(RevocationError) as refusal:
+        await handler.revoke(TOKEN, config)
+
+    assert refusal.value.kind is FailureKind.SERVER_ERROR
+    assert refusal.value.retryable
+
+
 async def test_a_success_a_provider_does_not_state_is_not_read_as_a_rejection() -> None:
     """GitHub answers 204 or 404, so a 200 leaves the outcome unknown rather than stating a refusal."""
     config = _config(Provider.GITHUB)
