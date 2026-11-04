@@ -145,6 +145,7 @@ _SLACK_TRANSIENT_ERRORS = frozenset(
     {
         "fatal_error",
         "internal_error",
+        "org_login_required",
         "ratelimited",
         "request_timeout",
         "service_unavailable",

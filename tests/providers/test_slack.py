@@ -240,6 +240,7 @@ class TestSlackIdentityHandler:
         [
             "fatal_error",
             "internal_error",
+            "org_login_required",
             "ratelimited",
             "request_timeout",
             "service_unavailable",
@@ -911,6 +912,7 @@ class TestSlackRevocationHandler:
         [
             "fatal_error",
             "internal_error",
+            "org_login_required",
             "ratelimited",
             "request_timeout",
             "service_unavailable",
