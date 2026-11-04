@@ -951,6 +951,33 @@ class TestSlackRevocationHandler:
 
         assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is True
 
+    async def test_a_body_stating_the_token_was_not_revoked_is_a_failed_revocation(self, httpx_mock: HTTPXMock) -> None:
+        """Slack states the outcome in ``revoked``, and ``ok`` states only that the call succeeded."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": False})
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is False
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            pytest.param({"ok": True}, id="no revoked member"),
+            pytest.param({"ok": True, "revoked": "false"}, id="a revoked member of another JSON type"),
+        ],
+    )
+    async def test_a_body_stating_no_boolean_revoked_leaves_the_outcome_to_ok(
+        self, httpx_mock: HTTPXMock, body: dict[str, object]
+    ) -> None:
+        """A body is untrusted input, so only the boolean Slack documents states the token was not revoked."""
+        httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
+        from apron_auth.providers.slack import preset
+
+        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+
+        assert await SlackRevocationHandler().revoke("xoxb-access-abc", config) is True
+
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.slack import preset

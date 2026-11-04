@@ -642,9 +642,9 @@ class SlackRevocationHandler:
             config: The provider configuration supplying the revocation URL.
 
         Returns:
-            ``True`` when Slack confirms revocation with the boolean ``"ok": true``, and when it names a
-            token already unusable, whose revocation needs nothing more as RFC 7009 section 2.2 reads it.
-            ``False`` where it states ``false`` for a refusal no retry clears.
+            ``True`` when Slack states the token revoked, and when it names a token already unusable,
+            whose revocation needs nothing more as RFC 7009 section 2.2 reads it. ``False`` where Slack
+            states the token was not revoked, and where it names a refusal no retry clears.
 
         Raises:
             ConfigurationError: If ``config`` has no revocation URL, or names one it does not permit
@@ -676,8 +676,9 @@ class SlackRevocationHandler:
             if not isinstance(ok, bool):
                 msg = "Failed to revoke Slack token: the response states no outcome"
                 raise RevocationError(msg, kind=FailureKind.REFUSED)
+            # ``ok`` states that the call succeeded, and ``revoked`` whether the token was revoked.
             if ok:
-                return True
+                return data.get("revoked") is not False
             code = _slack_error_code(data)
             if code in _SLACK_TOKEN_ALREADY_INVALID:
                 return True
