@@ -353,7 +353,13 @@ class TestProviderConfig:
             authorize_url="https://provider.example.com/authorize",
             token_url="https://provider.example.com/token",
         )
-        assert config.basic_auth() == ("test-client", "test-secret")
+        credential = config.basic_auth()
+
+        assert credential is not None
+        client_id, secret = credential
+        assert client_id == "test-client"
+        assert secret.get_secret_value() == "test-secret"
+        assert "test-secret" not in repr(credential)
 
     def test_basic_auth_returns_none_for_public_client(self) -> None:
         config = ProviderConfig(

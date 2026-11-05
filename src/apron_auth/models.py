@@ -1252,7 +1252,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         suffixes = self.provider.host_suffixes
         return matches_suffix(host, suffixes) and matches_suffix(token_host, suffixes)
 
-    def basic_auth(self) -> tuple[str, str] | None:
+    def basic_auth(self) -> tuple[str, SecretStr] | None:
         """Return the client's HTTP Basic credential, or None for a public client.
 
         A public client declares a ``token_endpoint_auth_method`` of ``"none"``, presents no client
@@ -1260,6 +1260,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         A confidential client authenticates with its ``client_id`` and ``client_secret``.
         The declared method drives the decision, so a public client presents no credential even if a secret
         lingers on the config.
+        The secret stays wrapped, so whatever holds the pair states nothing an error reporter records.
 
         Returns:
             The ``(client_id, client_secret)`` pair for a confidential
@@ -1271,7 +1272,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             return None
         if self.client_secret is None:
             return None
-        return (self.client_id, self.client_secret.get_secret_value())
+        return (self.client_id, self.client_secret)
 
     def validate_issuer(self, received_iss: str | None) -> None:
         """Validate an authorization-response ``iss`` (RFC 9207) against :attr:`issuer`.

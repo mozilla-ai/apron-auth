@@ -8,6 +8,7 @@ from importlib import import_module
 from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
@@ -62,7 +63,7 @@ class RevocationRequest:
     url: str
     label: str | None = None
     endpoint: str | None = None
-    auth: tuple[str, str] | None = None
+    auth: tuple[str, SecretStr] | None = None
     data: Mapping[str, str] | None = None
     headers: Mapping[str, str] | None = None
     json_body: Mapping[str, str] | None = None
@@ -235,6 +236,23 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
         raise ConfigurationError(msg)
 
 
+def _presented_auth(auth: tuple[str, SecretStr] | None) -> tuple[str, str] | None:
+    """Return an HTTP Basic credential in the form an HTTP client presents, or None to present none.
+
+    NOTE: The result states the secret in plain text. It is owned by the call it is passed to and
+    must not be bound to a local, because a local is what an error reporter records off a traceback.
+
+    Args:
+        auth: The credential to present, or ``None`` to present none.
+
+    Returns:
+        The ``(client_id, client_secret)`` pair as plain text, or ``None``.
+    """
+    if auth is None:
+        return None
+    return (auth[0], auth[1].get_secret_value())
+
+
 async def send_revocation(
     request: RevocationRequest,
     config: ProviderConfig,
@@ -285,7 +303,7 @@ async def send_revocation(
                 client.request(
                     request.method,
                     request.url,
-                    auth=request.auth,
+                    auth=_presented_auth(request.auth),
                     data=request.data,
                     headers=request.headers,
                     json=request.json_body,
