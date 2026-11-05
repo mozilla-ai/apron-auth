@@ -287,8 +287,20 @@ class TestUsesAllowedTransport:
             pytest.param("\uff61", id="a halfwidth ideographic full stop"),
         ],
     )
-    def test_a_loopback_host_written_with_another_dot_reaches_no_network(self, dot: str) -> None:
-        """The client reads each of these as the loopback host, so the request it sends reaches no network."""
+    def test_a_loopback_name_written_with_another_dot_reaches_no_network(self, dot: str) -> None:
+        """The client reads each of these as the loopback name, so the request it sends reaches no network."""
+        assert uses_allowed_transport(f"http://localhost{dot}/cb", plain_http_allowed=False) is True
+
+    @pytest.mark.parametrize(
+        "dot",
+        [
+            pytest.param("\u3002", id="an ideographic full stop"),
+            pytest.param("\uff0e", id="a fullwidth full stop"),
+            pytest.param("\uff61", id="a halfwidth ideographic full stop"),
+        ],
+    )
+    def test_a_loopback_address_written_with_another_dot_reaches_no_network(self, dot: str) -> None:
+        """The client reads each of these as the loopback address under the root, which names that address."""
         assert uses_allowed_transport(f"http://127.0.0.1{dot}/cb", plain_http_allowed=False) is True
 
     @pytest.mark.parametrize(

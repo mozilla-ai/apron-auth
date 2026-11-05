@@ -99,6 +99,8 @@ def is_localhost_name(host: str) -> bool:
 def is_loopback_host(host: str) -> bool:
     """Return whether host names the loopback interface, by name or by a canonical address.
 
+    A trailing root dot names the same host, so ``localhost.`` and ``127.0.0.1.`` both name it.
+
     NOTE: Only the name ``localhost`` and a canonical loopback address count.
     A name under ``localhost`` and a legacy numeric form do not, because resolvers differ over both.
 
