@@ -50,6 +50,24 @@ def _request(url: str = "https://auth.example.com/revoke", **changes: object) ->
     return RevocationRequest(**fields)  # ty: ignore[invalid-argument-type]
 
 
+def test_the_request_repr_names_only_what_carries_no_credential() -> None:
+    """An error reporter records the repr of a frame local, so this request must state nothing it carries.
+
+    The whole repr is asserted, because a part named in it later would otherwise go unnoticed here.
+    """
+    request = RevocationRequest(
+        url=f"https://auth.example.com/revoke/{TOKEN}",
+        label="Example",
+        auth=("cid", SecretStr("csecret")),  # pragma: allowlist secret
+        data={"token": TOKEN},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json_body={"token": TOKEN},
+        params={"token": TOKEN},
+    )
+
+    assert repr(request) == "RevocationRequest(method=POST, label='Example', host='auth.example.com')"
+
+
 def test_the_endpoint_of_a_config_that_declares_one_is_returned() -> None:
     assert revocation_endpoint(_config()) == "https://auth.example.com/revoke"
 

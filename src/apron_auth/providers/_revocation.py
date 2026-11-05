@@ -39,7 +39,7 @@ class HttpMethod(StrEnum):
     POST = "POST"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, repr=False)
 class RevocationRequest:
     """What one provider states about its revocation request, beside what the shared send supplies.
 
@@ -69,6 +69,19 @@ class RevocationRequest:
     json_body: Mapping[str, str] | None = None
     method: HttpMethod = HttpMethod.POST
     params: Mapping[str, str] | None = None
+
+    def __repr__(self) -> str:
+        """Return what the request is for, stating nothing it carries.
+
+        An error reporter records the repr of every local of every frame a traceback holds, and a
+        provider may state a credential in any part of its request, including the request line.
+        What appears is therefore named here rather than left out here, so a part added later is
+        absent until it is named.
+
+        Returns:
+            The method, the provider's label, and the host the request would reach.
+        """
+        return f"{type(self).__name__}(method={self.method}, label={self.label!r}, host={url_host(self.url)!r})"
 
 
 class StandardRevocationHandler:
