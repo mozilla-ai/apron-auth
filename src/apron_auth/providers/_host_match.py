@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
-from apron_auth._urls import matches_suffix
+from apron_auth._urls import matches_suffix, url_host
 
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
@@ -26,6 +25,9 @@ def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool
     derived host with :func:`matches_suffix` at fetch time as defense
     in depth.
 
+    Each host is the one the HTTP client dials, so this answers for the request that is sent. A URL
+    the client cannot read names no host, which matches no suffix.
+
     Args:
         config: The provider configuration whose ``authorize_url`` and
             ``token_url`` hosts are checked.
@@ -35,6 +37,6 @@ def oauth_hosts_match(config: ProviderConfig, suffixes: tuple[str, ...]) -> bool
         ``True`` only when both the authorize and token URL hosts match a
         suffix.
     """
-    authorize_host = urlparse(config.authorize_url).hostname or ""
-    token_host = urlparse(config.token_url).hostname or ""
-    return matches_suffix(authorize_host, suffixes) and matches_suffix(token_host, suffixes)
+    return matches_suffix(url_host(config.authorize_url), suffixes) and matches_suffix(
+        url_host(config.token_url), suffixes
+    )
