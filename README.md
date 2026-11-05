@@ -11,7 +11,7 @@ Provider-specific OAuth knowledge — endpoints, auth methods, PKCE quirks, erro
 | Provider presets     | Endpoints, auth methods, PKCE toggles, scope separators, and revocation for multiple providers out of the box.                            |
 | Error classification | Distinguishes permanent failures (revoked token, invalid client) from transient ones so callers know whether to retry or re-authenticate. |
 | Revocation support   | Providers all revoke differently (POST, DELETE, GET, Basic auth, query params) — presets include the right handler when available.          |
-| Auth method handling | `client_secret_post` vs `client_secret_basic` — picked from your config and handled by authlib under the hood.                            |
+| Auth method handling | `client_secret_post`, `client_secret_basic`, or a public client — picked from your config and sent as configured.                          |
 | PKCE (S256)          | Generated automatically when the provider supports it, no setup needed.                                                                   |
 
 apron-auth is stateless. It doesn't store tokens, manage sessions, or hold database connections — you bring your own storage, apron-auth handles the protocol.
@@ -671,7 +671,7 @@ print(tokens.context["tenant_id"])  # "T456"
 print(tokens.extras)  # {"team_id": "T123", ...}
 ```
 
-`TokenSet.extras` holds every field a token response carried that no attribute names. A field whose value is not of the type its attribute states lands there too, and the attribute keeps its default, so `scope`, `refresh_token`, `expires_in` and `expires_at` state nothing, and `token_type` reads `Bearer`, while the value the provider sent sits in the extras. `expires_in` is not coerced, so a numeric string lands there rather than becoming an integer, and `expires_at` can still state the expiry, because the token client derives it before this library reads the response. Treat the extras as sensitive: a credential a provider sent in the wrong shape arrives there, which makes them as sensitive as the token fields the model names.
+`TokenSet.extras` holds every field a token response carried that no attribute names. A field whose value is not of the type its attribute states lands there too, and the attribute keeps its default, so `scope`, `refresh_token`, `expires_in` and `expires_at` state nothing, and `token_type` reads `Bearer`, while the value the provider sent sits in the extras. `expires_in` is not coerced, so a numeric string lands there rather than becoming an integer, and `expires_at` then states nothing either, because an expiry is derived only from a lifetime this library read. Treat the extras as sensitive: a credential a provider sent in the wrong shape arrives there, which makes them as sensitive as the token fields the model names.
 
 ## Connecting to an MCP server
 
