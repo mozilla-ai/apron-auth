@@ -33,6 +33,7 @@ from apron_auth.errors import (
 from apron_auth.models import (
     ApplicationType,
     AuthorizationCallback,
+    BasicAuthCredential,
     BrowserBoundAuthorization,
     ClientRegistration,
     FreshTokenSet,
@@ -67,6 +68,7 @@ __all__ = [
     "ApplicationType",
     "AuthorizationCallback",
     "AuthorizationResponseError",
+    "BasicAuthCredential",
     "BrowserBoundAuthorization",
     "ClientRegistration",
     "ConfigurationError",

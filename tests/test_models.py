@@ -357,9 +357,8 @@ class TestProviderConfig:
         credential = config.basic_auth()
 
         assert credential is not None
-        client_id, secret = credential
-        assert client_id == "test-client"
-        assert secret.get_secret_value() == "test-secret"
+        assert credential.client_id == "test-client"
+        assert credential.client_secret.get_secret_value() == "test-secret"
         assert "test-secret" not in repr(credential)
 
     def test_basic_auth_returns_none_for_public_client(self) -> None:

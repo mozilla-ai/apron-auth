@@ -8,13 +8,12 @@ from importlib import import_module
 from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import SecretToken, UrlField
+from apron_auth.models import BasicAuthCredential, SecretToken, UrlField
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
@@ -63,7 +62,7 @@ class RevocationRequest:
     url: str
     label: str | None = None
     endpoint: str | None = None
-    auth: tuple[str, SecretStr] | None = None
+    auth: BasicAuthCredential | None = None
     data: Mapping[str, str] | None = None
     headers: Mapping[str, str] | None = None
     json_body: Mapping[str, str] | None = None
@@ -248,7 +247,7 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
         raise ConfigurationError(msg)
 
 
-def _presented_auth(auth: tuple[str, SecretStr] | None) -> tuple[str, str] | None:
+def _presented_auth(auth: BasicAuthCredential | None) -> tuple[str, str] | None:
     """Return an HTTP Basic credential in the form an HTTP client presents, or None to present none.
 
     NOTE: The result states the secret in plain text. It is owned by the call it is passed to and
@@ -258,11 +257,11 @@ def _presented_auth(auth: tuple[str, SecretStr] | None) -> tuple[str, str] | Non
         auth: The credential to present, or ``None`` to present none.
 
     Returns:
-        The ``(client_id, client_secret)`` pair as plain text, or ``None``.
+        The client identifier and the plain secret, or ``None``.
     """
     if auth is None:
         return None
-    return (auth[0], auth[1].get_secret_value())
+    return (auth.client_id, auth.client_secret.get_secret_value())
 
 
 async def send_revocation(

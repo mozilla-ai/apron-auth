@@ -68,6 +68,28 @@ def test_the_request_repr_names_only_what_carries_no_credential() -> None:
     assert repr(request) == "RevocationRequest(method=POST, label='Example', host='auth.example.com')"
 
 
+def test_the_request_repr_states_no_field_carrying_a_credential() -> None:
+    """Every field that can carry one is set to the credential, so a new such field is held to the rule.
+
+    The exact repr above pins the diagnostic shape. This pins the safety property, which a field
+    absent from that shape would otherwise satisfy by being absent rather than by stating nothing.
+    The method and the provider label are left out, because the repr names both deliberately and
+    neither can carry a credential.
+    """
+    request = RevocationRequest(
+        url=f"https://auth.example.com/revoke/{TOKEN}",
+        label="Example",
+        endpoint=f"https://auth.example.com/revoke/{TOKEN}",
+        auth=(TOKEN, SecretStr(TOKEN)),
+        data={TOKEN: TOKEN},
+        headers={TOKEN: TOKEN},
+        json_body={TOKEN: TOKEN},
+        params={TOKEN: TOKEN},
+    )
+
+    assert TOKEN not in repr(request)
+
+
 def test_the_endpoint_of_a_config_that_declares_one_is_returned() -> None:
     assert revocation_endpoint(_config()) == "https://auth.example.com/revoke"
 

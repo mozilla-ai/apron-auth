@@ -108,6 +108,39 @@ def _request_text(request: httpx.Request) -> str:
     return f"{request.url}{headers}{request.content.decode(errors='replace')}"
 
 
+def _assert_chains_nothing(exc: BaseException) -> None:
+    """Assert the error attaches no caught error, which is what keeps a transport frame off its traceback.
+
+    The frame walk below reads this library's own frames only. That is sound while the error carries
+    no cause and no context, because then its traceback starts at this library's own raise and holds
+    no frame of the HTTP client or its transport. Asserting it keeps the walk from resting on it.
+
+    Args:
+        exc: The error to read.
+    """
+    assert exc.__cause__ is None
+    assert exc.__context__ is None
+
+
+def _frames_outside_the_library(exc: BaseException) -> list[str]:
+    """Return one name per frame on the traceback that belongs to neither this library nor the test.
+
+    Args:
+        exc: The error whose traceback to walk.
+
+    Returns:
+        The name of each such frame, empty when the traceback holds none.
+    """
+    outside: list[str] = []
+    frames = exc.__traceback__
+    while frames is not None:
+        name = frames.tb_frame.f_code.co_filename
+        if LIBRARY_SOURCE not in name and __file__ != name:
+            outside.append(f"{name}:{frames.tb_frame.f_code.co_name}")
+        frames = frames.tb_next
+    return outside
+
+
 def _locals_stating(exc: BaseException, value: str) -> list[str]:
     """Return one name per frame local of this library on the traceback whose repr states ``value``.
 
@@ -150,6 +183,8 @@ class TestARevocationFailure:
             await handler.revoke(SecretToken(TOKEN), _standard_config())
 
         assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
         assert _locals_stating(caught.value, TOKEN) == []
 
     async def test_the_standard_handler_states_no_client_secret(self) -> None:
@@ -161,6 +196,7 @@ class TestARevocationFailure:
             await handler.revoke(SecretToken(TOKEN), _standard_config())
 
         assert sent[0].headers.get("authorization", "").startswith("Basic ")
+        _assert_chains_nothing(caught.value)
         assert _locals_stating(caught.value, CLIENT_SECRET) == []
 
     @pytest.mark.parametrize("provider", list(PRESETS), ids=lambda provider: provider.value)
@@ -175,6 +211,8 @@ class TestARevocationFailure:
             await handler.revoke(SecretToken(TOKEN), config)
 
         assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
         assert _locals_stating(caught.value, TOKEN) == []
 
 
@@ -196,4 +234,6 @@ class TestAnIdentityFailure:
             await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
 
         assert TOKEN in "".join(_request_text(request) for request in httpx_mock.get_requests())
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
         assert _locals_stating(caught.value, TOKEN) == []

@@ -7,7 +7,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto, unique
-from typing import Any, Literal, NoReturn, Self, TypeVar, assert_never
+from typing import Any, Literal, NamedTuple, NoReturn, Self, TypeVar, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -77,6 +77,21 @@ _PLAIN_HTTP_WAIVER = "allow_insecure_http_for"
 # The token that states a plain-HTTP waiver was built in code. It is compared by identity, so a
 # waiver arriving as data cannot state it.
 _WAIVER_SENTINEL = object()
+
+
+class BasicAuthCredential(NamedTuple):
+    """The client credential a request presents as HTTP Basic.
+
+    The two values only mean something together, and which one is the secret has to be read off the
+    name rather than off a position.
+
+    Attributes:
+        client_id: The client identifier, which states no secret.
+        client_secret: The client secret, wrapped so a local holding this credential states nothing.
+    """
+
+    client_id: str
+    client_secret: SecretStr
 
 
 class SecretToken(SecretStr):
@@ -1278,7 +1293,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         suffixes = self.provider.host_suffixes
         return matches_suffix(host, suffixes) and matches_suffix(token_host, suffixes)
 
-    def basic_auth(self) -> tuple[str, SecretStr] | None:
+    def basic_auth(self) -> BasicAuthCredential | None:
         """Return the client's HTTP Basic credential, or None for a public client.
 
         A public client declares a ``token_endpoint_auth_method`` of ``"none"``, presents no client
@@ -1289,8 +1304,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         The secret stays wrapped, so whatever holds the pair states nothing an error reporter records.
 
         Returns:
-            The ``(client_id, client_secret)`` pair for a confidential
-            client, or ``None`` for a public client.
+            The credential for a confidential client, or ``None`` for a public client.
         """
         # NOTE: This compares the value rather than reading the member's facts, because a config built
         # without validation holds whatever was passed, which may be a plain string.
@@ -1298,7 +1312,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             return None
         if self.client_secret is None:
             return None
-        return (self.client_id, self.client_secret)
+        return BasicAuthCredential(self.client_id, self.client_secret)
 
     def validate_issuer(self, received_iss: str | None) -> None:
         """Validate an authorization-response ``iss`` (RFC 9207) against :attr:`issuer`.
