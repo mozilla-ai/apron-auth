@@ -940,9 +940,17 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 
 An error reporter such as Sentry records the local variables of every frame a traceback holds, and Sentry does so by default (`include_local_variables=True`). A credential held in one of those is recorded, which no rule about an error's message or its exception chain reaches.
 
-This library holds every credential it passes between its own frames in a `SecretStr`, whose `repr` states a row of asterisks, and the one value that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. A reporter that captures this library's frames therefore records no token and no client secret. `make test` holds that rule by walking a failed request's traceback and asserting both halves: the credential reached the request, and no frame of this library states it.
+On the revocation and identity paths, this library holds every credential it passes between its own frames in a `SecretStr`, whose `repr` states a row of asterisks. The one value there that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. A reporter that captures a frame of either path therefore records no token and no client secret. `make test` holds that rule for every bundled handler by walking a failed request's traceback and asserting both halves: the credential reached the request, and no frame of this library states it.
 
-Two limits are worth knowing. The guarantee is about what a value states, so a reporter that walks object attributes recursively rather than reading a `repr` can still reach the string inside a wrapper. And your own frames are yours: a token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretStr(...)` and anything you unwrap in a handler of your own. For code that handles tokens, turn local-variable capture off or scrub it, with Sentry's `include_local_variables=False` or a `before_send` hook.
+Three limits are worth knowing, and the third is the one to act on.
+
+The guarantee is about what a value states, so a reporter that walks object attributes recursively rather than reading a `repr` can still reach the string inside a wrapper.
+
+Your own frames are yours. A token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretStr(...)` and anything you unwrap in a handler of your own.
+
+**The token-endpoint paths are not covered.** `exchange_code` and `refresh_token` take the authorization code, the PKCE verifier and the refresh token as plain strings, and each raises from its own frames, so a captured traceback of a failed exchange or refresh states them. Measured against a refused exchange, the code appears in five frame locals and the verifier in five; against a refused refresh, the refresh token appears in two. Covering those means wrapping the token fields of `TokenSet` itself, which is not done.
+
+So for code that handles tokens, turn local-variable capture off or scrub it, with Sentry's `include_local_variables=False` or a `before_send` hook. The wrapping above reduces what a capture reveals; it does not make the capture safe.
 
 ## Logging
 
