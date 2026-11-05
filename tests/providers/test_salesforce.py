@@ -400,3 +400,51 @@ class TestSalesforceIdentityHandler:
         assert not isinstance(exc_info.value, IdentityFetchError)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []
+
+    async def test_a_salesforce_host_written_with_another_dot_sends_the_token_to_salesforce(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The client dials the ASCII host, so the suffixes answer for the request that carries the token."""
+        from pydantic import SecretStr
+
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        httpx_mock.add_response(
+            url="https://login.salesforce.com/services/oauth2/userinfo",
+            json={"sub": "https://login.salesforce.com/id/00D/005"},
+        )
+        config = ProviderConfig(
+            client_id="sfid",
+            client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
+            authorize_url="https://login.salesforce\u3002com/services/oauth2/authorize",
+            token_url="https://login.salesforce.com/services/oauth2/token",
+        )
+        handler = SalesforceIdentityHandler()
+
+        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.subject == "https://login.salesforce.com/id/00D/005"
+
+    async def test_an_authorize_url_no_request_can_be_sent_to_refuses_to_send_the_token(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A URL the client cannot read names no host, which matches no suffix and refuses rather than raising.
+
+        NOTE: Validation refuses such a URL, so construction without it is the only way one arrives.
+        """
+        from pydantic import SecretStr
+
+        from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+        config = ProviderConfig.model_construct(
+            client_id="sfid",
+            client_secret=SecretStr("sfsecret"),  # pragma: allowlist secret
+            authorize_url="https://[::1/services/oauth2/authorize",
+            token_url="https://login.salesforce.com/services/oauth2/token",
+        )
+        handler = SalesforceIdentityHandler()
+
+        with pytest.raises(ConfigurationError, match="not a Salesforce host"):
+            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert httpx_mock.get_requests() == []
