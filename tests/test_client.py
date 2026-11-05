@@ -3036,7 +3036,7 @@ class TestFetchIdentity:
     async def test_fetch_identity_custom_handler(self):
         class DummyIdentityHandler:
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
-                assert material.access_token == "access-abc"
+                assert material.access_token.get_secret_value() == "access-abc"
                 assert config.client_id == "test-client"
                 return IdentityProfile(email="custom@example.com")
 

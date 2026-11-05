@@ -1758,7 +1758,7 @@ class TestFreshTokenSet:
 class TestIdentityMaterial:
     def test_minimal_defaults_id_token_to_none(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
-        assert material.access_token == "access-abc"
+        assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is None
 
     def test_frozen(self) -> None:
@@ -1769,8 +1769,19 @@ class TestIdentityMaterial:
     def test_from_token_set_extracts_id_token_from_extras(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
-        assert material.access_token == "access-abc"
-        assert material.id_token == "id-jwt"
+        assert material.access_token.get_secret_value() == "access-abc"
+        assert material.id_token is not None
+        assert material.id_token.get_secret_value() == "id-jwt"
+
+    def test_neither_token_is_stated_in_a_repr(self) -> None:
+        """An error reporter records the repr of each frame local, so this material must state neither."""
+        tokens = FreshTokenSet(access_token="s3cr3t-access", extras={"id_token": "s3cr3t-jwt"})
+
+        material = IdentityMaterial.from_token_set(tokens)
+
+        assert "s3cr3t-access" not in repr(material)
+        assert "s3cr3t-jwt" not in repr(material)
+        assert material.access_token.get_secret_value() == "s3cr3t-access"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})

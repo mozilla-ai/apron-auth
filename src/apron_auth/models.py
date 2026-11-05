@@ -1626,6 +1626,12 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
     refresh token and opaque caller context from them is defense in
     depth: the omitted fields are structurally absent, not merely blanked.
 
+    Each token is wrapped, because an error reporter records the local variables of every frame a
+    traceback holds and a handler's own frame is one of them.
+
+    NOTE: A handler must unwrap a token only into the request it sends, and must bind the unwrapped
+    value to no local of its own, because that local is what such a reporter records.
+
     NOTE: a provider-specific token-endpoint extra that a future handler
     needs (e.g. an instance URL) should be added here as a named field
     and populated in :meth:`from_token_set`, rather than widening the
@@ -1645,8 +1651,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             grant and must not infer one.
     """
 
-    access_token: str
-    id_token: str | None = None
+    access_token: SecretStr
+    id_token: SecretStr | None = None
     scope: str | None = None
 
     @classmethod
@@ -1664,8 +1670,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         """
         id_token = tokens.extras.get("id_token")
         return cls(
-            access_token=tokens.access_token,
-            id_token=id_token if isinstance(id_token, str) else None,
+            access_token=SecretStr(tokens.access_token),
+            id_token=SecretStr(id_token) if isinstance(id_token, str) else None,
             scope=tokens.scope,
         )
 

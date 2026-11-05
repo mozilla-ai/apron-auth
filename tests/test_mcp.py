@@ -334,7 +334,9 @@ class TestToProviderConfigIdentity:
         identity = await client.fetch_identity(FreshTokenSet(access_token="access"))
 
         assert identity.identity_key() == ("mcp", "u-1")
-        assert [(material.access_token, used_config) for material, used_config in handler.calls] == [("access", config)]
+        assert [(material.access_token.get_secret_value(), used_config) for material, used_config in handler.calls] == [
+            ("access", config)
+        ]
 
 
 class TestSelectAuthMethod:

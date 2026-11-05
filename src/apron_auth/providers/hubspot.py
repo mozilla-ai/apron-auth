@@ -31,6 +31,8 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import SecretStr
+
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -122,8 +124,7 @@ class HubSpotIdentityHandler:
                 response cannot be parsed. Messages never include the
                 request URL, which embeds the token.
         """
-        introspect_url = f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(material.access_token, safe='')}"
-        payload = await self._introspect(introspect_url, config.timeouts)
+        payload = await self._introspect(material.access_token, config.timeouts)
 
         user_id = payload.get("user_id")
         hub_id = payload.get("hub_id")
@@ -158,11 +159,13 @@ class HubSpotIdentityHandler:
             raw=payload,
         )
 
-    async def _introspect(self, introspect_url: str, timeouts: TimeoutPolicy) -> Any:
+    async def _introspect(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> Any:
         """Request the introspection endpoint and return the decoded body.
 
+        The endpoint states the token in its path, so the URL is built where the request is sent.
+
         Args:
-            introspect_url: The introspection URL, which carries the access token.
+            access_token: The access token the introspection URL states.
             timeouts: The limits in force for the introspection request.
 
         Returns:
@@ -173,7 +176,11 @@ class HubSpotIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         async with identity_client(timeouts) as client:
-            return await fetch_identity_json(client.get(introspect_url), "HubSpot identity", timeouts)
+            return await fetch_identity_json(
+                client.get(f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}"),
+                "HubSpot identity",
+                timeouts,
+            )
 
 
 class HubSpotRevocationHandler:

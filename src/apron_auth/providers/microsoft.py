@@ -18,6 +18,7 @@ from typing import Any, NamedTuple
 import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
 from joserfc.jwt import JWTClaimsRegistry
+from pydantic import SecretStr
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
@@ -277,7 +278,7 @@ class MicrosoftIdentityHandler:
         """
         id_token = None
         if material.id_token:
-            verified = await self._signing_keys.verify(material.id_token, config.timeouts)
+            verified = await self._signing_keys.verify(material.id_token.get_secret_value(), config.timeouts)
             id_token = _checked_id_token(verified.claims, config.client_id, verified.key.get("issuer"))
         payload = await self._fetch_userinfo(material.access_token, config.timeouts)
         if id_token is not None:
@@ -301,7 +302,7 @@ class MicrosoftIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_userinfo(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
+    async def _fetch_userinfo(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> dict[str, Any]:
         """Fetch the OIDC userinfo payload for display fields.
 
         Args:
@@ -320,7 +321,7 @@ class MicrosoftIdentityHandler:
             payload = await fetch_identity_json(
                 client.get(
                     _MICROSOFT_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Microsoft identity",
                 timeouts,
@@ -330,7 +331,7 @@ class MicrosoftIdentityHandler:
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
-    async def _fetch_organization(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
+    async def _fetch_organization(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
         """Fetch the signed-in user's organization from the directory, or ``None``.
 
         ``None`` means the directory yielded no usable organization: it
@@ -354,7 +355,7 @@ class MicrosoftIdentityHandler:
                 response = await within_request_limit(
                     client.get(
                         _MICROSOFT_ORGANIZATION_URL,
-                        headers={"Authorization": f"Bearer {access_token}"},
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                     ),
                     timeouts,
                 )
@@ -394,7 +395,7 @@ class MicrosoftIdentityHandler:
         return organization
 
     async def _fetch_verified_tenancies(
-        self, access_token: str, tenant_id: str, timeouts: TimeoutPolicy
+        self, access_token: SecretStr, tenant_id: str, timeouts: TimeoutPolicy
     ) -> tuple[TenancyContext, ...]:
         """Resolve the validated tenant's admin-verified domains into tenancies.
 

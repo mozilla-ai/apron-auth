@@ -42,6 +42,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._json_body import decode_json_body
@@ -376,7 +377,7 @@ class SlackIdentityHandler:
             return await self._fetch_via_oidc(access_token, config.timeouts)
         return await self._fetch_workspace_only(access_token, config.timeouts)
 
-    async def _fetch_via_oidc(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_via_oidc(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
 
         Args:
@@ -396,7 +397,7 @@ class SlackIdentityHandler:
             payload = await fetch_identity_json(
                 client.post(
                     _SLACK_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Slack identity",
                 timeouts,
@@ -446,7 +447,7 @@ class SlackIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_workspace_only(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_workspace_only(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch workspace tenancy for a non-OIDC (workspace-bot) token.
 
         Endpoint priority is fixed and intentional:
@@ -516,7 +517,7 @@ class SlackIdentityHandler:
     async def _slack_post(
         client: httpx.AsyncClient,
         url: str,
-        access_token: str,
+        access_token: SecretStr,
         endpoint_label: str,
         timeouts: TimeoutPolicy,
     ) -> dict[str, Any]:
@@ -538,7 +539,7 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         payload = await fetch_identity_json(
-            client.post(url, headers={"Authorization": f"Bearer {access_token}"}),
+            client.post(url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
             f"Slack {endpoint_label}",
             timeouts,
         )

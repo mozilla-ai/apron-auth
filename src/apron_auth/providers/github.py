@@ -161,7 +161,7 @@ class GitHubIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         headers = {
-            "Authorization": f"Bearer {material.access_token}",
+            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
             **_GITHUB_API_HEADERS,
         }
         async with identity_client(config.timeouts) as client:

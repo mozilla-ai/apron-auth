@@ -88,7 +88,7 @@ class NotionIdentityHandler:
                 client.get(
                     _NOTION_USERINFO_URL,
                     headers={
-                        "Authorization": f"Bearer {material.access_token}",
+                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
                         "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
                     },
                 ),

@@ -98,7 +98,7 @@ class GoogleIdentityHandler:
             payload = await fetch_identity_json(
                 client.get(
                     _GOOGLE_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {material.access_token}"},
+                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Google identity",
                 config.timeouts,
