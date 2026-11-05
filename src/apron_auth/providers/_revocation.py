@@ -127,10 +127,10 @@ class StandardRevocationHandler:
             url=revocation_endpoint(config),
             label=None if provider is None else provider.display_name,
             auth=auth,
-            # RFC 7009 section 5: a public client identifies itself with client_id in the request
-            # body, presenting no client authentication.
             data={"token": token.get_secret_value()}
             if auth is not None
+            # RFC 7009 section 5: a public client identifies itself with client_id in the request
+            # body, presenting no client authentication.
             else {"token": token.get_secret_value(), "client_id": config.client_id},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
