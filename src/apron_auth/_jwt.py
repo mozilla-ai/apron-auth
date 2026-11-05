@@ -104,8 +104,14 @@ def parse_compact(token: str) -> CompactSignature:
     msg = "The token is not a compact signed token"
     try:
         compact = jws.extract_compact(token.encode(), registry=jws_registry())
-    except (JoseError, RecursionError, TypeError, ValueError) as exc:
-        raise ValueError(msg) from exc
+    except (JoseError, RecursionError, TypeError, ValueError):
+        # NOTE: The caught error's frames hold the token, so this raise stays outside the except
+        # block, where Python would set __context__ to it.
+        unreadable = True
+    else:
+        unreadable = False
+    if unreadable:
+        raise ValueError(msg)
     header = compact.headers()
     # RFC 7797 ``b64: false`` sends the payload unencoded, and an ID token never uses that form.
     if not isinstance(header, dict) or header.get("b64", True) is not True:

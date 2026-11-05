@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
@@ -25,6 +24,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -185,7 +185,7 @@ class AtlassianIdentityHandler:
         )
 
     async def _fetch_tenancies(
-        self, client: httpx.AsyncClient, token: SecretStr, timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
     ) -> tuple[TenancyContext, ...]:
         """Resolve the sites the token can access into tenancies.
 
@@ -213,7 +213,7 @@ class AtlassianIdentityHandler:
         return _build_tenancies(resources)
 
     async def _fetch_profile(
-        self, client: httpx.AsyncClient, token: SecretStr, timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
     ) -> dict[str, Any]:
         """Fetch the person-level profile from the User Identity API.
 

@@ -29,6 +29,9 @@ IdentityCase: TypeAlias = Callable[[], "tuple[Any, ProviderConfig]"]
 # A token value distinctive enough that finding it in a repr cannot be a coincidence.
 TOKEN = "s3cr3t-live-access-token"  # pragma: allowlist secret
 
+# An ID token no verification can read, so it is refused before a key set is fetched.
+ID_TOKEN = "s3cr3t-unreadable-id-token"  # pragma: allowlist secret
+
 # The client secret the configuration carries, which a revocation request presents as HTTP Basic.
 CLIENT_SECRET = "s3cr3t-client-secret"  # pragma: allowlist secret
 
@@ -213,6 +216,27 @@ class TestARevocationFailure:
         assert TOKEN in _request_text(sent[0])
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating(caught.value, TOKEN) == []
+
+
+class TestAnIdTokenFailure:
+    """Test that a failed ID token verification leaves no token in a frame local."""
+
+    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False, can_send_already_matched_responses=True)
+    async def test_verification_states_neither_token(self, httpx_mock: HTTPXMock) -> None:
+        """Verification reads the ID token, so its own frames and the error it raises are held to the rule.
+
+        The token is unreadable, so verification refuses it before any key set can matter.
+        """
+        httpx_mock.add_response(status_code=REFUSED_STATUS, json={"error": "server_error"})
+        handler, config = IDENTITY_CASES[Provider.MICROSOFT]()
+
+        with pytest.raises(Exception) as caught:  # noqa: B017, PT011
+            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN, id_token=ID_TOKEN), config)
+
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating(caught.value, ID_TOKEN) == []
         assert _locals_stating(caught.value, TOKEN) == []
 
 

@@ -16,7 +16,6 @@ from dataclasses import replace
 from typing import Any
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth.models import (
     IdentityMaterial,
@@ -155,7 +154,7 @@ def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> t
 class GitHubIdentityHandler:
     """Fetch identity fields from GitHub profile and email APIs."""
 
-    async def _fetch(self, client: httpx.AsyncClient, url: str, token: SecretStr, timeouts: TimeoutPolicy) -> Any:
+    async def _fetch(self, client: httpx.AsyncClient, url: str, token: SecretToken, timeouts: TimeoutPolicy) -> Any:
         """Fetch one GitHub identity endpoint with the token presented as a bearer credential.
 
         Args:

@@ -42,7 +42,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._json_body import decode_json_body
@@ -378,7 +377,7 @@ class SlackIdentityHandler:
             return await self._fetch_via_oidc(access_token, config.timeouts)
         return await self._fetch_workspace_only(access_token, config.timeouts)
 
-    async def _fetch_via_oidc(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_via_oidc(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
 
         Args:
@@ -448,7 +447,7 @@ class SlackIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_workspace_only(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_workspace_only(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch workspace tenancy for a non-OIDC (workspace-bot) token.
 
         Endpoint priority is fixed and intentional:
@@ -518,7 +517,7 @@ class SlackIdentityHandler:
     async def _slack_post(
         client: httpx.AsyncClient,
         url: str,
-        access_token: SecretStr,
+        access_token: SecretToken,
         endpoint_label: str,
         timeouts: TimeoutPolicy,
     ) -> dict[str, Any]:

@@ -72,6 +72,7 @@ from apron_auth.models import (
     IdentityProfile,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     ServerMetadata,
     TimeoutPolicy,
     TokenEndpointAuthMethod,
@@ -591,7 +592,7 @@ class OidcIdentityHandler:
         )
 
     async def _validated_claims(
-        self, id_token: SecretStr, access_token: SecretStr, config: ProviderConfig
+        self, id_token: SecretToken, access_token: SecretToken, config: ProviderConfig
     ) -> dict[str, Any]:
         """Return the ID token's claims once its signature and claims check out.
 
@@ -616,7 +617,7 @@ class OidcIdentityHandler:
                 or the issuer's signing keys cannot be fetched or read.
         """
         issuer, client_id = self._issuer, config.client_id
-        verified = await self._signing_keys.verify(id_token.get_secret_value(), config.timeouts)
+        verified = await self._signing_keys.verify(id_token, config.timeouts)
         header, claims = verified.header, verified.claims
         token = CodeIDToken(
             claims,
@@ -646,7 +647,7 @@ class OidcIdentityHandler:
         return claims
 
     async def _fetch_userinfo(
-        self, userinfo_url: str, access_token: SecretStr, timeouts: TimeoutPolicy
+        self, userinfo_url: str, access_token: SecretToken, timeouts: TimeoutPolicy
     ) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 

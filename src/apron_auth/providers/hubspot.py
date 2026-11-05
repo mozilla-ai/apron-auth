@@ -13,8 +13,9 @@ which carries the bearer token in the URL path rather than an
 An :class:`IdentityFetchError` from the identity handler holds no request URL and no HTTP client text.
 The failed request's error is not attached as its cause or context, so the request cannot be reached from it.
 
-NOTE: An error reporter that captures frame local variables can still record the token.
-The request URL is a local variable while the request runs, and no error handling can remove it.
+NOTE: The token is part of the request URL, so a reporter that reads the request object itself can
+reach it. No frame local of this library states it: the URL is built where the request is sent, and
+the frames that remain hold the token wrapped.
 
 The introspection response mixes user and portal/account fields:
 ``user`` / ``user_id`` identify the HubSpot user, while ``hub_id`` /
@@ -30,8 +31,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
-
-from pydantic import SecretStr
 
 from apron_auth.models import (
     IdentityMaterial,
@@ -160,7 +159,7 @@ class HubSpotIdentityHandler:
             raw=payload,
         )
 
-    async def _introspect(self, access_token: SecretStr, timeouts: TimeoutPolicy) -> Any:
+    async def _introspect(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> Any:
         """Request the introspection endpoint and return the decoded body.
 
         The endpoint states the token in its path, so the URL is built where the request is sent.
