@@ -12,7 +12,7 @@ import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
-from apron_auth._urls import matches_suffix
+from apron_auth._urls import matches_suffix, url_host
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -80,6 +80,9 @@ class SalesforceIdentityHandler:
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Salesforce access token.
 
+        The host is the one the HTTP client dials, so the suffixes answer for the request that
+        carries the token rather than for a second reading of the URL.
+
         Args:
             material: The token material to establish identity from.
             config: The provider configuration; its ``authorize_url`` host
@@ -95,7 +98,7 @@ class SalesforceIdentityHandler:
             IdentityFetchError: If the userinfo request fails, or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        host = urlparse(config.authorize_url).hostname or ""
+        host = url_host(config.authorize_url)
         # NOTE: The access token goes to a userinfo URL on this host, so the suffixes limit where it is sent.
         if not matches_suffix(host, Provider.SALESFORCE.host_suffixes):
             msg = (
