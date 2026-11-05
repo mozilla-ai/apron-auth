@@ -46,6 +46,7 @@ from apron_auth._urls import (
     is_localhost_name,
     is_loopback_host,
     parse_ip,
+    url_host,
     uses_secure_transport,
 )
 from apron_auth.errors import ConfigurationError, FailureKind, McpDiscoveryError, McpRegistrationError, OAuthError
@@ -837,6 +838,8 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     A URL is refused when it is malformed, not HTTPS, carries userinfo, or targets a host that is not
     globally reachable. The caller's policy then sees a URL that passed those, and decides for every URL
     whatever its source.
+    The host is the HTTP client's own, so the host rule answers for the request that would be sent rather
+    than for a second reading of the URL. A URL the client cannot read names no host and is malformed.
 
     Args:
         url: The URL to check.
@@ -861,7 +864,10 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
         msg = f"MCP OAuth requires HTTPS URLs ({subject})"
         raise error_cls(msg, kind=kind)
     _require_no_authority_credential(url, subject=subject, caller_supplied=caller_supplied)
-    if _is_blocked_host(parsed.hostname or ""):
+    host = url_host(url)
+    if not host:
+        raise error_cls(_malformed_url_message(subject), kind=kind)
+    if _is_blocked_host(host):
         msg = f"MCP OAuth blocked a non-public host ({subject})"
         raise error_cls(msg, kind=kind)
     if url_validator is None:
