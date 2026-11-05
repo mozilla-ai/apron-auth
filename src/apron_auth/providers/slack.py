@@ -58,6 +58,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -376,7 +377,7 @@ class SlackIdentityHandler:
             return await self._fetch_via_oidc(access_token, config.timeouts)
         return await self._fetch_workspace_only(access_token, config.timeouts)
 
-    async def _fetch_via_oidc(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_via_oidc(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
 
         Args:
@@ -396,7 +397,7 @@ class SlackIdentityHandler:
             payload = await fetch_identity_json(
                 client.post(
                     _SLACK_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Slack identity",
                 timeouts,
@@ -446,7 +447,7 @@ class SlackIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_workspace_only(self, access_token: str, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_workspace_only(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
         """Fetch workspace tenancy for a non-OIDC (workspace-bot) token.
 
         Endpoint priority is fixed and intentional:
@@ -516,7 +517,7 @@ class SlackIdentityHandler:
     async def _slack_post(
         client: httpx.AsyncClient,
         url: str,
-        access_token: str,
+        access_token: SecretToken,
         endpoint_label: str,
         timeouts: TimeoutPolicy,
     ) -> dict[str, Any]:
@@ -538,7 +539,7 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         payload = await fetch_identity_json(
-            client.post(url, headers={"Authorization": f"Bearer {access_token}"}),
+            client.post(url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
             f"Slack {endpoint_label}",
             timeouts,
         )
@@ -635,7 +636,7 @@ class SlackRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a token at Slack's revocation endpoint.
 
         Args:
@@ -661,7 +662,7 @@ class SlackRevocationHandler:
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label="Slack",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token.get_secret_value()}"},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:

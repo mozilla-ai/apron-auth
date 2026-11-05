@@ -72,6 +72,7 @@ from apron_auth.models import (
     IdentityProfile,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     ServerMetadata,
     TimeoutPolicy,
     TokenEndpointAuthMethod,
@@ -590,7 +591,9 @@ class OidcIdentityHandler:
             raw={"id_token": claims or {}, "userinfo": userinfo},
         )
 
-    async def _validated_claims(self, id_token: str, access_token: str, config: ProviderConfig) -> dict[str, Any]:
+    async def _validated_claims(
+        self, id_token: SecretToken, access_token: SecretToken, config: ProviderConfig
+    ) -> dict[str, Any]:
         """Return the ID token's claims once its signature and claims check out.
 
         The signature is checked against the issuer's published keys before any claim is read.
@@ -625,7 +628,7 @@ class OidcIdentityHandler:
                 "iss": {"values": [issuer], "essential": True},
                 "aud": {"values": [client_id], "essential": True},
             },
-            {"client_id": client_id, "access_token": access_token},
+            {"client_id": client_id, "access_token": access_token.get_secret_value()},
         )
         try:
             token.validate(leeway=CLOCK_SKEW_SECONDS)
@@ -643,7 +646,9 @@ class OidcIdentityHandler:
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return claims
 
-    async def _fetch_userinfo(self, userinfo_url: str, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
+    async def _fetch_userinfo(
+        self, userinfo_url: str, access_token: SecretToken, timeouts: TimeoutPolicy
+    ) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 
         Args:
@@ -672,7 +677,8 @@ class OidcIdentityHandler:
         try:
             async with identity_client(timeouts, transport=transport) as client:
                 response = await within_request_limit(
-                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token}"}), timeouts
+                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
+                    timeouts,
                 )
                 response.raise_for_status()
         except httpx.HTTPStatusError as exc:

@@ -13,7 +13,7 @@ from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import UrlField
+from apron_auth.models import BasicAuthCredential, SecretToken, UrlField
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
@@ -38,7 +38,7 @@ class HttpMethod(StrEnum):
     POST = "POST"
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, repr=False)
 class RevocationRequest:
     """What one provider states about its revocation request, beside what the shared send supplies.
 
@@ -62,12 +62,25 @@ class RevocationRequest:
     url: str
     label: str | None = None
     endpoint: str | None = None
-    auth: tuple[str, str] | None = None
+    auth: BasicAuthCredential | None = None
     data: Mapping[str, str] | None = None
     headers: Mapping[str, str] | None = None
     json_body: Mapping[str, str] | None = None
     method: HttpMethod = HttpMethod.POST
     params: Mapping[str, str] | None = None
+
+    def __repr__(self) -> str:
+        """Return what the request is for, stating nothing it carries.
+
+        An error reporter records the repr of every local of every frame a traceback holds, and a
+        provider may state a credential in any part of its request, including the request line.
+        What appears is therefore named here rather than left out here, so a part added later is
+        absent until it is named.
+
+        Returns:
+            The method, the provider's label, and the host the request would reach.
+        """
+        return f"{type(self).__name__}(method={self.method}, label={self.label!r}, host={url_host(self.url)!r})"
 
 
 class StandardRevocationHandler:
@@ -89,7 +102,7 @@ class StandardRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a token at the configuration's RFC 7009 endpoint.
 
         Args:
@@ -108,17 +121,16 @@ class StandardRevocationHandler:
                 The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth()
-        data = {"token": token}
-        if auth is None:
-            # RFC 7009 section 5: a public client identifies itself with client_id in the request
-            # body, presenting no client authentication.
-            data["client_id"] = config.client_id
         provider = config.provider
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label=None if provider is None else provider.display_name,
             auth=auth,
-            data=data,
+            data={"token": token.get_secret_value()}
+            if auth is not None
+            # RFC 7009 section 5: a public client identifies itself with client_id in the request
+            # body, presenting no client authentication.
+            else {"token": token.get_secret_value(), "client_id": config.client_id},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in _REVOKED_STATUSES:
@@ -235,6 +247,23 @@ def _refuse_an_unpermitted_url(request: RevocationRequest, config: ProviderConfi
         raise ConfigurationError(msg)
 
 
+def _presented_auth(auth: BasicAuthCredential | None) -> tuple[str, str] | None:
+    """Return an HTTP Basic credential in the form an HTTP client presents, or None to present none.
+
+    NOTE: The result states the secret in plain text. It is owned by the call it is passed to and
+    must not be bound to a local, because a local is what an error reporter records off a traceback.
+
+    Args:
+        auth: The credential to present, or ``None`` to present none.
+
+    Returns:
+        The client identifier and the plain secret, or ``None``.
+    """
+    if auth is None:
+        return None
+    return (auth.client_id, auth.client_secret.get_secret_value())
+
+
 async def send_revocation(
     request: RevocationRequest,
     config: ProviderConfig,
@@ -285,7 +314,7 @@ async def send_revocation(
                 client.request(
                     request.method,
                     request.url,
-                    auth=request.auth,
+                    auth=_presented_auth(request.auth),
                     data=request.data,
                     headers=request.headers,
                     json=request.json_body,

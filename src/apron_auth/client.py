@@ -48,6 +48,7 @@ from apron_auth.models import (
     FreshTokenSet,
     IdentityMaterial,
     OAuthPendingState,
+    SecretToken,
     TokenEndpointAuthMethod,
     UrlField,
     UserToken,
@@ -885,7 +886,7 @@ class _OAuthClientBase:
             host: The revocation endpoint's host, for the log line.
         """
         try:
-            await self.revoke_token(token)
+            await self.revoke_token(SecretToken(token))
         except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
@@ -953,14 +954,14 @@ class _OAuthClientBase:
             raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 
-    async def revoke_token(self, token: str) -> bool:
+    async def revoke_token(self, token: SecretToken) -> bool:
         """Revoke a token via the provider's revocation endpoint.
 
         A handler passed to this client revokes the token. Otherwise the handler the config's
         provider needs does, and a config naming no provider takes RFC 7009 revocation.
 
         Args:
-            token: The token to revoke.
+            token: The token to revoke, wrapped so this frame states it to no error reporter.
 
         Returns:
             ``True`` when the provider confirms revocation.

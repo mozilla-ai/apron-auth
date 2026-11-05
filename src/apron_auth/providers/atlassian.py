@@ -24,6 +24,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -167,10 +168,9 @@ class AtlassianIdentityHandler:
                 or its response cannot be parsed. The User Identity API
                 request never raises; it degrades to a tenancy-only profile.
         """
-        headers = {"Authorization": f"Bearer {material.access_token}"}
         async with identity_client(config.timeouts) as client:
-            tenancies = await self._fetch_tenancies(client, headers, config.timeouts)
-            payload = await self._fetch_profile(client, headers, config.timeouts)
+            tenancies = await self._fetch_tenancies(client, material.access_token, config.timeouts)
+            payload = await self._fetch_profile(client, material.access_token, config.timeouts)
 
         return IdentityProfile(
             provider=Provider.ATLASSIAN,
@@ -185,13 +185,13 @@ class AtlassianIdentityHandler:
         )
 
     async def _fetch_tenancies(
-        self, client: httpx.AsyncClient, headers: dict[str, str], timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
     ) -> tuple[TenancyContext, ...]:
         """Resolve the sites the token can access into tenancies.
 
         Args:
             client: The HTTP client to issue the request with.
-            headers: Request headers carrying the bearer token.
+            token: The bearer access token the request carries.
             timeouts: The limits in force for the tenancy request.
 
         Returns:
@@ -203,7 +203,9 @@ class AtlassianIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         resources = await fetch_identity_json(
-            client.get(_ATLASSIAN_ACCESSIBLE_RESOURCES_URL, headers=headers),
+            client.get(
+                _ATLASSIAN_ACCESSIBLE_RESOURCES_URL, headers={"Authorization": f"Bearer {token.get_secret_value()}"}
+            ),
             "Atlassian accessible resources",
             timeouts,
         )
@@ -211,7 +213,7 @@ class AtlassianIdentityHandler:
         return _build_tenancies(resources)
 
     async def _fetch_profile(
-        self, client: httpx.AsyncClient, headers: dict[str, str], timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
     ) -> dict[str, Any]:
         """Fetch the person-level profile from the User Identity API.
 
@@ -221,7 +223,7 @@ class AtlassianIdentityHandler:
 
         Args:
             client: The HTTP client to issue the request with.
-            headers: Request headers carrying the bearer token.
+            token: The bearer access token the request carries.
             timeouts: The limits in force for the profile request.
 
         Returns:
@@ -229,7 +231,10 @@ class AtlassianIdentityHandler:
             unavailable.
         """
         try:
-            response = await within_request_limit(client.get(_ATLASSIAN_USERINFO_URL, headers=headers), timeouts)
+            response = await within_request_limit(
+                client.get(_ATLASSIAN_USERINFO_URL, headers={"Authorization": f"Bearer {token.get_secret_value()}"}),
+                timeouts,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # The status is the whole diagnostic: 401 separates a missing

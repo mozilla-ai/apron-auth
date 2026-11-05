@@ -113,7 +113,7 @@ class SalesforceIdentityHandler:
             payload = await fetch_identity_json(
                 client.get(
                     userinfo_url,
-                    headers={"Authorization": f"Bearer {material.access_token}"},
+                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Salesforce identity",
                 config.timeouts,

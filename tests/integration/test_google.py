@@ -14,6 +14,7 @@ import os
 import pytest
 
 from apron_auth.client import OAuthClient
+from apron_auth.models import SecretToken
 from apron_auth.providers import google
 
 pytestmark = pytest.mark.integration
@@ -64,5 +65,5 @@ class TestGoogleRevocation:
         )
         client = OAuthClient(config)
         tokens = await client.refresh_token(google_env["refresh_token"])
-        result = await client.revoke_token(tokens.access_token)
+        result = await client.revoke_token(SecretToken(tokens.access_token))
         assert result is True

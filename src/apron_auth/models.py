@@ -7,7 +7,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto, unique
-from typing import Any, Literal, NoReturn, Self, TypeVar, assert_never
+from typing import Any, Literal, NamedTuple, NoReturn, Self, TypeVar, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
@@ -77,6 +77,47 @@ _PLAIN_HTTP_WAIVER = "allow_insecure_http_for"
 # The token that states a plain-HTTP waiver was built in code. It is compared by identity, so a
 # waiver arriving as data cannot state it.
 _WAIVER_SENTINEL = object()
+
+
+class BasicAuthCredential(NamedTuple):
+    """The client credential a request presents as HTTP Basic.
+
+    The two values only mean something together, and which one is the secret has to be read off the
+    name rather than off a position.
+
+    Attributes:
+        client_id: The client identifier, which states no secret.
+        client_secret: The client secret, wrapped so a local holding this credential states nothing.
+    """
+
+    client_id: str
+    client_secret: SecretStr
+
+
+class SecretToken(SecretStr):
+    """A token that states nothing as text, so no accident can put it on the wire or in a log.
+
+    A plain secret wrapper renders a row of asterisks wherever text is wanted, which keeps a token
+    out of a log and out of a captured frame local. It also means code that forgets to unwrap sends
+    the asterisks instead, and an endpoint that answers the same status for a token it does not
+    recognize reports that as a revocation. Refusing the conversion turns that silence into a
+    failure at the point of the mistake.
+
+    NOTE: Reading the token is :meth:`get_secret_value` and nothing else. Formatting one, printing
+    one, or putting one in a request without that call raises :class:`TypeError`.
+    """
+
+    def __str__(self) -> str:
+        """Refuse to state the token as text.
+
+        Returns:
+            Never returns.
+
+        Raises:
+            TypeError: Always, because a token states nothing as text.
+        """
+        msg = "A token states nothing as text. Read it with get_secret_value()."
+        raise TypeError(msg)
 
 
 @unique
@@ -1252,7 +1293,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         suffixes = self.provider.host_suffixes
         return matches_suffix(host, suffixes) and matches_suffix(token_host, suffixes)
 
-    def basic_auth(self) -> tuple[str, str] | None:
+    def basic_auth(self) -> BasicAuthCredential | None:
         """Return the client's HTTP Basic credential, or None for a public client.
 
         A public client declares a ``token_endpoint_auth_method`` of ``"none"``, presents no client
@@ -1260,10 +1301,10 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         A confidential client authenticates with its ``client_id`` and ``client_secret``.
         The declared method drives the decision, so a public client presents no credential even if a secret
         lingers on the config.
+        The secret stays wrapped, so whatever holds the pair states nothing an error reporter records.
 
         Returns:
-            The ``(client_id, client_secret)`` pair for a confidential
-            client, or ``None`` for a public client.
+            The credential for a confidential client, or ``None`` for a public client.
         """
         # NOTE: This compares the value rather than reading the member's facts, because a config built
         # without validation holds whatever was passed, which may be a plain string.
@@ -1271,7 +1312,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             return None
         if self.client_secret is None:
             return None
-        return (self.client_id, self.client_secret.get_secret_value())
+        return BasicAuthCredential(self.client_id, self.client_secret)
 
     def validate_issuer(self, received_iss: str | None) -> None:
         """Validate an authorization-response ``iss`` (RFC 9207) against :attr:`issuer`.
@@ -1625,6 +1666,12 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
     refresh token and opaque caller context from them is defense in
     depth: the omitted fields are structurally absent, not merely blanked.
 
+    Each token is wrapped, because an error reporter records the local variables of every frame a
+    traceback holds and a handler's own frame is one of them.
+
+    NOTE: A handler must unwrap a token only into the request it sends, and must bind the unwrapped
+    value to no local of its own, because that local is what such a reporter records.
+
     NOTE: a provider-specific token-endpoint extra that a future handler
     needs (e.g. an instance URL) should be added here as a named field
     and populated in :meth:`from_token_set`, rather than widening the
@@ -1644,9 +1691,28 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             grant and must not infer one.
     """
 
-    access_token: str
-    id_token: str | None = None
+    access_token: SecretToken
+    id_token: SecretToken | None = None
     scope: str | None = None
+
+    @model_validator(mode="after")
+    def _each_token_states_a_value(self) -> IdentityMaterial:
+        """Refuse material whose token states nothing, which no request could carry.
+
+        A token stating nothing is absent rather than empty, so it is refused here and the
+        difference never reaches a handler as a value it has to test.
+
+        Raises:
+            ValueError: If the access token states nothing, or an ID token is present and states
+                nothing.
+        """
+        if not self.access_token.get_secret_value():
+            msg = "access_token must state a value"
+            raise ValueError(msg)
+        if self.id_token is not None and not self.id_token.get_secret_value():
+            msg = "id_token must state a value when it is present"
+            raise ValueError(msg)
+        return self
 
     @classmethod
     def from_token_set(cls, tokens: FreshTokenSet) -> IdentityMaterial:
@@ -1663,8 +1729,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         """
         id_token = tokens.extras.get("id_token")
         return cls(
-            access_token=tokens.access_token,
-            id_token=id_token if isinstance(id_token, str) else None,
+            access_token=SecretToken(tokens.access_token),
+            id_token=SecretToken(id_token) if isinstance(id_token, str) and id_token else None,
             scope=tokens.scope,
         )
 

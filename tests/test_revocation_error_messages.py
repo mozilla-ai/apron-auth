@@ -18,7 +18,7 @@ from pytest_httpx import HTTPXMock
 from support import ANY_SUCCESS_STATUS, revoked_status
 
 from apron_auth.errors import RevocationError
-from apron_auth.models import Provider, ProviderConfig
+from apron_auth.models import Provider, ProviderConfig, SecretToken
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
 
@@ -67,7 +67,7 @@ async def _revocation_error(
     config = CONFIGS[name]()
     handler = revocation_handler_for(config) or StandardRevocationHandler()
     with pytest.raises(RevocationError) as exc_info:
-        await handler.revoke(TOKEN, config)
+        await handler.revoke(SecretToken(TOKEN), config)
     return exc_info.value
 
 
@@ -113,7 +113,7 @@ async def test_token_that_cannot_be_sent_is_refused_without_a_request(name: str,
     handler = revocation_handler_for(config) or StandardRevocationHandler()
 
     with pytest.raises(RevocationError) as exc_info:
-        await handler.revoke(NON_ASCII_TOKEN, config)
+        await handler.revoke(SecretToken(NON_ASCII_TOKEN), config)
 
     assert str(exc_info.value).endswith(" token: the token could not be encoded")
     assert exc_info.value.kind.retryable is False
@@ -135,7 +135,7 @@ async def test_token_that_is_not_ascii_reaches_the_endpoint(name: str, httpx_moc
     config = CONFIGS[name]()
     handler = revocation_handler_for(config) or StandardRevocationHandler()
 
-    await handler.revoke(NON_ASCII_TOKEN, config)
+    await handler.revoke(SecretToken(NON_ASCII_TOKEN), config)
 
     request = httpx_mock.get_request()
     assert request is not None

@@ -13,8 +13,9 @@ which carries the bearer token in the URL path rather than an
 An :class:`IdentityFetchError` from the identity handler holds no request URL and no HTTP client text.
 The failed request's error is not attached as its cause or context, so the request cannot be reached from it.
 
-NOTE: An error reporter that captures frame local variables can still record the token.
-The request URL is a local variable while the request runs, and no error handling can remove it.
+NOTE: The token is part of the request URL, so a reporter that reads the request object itself can
+reach it. No frame local of this library states it: the URL is built where the request is sent, and
+the frames that remain hold the token wrapped.
 
 The introspection response mixes user and portal/account fields:
 ``user`` / ``user_id`` identify the HubSpot user, while ``hub_id`` /
@@ -37,6 +38,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -122,8 +124,7 @@ class HubSpotIdentityHandler:
                 response cannot be parsed. Messages never include the
                 request URL, which embeds the token.
         """
-        introspect_url = f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(material.access_token, safe='')}"
-        payload = await self._introspect(introspect_url, config.timeouts)
+        payload = await self._introspect(material.access_token, config.timeouts)
 
         user_id = payload.get("user_id")
         hub_id = payload.get("hub_id")
@@ -158,11 +159,13 @@ class HubSpotIdentityHandler:
             raw=payload,
         )
 
-    async def _introspect(self, introspect_url: str, timeouts: TimeoutPolicy) -> Any:
+    async def _introspect(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> Any:
         """Request the introspection endpoint and return the decoded body.
 
+        The endpoint states the token in its path, so the URL is built where the request is sent.
+
         Args:
-            introspect_url: The introspection URL, which carries the access token.
+            access_token: The access token the introspection URL states.
             timeouts: The limits in force for the introspection request.
 
         Returns:
@@ -173,7 +176,11 @@ class HubSpotIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         async with identity_client(timeouts) as client:
-            return await fetch_identity_json(client.get(introspect_url), "HubSpot identity", timeouts)
+            return await fetch_identity_json(
+                client.get(f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}"),
+                "HubSpot identity",
+                timeouts,
+            )
 
 
 class HubSpotRevocationHandler:
@@ -201,7 +208,7 @@ class HubSpotRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
 
         The ``token`` argument must be the refresh token issued by
@@ -224,9 +231,8 @@ class HubSpotRevocationHandler:
                 The failed request's error is not attached as its cause or context.
         """
         endpoint = revocation_endpoint(config)
-        encoded = quote(token, safe="")
         request = RevocationRequest(
-            url=f"{endpoint.rstrip('/')}/{encoded}",
+            url=f"{endpoint.rstrip('/')}/{quote(token.get_secret_value(), safe='')}",
             label="HubSpot",
             method=HttpMethod.DELETE,
             endpoint=endpoint,

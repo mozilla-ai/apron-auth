@@ -33,7 +33,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import TimeoutPolicy, UrlField, WorkloadIssuer
+from apron_auth.models import SecretToken, TimeoutPolicy, UrlField, WorkloadIssuer
 from apron_auth.providers._jwks import IssuerSigningKeys, VerifiedToken
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
@@ -244,7 +244,7 @@ class _TrustedIssuer:
         if moved is None:
             return None
         try:
-            verified = await moved.keys.verify(token, self._timeouts)
+            verified = await moved.keys.verify(SecretToken(token), self._timeouts)
         except (IdentityFetchError, TokenValidationError):
             # NOTE: The failure is not logged with its value, because a failed request can render itself.
             logger.warning(
@@ -466,7 +466,7 @@ class WorkloadTokenVerifier:
         """
         signing_keys = await trusted.keys()
         try:
-            return await signing_keys.verify(token, self._timeouts)
+            return await signing_keys.verify(SecretToken(token), self._timeouts)
         except TokenValidationError as refusal:
             if refusal.reason is not TokenValidationReason.UNKNOWN_KEY:
                 raise

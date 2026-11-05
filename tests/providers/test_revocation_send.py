@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import Provider, ProviderConfig, UrlField
+from apron_auth.models import Provider, ProviderConfig, SecretToken, UrlField
 from apron_auth.providers._revocation import (
     HttpMethod,
     RevocationRequest,
@@ -50,6 +50,46 @@ def _request(url: str = "https://auth.example.com/revoke", **changes: object) ->
     return RevocationRequest(**fields)  # ty: ignore[invalid-argument-type]
 
 
+def test_the_request_repr_names_only_what_carries_no_credential() -> None:
+    """An error reporter records the repr of a frame local, so this request must state nothing it carries.
+
+    The whole repr is asserted, because a part named in it later would otherwise go unnoticed here.
+    """
+    request = RevocationRequest(
+        url=f"https://auth.example.com/revoke/{TOKEN}",
+        label="Example",
+        auth=("cid", SecretStr("csecret")),  # pragma: allowlist secret
+        data={"token": TOKEN},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json_body={"token": TOKEN},
+        params={"token": TOKEN},
+    )
+
+    assert repr(request) == "RevocationRequest(method=POST, label='Example', host='auth.example.com')"
+
+
+def test_the_request_repr_states_no_field_carrying_a_credential() -> None:
+    """Every field that can carry one is set to the credential, so a new such field is held to the rule.
+
+    The exact repr above pins the diagnostic shape. This pins the safety property, which a field
+    absent from that shape would otherwise satisfy by being absent rather than by stating nothing.
+    The method and the provider label are left out, because the repr names both deliberately and
+    neither can carry a credential.
+    """
+    request = RevocationRequest(
+        url=f"https://auth.example.com/revoke/{TOKEN}",
+        label="Example",
+        endpoint=f"https://auth.example.com/revoke/{TOKEN}",
+        auth=(TOKEN, SecretStr(TOKEN)),
+        data={TOKEN: TOKEN},
+        headers={TOKEN: TOKEN},
+        json_body={TOKEN: TOKEN},
+        params={TOKEN: TOKEN},
+    )
+
+    assert TOKEN not in repr(request)
+
+
 def test_the_endpoint_of_a_config_that_declares_one_is_returned() -> None:
     assert revocation_endpoint(_config()) == "https://auth.example.com/revoke"
 
@@ -73,7 +113,7 @@ async def test_an_empty_endpoint_is_not_reported_as_a_failure_worth_retrying() -
     bypassed = _config().model_copy(update={"revocation_url": ""})
 
     with pytest.raises(ConfigurationError) as refusal:
-        await StandardRevocationHandler().revoke(TOKEN, bypassed)
+        await StandardRevocationHandler().revoke(SecretToken(TOKEN), bypassed)
 
     assert refusal.value.kind.retryable is False
 
@@ -468,7 +508,7 @@ async def test_the_standard_handler_names_the_provider_the_config_states() -> No
     )
 
     with pytest.raises(RevocationError, match="Failed to revoke Atlassian token"):
-        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, config)
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretToken(TOKEN), config)
 
 
 async def test_the_standard_handler_names_the_provider_when_the_request_cannot_be_sent() -> None:
@@ -490,10 +530,10 @@ async def test_the_standard_handler_names_the_provider_when_the_request_cannot_b
     )
 
     with pytest.raises(RevocationError, match="Failed to revoke Atlassian token: "):
-        await StandardRevocationHandler(transport_factory=unreachable).revoke(TOKEN, config)
+        await StandardRevocationHandler(transport_factory=unreachable).revoke(SecretToken(TOKEN), config)
 
 
 async def test_the_standard_handler_names_no_provider_where_the_config_names_none() -> None:
     """A configuration naming no provider has no name to give, and the message states none."""
     with pytest.raises(RevocationError, match="^Failed to revoke token: "):
-        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(TOKEN, _config())
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretToken(TOKEN), _config())

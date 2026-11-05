@@ -31,6 +31,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     ServerMetadata,
     TenancyContext,
     TimeoutPolicy,
@@ -353,7 +354,12 @@ class TestProviderConfig:
             authorize_url="https://provider.example.com/authorize",
             token_url="https://provider.example.com/token",
         )
-        assert config.basic_auth() == ("test-client", "test-secret")
+        credential = config.basic_auth()
+
+        assert credential is not None
+        assert credential.client_id == "test-client"
+        assert credential.client_secret.get_secret_value() == "test-secret"
+        assert "test-secret" not in repr(credential)
 
     def test_basic_auth_returns_none_for_public_client(self) -> None:
         config = ProviderConfig(
@@ -1749,10 +1755,37 @@ class TestFreshTokenSet:
         assert isinstance(fresh.model_copy(), FreshTokenSet)
 
 
+class TestSecretToken:
+    """Test that a token states nothing as text, so a mistake fails rather than masking the value."""
+
+    def test_the_value_is_read_only_by_asking_for_it(self) -> None:
+        token = SecretToken("s3cr3t-live-access-token")
+
+        assert token.get_secret_value() == "s3cr3t-live-access-token"
+        assert "s3cr3t-live-access-token" not in repr(token)
+
+    @pytest.mark.parametrize(
+        "state_as_text",
+        [
+            pytest.param(str, id="a string conversion"),
+            pytest.param(lambda token: f"{token}", id="a format string"),
+        ],
+    )
+    def test_stating_it_as_text_is_refused(self, state_as_text: Callable[[SecretToken], str]) -> None:
+        """A masked value sent to a provider reads as a token it does not recognize, which it accepts."""
+        with pytest.raises(TypeError, match="get_secret_value"):
+            state_as_text(SecretToken("s3cr3t-live-access-token"))
+
+    def test_an_empty_token_is_falsy_and_a_stated_one_is_not(self) -> None:
+        """A present-or-absent check reads the token itself, so the empty case answers without a conversion."""
+        assert bool(SecretToken("s3cr3t-live-access-token")) is True
+        assert bool(SecretToken("")) is False
+
+
 class TestIdentityMaterial:
     def test_minimal_defaults_id_token_to_none(self) -> None:
         material = IdentityMaterial(access_token="access-abc")
-        assert material.access_token == "access-abc"
+        assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is None
 
     def test_frozen(self) -> None:
@@ -1763,8 +1796,37 @@ class TestIdentityMaterial:
     def test_from_token_set_extracts_id_token_from_extras(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
-        assert material.access_token == "access-abc"
-        assert material.id_token == "id-jwt"
+        assert material.access_token.get_secret_value() == "access-abc"
+        assert material.id_token is not None
+        assert material.id_token.get_secret_value() == "id-jwt"
+
+    def test_an_id_token_the_response_states_as_nothing_is_absent(self) -> None:
+        """A token stating nothing carries nothing to verify, so the narrowing reports it as absent."""
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": ""})
+
+        assert IdentityMaterial.from_token_set(tokens).id_token is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"access_token": ""}, id="an access token stating nothing"),
+            pytest.param({"access_token": "access-abc", "id_token": ""}, id="an ID token stating nothing"),
+        ],
+    )
+    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, str]) -> None:
+        """No request can carry a token stating nothing, so the material states the rule itself."""
+        with pytest.raises(ConfigurationError, match="must state a value"):
+            IdentityMaterial(**payload)
+
+    def test_neither_token_is_stated_in_a_repr(self) -> None:
+        """An error reporter records the repr of each frame local, so this material must state neither."""
+        tokens = FreshTokenSet(access_token="s3cr3t-access", extras={"id_token": "s3cr3t-jwt"})
+
+        material = IdentityMaterial.from_token_set(tokens)
+
+        assert "s3cr3t-access" not in repr(material)
+        assert "s3cr3t-jwt" not in repr(material)
+        assert material.access_token.get_secret_value() == "s3cr3t-access"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
         tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})

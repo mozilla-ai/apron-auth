@@ -30,7 +30,7 @@ from apron_auth.errors import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from apron_auth.models import TimeoutPolicy
+    from apron_auth.models import SecretToken, TimeoutPolicy
     from apron_auth.protocols import TransportFactory
 
 logger = logging.getLogger(__name__)
@@ -155,13 +155,13 @@ class IssuerSigningKeys:
         self._last_failure: tuple[str, FailureKind] | None = None
         self._loop_lock = LoopLock()
 
-    async def verify(self, token: str, timeouts: TimeoutPolicy) -> VerifiedToken:
+    async def verify(self, token: SecretToken, timeouts: TimeoutPolicy) -> VerifiedToken:
         """Return the header and claims of a token whose signature an issuer key verifies.
 
         Only the issuer's published keys are used, so a key or key URL in the token's header is ignored.
 
         Args:
-            token: A compact signed token.
+            token: A compact signed token, wrapped so this frame states it to no error reporter.
             timeouts: The limits in force for a key set fetch this check needs.
 
         Returns:
@@ -174,11 +174,17 @@ class IssuerSigningKeys:
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
-            compact = parse_compact(token)
-        except ValueError as exc:
+            compact = parse_compact(token.get_secret_value())
+        except ValueError:
+            # NOTE: The caught error's frames hold the token, so this raise stays outside the except
+            # block, where Python would set __context__ to it.
+            malformed = True
+        else:
+            malformed = False
+        if malformed:
             raise TokenValidationError(
                 "The token is not a compact signed token", reason=TokenValidationReason.MALFORMED
-            ) from exc
+            )
         header = compact.headers()
         if "crit" in header:
             # No header extension is understood here, so RFC 7515 section 4.1.11 requires refusing any listed one.
@@ -193,10 +199,14 @@ class IssuerSigningKeys:
             raise TokenValidationError(msg, reason=TokenValidationReason.UNSUPPORTED)
         try:
             algorithm.registry.check_header(header)
-        except JoseError as exc:
-            raise TokenValidationError(
-                "The token's header is not valid", reason=TokenValidationReason.MALFORMED
-            ) from exc
+        except JoseError:
+            # NOTE: The caught error can hold the parsed token, so this raise stays outside the
+            # except block, where Python would set __context__ to it.
+            invalid_header = True
+        else:
+            invalid_header = False
+        if invalid_header:
+            raise TokenValidationError("The token's header is not valid", reason=TokenValidationReason.MALFORMED)
         await self._refresh_if_stale(timeouts)
         checked_keys = self._keys
         result = self._check_signature(compact, header.get("kid"), algorithm)
@@ -217,7 +227,8 @@ class IssuerSigningKeys:
                 msg = "The token is signed with a key the issuer does not publish"
                 raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_KEY)
             msg = "The token's signature did not verify"
-            raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE) from result.error
+            # NOTE: result.error can hold the parsed token, so it is not attached.
+            raise TokenValidationError(msg, reason=TokenValidationReason.SIGNATURE)
         claims = compact_claims(compact)
         if claims is None:
             msg = "The token's claims are not a JSON object"

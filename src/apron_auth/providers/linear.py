@@ -66,7 +66,7 @@ class LinearIdentityHandler:
                 client.post(
                     _LINEAR_GRAPHQL_URL,
                     headers={
-                        "Authorization": f"Bearer {material.access_token}",
+                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
                         "Content-Type": "application/json",
                     },
                     json={"query": _LINEAR_VIEWER_QUERY},

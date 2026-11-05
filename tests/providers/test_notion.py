@@ -10,7 +10,7 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.notion import NotionIdentityHandler, NotionRevocationHandler, preset
@@ -201,7 +201,7 @@ class TestNotionRevocationHandler:
     async def test_already_revoked_returns_true(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=400)
         handler = NotionRevocationHandler()
-        result = await handler.revoke("old-token", TestNotionRevocationHandler._make_config())
+        result = await handler.revoke(SecretToken("old-token"), TestNotionRevocationHandler._make_config())
         assert result is True
 
     async def test_a_status_notion_does_not_state_is_refused(self, httpx_mock: HTTPXMock) -> None:
@@ -210,7 +210,7 @@ class TestNotionRevocationHandler:
         handler = NotionRevocationHandler()
 
         with pytest.raises(RevocationError) as refusal:
-            await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
+            await handler.revoke(SecretToken("access-token-abc"), TestNotionRevocationHandler._make_config())
 
         assert refusal.value.kind is FailureKind.SERVER_ERROR
 
@@ -218,7 +218,7 @@ class TestNotionRevocationHandler:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         handler = NotionRevocationHandler()
         with pytest.raises(RevocationError, match="^Failed to revoke Notion token: network error$") as exc_info:
-            await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
+            await handler.revoke(SecretToken("access-token-abc"), TestNotionRevocationHandler._make_config())
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -232,12 +232,12 @@ class TestNotionRevocationHandler:
         )
         handler = NotionRevocationHandler()
         with pytest.raises(ConfigurationError, match="no revocation endpoint"):
-            await handler.revoke("access-token-abc", config)
+            await handler.revoke(SecretToken("access-token-abc"), config)
 
     async def test_successful_revocation(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=200)
         handler = NotionRevocationHandler()
-        result = await handler.revoke("access-token-abc", TestNotionRevocationHandler._make_config())
+        result = await handler.revoke(SecretToken("access-token-abc"), TestNotionRevocationHandler._make_config())
         assert result is True
         request = httpx_mock.get_request()
         assert request is not None
@@ -254,7 +254,7 @@ class TestNotionRevocationViaOAuthClient:
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=200)
         config = preset(client_id="nid", client_secret="nsecret", scopes=[])
         client = OAuthClient(config=config)
-        result = await client.revoke_token("access-token-abc")
+        result = await client.revoke_token(SecretToken("access-token-abc"))
         assert result is True
 
         request = httpx_mock.get_request()

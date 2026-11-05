@@ -73,7 +73,7 @@ class TypeformIdentityHandler:
             payload = await fetch_identity_json(
                 client.get(
                     _TYPEFORM_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {material.access_token}"},
+                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Typeform identity",
                 config.timeouts,

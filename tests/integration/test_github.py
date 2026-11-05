@@ -14,6 +14,7 @@ import os
 import pytest
 
 from apron_auth.client import OAuthClient
+from apron_auth.models import SecretToken
 from apron_auth.providers import github
 
 pytestmark = pytest.mark.integration
@@ -52,5 +53,5 @@ class TestGitHubRevocation:
         )
         client = OAuthClient(config)
         tokens = await client.refresh_token(github_env["refresh_token"])
-        result = await client.revoke_token(tokens.access_token)
+        result = await client.revoke_token(SecretToken(tokens.access_token))
         assert result is True

@@ -20,6 +20,7 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
     TokenEndpointAuthMethod,
@@ -88,7 +89,7 @@ class NotionIdentityHandler:
                 client.get(
                     _NOTION_USERINFO_URL,
                     headers={
-                        "Authorization": f"Bearer {material.access_token}",
+                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
                         "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
                     },
                 ),
@@ -176,7 +177,7 @@ class NotionRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.
 
         Args:
@@ -199,7 +200,7 @@ class NotionRevocationHandler:
             url=revocation_endpoint(config),
             label="Notion",
             auth=config.basic_auth(),
-            json_body={"token": token},
+            json_body={"token": token.get_secret_value()},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (200, 400):

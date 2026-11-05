@@ -37,6 +37,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -301,7 +302,7 @@ class MicrosoftIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_userinfo(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any]:
+    async def _fetch_userinfo(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> dict[str, Any]:
         """Fetch the OIDC userinfo payload for display fields.
 
         Args:
@@ -320,7 +321,7 @@ class MicrosoftIdentityHandler:
             payload = await fetch_identity_json(
                 client.get(
                     _MICROSOFT_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token}"},
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Microsoft identity",
                 timeouts,
@@ -330,7 +331,7 @@ class MicrosoftIdentityHandler:
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
-    async def _fetch_organization(self, access_token: str, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
+    async def _fetch_organization(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
         """Fetch the signed-in user's organization from the directory, or ``None``.
 
         ``None`` means the directory yielded no usable organization: it
@@ -354,7 +355,7 @@ class MicrosoftIdentityHandler:
                 response = await within_request_limit(
                     client.get(
                         _MICROSOFT_ORGANIZATION_URL,
-                        headers={"Authorization": f"Bearer {access_token}"},
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                     ),
                     timeouts,
                 )
@@ -394,7 +395,7 @@ class MicrosoftIdentityHandler:
         return organization
 
     async def _fetch_verified_tenancies(
-        self, access_token: str, tenant_id: str, timeouts: TimeoutPolicy
+        self, access_token: SecretToken, tenant_id: str, timeouts: TimeoutPolicy
     ) -> tuple[TenancyContext, ...]:
         """Resolve the validated tenant's admin-verified domains into tenancies.
 

@@ -6,7 +6,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, RevocationError
-from apron_auth.models import OAuthPendingState, ProviderConfig
+from apron_auth.models import OAuthPendingState, ProviderConfig, SecretToken
 from apron_auth.protocols import RevocationHandler, StateStore
 from apron_auth.providers._revocation import StandardRevocationHandler
 
@@ -38,7 +38,7 @@ class TestStateStoreProtocol:
 class TestRevocationHandlerProtocol:
     def test_class_satisfies_protocol(self):
         class CustomHandler:
-            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 return True
 
         assert isinstance(CustomHandler(), RevocationHandler)
@@ -49,7 +49,7 @@ class TestStandardRevocationHandler:
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config()
         handler = StandardRevocationHandler()
-        result = await handler.revoke("access-token-abc", config)
+        result = await handler.revoke(SecretToken("access-token-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
         assert request is not None
@@ -61,7 +61,7 @@ class TestStandardRevocationHandler:
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=status)
         handler = StandardRevocationHandler()
         with pytest.raises(RevocationError, match=f"HTTP {status}") as exc_info:
-            await handler.revoke("tok", _make_config())
+            await handler.revoke(SecretToken("tok"), _make_config())
         assert exc_info.value.kind is kind
         assert exc_info.value.retryable is True
 
@@ -69,7 +69,7 @@ class TestStandardRevocationHandler:
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=400)
         handler = StandardRevocationHandler()
         with pytest.raises(RevocationError, match="HTTP 400") as exc_info:
-            await handler.revoke("tok", _make_config())
+            await handler.revoke(SecretToken("tok"), _make_config())
         assert exc_info.value.kind is FailureKind.REJECTED
 
     @pytest.mark.parametrize(
@@ -85,7 +85,7 @@ class TestStandardRevocationHandler:
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config(client_secret=secret, token_endpoint_auth_method=auth_method)
         handler = StandardRevocationHandler()
-        result = await handler.revoke("access-token-abc", config)
+        result = await handler.revoke(SecretToken("access-token-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
         assert b"token=access-token-abc" in request.content
@@ -96,7 +96,7 @@ class TestStandardRevocationHandler:
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config(client_secret=None, token_endpoint_auth_method="none")
         handler = StandardRevocationHandler()
-        result = await handler.revoke("access-token-abc", config)
+        result = await handler.revoke(SecretToken("access-token-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
         assert b"client_id=test-client" in request.content
@@ -120,7 +120,7 @@ class TestStandardRevocationHandler:
             token_endpoint_auth_method="none",
         )
         handler = StandardRevocationHandler()
-        result = await handler.revoke("access-token-abc", config)
+        result = await handler.revoke(SecretToken("access-token-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
         assert request is not None
@@ -143,7 +143,7 @@ class TestStandardRevocationHandler:
         config = _make_config(client_secret=None, token_endpoint_auth_method="none")
         handler = StandardRevocationHandler(transport_factory=transport)
 
-        assert await handler.revoke("access-token-abc", config) is True
+        assert await handler.revoke(SecretToken("access-token-abc"), config) is True
         assert headers == [False]
         assert "client_id=" in bodies[0]
 
@@ -152,7 +152,7 @@ class TestStandardRevocationHandler:
         config = _make_config()
         handler = StandardRevocationHandler()
         with pytest.raises(RevocationError, match="HTTP 400") as exc_info:
-            await handler.revoke("bad-token", config)
+            await handler.revoke(SecretToken("bad-token"), config)
         assert exc_info.value.kind is FailureKind.REJECTED
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
@@ -160,7 +160,7 @@ class TestStandardRevocationHandler:
         config = _make_config()
         handler = StandardRevocationHandler()
         with pytest.raises(RevocationError, match="^Failed to revoke token: network error$") as exc_info:
-            await handler.revoke("access-token-abc", config)
+            await handler.revoke(SecretToken("access-token-abc"), config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -182,6 +182,6 @@ class TestStandardRevocationHandler:
 
         config = _make_config()
         handler = StandardRevocationHandler(transport_factory=factory)
-        result = await handler.revoke("access-token-abc", config)
+        result = await handler.revoke(SecretToken("access-token-abc"), config)
         assert result is True
         assert calls == ["https://provider.example.com/revoke"]
