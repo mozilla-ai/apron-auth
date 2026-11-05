@@ -495,7 +495,6 @@ def cimd_client_id(url: str) -> str:
         case AuthorityCredential.ABSENT:
             pass
         case AuthorityCredential.MALFORMED:
-            # NOTE: This arm is unreachable, because the parse above refuses an authority it cannot read.
             msg = "CIMD client_id must be a valid URL"
             raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         case AuthorityCredential.PRESENT:
