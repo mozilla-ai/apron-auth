@@ -967,6 +967,68 @@ class TestExchangeCode:
             await client.exchange_code(_callback(), pending_state=pending)
         assert httpx_mock.get_requests() == []
 
+    @pytest.mark.parametrize(
+        "nonce",
+        [pytest.param(None, id="no nonce"), pytest.param("", id="a nonce stating nothing")],
+    )
+    async def test_exchange_refuses_a_pending_state_whose_openid_answer_states_no_nonce(
+        self, httpx_mock: HTTPXMock, nonce: str | None
+    ) -> None:
+        """Validation refuses this state, so construction without it is the only way one arrives."""
+        client = OAuthClient(config=_make_oauth_config())
+        pending = OAuthPendingState.model_construct(
+            state=_STATE,
+            redirect_uri="https://app.example.com/callback",
+            nonce=nonce,
+            openid_requested=True,
+            created_at=time.time(),
+        )
+        with pytest.raises(StateError, match="states no nonce"):
+            await client.exchange_code(_callback(), pending_state=pending)
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_pending_state_whose_nonce_was_copied_away(self, httpx_mock: HTTPXMock) -> None:
+        """A copy carries no validation either, so the same state arrives through it."""
+        client = OAuthClient(config=_make_oauth_config())
+        pending = _pending_state(nonce="sent-nonce").model_copy(update={"nonce": None})
+        with pytest.raises(StateError, match="states no nonce"):
+            await client.exchange_code(_callback(), pending_state=pending)
+        assert httpx_mock.get_requests() == []
+
+    async def test_exchange_refuses_a_pending_state_carrying_a_nonce_its_request_never_sent(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """Checking a nonce the request never sent would refuse a response that answers it."""
+        client = OAuthClient(config=_make_oauth_config())
+        pending = OAuthPendingState.model_construct(
+            state=_STATE,
+            redirect_uri="https://app.example.com/callback",
+            nonce="never-sent",
+            openid_requested=False,
+            created_at=time.time(),
+        )
+        with pytest.raises(StateError, match="states a nonce"):
+            await client.exchange_code(_callback(), pending_state=pending)
+        assert httpx_mock.get_requests() == []
+
+    async def test_a_stored_pending_state_whose_openid_answer_states_no_nonce_is_refused(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        store = AsyncMock()
+        store.consume = AsyncMock(
+            return_value=OAuthPendingState.model_construct(
+                state=_STATE,
+                redirect_uri="https://app.example.com/callback",
+                nonce=None,
+                openid_requested=True,
+                created_at=time.time(),
+            )
+        )
+        client = StoredStateClient(config=_make_oauth_config(), state_store=store)
+        with pytest.raises(StateError, match="states no nonce"):
+            await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
+        assert httpx_mock.get_requests() == []
+
     async def test_exchange_measures_the_pending_state_age_against_the_configured_maximum(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
     ) -> None:

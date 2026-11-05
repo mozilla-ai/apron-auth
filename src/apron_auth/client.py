@@ -260,6 +260,28 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     raise StateError(msg)
 
 
+def _check_pending_openid(pending: OAuthPendingState) -> None:
+    """Refuse a pending authorization request whose nonce does not state what its request asked for.
+
+    A request that asked for the ``openid`` scope sent a nonce, and no other request sent one, so a
+    request stating one without the other states nothing the nonce rule can be held to.
+
+    NOTE: Validation refuses such a request, so only construction without it produces one.
+
+    Args:
+        pending: The pending authorization request to check.
+
+    Raises:
+        StateError: If an OpenID request states no nonce, or another request states one.
+    """
+    if pending.openid_requested and not pending.nonce:
+        msg = "Pending authorization request asked for OpenID and states no nonce"
+        raise StateError(msg)
+    if not pending.openid_requested and pending.nonce:
+        msg = "Pending authorization request states a nonce its request did not ask for"
+        raise StateError(msg)
+
+
 def _expires_at(token: Mapping[str, Any]) -> float | None:
     """Return the absolute expiry a token states, derived from its lifetime where it states no expiry.
 
@@ -696,10 +718,12 @@ class _OAuthClientBase:
                 or an ID token that does not carry that nonce.
             StateError: If the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or its response states no access token.
         """
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
+        _check_pending_openid(pending)
 
         data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
@@ -1331,7 +1355,8 @@ class OAuthClient(_OAuthClientBase):
             StateError: If the callback carried no state, ``state`` is not the pending state's own,
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
                 access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
@@ -1479,7 +1504,8 @@ class StoredStateClient(_OAuthClientBase):
                 the store holds no pending state for it because it is invalid, expired, or already consumed,
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
                 access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
                 its remaining tokens revoked first, under the same time limit as a refused ID token.

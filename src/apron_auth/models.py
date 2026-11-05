@@ -1997,15 +1997,17 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         Returns:
             The validated state, unchanged.
 
+        A nonce that states nothing checks nothing, so an empty one is no nonce either way.
+
         Raises:
             ValueError: If an OpenID request states no nonce, or a request that asked for no OpenID
                 scope states one.
         """
         if self.openid_requested and not self.nonce:
-            msg = "nonce is required when openid_requested is true"
+            msg = "nonce must state a value when openid_requested is true"
             raise ValueError(msg)
         if not self.openid_requested and self.nonce:
-            msg = "nonce must be omitted when openid_requested is false"
+            msg = "nonce must state nothing when openid_requested is false"
             raise ValueError(msg)
         return self
 

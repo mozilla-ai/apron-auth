@@ -2569,6 +2569,23 @@ class TestOAuthPendingState:
                 openid_requested=False,
             )
 
+    def test_a_request_that_asked_for_no_openid_may_state_an_empty_nonce(self) -> None:
+        """An empty nonce checks nothing, so it is no nonce, which is what this request recorded.
+
+        NOTE: A store whose nonce column states no value as the empty string round-trips one, and
+        refusing it would refuse a state that reads exactly as it was recorded.
+        """
+        state = OAuthPendingState(
+            state="random-state-token",
+            redirect_uri="https://app.example.com/callback",
+            created_at=1.0,
+            nonce="",
+            openid_requested=False,
+        )
+
+        assert state.nonce == ""
+        assert state.openid_requested is False
+
     def test_a_refused_nonce_is_not_repeated(self) -> None:
         with pytest.raises(ConfigurationError) as refusal:
             OAuthPendingState(
