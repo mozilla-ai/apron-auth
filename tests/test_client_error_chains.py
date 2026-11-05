@@ -410,25 +410,25 @@ class TestHandlerErrors:
         self, failure: type[httpx.RequestError], kind: str
     ) -> None:
         class FailingHandler:
-            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
                 request = httpx.Request("POST", f"https://provider.example.com/revoke?token={token}")
                 raise failure(RAW_TEXT, request=request)
 
         client = OAuthClient(_config(), revocation_handler=FailingHandler())
         with pytest.raises(RevocationError) as exc_info:
-            await client.revoke_token(ACCESS_TOKEN)
+            await client.revoke_token(SecretStr(ACCESS_TOKEN))
 
         assert str(exc_info.value) == f"Failed to revoke token: {kind}"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
 
     async def test_revocation_handler_unexpected_error_carries_no_text(self) -> None:
         class BrokenHandler:
-            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
                 raise RuntimeError(f"{RAW_TEXT} {token}")
 
         client = OAuthClient(_config(), revocation_handler=BrokenHandler())
         with pytest.raises(RevocationError) as exc_info:
-            await client.revoke_token(ACCESS_TOKEN)
+            await client.revoke_token(SecretStr(ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Failed to revoke token"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -467,12 +467,12 @@ class TestHandlerErrors:
 
     async def test_configuration_error_from_a_revocation_handler_keeps_its_class_and_message(self) -> None:
         class MisconfiguredHandler:
-            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
                 raise ConfigurationError("revocation needs client authentication")
 
         client = OAuthClient(_config(), revocation_handler=MisconfiguredHandler())
         with pytest.raises(ConfigurationError) as exc_info:
-            await client.revoke_token(ACCESS_TOKEN)
+            await client.revoke_token(SecretStr(ACCESS_TOKEN))
 
         assert not isinstance(exc_info.value, RevocationError)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
@@ -498,7 +498,7 @@ class TestHandlerErrors:
 class TestHandlerDomainErrors:
     async def test_revocation_handler_error_loses_its_chain(self) -> None:
         class ChainingHandler:
-            async def revoke(self, token: str, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
                 request = httpx.Request("POST", "https://provider.example.com/revoke", data={"token": token})
                 try:
                     raise httpx.ConnectError(RAW_TEXT, request=request)
@@ -507,7 +507,7 @@ class TestHandlerDomainErrors:
 
         client = OAuthClient(_config(), revocation_handler=ChainingHandler())
         with pytest.raises(RevocationError) as exc_info:
-            await client.revoke_token(ACCESS_TOKEN)
+            await client.revoke_token(SecretStr(ACCESS_TOKEN))
 
         assert str(exc_info.value) == "Custom revocation failed"
         # The handler's frames hold the token, so they must not stay on the error's traceback.

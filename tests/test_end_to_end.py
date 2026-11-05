@@ -112,7 +112,7 @@ class TestFullOAuthFlow:
             url="https://provider.example.com/revoke",
             status_code=200,
         )
-        result = await client.revoke_token(token=refreshed.access_token)
+        result = await client.revoke_token(token=SecretStr(refreshed.access_token))
         assert result is True
 
 

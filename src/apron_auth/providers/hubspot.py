@@ -208,7 +208,7 @@ class HubSpotRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
 
         The ``token`` argument must be the refresh token issued by
@@ -231,9 +231,8 @@ class HubSpotRevocationHandler:
                 The failed request's error is not attached as its cause or context.
         """
         endpoint = revocation_endpoint(config)
-        encoded = quote(token, safe="")
         request = RevocationRequest(
-            url=f"{endpoint.rstrip('/')}/{encoded}",
+            url=f"{endpoint.rstrip('/')}/{quote(token.get_secret_value(), safe='')}",
             label="HubSpot",
             method=HttpMethod.DELETE,
             endpoint=endpoint,

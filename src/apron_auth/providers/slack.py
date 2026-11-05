@@ -636,7 +636,7 @@ class SlackRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a token at Slack's revocation endpoint.
 
         Args:
@@ -662,7 +662,7 @@ class SlackRevocationHandler:
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label="Slack",
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"Authorization": f"Bearer {token.get_secret_value()}"},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if not response.is_success:

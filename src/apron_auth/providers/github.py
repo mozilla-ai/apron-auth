@@ -15,6 +15,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+from pydantic import SecretStr
+
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TimeoutPolicy
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
@@ -219,7 +221,7 @@ class GitHubRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke the GitHub OAuth grant at the configured revocation endpoint.
 
         Args:
@@ -245,7 +247,7 @@ class GitHubRevocationHandler:
             method=HttpMethod.DELETE,
             auth=config.basic_auth(),
             headers=_GITHUB_API_HEADERS,
-            json_body={"access_token": token},
+            json_body={"access_token": token.get_secret_value()},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         # 204: grant removed. 404: already gone, an idempotent re-disconnect.

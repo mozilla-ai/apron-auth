@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic import SecretStr
+
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -176,7 +178,7 @@ class NotionRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.
 
         Args:
@@ -199,7 +201,7 @@ class NotionRevocationHandler:
             url=revocation_endpoint(config),
             label="Notion",
             auth=config.basic_auth(),
-            json_body={"token": token},
+            json_body={"token": token.get_secret_value()},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (200, 400):

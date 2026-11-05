@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic import SecretStr
+
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -164,7 +166,7 @@ class GoogleRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a token at Google's revocation endpoint.
 
         Args:
@@ -182,13 +184,13 @@ class GoogleRevocationHandler:
                 Its kind says whether the same request may pass later.
                 The failed request's error is not attached as its cause or context.
         """
-        if not token.strip():
+        if not token.get_secret_value().strip():
             msg = "Revocation refused: no token was given to revoke."
             raise ConfigurationError(msg)
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label="Google",
-            params={"token": token},
+            params={"token": token.get_secret_value()},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in (_TOKEN_REVOKED, _TOKEN_NOT_VALID):

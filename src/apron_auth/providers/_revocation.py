@@ -90,7 +90,7 @@ class StandardRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a token at the configuration's RFC 7009 endpoint.
 
         Args:
@@ -109,17 +109,16 @@ class StandardRevocationHandler:
                 The failed request's error is not attached as its cause or context.
         """
         auth = config.basic_auth()
-        data = {"token": token}
-        if auth is None:
-            # RFC 7009 section 5: a public client identifies itself with client_id in the request
-            # body, presenting no client authentication.
-            data["client_id"] = config.client_id
         provider = config.provider
         request = RevocationRequest(
             url=revocation_endpoint(config),
             label=None if provider is None else provider.display_name,
             auth=auth,
-            data=data,
+            # RFC 7009 section 5: a public client identifies itself with client_id in the request
+            # body, presenting no client authentication.
+            data={"token": token.get_secret_value()}
+            if auth is not None
+            else {"token": token.get_secret_value(), "client_id": config.client_id},
         )
         response = await send_revocation(request, config, transport_factory=self._transport_factory)
         if response.status_code in _REVOKED_STATUSES:

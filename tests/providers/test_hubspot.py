@@ -4,6 +4,7 @@ import traceback
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
@@ -323,7 +324,7 @@ class TestHubSpotRevocationHandler:
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await HubSpotRevocationHandler().revoke("refresh-abc", config)
+        result = await HubSpotRevocationHandler().revoke(SecretStr("refresh-abc"), config)
         assert result is True
 
         request = httpx_mock.get_request()
@@ -340,7 +341,7 @@ class TestHubSpotRevocationHandler:
             client_secret="hssecret",  # pragma: allowlist secret
             scopes=["contacts"],
         )
-        result = await HubSpotRevocationHandler().revoke("refresh-missing", config)
+        result = await HubSpotRevocationHandler().revoke(SecretStr("refresh-missing"), config)
         assert result is True
 
     async def test_a_status_hubspot_does_not_state_is_refused(self, httpx_mock: HTTPXMock):
@@ -354,7 +355,7 @@ class TestHubSpotRevocationHandler:
             scopes=["contacts"],
         )
         with pytest.raises(RevocationError) as refusal:
-            await HubSpotRevocationHandler().revoke("refresh-abc", config)
+            await HubSpotRevocationHandler().revoke(SecretStr("refresh-abc"), config)
 
         assert refusal.value.kind is FailureKind.SERVER_ERROR
 
@@ -368,7 +369,7 @@ class TestHubSpotRevocationHandler:
             scopes=["contacts"],
         )
         raw_token = "a/b+c=d e"
-        result = await HubSpotRevocationHandler().revoke(raw_token, config)
+        result = await HubSpotRevocationHandler().revoke(SecretStr(raw_token), config)
         assert result is True
 
         request = httpx_mock.get_request()
@@ -392,7 +393,7 @@ class TestHubSpotRevocationHandler:
             scopes=["contacts"],
         )
         with pytest.raises(RevocationError) as exc_info:
-            await HubSpotRevocationHandler().revoke(secret, config)
+            await HubSpotRevocationHandler().revoke(SecretStr(secret), config)
         assert str(exc_info.value) == "Failed to revoke HubSpot token: network error"
         formatted = "".join(traceback.format_exception(exc_info.value))
         assert secret not in formatted
@@ -411,7 +412,7 @@ class TestHubSpotRevocationHandler:
         )
         handler = HubSpotRevocationHandler()
         with pytest.raises(ConfigurationError, match="no revocation endpoint"):
-            await handler.revoke("refresh-abc", config)
+            await handler.revoke(SecretStr("refresh-abc"), config)
 
 
 class TestHubSpotRevocationViaOAuthClient:
@@ -425,7 +426,7 @@ class TestHubSpotRevocationViaOAuthClient:
             scopes=["contacts"],
         )
         client = OAuthClient(config=config)
-        result = await client.revoke_token("refresh-abc")
+        result = await client.revoke_token(SecretStr("refresh-abc"))
         assert result is True
 
         request = httpx_mock.get_request()

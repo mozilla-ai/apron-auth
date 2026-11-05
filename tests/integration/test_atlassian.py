@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.providers import atlassian
@@ -52,5 +53,5 @@ class TestAtlassianRevocation:
         )
         client = OAuthClient(config)
         tokens = await client.refresh_token(atlassian_env["refresh_token"])
-        result = await client.revoke_token(tokens.access_token)
+        result = await client.revoke_token(SecretStr(tokens.access_token))
         assert result is True

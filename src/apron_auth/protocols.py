@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 import httpx
 
 if TYPE_CHECKING:
+    from pydantic import SecretStr
+
     from apron_auth.models import IdentityMaterial, IdentityProfile, OAuthPendingState, ProviderConfig
 
 
@@ -61,11 +63,15 @@ class StateStore(Protocol):
 class RevocationHandler(Protocol):
     """Provider-specific token revocation."""
 
-    async def revoke(self, token: str, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
         """Revoke a token at the provider.
 
         NOTE: Implementations must keep credentials out of a raised error's message and attributes,
         and must not chain an error that carries them.
+
+        NOTE: Implementations must unwrap the token only into the request they send, and must bind
+        the unwrapped value to no local of their own, because an error reporter that captures frame
+        locals records every local of every frame a traceback holds.
 
         Args:
             token: The token to revoke.
