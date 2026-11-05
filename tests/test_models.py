@@ -1185,6 +1185,7 @@ class TestUrlSchemes:
         pending = OAuthPendingState(
             state="random-state-token",
             redirect_uri="http://app.example.com/callback",
+            openid_requested=False,
             created_at=1.0,
         )
 
@@ -1418,7 +1419,12 @@ class TestARefusalRepeatsNoValue:
             pytest.param(IdentityMaterial, {"access_token": "at"}, "id_token", id="identity material"),
             pytest.param(
                 OAuthPendingState,
-                {"state": "s", "redirect_uri": "https://app.example.com/callback", "created_at": 1.0},
+                {
+                    "state": "s",
+                    "redirect_uri": "https://app.example.com/callback",
+                    "openid_requested": False,
+                    "created_at": 1.0,
+                },
                 "code_verifier",
                 id="a pending state",
             ),
@@ -2446,6 +2452,7 @@ class TestOAuthPendingState:
             OAuthPendingState(
                 state="random-state-token",
                 redirect_uri="https://operator:" + "sesame@app.example.com/callback",
+                openid_requested=False,
                 created_at=1.0,
             )
 
@@ -2455,6 +2462,7 @@ class TestOAuthPendingState:
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             code_verifier="verifier-abc",
+            openid_requested=False,
             created_at=now,
         )
         assert state.state == "random-state-token"
@@ -2465,6 +2473,7 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
         )
         assert state.code_verifier is None
@@ -2473,6 +2482,7 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
         )
         assert state.context == {}
@@ -2482,6 +2492,7 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
             context=meta,
         )
@@ -2493,6 +2504,7 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
             context=original,
         )
@@ -2527,9 +2539,61 @@ class TestOAuthPendingState:
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
             created_at=time.time(),
+            openid_requested=False,
         )
         with pytest.raises(ConfigurationError):
             state.state = "other"
+
+    @pytest.mark.parametrize(
+        "nonce",
+        [pytest.param(None, id="no nonce"), pytest.param("", id="a nonce stating nothing")],
+    )
+    def test_an_openid_request_that_states_no_nonce_is_refused(self, nonce: str | None) -> None:
+        """A persisted state that lost its nonce would otherwise read as a request that asked for none."""
+        with pytest.raises(ConfigurationError, match="nonce"):
+            OAuthPendingState(
+                state="random-state-token",
+                redirect_uri="https://app.example.com/callback",
+                created_at=1.0,
+                nonce=nonce,
+                openid_requested=True,
+            )
+
+    def test_a_nonce_without_an_openid_request_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError, match="nonce"):
+            OAuthPendingState(
+                state="random-state-token",
+                redirect_uri="https://app.example.com/callback",
+                created_at=1.0,
+                nonce="sent-nonce",
+                openid_requested=False,
+            )
+
+    def test_a_refused_nonce_is_not_repeated(self) -> None:
+        with pytest.raises(ConfigurationError) as refusal:
+            OAuthPendingState(
+                state="random-state-token",
+                redirect_uri="https://app.example.com/callback",
+                created_at=1.0,
+                nonce="sent-nonce",
+                openid_requested=False,
+            )
+
+        assert "sent-nonce" not in str(refusal.value)
+
+    def test_a_state_stating_no_openid_answer_is_refused(self) -> None:
+        """A store returns every field, so a record missing this one states nothing about the nonce rule.
+
+        NOTE: The record states no nonce either, which is the shape a default would read as a request that
+        asked for no OpenID scope, leaving the rule off without saying so.
+        """
+        stored = {
+            "state": "random-state-token",
+            "redirect_uri": "https://app.example.com/callback",
+            "created_at": 1.0,
+        }
+        with pytest.raises(ConfigurationError, match="openid_requested"):
+            OAuthPendingState.model_validate(stored)
 
 
 class TestBrowserBoundAuthorization:

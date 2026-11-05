@@ -23,7 +23,9 @@ DNS resolution to validated public addresses and prevent SSRF via rebinding.
 class StateStore(Protocol):
     """Caller provides persistence for OAuth state.
 
-    NOTE: Implementations must return every field of a saved pending state, including ``created_at`` and ``nonce``.
+    NOTE: Implementations must return every field of a saved pending state, including ``created_at``,
+    ``nonce`` and ``openid_requested``. A state whose nonce and ``openid_requested`` disagree is refused,
+    so a store that drops one of them is reported rather than left to weaken the nonce rule.
     An implementation that rebuilds the state from a stored record must pass the model's own fields alone.
     A field the model does not define is refused rather than ignored, so a record carrying keys of the store's
     own, such as a document identifier or an expiry attribute, needs those keys left out.

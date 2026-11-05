@@ -63,6 +63,7 @@ def _pending_state(nonce: str | None = None, code_verifier: str = VERIFIER) -> O
         redirect_uri="https://app.example.com/callback",
         code_verifier=code_verifier,
         nonce=nonce,
+        openid_requested=bool(nonce),
         created_at=time.time(),
     )
 

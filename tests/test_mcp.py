@@ -235,7 +235,9 @@ class TestToProviderConfig:
             meta, ClientRegistration(client_id="c", client_secret="s"), redirect_uri=_REDIRECT_URI
         )
         client = OAuthClient(config)
-        pending = OAuthPendingState(state="s-1", redirect_uri=_REDIRECT_URI, created_at=time.time())
+        pending = OAuthPendingState(
+            state="s-1", redirect_uri=_REDIRECT_URI, openid_requested=False, created_at=time.time()
+        )
 
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(AuthorizationCallback(code="auth-code", state="s-1"), pending_state=pending)

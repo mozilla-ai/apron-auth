@@ -27,6 +27,7 @@ def _make_pending(state: str = "test-state", age: float = 0.0) -> OAuthPendingSt
         state=state,
         redirect_uri="https://app.example.com/callback",
         code_verifier="test-verifier",
+        openid_requested=False,
         created_at=time.time() - age,
     )
 

@@ -128,6 +128,7 @@ def _pending_state(**overrides: object) -> OAuthPendingState:
         "created_at": time.time(),
     }
     defaults.update(overrides)
+    defaults.setdefault("openid_requested", bool(defaults.get("nonce")))
     return OAuthPendingState(**defaults)
 
 
@@ -587,6 +588,7 @@ class TestGetAuthorizationUrl:
         params = parse_qs(urlparse(url).query)
         assert ("nonce" in params) is sends_nonce
         assert (pending_state.nonce is not None) is sends_nonce
+        assert pending_state.openid_requested is sends_nonce
 
     async def test_repeated_authorize_url_scope_is_kept(self) -> None:
         url_with_scopes = "https://provider.example.com/authorize?scope=openid&scope=email"
@@ -679,6 +681,7 @@ class TestExchangeCode:
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
             code_verifier="stored-verifier",
+            openid_requested=False,
             created_at=time.time(),
         )
         store = AsyncMock()
@@ -700,6 +703,7 @@ class TestExchangeCode:
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
             code_verifier="stored-verifier",
+            openid_requested=False,
             created_at=time.time(),
             context={"user_id": "U123", "tenant_id": "T456"},
         )
@@ -720,6 +724,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
         )
         store = AsyncMock()
@@ -986,6 +991,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
+            openid_requested=False,
             created_at=time.time(),
             context={"user_id": "caller-U"},
         )
@@ -1506,25 +1512,14 @@ class TestExchangeCodeNonce:
             await self._exchange(httpx_mock, {"id_token": id_token}, nonce=None, scopes=("email",))
         assert not isinstance(exc_info.value, NonceValidationError)
 
-    async def test_openid_pending_state_without_a_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        id_token = _id_token(_openid_claims(nonce="sent-nonce"))
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await self._exchange(httpx_mock, {"id_token": id_token}, nonce=None)
-        assert httpx_mock.get_requests() == []
-
-    async def test_openid_pending_state_with_an_empty_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        id_token = _id_token(_openid_claims(nonce=""))
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await self._exchange(httpx_mock, {"id_token": id_token}, nonce="")
-        assert httpx_mock.get_requests() == []
-
-    @pytest.mark.parametrize("response", [{}, {"id_token": None}], ids=["absent", "null"])
-    async def test_openid_pending_state_without_a_nonce_is_refused_without_an_id_token(
-        self, httpx_mock: HTTPXMock, response: dict[str, object]
+    async def test_a_request_that_asked_for_no_openid_is_read_the_same_way_after_the_scopes_change(
+        self, httpx_mock: HTTPXMock
     ) -> None:
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await self._exchange(httpx_mock, response, nonce=None)
-        assert httpx_mock.get_requests() == []
+        """The scopes can change between the request and the exchange, so the request's own answer decides."""
+        tokens = await self._exchange(
+            httpx_mock, {"id_token": _id_token(_openid_claims())}, nonce=None, scopes=("openid", "email")
+        )
+        assert tokens.access_token == "access-abc"
 
     @pytest.mark.parametrize(
         ("overrides", "message"),
@@ -1588,30 +1583,22 @@ class TestExchangeCodeNonce:
         with pytest.raises(NonceValidationError, match="ID token nonce does not match"):
             await self._exchange(httpx_mock, {"id_token": id_token}, scopes=("email",))
 
-    @pytest.mark.parametrize(
-        "overrides",
-        [
-            {"scopes": [], "extra_params": {"scope": "openid email"}},
-            {"scopes": [], "authorize_url": "https://provider.example.com/authorize?scope=openid"},
-        ],
-        ids=["extra-params", "authorize-url-query"],
-    )
-    async def test_openid_scope_from_any_source_needs_a_nonce(
-        self, httpx_mock: HTTPXMock, overrides: dict[str, object]
-    ) -> None:
+    async def test_a_stored_request_that_asked_for_no_openid_is_read_the_same_way(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
-            is_optional=True,
             url="https://provider.example.com/token",
             json={
                 "access_token": "access-abc",
                 "token_type": "Bearer",
-                "id_token": _id_token(_openid_claims(nonce="x")),
+                "id_token": _id_token(_openid_claims()),
             },
         )
-        client = OAuthClient(config=_make_config(**overrides))
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await client.exchange_code(_callback(), pending_state=_pending_state())
-        assert httpx_mock.get_requests() == []
+        store = AsyncMock()
+        store.consume = AsyncMock(return_value=_pending_state(nonce=None))
+        client = StoredStateClient(config=_make_config(scopes=["openid", "email"]), state_store=store)
+
+        tokens = await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
+
+        assert tokens.access_token == "access-abc"
 
     async def test_stored_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -1642,23 +1629,6 @@ class TestExchangeCodeNonce:
         client = StoredStateClient(config=_make_config(), state_store=store)
         with pytest.raises(NonceValidationError):
             await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
-
-    async def test_stored_openid_pending_state_without_a_nonce_is_refused(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            is_optional=True,
-            url="https://provider.example.com/token",
-            json={
-                "access_token": "access-abc",
-                "token_type": "Bearer",
-                "id_token": _id_token(_openid_claims(nonce="x")),
-            },
-        )
-        store = AsyncMock()
-        store.consume = AsyncMock(return_value=_pending_state(nonce=None))
-        client = StoredStateClient(config=_make_config(), state_store=store)
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
-        assert httpx_mock.get_requests() == []
 
     async def test_refresh_checks_no_nonce(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -2126,17 +2096,6 @@ class TestExchangeCodeNonceRevocation:
             await exchange
         assert canceled == ["access-abc"]
         assert [record for record in caplog.records if record.name == "apron_auth.client"] == []
-
-    async def test_a_pending_state_without_a_nonce_redeems_no_code(self, httpx_mock: HTTPXMock) -> None:
-        client = OAuthClient(config=_make_config(scopes=["openid"], revocation_url=self.REVOKE_URL))
-
-        with pytest.raises(NonceValidationError, match="pending state has no nonce"):
-            await client.exchange_code(
-                _callback(),
-                pending_state=_pending_state(nonce=None),
-            )
-
-        assert httpx_mock.get_requests() == []
 
     async def test_a_refused_response_without_tokens_logs_nothing(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture

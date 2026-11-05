@@ -602,7 +602,8 @@ class _OAuthClientBase:
         # The nonce is set on the built query, because the decision depends on its final scope
         # and extra_params must not be able to replace it.
         nonce = None
-        if self._sends_openid(query):
+        openid_requested = self._sends_openid(query)
+        if openid_requested:
             nonce = secrets.token_urlsafe(32)
             query["nonce"] = nonce
 
@@ -614,6 +615,7 @@ class _OAuthClientBase:
             redirect_uri=effective_redirect_uri,
             code_verifier=code_verifier,
             nonce=nonce,
+            openid_requested=openid_requested,
             created_at=time.time(),
             context=context or {},
         )
@@ -691,19 +693,13 @@ class _OAuthClientBase:
 
         Raises:
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
             StateError: If the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
                 or was created further ahead of this client's clock than the allowed difference.
             TokenExchangeError: If the token endpoint rejects the exchange, or its response states no access token.
         """
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
-
-        if not pending.nonce and self._requests_openid():
-            # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.
-            msg = "The pending state has no nonce to check the token response against"
-            raise NonceValidationError(msg)
 
         data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
@@ -1032,14 +1028,6 @@ class _OAuthClientBase:
         """
         return authorization_query(self._config, params)
 
-    def _requests_openid(self) -> bool:
-        """Return whether this client's authorization request asks for the ``openid`` scope.
-
-        Returns:
-            ``True`` when a scope word the request sends is ``openid``.
-        """
-        return self._sends_openid(self._authorization_query(self._scope_params()))
-
     def _scope_params(self) -> dict[str, str]:
         """Return the ``scope`` request parameter for the configured scopes.
 
@@ -1316,8 +1304,7 @@ class OAuthClient(_OAuthClientBase):
             IssuerValidationError: If the response's ``iss`` fails validation against the provider's
                 expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
                 A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
@@ -1462,8 +1449,7 @@ class StoredStateClient(_OAuthClientBase):
             IssuerValidationError: If the response's ``iss`` fails validation against the provider's
                 expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
                 A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
