@@ -1942,7 +1942,7 @@ class TestExchangeCodeNonceRevocation:
     ) -> None:
         class FailingHandler:
             async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
-                raise failure_type(f"provider refused token {token}")
+                raise failure_type(f"provider refused token {token.get_secret_value()}")
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
         client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=FailingHandler())

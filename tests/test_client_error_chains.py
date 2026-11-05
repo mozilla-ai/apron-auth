@@ -411,7 +411,7 @@ class TestHandlerErrors:
     ) -> None:
         class FailingHandler:
             async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
-                request = httpx.Request("POST", f"https://provider.example.com/revoke?token={token}")
+                request = httpx.Request("POST", f"https://provider.example.com/revoke?token={token.get_secret_value()}")
                 raise failure(RAW_TEXT, request=request)
 
         client = OAuthClient(_config(), revocation_handler=FailingHandler())
@@ -424,7 +424,7 @@ class TestHandlerErrors:
     async def test_revocation_handler_unexpected_error_carries_no_text(self) -> None:
         class BrokenHandler:
             async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
-                raise RuntimeError(f"{RAW_TEXT} {token}")
+                raise RuntimeError(f"{RAW_TEXT} {token.get_secret_value()}")
 
         client = OAuthClient(_config(), revocation_handler=BrokenHandler())
         with pytest.raises(RevocationError) as exc_info:
@@ -499,7 +499,9 @@ class TestHandlerDomainErrors:
     async def test_revocation_handler_error_loses_its_chain(self) -> None:
         class ChainingHandler:
             async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
-                request = httpx.Request("POST", "https://provider.example.com/revoke", data={"token": token})
+                request = httpx.Request(
+                    "POST", "https://provider.example.com/revoke", data={"token": token.get_secret_value()}
+                )
                 try:
                     raise httpx.ConnectError(RAW_TEXT, request=request)
                 except httpx.ConnectError as exc:
