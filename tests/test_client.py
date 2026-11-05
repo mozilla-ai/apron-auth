@@ -50,6 +50,7 @@ from apron_auth.models import (
     OAuthPendingState,
     Provider,
     ProviderConfig,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
     TokenSet,
@@ -1893,7 +1894,7 @@ class TestExchangeCodeNonceRevocation:
         """Revoking a refused response's tokens is best effort, so a config fault there is logged, not raised."""
 
         class MisconfiguredHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 msg = "revocation needs client authentication"
                 raise ConfigurationError(msg)
 
@@ -1941,7 +1942,7 @@ class TestExchangeCodeNonceRevocation:
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture, failure_type: type[Exception]
     ) -> None:
         class FailingHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 raise failure_type(f"provider refused token {token.get_secret_value()}")
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
@@ -1961,7 +1962,7 @@ class TestExchangeCodeNonceRevocation:
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
         class CancelledHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 raise asyncio.CancelledError
 
         httpx_mock.add_response(url="https://provider.example.com/token", json={"access_token": "access-abc"})
@@ -1979,7 +1980,7 @@ class TestExchangeCodeNonceRevocation:
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
         class SlowRefreshHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 if token.get_secret_value() == "refresh-xyz":
                     await asyncio.Event().wait()
                 return True
@@ -2011,7 +2012,7 @@ class TestExchangeCodeNonceRevocation:
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
         class MixedHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 if token.get_secret_value() == "access-abc":
                     raise asyncio.CancelledError
                 await asyncio.Event().wait()
@@ -2052,7 +2053,7 @@ class TestExchangeCodeNonceRevocation:
             pass
 
         class SwallowingHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 try:
                     await asyncio.Event().wait()
                 except asyncio.CancelledError:
@@ -2087,7 +2088,7 @@ class TestExchangeCodeNonceRevocation:
             pass
 
         class AbortingHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 if token.get_secret_value() == "refresh-xyz":
                     raise HandlerAbortError
                 await asyncio.Event().wait()
@@ -2123,7 +2124,7 @@ class TestExchangeCodeNonceRevocation:
         canceled: list[str] = []
 
         class HangingHandler:
-            async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
                 started.set()
                 try:
                     await asyncio.Event().wait()
@@ -2697,20 +2698,43 @@ class TestRevokeToken:
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         handler = StandardRevocationHandler()
         client = OAuthClient(config=config, revocation_handler=handler)
-        result = await client.revoke_token(token=SecretStr("access-token"))
+        result = await client.revoke_token(token=SecretToken("access-token"))
         assert result is True
+
+    async def test_a_handler_that_states_the_token_as_text_fails_instead_of_reporting_success(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A handler written for a plain token sent a masked value, which an endpoint accepts as revoked.
+
+        RFC 7009 section 2.2 answers one status for a token the endpoint does not recognize, so a
+        masked value read as a completed revocation while the grant stayed live.
+        """
+
+        class HandlerWrittenForAPlainToken:
+            async def revoke(self, token: object, config: ProviderConfig) -> bool:
+                httpx.Request("POST", "https://provider.example.com/revoke", data={"token": token})
+                return True
+
+        config = _make_config(revocation_url="https://provider.example.com/revoke")
+        client = OAuthClient(config=config, revocation_handler=HandlerWrittenForAPlainToken())
+
+        with pytest.raises(RevocationError) as exc_info:
+            await client.revoke_token(token=SecretToken("access-token"))
+
+        assert exc_info.value.retryable is False
+        assert httpx_mock.get_requests() == []
 
     async def test_revocation_no_url_raises(self):
         config = _make_config(revocation_url=None)
         client = OAuthClient(config=config)
         with pytest.raises(ConfigurationError, match="revocation_url"):
-            await client.revoke_token(token=SecretStr("access-token"))
+            await client.revoke_token(token=SecretToken("access-token"))
 
     async def test_revocation_with_default_handler(self, httpx_mock):
         httpx_mock.add_response(url="https://provider.example.com/revoke", status_code=200)
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config)
-        result = await client.revoke_token(token=SecretStr("access-token"))
+        result = await client.revoke_token(token=SecretToken("access-token"))
         assert result is True
 
     async def test_revocation_default_handler_uses_transport_factory(self):
@@ -2731,7 +2755,7 @@ class TestRevokeToken:
 
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config, transport_factory=factory)
-        result = await client.revoke_token(token=SecretStr("access-token"))
+        result = await client.revoke_token(token=SecretToken("access-token"))
         assert result is True
         assert calls == ["https://provider.example.com/revoke"]
 
@@ -2748,7 +2772,7 @@ class TestRevokeToken:
         )
         client = OAuthClient(config=config)
 
-        assert await client.revoke_token(token=SecretStr("xoxp-live")) is True
+        assert await client.revoke_token(token=SecretToken("xoxp-live")) is True
 
         request = httpx_mock.get_request()
         assert request.headers["Authorization"] == "Bearer xoxp-live"
@@ -2759,7 +2783,7 @@ class TestRevokeToken:
         revoked: list[str] = []
 
         class MyHandler:
-            async def revoke(self, token: SecretStr, config) -> bool:
+            async def revoke(self, token: SecretToken, config) -> bool:
                 del config
                 revoked.append(token.get_secret_value())
                 return True
@@ -2774,7 +2798,7 @@ class TestRevokeToken:
         )
         client = OAuthClient(config=config, revocation_handler=MyHandler())
 
-        assert await client.revoke_token(token=SecretStr("xoxp-live")) is True
+        assert await client.revoke_token(token=SecretToken("xoxp-live")) is True
         assert revoked == ["xoxp-live"]
 
     async def test_a_provider_taking_rfc_7009_still_honors_the_transport_factory(self):
@@ -2796,7 +2820,7 @@ class TestRevokeToken:
         )
         client = OAuthClient(config=config, transport_factory=factory)
 
-        assert await client.revoke_token(token=SecretStr("access-token")) is True
+        assert await client.revoke_token(token=SecretToken("access-token")) is True
         assert calls == ["https://api.linear.app/oauth/revoke"]
 
     async def test_revocation_failure_raises(self, httpx_mock):
@@ -2804,30 +2828,30 @@ class TestRevokeToken:
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config)
         with pytest.raises(RevocationError):
-            await client.revoke_token(token=SecretStr("access-token"))
+            await client.revoke_token(token=SecretToken("access-token"))
 
     async def test_revocation_handler_exception_wrapped(self):
         class BrokenHandler:
-            async def revoke(self, token: SecretStr, config) -> bool:
+            async def revoke(self, token: SecretToken, config) -> bool:
                 msg = "something unexpected"
                 raise RuntimeError(msg)
 
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config, revocation_handler=BrokenHandler())
         with pytest.raises(RevocationError, match="^Failed to revoke token$") as exc_info:
-            await client.revoke_token(token=SecretStr("access-token"))
+            await client.revoke_token(token=SecretToken("access-token"))
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
     async def test_revocation_error_not_double_wrapped(self):
         class ErrorHandler:
-            async def revoke(self, token: SecretStr, config) -> bool:
+            async def revoke(self, token: SecretToken, config) -> bool:
                 raise RevocationError("handler error", kind=FailureKind.REJECTED)
 
         config = _make_config(revocation_url="https://provider.example.com/revoke")
         client = OAuthClient(config=config, revocation_handler=ErrorHandler())
         with pytest.raises(RevocationError, match="handler error") as exc_info:
-            await client.revoke_token(token=SecretStr("access-token"))
+            await client.revoke_token(token=SecretToken("access-token"))
         assert exc_info.value.__cause__ is None
 
 

@@ -12,7 +12,7 @@ from apron_auth.errors import (
     IdentityScopeNotGrantedError,
     RevocationError,
 )
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.slack import SlackRevocationHandler
@@ -887,7 +887,7 @@ class TestSlackRevocationHandler:
         from apron_auth.providers.slack import preset
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
-        result = await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config)
+        result = await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
 
         assert result is True
         request = httpx_mock.get_request()
@@ -904,7 +904,7 @@ class TestSlackRevocationHandler:
         from apron_auth.providers.slack import preset
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
-        result = await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config)
+        result = await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
         assert result is False
 
     @pytest.mark.parametrize(
@@ -927,7 +927,7 @@ class TestSlackRevocationHandler:
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
         with pytest.raises(RevocationError) as refusal:
-            await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
 
         assert refusal.value.kind is FailureKind.SERVER_ERROR
         assert refusal.value.retryable
@@ -939,7 +939,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
-        assert await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config) is False
+        assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is False
 
     @pytest.mark.parametrize("error", ["account_inactive", "token_expired", "token_revoked"])
     async def test_a_token_slack_states_is_already_unusable_reads_as_revoked(
@@ -951,7 +951,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
-        assert await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config) is True
+        assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is True
 
     async def test_a_body_stating_the_token_was_not_revoked_is_a_failed_revocation(self, httpx_mock: HTTPXMock) -> None:
         """Slack states the outcome in ``revoked``, and ``ok`` states only that the call succeeded."""
@@ -960,7 +960,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
-        assert await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config) is False
+        assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is False
 
     @pytest.mark.parametrize(
         "body",
@@ -980,7 +980,7 @@ class TestSlackRevocationHandler:
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
         with pytest.raises(RevocationError, match="states no outcome for the token") as exc_info:
-            await SlackRevocationHandler().revoke(SecretStr("xoxb-access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
         assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_network_error_raises_revocation_error(self, httpx_mock: HTTPXMock):
@@ -989,7 +989,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Failed to revoke Slack token: network error$") as exc_info:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -1001,7 +1001,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError) as exc_info:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert str(exc_info.value) == "Failed to parse Slack revocation response"
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
@@ -1020,7 +1020,7 @@ class TestSlackRevocationHandler:
         )
         handler = SlackRevocationHandler()
         with pytest.raises(ConfigurationError, match="^Revocation refused: the request URL names no host") as exc_info:
-            await handler.revoke(SecretStr("access-abc"), config)
+            await handler.revoke(SecretToken("access-abc"), config)
         assert exc_info.value.kind.retryable is False
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
@@ -1041,7 +1041,7 @@ class TestSlackRevocationHandler:
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
         with pytest.raises(RevocationError, match="states no outcome") as refusal:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
 
         assert refusal.value.kind is FailureKind.REFUSED
         assert refusal.value.retryable is False
@@ -1053,7 +1053,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
-        assert await SlackRevocationHandler().revoke(SecretStr("access-abc"), config) is False
+        assert await SlackRevocationHandler().revoke(SecretToken("access-abc"), config) is False
 
     async def test_deeply_nested_response_raises_revocation_error(self, httpx_mock: HTTPXMock) -> None:
         # The depth is far past any interpreter's JSON nesting limit, so decoding raises RecursionError.
@@ -1062,7 +1062,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Failed to parse Slack revocation response$") as exc_info:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -1072,7 +1072,7 @@ class TestSlackRevocationHandler:
 
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Slack revocation response was not a JSON object$") as exc_info:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -1084,7 +1084,7 @@ class TestSlackRevocationHandler:
         config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
 
         with pytest.raises(RevocationError) as refusal:
-            await SlackRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
 
         assert refusal.value.kind is FailureKind.SERVER_ERROR
 

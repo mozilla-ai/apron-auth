@@ -15,13 +15,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pydantic import SecretStr
-
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     Provider,
     ProviderConfig,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
     TokenEndpointAuthMethod,
@@ -178,7 +177,7 @@ class NotionRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a Notion access token.
 
         Args:

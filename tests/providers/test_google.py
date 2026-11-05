@@ -5,11 +5,10 @@ import traceback
 
 import httpx
 import pytest
-from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
-from apron_auth.models import IdentityMaterial, ProviderConfig, TenancyContext, TimeoutPolicy
+from apron_auth.models import IdentityMaterial, ProviderConfig, SecretToken, TenancyContext, TimeoutPolicy
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.google import GoogleRevocationHandler
@@ -238,7 +237,7 @@ class TestGoogleRevocationHandler:
         from apron_auth.providers.google import preset
 
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
-        result = await GoogleRevocationHandler().revoke(SecretStr("access-abc"), config)
+        result = await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
         assert request.method == "POST"
@@ -259,7 +258,7 @@ class TestGoogleRevocationHandler:
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
 
         with pytest.raises(RevocationError, match="states no outcome") as refusal:
-            await GoogleRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
 
         assert refusal.value.kind is FailureKind.REFUSED
 
@@ -275,7 +274,7 @@ class TestGoogleRevocationHandler:
 
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
         with pytest.raises(RevocationError) as exc_info:
-            await GoogleRevocationHandler().revoke(SecretStr(secret), config)
+            await GoogleRevocationHandler().revoke(SecretToken(secret), config)
         assert str(exc_info.value) == "Failed to revoke Google token: network error"
         formatted = "".join(traceback.format_exception(exc_info.value))
         assert secret not in formatted
@@ -299,7 +298,7 @@ class TestGoogleRevocationHandler:
 
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
 
-        assert await GoogleRevocationHandler().revoke(SecretStr("access-abc"), config) is True
+        assert await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config) is True
 
     @pytest.mark.parametrize("status", [401, 403, 404, 418])
     async def test_a_status_google_states_nothing_about_is_still_refused(
@@ -311,7 +310,7 @@ class TestGoogleRevocationHandler:
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
 
         with pytest.raises(RevocationError) as refusal:
-            await GoogleRevocationHandler().revoke(SecretStr("access-abc"), config)
+            await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
 
         assert refusal.value.kind is FailureKind.REJECTED
 
@@ -325,7 +324,7 @@ class TestGoogleRevocationHandler:
         config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
 
         with pytest.raises(ConfigurationError) as refusal:
-            await GoogleRevocationHandler().revoke(SecretStr(token), config)
+            await GoogleRevocationHandler().revoke(SecretToken(token), config)
 
         assert refusal.value.kind is FailureKind.CONFIGURATION
         assert httpx_mock.get_requests() == []

@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pydantic import SecretStr
-
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -21,6 +19,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -166,7 +165,7 @@ class GoogleRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a token at Google's revocation endpoint.
 
         Args:

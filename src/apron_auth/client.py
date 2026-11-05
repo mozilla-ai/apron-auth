@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
-from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
@@ -49,6 +48,7 @@ from apron_auth.models import (
     FreshTokenSet,
     IdentityMaterial,
     OAuthPendingState,
+    SecretToken,
     TokenEndpointAuthMethod,
     UrlField,
     UserToken,
@@ -886,7 +886,7 @@ class _OAuthClientBase:
             host: The revocation endpoint's host, for the log line.
         """
         try:
-            await self.revoke_token(SecretStr(token))
+            await self.revoke_token(SecretToken(token))
         except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
@@ -954,7 +954,7 @@ class _OAuthClientBase:
             raise TokenRefreshError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response)
 
-    async def revoke_token(self, token: SecretStr) -> bool:
+    async def revoke_token(self, token: SecretToken) -> bool:
         """Revoke a token via the provider's revocation endpoint.
 
         A handler passed to this client revokes the token. Otherwise the handler the config's

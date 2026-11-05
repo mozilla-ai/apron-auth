@@ -31,6 +31,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     ServerMetadata,
     TenancyContext,
     TimeoutPolicy,
@@ -1753,6 +1754,33 @@ class TestFreshTokenSet:
         fresh = FreshTokenSet(access_token="access-abc")
         assert isinstance(copy.deepcopy(fresh), FreshTokenSet)
         assert isinstance(fresh.model_copy(), FreshTokenSet)
+
+
+class TestSecretToken:
+    """Test that a token states nothing as text, so a mistake fails rather than masking the value."""
+
+    def test_the_value_is_read_only_by_asking_for_it(self) -> None:
+        token = SecretToken("s3cr3t-live-access-token")
+
+        assert token.get_secret_value() == "s3cr3t-live-access-token"
+        assert "s3cr3t-live-access-token" not in repr(token)
+
+    @pytest.mark.parametrize(
+        "state_as_text",
+        [
+            pytest.param(str, id="a string conversion"),
+            pytest.param(lambda token: f"{token}", id="a format string"),
+        ],
+    )
+    def test_stating_it_as_text_is_refused(self, state_as_text: Callable[[SecretToken], str]) -> None:
+        """A masked value sent to a provider reads as a token it does not recognize, which it accepts."""
+        with pytest.raises(TypeError, match="get_secret_value"):
+            state_as_text(SecretToken("s3cr3t-live-access-token"))
+
+    def test_an_empty_token_is_falsy_and_a_stated_one_is_not(self) -> None:
+        """A present-or-absent check reads the token itself, so the empty case answers without a conversion."""
+        assert bool(SecretToken("s3cr3t-live-access-token")) is True
+        assert bool(SecretToken("")) is False
 
 
 class TestIdentityMaterial:

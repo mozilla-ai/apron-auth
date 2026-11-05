@@ -12,7 +12,7 @@ from pydantic import SecretStr
 from support import revoked_status
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import Provider, ProviderConfig
+from apron_auth.models import Provider, ProviderConfig, SecretToken
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import (
     atlassian,
@@ -144,7 +144,7 @@ async def test_a_providers_own_handler_reaches_the_transport_factory(provider: P
     handler = revocation_handler_for(config, transport_factory=factory)
     assert handler is not None
 
-    await handler.revoke(SecretStr("a-token"), config)
+    await handler.revoke(SecretToken("a-token"), config)
 
     # The factory is asked for the token-free endpoint, which prefixes the per-token URL HubSpot sends to.
     assert config.revocation_url is not None
@@ -203,7 +203,7 @@ async def test_every_handler_reports_a_transport_failure_alike(provider: Provide
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.UNREACHABLE
     assert refusal.value.__cause__ is None
@@ -219,7 +219,7 @@ async def test_every_handler_refuses_an_invalid_url_alike(provider: Provider) ->
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.REFUSED
 
@@ -240,7 +240,7 @@ async def test_every_handler_reports_a_retryable_status_as_retryable(provider: P
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.SERVER_ERROR
     assert refusal.value.retryable
@@ -276,7 +276,7 @@ async def test_a_throttle_a_provider_states_as_a_refusal_status_is_still_retryab
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.SERVER_ERROR
     assert refusal.value.retryable
@@ -288,7 +288,7 @@ async def test_rfc_7009_revocation_reads_a_completed_status_as_revoked(status: i
     config = _config(None)
     handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
 
-    assert await handler.revoke(SecretStr(TOKEN), config) is True
+    assert await handler.revoke(SecretToken(TOKEN), config) is True
 
 
 @pytest.mark.parametrize(
@@ -304,7 +304,7 @@ async def test_rfc_7009_revocation_refuses_a_success_stating_no_completed_revoca
     handler = StandardRevocationHandler(transport_factory=_answering_transport(status))
 
     with pytest.raises(RevocationError, match="states no outcome") as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.REFUSED
 
@@ -332,7 +332,7 @@ async def test_a_statement_of_when_to_come_back_outranks_a_status_a_provider_sta
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.SERVER_ERROR
     assert refusal.value.retryable
@@ -345,7 +345,7 @@ async def test_a_success_a_provider_does_not_state_is_not_read_as_a_rejection() 
     assert handler is not None
 
     with pytest.raises(RevocationError, match="states no outcome") as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.REFUSED
     assert refusal.value.retryable is False
@@ -359,7 +359,7 @@ async def test_no_handler_reads_an_unexpected_status_as_a_refusal_to_revoke(prov
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.REJECTED
     assert TOKEN not in "".join(traceback.format_exception(refusal.value))
@@ -373,7 +373,7 @@ async def test_every_handler_refuses_a_config_declaring_no_endpoint_alike(provid
     handler = type(resolved)()
 
     with pytest.raises(ConfigurationError, match="carries no revocation endpoint"):
-        await handler.revoke(SecretStr(TOKEN), _config(provider, revokes=False))
+        await handler.revoke(SecretToken(TOKEN), _config(provider, revokes=False))
 
 
 @pytest.mark.parametrize("provider", list(Provider))
@@ -391,7 +391,7 @@ async def test_no_handler_hands_the_token_to_the_transport_factory(provider: Pro
     handler = revocation_handler_for(config, transport_factory=factory)
     assert handler is not None
 
-    await handler.revoke(SecretStr(TOKEN), config)
+    await handler.revoke(SecretToken(TOKEN), config)
 
     assert seen
     assert TOKEN not in seen[0]
@@ -410,7 +410,7 @@ async def test_a_transport_factory_that_refuses_does_not_escape_as_itself(provid
     assert handler is not None
 
     with pytest.raises(RevocationError) as refusal:
-        await handler.revoke(SecretStr(TOKEN), config)
+        await handler.revoke(SecretToken(TOKEN), config)
 
     assert refusal.value.kind is FailureKind.UNEXPECTED
     assert TOKEN not in "".join(traceback.format_exception(refusal.value))

@@ -9,7 +9,7 @@ import pytest
 from pydantic import SecretStr
 
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import Provider, ProviderConfig, UrlField
+from apron_auth.models import Provider, ProviderConfig, SecretToken, UrlField
 from apron_auth.providers._revocation import (
     HttpMethod,
     RevocationRequest,
@@ -91,7 +91,7 @@ async def test_an_empty_endpoint_is_not_reported_as_a_failure_worth_retrying() -
     bypassed = _config().model_copy(update={"revocation_url": ""})
 
     with pytest.raises(ConfigurationError) as refusal:
-        await StandardRevocationHandler().revoke(SecretStr(TOKEN), bypassed)
+        await StandardRevocationHandler().revoke(SecretToken(TOKEN), bypassed)
 
     assert refusal.value.kind.retryable is False
 
@@ -486,7 +486,7 @@ async def test_the_standard_handler_names_the_provider_the_config_states() -> No
     )
 
     with pytest.raises(RevocationError, match="Failed to revoke Atlassian token"):
-        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretStr(TOKEN), config)
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretToken(TOKEN), config)
 
 
 async def test_the_standard_handler_names_the_provider_when_the_request_cannot_be_sent() -> None:
@@ -508,10 +508,10 @@ async def test_the_standard_handler_names_the_provider_when_the_request_cannot_b
     )
 
     with pytest.raises(RevocationError, match="Failed to revoke Atlassian token: "):
-        await StandardRevocationHandler(transport_factory=unreachable).revoke(SecretStr(TOKEN), config)
+        await StandardRevocationHandler(transport_factory=unreachable).revoke(SecretToken(TOKEN), config)
 
 
 async def test_the_standard_handler_names_no_provider_where_the_config_names_none() -> None:
     """A configuration naming no provider has no name to give, and the message states none."""
     with pytest.raises(RevocationError, match="^Failed to revoke token: "):
-        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretStr(TOKEN), _config())
+        await StandardRevocationHandler(transport_factory=_failing_transport).revoke(SecretToken(TOKEN), _config())

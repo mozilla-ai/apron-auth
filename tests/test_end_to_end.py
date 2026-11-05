@@ -33,6 +33,7 @@ from apron_auth import (
     TokenRefreshError,
     TokenSet,
 )
+from apron_auth.models import SecretToken
 
 
 def _nonce(url: str) -> str:
@@ -112,7 +113,7 @@ class TestFullOAuthFlow:
             url="https://provider.example.com/revoke",
             status_code=200,
         )
-        result = await client.revoke_token(token=SecretStr(refreshed.access_token))
+        result = await client.revoke_token(token=SecretToken(refreshed.access_token))
         assert result is True
 
 

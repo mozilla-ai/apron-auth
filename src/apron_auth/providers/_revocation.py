@@ -14,7 +14,7 @@ from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
-from apron_auth.models import UrlField
+from apron_auth.models import SecretToken, UrlField
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers._host_match import oauth_hosts_match
 
@@ -103,7 +103,7 @@ class StandardRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a token at the configuration's RFC 7009 endpoint.
 
         Args:

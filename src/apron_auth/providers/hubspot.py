@@ -39,6 +39,7 @@ from apron_auth.models import (
     Provider,
     ProviderConfig,
     ScopeMetadata,
+    SecretToken,
     TenancyContext,
     TimeoutPolicy,
 )
@@ -208,7 +209,7 @@ class HubSpotRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke a HubSpot refresh token.
 
         The ``token`` argument must be the refresh token issued by

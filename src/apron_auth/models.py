@@ -79,6 +79,32 @@ _PLAIN_HTTP_WAIVER = "allow_insecure_http_for"
 _WAIVER_SENTINEL = object()
 
 
+class SecretToken(SecretStr):
+    """A token that states nothing as text, so no accident can put it on the wire or in a log.
+
+    A plain secret wrapper renders a row of asterisks wherever text is wanted, which keeps a token
+    out of a log and out of a captured frame local. It also means code that forgets to unwrap sends
+    the asterisks instead, and an endpoint that answers the same status for a token it does not
+    recognize reports that as a revocation. Refusing the conversion turns that silence into a
+    failure at the point of the mistake.
+
+    NOTE: Reading the token is :meth:`get_secret_value` and nothing else. Formatting one, printing
+    one, or putting one in a request without that call raises :class:`TypeError`.
+    """
+
+    def __str__(self) -> str:
+        """Refuse to state the token as text.
+
+        Returns:
+            Never returns.
+
+        Raises:
+            TypeError: Always, because a token states nothing as text.
+        """
+        msg = "A token states nothing as text. Read it with get_secret_value()."
+        raise TypeError(msg)
+
+
 @unique
 class UrlTransport(Enum):
     """Each member is one rule for what a URL field's scheme has to state about its transport."""
@@ -1651,8 +1677,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             grant and must not infer one.
     """
 
-    access_token: SecretStr
-    id_token: SecretStr | None = None
+    access_token: SecretToken
+    id_token: SecretToken | None = None
     scope: str | None = None
 
     @classmethod
@@ -1670,8 +1696,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         """
         id_token = tokens.extras.get("id_token")
         return cls(
-            access_token=SecretStr(tokens.access_token),
-            id_token=SecretStr(id_token) if isinstance(id_token, str) else None,
+            access_token=SecretToken(tokens.access_token),
+            id_token=SecretToken(id_token) if isinstance(id_token, str) else None,
             scope=tokens.scope,
         )
 

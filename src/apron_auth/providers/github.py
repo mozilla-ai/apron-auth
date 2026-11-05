@@ -18,7 +18,15 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TimeoutPolicy
+from apron_auth.models import (
+    IdentityMaterial,
+    IdentityProfile,
+    Provider,
+    ProviderConfig,
+    ScopeMetadata,
+    SecretToken,
+    TimeoutPolicy,
+)
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 from apron_auth.providers._presets import Preset
@@ -239,7 +247,7 @@ class GitHubRevocationHandler:
         """
         self._transport_factory = transport_factory
 
-    async def revoke(self, token: SecretStr, config: ProviderConfig) -> bool:
+    async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
         """Revoke the GitHub OAuth grant at the configured revocation endpoint.
 
         Args:

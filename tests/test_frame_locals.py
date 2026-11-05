@@ -17,10 +17,9 @@ from typing import Any, TypeAlias
 
 import httpx
 import pytest
-from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.models import IdentityMaterial, Provider, ProviderConfig
+from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
 
@@ -148,7 +147,7 @@ class TestARevocationFailure:
         handler = StandardRevocationHandler(transport_factory=_recording_transport(sent))
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.revoke(SecretStr(TOKEN), _standard_config())
+            await handler.revoke(SecretToken(TOKEN), _standard_config())
 
         assert TOKEN in _request_text(sent[0])
         assert _locals_stating(caught.value, TOKEN) == []
@@ -159,7 +158,7 @@ class TestARevocationFailure:
         handler = StandardRevocationHandler(transport_factory=_recording_transport(sent))
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.revoke(SecretStr(TOKEN), _standard_config())
+            await handler.revoke(SecretToken(TOKEN), _standard_config())
 
         assert sent[0].headers.get("authorization", "").startswith("Basic ")
         assert _locals_stating(caught.value, CLIENT_SECRET) == []
@@ -173,7 +172,7 @@ class TestARevocationFailure:
         assert handler is not None
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.revoke(SecretStr(TOKEN), config)
+            await handler.revoke(SecretToken(TOKEN), config)
 
         assert TOKEN in _request_text(sent[0])
         assert _locals_stating(caught.value, TOKEN) == []
