@@ -1801,6 +1801,24 @@ class TestIdentityMaterial:
         assert material.id_token is not None
         assert material.id_token.get_secret_value() == "id-jwt"
 
+    def test_an_id_token_the_response_states_as_nothing_is_absent(self) -> None:
+        """A token stating nothing carries nothing to verify, so the narrowing reports it as absent."""
+        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": ""})
+
+        assert IdentityMaterial.from_token_set(tokens).id_token is None
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            pytest.param({"access_token": ""}, id="an access token stating nothing"),
+            pytest.param({"access_token": "access-abc", "id_token": ""}, id="an ID token stating nothing"),
+        ],
+    )
+    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, str]) -> None:
+        """No request can carry a token stating nothing, so the material states the rule itself."""
+        with pytest.raises(ConfigurationError, match="must state a value"):
+            IdentityMaterial(**payload)
+
     def test_neither_token_is_stated_in_a_repr(self) -> None:
         """An error reporter records the repr of each frame local, so this material must state neither."""
         tokens = FreshTokenSet(access_token="s3cr3t-access", extras={"id_token": "s3cr3t-jwt"})

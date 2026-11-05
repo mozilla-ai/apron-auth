@@ -690,17 +690,6 @@ class TestMicrosoftIdTokenVerification:
 
         assert _USERINFO_URL not in [str(request.url) for request in httpx_mock.get_requests()]
 
-    async def test_an_empty_id_token_is_treated_as_absent(self, httpx_mock: HTTPXMock) -> None:
-        """An empty ID token carries nothing to verify, so identity comes from userinfo, as for any OpenID provider."""
-        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
-
-        identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=""), _config()
-        )
-
-        assert identity.subject == "ms-sub-1"
-        assert identity.tenancies == ()
-
     async def test_accepts_an_uppercase_client_id(self, httpx_mock: HTTPXMock) -> None:
         """Entra app IDs are GUIDs, so a client ID configured in uppercase still matches the token's ``aud``."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)

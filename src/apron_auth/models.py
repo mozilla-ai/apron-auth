@@ -1681,6 +1681,25 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
     id_token: SecretToken | None = None
     scope: str | None = None
 
+    @model_validator(mode="after")
+    def _each_token_states_a_value(self) -> IdentityMaterial:
+        """Refuse material whose token states nothing, which no request could carry.
+
+        A token stating nothing is absent rather than empty, so it is refused here and the
+        difference never reaches a handler as a value it has to test.
+
+        Raises:
+            ValueError: If the access token states nothing, or an ID token is present and states
+                nothing.
+        """
+        if not self.access_token.get_secret_value():
+            msg = "access_token must state a value"
+            raise ValueError(msg)
+        if self.id_token is not None and not self.id_token.get_secret_value():
+            msg = "id_token must state a value when it is present"
+            raise ValueError(msg)
+        return self
+
     @classmethod
     def from_token_set(cls, tokens: FreshTokenSet) -> IdentityMaterial:
         """Narrow a :class:`FreshTokenSet` to the material identity handlers may use.
@@ -1697,7 +1716,7 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         id_token = tokens.extras.get("id_token")
         return cls(
             access_token=SecretToken(tokens.access_token),
-            id_token=SecretToken(id_token) if isinstance(id_token, str) else None,
+            id_token=SecretToken(id_token) if isinstance(id_token, str) and id_token else None,
             scope=tokens.scope,
         )
 
