@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from importlib import import_module
+from typing import Any, TypeAlias
 
 import httpx
 import pytest
@@ -21,7 +23,9 @@ from pytest_httpx import HTTPXMock
 from apron_auth.models import IdentityMaterial, Provider, ProviderConfig
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
-from apron_auth.providers.salesforce import SalesforceIdentityHandler
+
+# One identity handler with the configuration it accepts, built on demand so no import runs at collection.
+IdentityCase: TypeAlias = Callable[[], "tuple[Any, ProviderConfig]"]
 
 # A token value distinctive enough that finding it in a repr cannot be a coincidence.
 TOKEN = "s3cr3t-live-access-token"  # pragma: allowlist secret
@@ -42,6 +46,33 @@ PRESETS: dict[Provider, Callable[..., ProviderConfig]] = {
     Provider.HUBSPOT: hubspot.preset,
     Provider.NOTION: notion.preset,
     Provider.SLACK: slack.preset,
+}
+
+
+def _identity_case(module_name: str, handler_name: str, preset_name: str, scopes: list[str]) -> IdentityCase:
+    """Build one handler and the configuration its own host gate accepts."""
+
+    def build() -> tuple[Any, ProviderConfig]:
+        module = import_module(f"apron_auth.providers.{module_name}")
+        preset = getattr(module, preset_name)
+        config = preset(client_id="cid", client_secret=CLIENT_SECRET, scopes=scopes)
+        return getattr(module, handler_name)(), config
+
+    return build
+
+
+# Every bundled identity handler, keyed by the provider whose handler it is.
+IDENTITY_CASES: dict[Provider, IdentityCase] = {
+    Provider.ATLASSIAN: _identity_case("atlassian", "AtlassianIdentityHandler", "preset", ["read:me"]),
+    Provider.GITHUB: _identity_case("github", "GitHubIdentityHandler", "preset", ["read:user"]),
+    Provider.GOOGLE: _identity_case("google", "GoogleIdentityHandler", "preset", ["openid"]),
+    Provider.HUBSPOT: _identity_case("hubspot", "HubSpotIdentityHandler", "preset", ["oauth"]),
+    Provider.LINEAR: _identity_case("linear", "LinearIdentityHandler", "preset", ["read"]),
+    Provider.MICROSOFT: _identity_case("microsoft", "MicrosoftIdentityHandler", "preset", ["openid"]),
+    Provider.NOTION: _identity_case("notion", "NotionIdentityHandler", "preset", ["read"]),
+    Provider.SALESFORCE: _identity_case("salesforce", "SalesforceIdentityHandler", "preset", ["openid"]),
+    Provider.SLACK: _identity_case("slack", "SlackIdentityHandler", "sign_in_preset", ["openid"]),
+    Provider.TYPEFORM: _identity_case("typeform", "TypeformIdentityHandler", "preset", ["accounts:read"]),
 }
 
 
@@ -151,22 +182,19 @@ class TestARevocationFailure:
 class TestAnIdentityFailure:
     """Test that a failed identity fetch leaves no token in a frame local."""
 
-    async def test_the_handler_states_no_access_token(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://login.salesforce.com/services/oauth2/userinfo",
-            status_code=REFUSED_STATUS,
-            json={"error": "server_error"},
-        )
-        config = ProviderConfig(
-            provider=Provider.SALESFORCE,
-            client_id="cid",
-            client_secret=CLIENT_SECRET,
-            authorize_url="https://login.salesforce.com/services/oauth2/authorize",
-            token_url="https://login.salesforce.com/services/oauth2/token",
-        )
+    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False, can_send_already_matched_responses=True)
+    @pytest.mark.parametrize("provider", list(IDENTITY_CASES), ids=lambda provider: provider.value)
+    async def test_a_provider_handler_states_no_access_token(self, provider: Provider, httpx_mock: HTTPXMock) -> None:
+        """Each handler presents the token its own way, so each one is held to the rule.
+
+        One handler states the token in the request line and another in a header, and one sends two
+        requests with it, so no single shape stands in for the rest.
+        """
+        httpx_mock.add_response(status_code=REFUSED_STATUS, json={"error": "server_error"})
+        handler, config = IDENTITY_CASES[provider]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await SalesforceIdentityHandler().fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
 
-        assert httpx_mock.get_request().headers["authorization"] == f"Bearer {TOKEN}"
+        assert TOKEN in "".join(_request_text(request) for request in httpx_mock.get_requests())
         assert _locals_stating(caught.value, TOKEN) == []

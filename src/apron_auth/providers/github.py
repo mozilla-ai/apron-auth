@@ -15,6 +15,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 
+import httpx
 from pydantic import SecretStr
 
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, ScopeMetadata, TimeoutPolicy
@@ -146,6 +147,31 @@ def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> t
 class GitHubIdentityHandler:
     """Fetch identity fields from GitHub profile and email APIs."""
 
+    async def _fetch(self, client: httpx.AsyncClient, url: str, token: SecretStr, timeouts: TimeoutPolicy) -> Any:
+        """Fetch one GitHub identity endpoint with the token presented as a bearer credential.
+
+        Args:
+            client: The HTTP client to issue the request with.
+            url: The endpoint to request.
+            token: The bearer access token the request carries.
+            timeouts: The limits in force for the request.
+
+        Returns:
+            The decoded JSON body.
+
+        Raises:
+            IdentityFetchError: If the request fails or its response cannot be parsed.
+                The failed request's error is not attached as its cause or context.
+        """
+        return await fetch_identity_json(
+            client.get(
+                url,
+                headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
+            ),
+            "GitHub identity",
+            timeouts,
+        )
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a GitHub access token.
 
@@ -162,17 +188,9 @@ class GitHubIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        headers = {
-            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
-            **_GITHUB_API_HEADERS,
-        }
         async with identity_client(config.timeouts) as client:
-            user_payload = await fetch_identity_json(
-                client.get(_GITHUB_USER_URL, headers=headers), "GitHub identity", config.timeouts
-            )
-            emails_payload = await fetch_identity_json(
-                client.get(_GITHUB_EMAILS_URL, headers=headers), "GitHub identity", config.timeouts
-            )
+            user_payload = await self._fetch(client, _GITHUB_USER_URL, material.access_token, config.timeouts)
+            emails_payload = await self._fetch(client, _GITHUB_EMAILS_URL, material.access_token, config.timeouts)
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")
