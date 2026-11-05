@@ -265,10 +265,13 @@ first. A model you persist must hold a `TokenSet`, not a
 — exposing only the access token and, for OIDC providers, the ID token —
 before being handed to the provider's identity handler, so handlers
 never receive the refresh token or caller context. Each token on it is a
-`SecretStr`, as is the token `revoke_token` and a `RevocationHandler`
+`SecretToken`, as is the token `revoke_token` and a `RevocationHandler`
 take, so a handler unwraps one with `get_secret_value()` into the request
-it sends and binds the unwrapped value to no variable of its own. See
-[what an error reporter can capture](#what-an-error-reporter-can-capture).
+it sends and binds the unwrapped value to no variable of its own. A
+`SecretToken` states nothing as text, so formatting one or sending one
+without that call raises `TypeError` rather than sending a masked value a
+provider would accept. See [what an error reporter can
+capture](#what-an-error-reporter-can-capture).
 
 A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to the client. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
 OAuth protocol endpoints come from the provider config; identity API
@@ -582,10 +585,10 @@ An ID token in a refresh response is held to the same claims as the one the orig
 ### Token revocation
 
 ```python
-from pydantic import SecretStr
+from apron_auth import SecretToken
 
 client = OAuthClient(config)
-await client.revoke_token(SecretStr(tokens.access_token))
+await client.revoke_token(SecretToken(tokens.access_token))
 ```
 
 The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to either client to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
@@ -853,13 +856,13 @@ tokens = await client.exchange_code(
 Each token is revoked on its own, so disconnecting the install revokes both, and the refresh token beside each one where the install rotates its tokens:
 
 ```python
-await client.revoke_token(SecretStr(tokens.access_token))
+await client.revoke_token(SecretToken(tokens.access_token))
 if tokens.refresh_token is not None:
-    await client.revoke_token(SecretStr(tokens.refresh_token))
+    await client.revoke_token(SecretToken(tokens.refresh_token))
 if tokens.user_token is not None:
-    await client.revoke_token(SecretStr(tokens.user_token.access_token))
+    await client.revoke_token(SecretToken(tokens.user_token.access_token))
     if tokens.user_token.refresh_token is not None:
-        await client.revoke_token(SecretStr(tokens.user_token.refresh_token))
+        await client.revoke_token(SecretToken(tokens.user_token.refresh_token))
 ```
 
 `OAuthClient.refresh_token` refreshes the token in `token_set.access_token`, so it cannot refresh the user token: Slack returns a refreshed user token nested as well, and a response carrying no token at the top level is refused. Passing `token_set.user_token.refresh_token` to it spends that token at Slack and then fails, though the refusal revokes whatever the response issued, so nothing is left valid and unreachable. Refresh a rotating user token with Slack's own endpoint for now.
@@ -940,13 +943,13 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 
 An error reporter such as Sentry records the local variables of every frame a traceback holds, and Sentry does so by default (`include_local_variables=True`). A credential held in one of those is recorded, which no rule about an error's message or its exception chain reaches.
 
-On the revocation and identity paths, this library holds every credential it passes between its own frames in a `SecretStr`, whose `repr` states a row of asterisks. The one value there that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. A reporter that captures a frame of either path therefore records no token and no client secret. `make test` holds that rule for every bundled handler by walking a failed request's traceback and asserting both halves: the credential reached the request, and no frame of this library states it.
+On the revocation and identity paths, including ID token verification, this library holds every credential it passes between its own frames in a wrapper whose `repr` states a row of asterisks, and every token it hands to handler code in a `SecretToken`, which also refuses to state itself as text. The one value there that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each of those paths also raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. A reporter that captures a frame of either path therefore records no token and no client secret. `make test` holds that rule for every bundled handler by walking a failed request's traceback and asserting all of it: the credential reached the request, the error attaches nothing, every frame but the test's own belongs to this library, and none of them states the credential.
 
 Three limits are worth knowing, and the third is the one to act on.
 
 The guarantee is about what a value states, so a reporter that walks object attributes recursively rather than reading a `repr` can still reach the string inside a wrapper.
 
-Your own frames are yours. A token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretStr(...)` and anything you unwrap in a handler of your own.
+Your own frames are yours. A token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretToken(...)` and anything you unwrap in a handler of your own.
 
 **The token-endpoint paths are not covered.** `exchange_code` and `refresh_token` take the authorization code, the PKCE verifier and the refresh token as plain strings, and each raises from its own frames, so a captured traceback of a failed exchange or refresh states them. Measured against a refused exchange, the code appears in five frame locals and the verifier in five; against a refused refresh, the refresh token appears in two. Covering those means wrapping the token fields of `TokenSet` itself, which is not done.
 
