@@ -1379,6 +1379,35 @@ class TestValidateUrl:
         assert exc_info.value.kind is FailureKind.REFUSED
 
     @pytest.mark.parametrize(
+        "host",
+        [
+            pytest.param("localhost\u3002", id="the loopback name"),
+            pytest.param("app\u3002localhost", id="a name under localhost"),
+            pytest.param("127\u30020\u30020\u30021", id="the loopback address"),
+            pytest.param("2130706433\u3002", id="a legacy numeric form"),
+        ],
+    )
+    def test_rejects_a_non_public_host_written_with_another_dot(self, host: str) -> None:
+        """The client reads each of these as a host it will not fetch, so the rule reads the host it dials.
+
+        A document names this URL, so the other side chooses the spelling the rule is held to.
+        """
+        with pytest.raises(McpDiscoveryError, match="non-public host") as exc_info:
+            _validate_url(f"https://{host}/x", None, subject="server_url", caller_supplied=False)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize(
+        "url",
+        ["https:///x", "https://", "https://?q=1"],
+        ids=["an authority naming no host", "an authority and nothing else", "no host before the query"],
+    )
+    def test_rejects_a_url_naming_no_host_as_malformed(self, url: str) -> None:
+        """A URL naming no host states no host the rule could hold, which is a malformed URL and not a host."""
+        with pytest.raises(McpDiscoveryError, match="malformed URL") as exc_info:
+            _validate_url(url, None, subject="server_url", caller_supplied=False)
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    @pytest.mark.parametrize(
         "url",
         ["http://mcp.example.com", "https://127.0.0.1", "https://[::1"],
         ids=["not https", "non-public host", "malformed"],
