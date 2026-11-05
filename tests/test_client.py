@@ -64,16 +64,6 @@ _BROWSER_TOKEN = "browser-token-for-these-tests"
 # The fixed wall-clock reading, in epoch seconds, that the pending state age tests pin the client to.
 _NOW = 1_700_000_000.0
 
-# A lifetime or expiry of these types is refused by the token client before this library reads the body.
-_REFUSED_BEFORE_PARSING = [
-    ("expires_at", {"at": 1.0}),
-    ("expires_at", [1.0]),
-    ("expires_in", "3600.5"),
-    ("expires_in", "one hour"),
-    ("expires_in", [3600]),
-    ("expires_in", {"seconds": 3600}),
-]
-
 # The state the pending states and callbacks of these tests carry. A stored-state flow derives it from
 # the browser token, so one value serves both clients.
 _STATE = _state_for_browser_token(_BROWSER_TOKEN)
@@ -3565,8 +3555,14 @@ class TestATopLevelFieldOfTheWrongType:
 
     WRONG = [
         ("expires_at", "soon"),
+        ("expires_at", [1.0]),
+        ("expires_at", {"at": 1.0}),
         ("expires_in", "3600"),
+        ("expires_in", "3600.5"),
+        ("expires_in", "one hour"),
         ("expires_in", True),
+        ("expires_in", [3600]),
+        ("expires_in", {"seconds": 3600}),
         ("refresh_token", {"token": "r"}),
         ("refresh_token", ["r"]),
         ("scope", {"granted": "chat:write"}),
@@ -3618,13 +3614,11 @@ class TestATopLevelFieldOfTheWrongType:
 
         assert named == set(TokenSet.model_fields) - filled_by_this_client
 
-    async def test_a_numeric_string_lifetime_still_states_an_expiry(self, httpx_mock: HTTPXMock) -> None:
-        """The token client derives the expiry before this library reads the response, so it survives."""
+    async def test_a_numeric_string_lifetime_states_no_expiry(self, httpx_mock: HTTPXMock) -> None:
+        """An expiry is derived from a lifetime this library read, so one it could not read derives none."""
         tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", "expires_in": "3600"})
 
-        assert tokens.expires_in is None
-        assert tokens.extras["expires_in"] == "3600"
-        assert tokens.expires_at is not None
+        assert tokens.expires_at is None
 
     async def test_a_lifetime_that_is_not_a_number_states_no_lifetime(self, httpx_mock: HTTPXMock) -> None:
         """A boolean reads as a number in Python, so it is refused here rather than taken as one second."""
@@ -3632,21 +3626,6 @@ class TestATopLevelFieldOfTheWrongType:
 
         assert tokens.expires_in is None
         assert tokens.extras["expires_in"] is True
-
-    @pytest.mark.parametrize(
-        ("field", "value"), _REFUSED_BEFORE_PARSING, ids=[f"{f}={v!r}" for f, v in _REFUSED_BEFORE_PARSING]
-    )
-    async def test_a_lifetime_the_token_client_refuses_states_the_documented_failure(
-        self, httpx_mock: HTTPXMock, field: str, value: object
-    ) -> None:
-        """The token client reads the lifetime itself, so this library never reaches these values."""
-        httpx_mock.add_response(
-            url="https://provider.example.com/token", json={"access_token": "LIVE-TOKEN", field: value}
-        )
-        client = OAuthClient(config=_make_oauth_config())
-
-        with pytest.raises(TokenExchangeError):
-            await client.exchange_code(_callback(), pending_state=_pending_state())
 
 
 class TestTheUserTokenAProviderNests:
@@ -3851,6 +3830,47 @@ class TestARefusedResponseLeavesNoTokenValid:
 
         assert self._revoked(httpx_mock) == ["xoxp-USER"]
 
+    async def test_a_refused_error_status_revokes_the_tokens_its_body_carries(self, httpx_mock: HTTPXMock) -> None:
+        """An error status is a refusal, and a refusal must leave no token the response issued valid."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            status_code=400,
+            json={"access_token": "xoxb-BOT", "refresh_token": "issued-refresh"},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(_callback(), pending_state=_pending_state())
+
+        assert sorted(self._revoked(httpx_mock)) == ["issued-refresh", "xoxb-BOT"]
+
+    async def test_a_refused_error_body_revokes_the_tokens_beside_it(self, httpx_mock: HTTPXMock) -> None:
+        """A body stating an error may still carry a token, which the refusal must not leave valid."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url=self.SLACK_TOKEN_URL,
+            json={"error": "invalid_scope", "access_token": "xoxb-BOT"},
+        )
+        config = _make_config(
+            authorize_url="https://slack.com/oauth/v2/authorize",
+            token_url=self.SLACK_TOKEN_URL,
+            revocation_url=self.REVOKE_URL,
+            scopes=["channels:read"],
+        )
+        client = OAuthClient(config=config)
+
+        with pytest.raises(TokenExchangeError):
+            await client.exchange_code(_callback(), pending_state=_pending_state())
+
+        assert self._revoked(httpx_mock) == ["xoxb-BOT"]
+
     async def test_a_refused_refresh_revokes_a_token_the_caller_never_held(self, httpx_mock: HTTPXMock) -> None:
         """Sparing the token the caller presented does not justify sparing one it was just issued."""
         httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
@@ -3886,58 +3906,6 @@ class TestARefusedResponseLeavesNoTokenValid:
             await client.refresh_token("callers-own-refresh")
 
         assert self._revoked(httpx_mock) == ["xoxp-NEW"]
-
-    @pytest.mark.parametrize(
-        ("field", "value"), _REFUSED_BEFORE_PARSING, ids=[f"{f}={v!r}" for f, v in _REFUSED_BEFORE_PARSING]
-    )
-    async def test_an_exchange_the_token_client_refuses_revokes_what_it_issued(
-        self, httpx_mock: HTTPXMock, field: str, value: object
-    ) -> None:
-        """A response refused before this library reads it issued the same live tokens as one it reads."""
-        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
-        httpx_mock.add_response(
-            url=self.SLACK_TOKEN_URL,
-            json={"access_token": "xoxb-BOT", "refresh_token": "issued-refresh", field: value},
-        )
-        config = _make_config(
-            authorize_url="https://slack.com/oauth/v2/authorize",
-            token_url=self.SLACK_TOKEN_URL,
-            revocation_url=self.REVOKE_URL,
-            scopes=["channels:read"],
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(TokenExchangeError) as refusal:
-            await client.exchange_code(_callback(), pending_state=_pending_state())
-
-        assert sorted(self._revoked(httpx_mock)) == ["issued-refresh", "xoxb-BOT"]
-        assert refusal.value.kind is FailureKind.REFUSED
-
-    async def test_a_refresh_the_token_client_refuses_spares_only_the_token_it_was_given(
-        self, httpx_mock: HTTPXMock
-    ) -> None:
-        """A refusal inside the token client spares the token the caller presented, as every refusal does."""
-        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
-        httpx_mock.add_response(
-            url=self.SLACK_TOKEN_URL,
-            json={
-                "access_token": "xoxb-NEW",
-                "refresh_token": "callers-own-refresh",
-                "expires_in": {"seconds": 3600},
-            },
-        )
-        config = _make_config(
-            authorize_url="https://slack.com/oauth/v2/authorize",
-            token_url=self.SLACK_TOKEN_URL,
-            revocation_url=self.REVOKE_URL,
-            scopes=["channels:read"],
-        )
-        client = OAuthClient(config=config)
-
-        with pytest.raises(TokenRefreshError):
-            await client.refresh_token("callers-own-refresh")
-
-        assert self._revoked(httpx_mock) == ["xoxb-NEW"]
 
     async def test_a_body_the_token_client_cannot_decode_revokes_nothing(self, httpx_mock: HTTPXMock) -> None:
         """A body that states no object names no token, so there is nothing to revoke and nothing to log."""

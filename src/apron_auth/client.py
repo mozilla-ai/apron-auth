@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import logging
@@ -11,7 +12,7 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from functools import cached_property, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, assert_never
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
@@ -47,6 +48,7 @@ from apron_auth.models import (
     FreshTokenSet,
     IdentityMaterial,
     OAuthPendingState,
+    TokenEndpointAuthMethod,
     UrlField,
     UserToken,
 )
@@ -71,6 +73,10 @@ _PendingStateLookup = Callable[[str], Awaitable[OAuthPendingState]]
 # The grant fields of a token request that hold a secret.
 _SENT_SECRET_FIELDS = ("code", "code_verifier", "refresh_token")
 
+# The headers every token request sends, beside the ones its client authentication adds.
+# NOTE: An endpoint may answer a form-encoded body where the request asks for no JSON.
+_TOKEN_REQUEST_HEADERS = MappingProxyType({"Accept": "application/json"})
+
 # The number fields a token-endpoint response states: a Unix timestamp and a lifetime in seconds.
 _TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
 
@@ -82,6 +88,17 @@ _TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
 _USER_TOKEN_STRINGS = MappingProxyType(
     {"id": "user_id", "refresh_token": "refresh_token", "scope": "scope", "token_type": "token_type"}
 )
+
+
+class _ClientAuthentication(NamedTuple):
+    """How a token request presents its client credentials: the headers to send, and the fields to add."""
+
+    headers: dict[str, str]
+    form: dict[str, str]
+
+
+class _StatedOAuthError(Exception):
+    """Internal signal that a token-endpoint response states an OAuth error, whatever its status."""
 
 
 class _TokenEndpointError(Exception):
@@ -113,6 +130,10 @@ class _TokenEndpointError(Exception):
         self.kind = kind
         self.error_code = error_code
         self.refused_response = refused_response
+
+
+class _UnreadableBodyError(Exception):
+    """Internal signal that a token-endpoint response states no JSON object to read."""
 
 
 def _audience_names(audience: object) -> set[str] | None:
@@ -282,6 +303,33 @@ def _check_pending_openid(pending: OAuthPendingState) -> None:
         raise StateError(msg)
 
 
+def _client_authentication(config: ProviderConfig) -> _ClientAuthentication:
+    """Return how a token request presents the client credentials the method in ``config`` names.
+
+    NOTE: Each credential is sent as configured. RFC 6749 section 2.3.1 asks for form encoding before
+    the Basic credentials are encoded, which an endpoint reading the secret verbatim then refuses.
+
+    Args:
+        config: The provider configuration, whose token-endpoint authentication method decides where
+            the credentials go.
+
+    Returns:
+        The headers the request sends, and the form fields it adds to the grant's own.
+    """
+    client_id = config.client_id
+    secret = config.client_secret.get_secret_value() if config.client_secret is not None else ""
+    match config.token_endpoint_auth_method:
+        case TokenEndpointAuthMethod.CLIENT_SECRET_BASIC:
+            credentials = base64.b64encode(f"{client_id}:{secret}".encode()).decode()
+            return _ClientAuthentication(headers={"Authorization": f"Basic {credentials}"}, form={})
+        case TokenEndpointAuthMethod.CLIENT_SECRET_POST:
+            return _ClientAuthentication(headers={}, form={"client_id": client_id, "client_secret": secret})
+        case TokenEndpointAuthMethod.NONE:
+            return _ClientAuthentication(headers={}, form={"client_id": client_id})
+        case _:
+            assert_never(config.token_endpoint_auth_method)
+
+
 def _expires_at(token: Mapping[str, Any]) -> float | None:
     """Return the absolute expiry a token states, derived from its lifetime where it states no expiry.
 
@@ -359,18 +407,8 @@ def _nested_user_token(extras: Mapping[str, Any]) -> tuple[str, UserToken] | Non
     return nested[0] if len(nested) == 1 else None
 
 
-def _read_task_exception(task: asyncio.Task[None]) -> None:
-    """Mark a finished task's exception as retrieved, so asyncio never logs it with its text.
-
-    Args:
-        task: The finished task.
-    """
-    if not task.cancelled():
-        task.exception()
-
-
-def _refused_response(response: httpx.Response) -> dict[str, Any] | None:
-    """Return the token-endpoint body of a response the token client refused.
+def _object_body(response: httpx.Response) -> dict[str, Any] | None:
+    """Return the JSON object a token-endpoint response states.
 
     Args:
         response: The response the endpoint sent.
@@ -383,6 +421,16 @@ def _refused_response(response: httpx.Response) -> dict[str, Any] | None:
     except ValueError:
         return None
     return body if isinstance(body, dict) else None
+
+
+def _read_task_exception(task: asyncio.Task[None]) -> None:
+    """Mark a finished task's exception as retrieved, so asyncio never logs it with its text.
+
+    Args:
+        task: The finished task.
+    """
+    if not task.cancelled():
+        task.exception()
 
 
 def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
@@ -1120,11 +1168,11 @@ class _OAuthClientBase:
         code = recognized_error_code(_stated_error_member(response))
         return "" if code in self._sent_secrets(sent) else code
 
-    async def _token_request(self, data: dict[str, str]) -> dict:
-        """Send a token request via authlib's AsyncOAuth2Client.
+    async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
+        """Send a token request to the configured token endpoint.
 
-        Authlib handles token_endpoint_auth_method (client_secret_post vs
-        client_secret_basic), request encoding, and response parsing.
+        An OAuth error the body states names the failure, whatever status carries it. Otherwise an
+        error status is the failure, and a success whose body states no object is a refusal.
 
         Args:
             data: The grant-specific form fields for the request (e.g.
@@ -1138,39 +1186,37 @@ class _OAuthClientBase:
                 fails with a non-success status, or the request otherwise
                 errors; its ``error_code`` carries the OAuth error code
                 when the endpoint states one that this request did not send as a secret.
-                Where a response arrived and its body was refused, the error carries that body, whose
+                Where a response arrived and was refused, the error carries the body it stated, whose
                 tokens the endpoint issued and nothing else holds.
                 The caught error is not attached as its cause or context.
                 Its message is this library's own text and states nothing the endpoint sent.
         """
-        from authlib.integrations.base_client.errors import OAuthError as AuthlibOAuthError
-        from authlib.integrations.httpx_client import AsyncOAuth2Client
-
-        # The token client reports an OAuth error body without the response it came from, so it is recorded here.
-        responses: list[httpx.Response] = []
-
-        async def record_response(response: httpx.Response) -> None:
-            responses.append(response)
-
+        response: httpx.Response | None = None
         try:
-            client_secret = self._config.client_secret
+            authentication = _client_authentication(self._config)
             transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
-            async with AsyncOAuth2Client(
-                client_id=self._config.client_id,
-                client_secret=client_secret.get_secret_value() if client_secret is not None else None,
-                token_endpoint_auth_method=self._config.token_endpoint_auth_method,
+            async with httpx.AsyncClient(
                 transport=transport,
                 timeout=httpx_timeout(self._config.timeouts),
                 follow_redirects=False,
-                event_hooks={"response": [record_response]},
             ) as client:
-                token = await within_request_limit(
-                    client.fetch_token(self._config.token_url, **data), self._config.timeouts
+                response = await within_request_limit(
+                    client.post(
+                        self._config.token_url,
+                        data=data | authentication.form,
+                        headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
+                    ),
+                    self._config.timeouts,
                 )
-            return dict(token)
-        except AuthlibOAuthError:
-            # A response with an OAuth error body, which an endpoint may send with any status.
-            response = responses[-1] if responses else None
+            body = _object_body(response)
+            if body is not None and "error" in body:
+                raise _StatedOAuthError
+            response.raise_for_status()
+            if body is None:
+                raise _UnreadableBodyError
+            return body
+        except _StatedOAuthError:
+            # An OAuth error body, which an endpoint may send with any status.
             error_code = self._stated_error_code(response, data)
             status_code = response.status_code if response is not None else None
             kind = self._kind_for_token_response(response, error_code)
@@ -1179,30 +1225,26 @@ class _OAuthClientBase:
             else:
                 # An error body can arrive with a status that describes no failure of its own.
                 description = "token endpoint returned an error"
-            failure = _TokenEndpointError(description, kind, error_code=error_code)
+            failure = _TokenEndpointError(
+                description,
+                kind,
+                error_code=error_code,
+                refused_response=_object_body(response) if response is not None else None,
+            )
         except httpx.HTTPStatusError as exc:
-            # An error status without an OAuth error body that the token client recognized.
+            # An error status stating no OAuth error of its own.
             # The body may still carry an OAuth error code, which then decides the kind.
             error_code = self._stated_error_code(exc.response, data)
             kind = self._kind_for_token_response(exc.response, error_code)
             status = status_failure(exc.response.status_code)
-            failure = _TokenEndpointError(status.description, kind, error_code=error_code)
+            failure = _TokenEndpointError(
+                status.description, kind, error_code=error_code, refused_response=_object_body(exc.response)
+            )
         except httpx.RequestError as exc:
-            transport = http_failure(exc)
-            failure = _TokenEndpointError(transport.description, transport.kind)
-        # NOTE: The token client reads a success body itself, so a body it refuses surfaces here
-        # rather than as an HTTP error: as a ValueError or a TypeError where a lifetime states no
-        # number, or as a RecursionError on a deeply nested body. A response must have arrived for
-        # the body to be what failed, so one of those raised before then is the unexpected failure it is.
-        except (RecursionError, TypeError, ValueError):
-            if responses:
-                failure = _TokenEndpointError(
-                    "token response could not be read",
-                    FailureKind.REFUSED,
-                    refused_response=_refused_response(responses[-1]),
-                )
-            else:
-                failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
+            transport_failure = http_failure(exc)
+            failure = _TokenEndpointError(transport_failure.description, transport_failure.kind)
+        except _UnreadableBodyError:
+            failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
         except Exception:
             failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         # NOTE: The caught error can hold the request, which carries the client secret and the grant.
@@ -1230,7 +1272,7 @@ class _OAuthClientBase:
             return FailureKind.REJECTED if status_kind is None else status_kind
         return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED
 
-    def _parse_token_response(self, data: dict, context: dict[str, Any] | None = None) -> FreshTokenSet:
+    def _parse_token_response(self, data: dict[str, Any], context: dict[str, Any] | None = None) -> FreshTokenSet:
         """Parse a token endpoint response into a fresh token set.
 
         Args:
