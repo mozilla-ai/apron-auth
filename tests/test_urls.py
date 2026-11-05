@@ -278,3 +278,31 @@ class TestUsesAllowedTransport:
     )
     def test_without_a_waiver_it_answers_what_secure_transport_answers(self, url: str, expected: bool) -> None:
         assert uses_allowed_transport(url, plain_http_allowed=False) is expected
+
+    @pytest.mark.parametrize(
+        "dot",
+        [
+            pytest.param("\u3002", id="an ideographic full stop"),
+            pytest.param("\uff0e", id="a fullwidth full stop"),
+            pytest.param("\uff61", id="a halfwidth ideographic full stop"),
+        ],
+    )
+    def test_a_loopback_host_written_with_another_dot_reaches_no_network(self, dot: str) -> None:
+        """The client reads each of these as the loopback host, so the request it sends reaches no network."""
+        assert uses_allowed_transport(f"http://127.0.0.1{dot}/cb", plain_http_allowed=False) is True
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            pytest.param("slack\u3002com", id="a dot variant between labels"),
+            pytest.param("\u0430\u0440\u0440\u04cf\u0435.com", id="a host in another script"),
+            pytest.param("127.0.0.1.evil.com", id="a loopback literal as a label"),
+        ],
+    )
+    def test_plain_http_to_a_host_on_the_network_is_still_refused(self, host: str) -> None:
+        """Reading the host the client dials must not turn a host off this machine into a loopback one."""
+        assert uses_allowed_transport(f"http://{host}/cb", plain_http_allowed=False) is False
+
+    def test_a_port_the_standard_parser_refuses_is_refused(self) -> None:
+        """The client drops this port and dials the default, so the URL states a port it never sends."""
+        assert uses_allowed_transport("https://app.example.com:+443/cb", plain_http_allowed=False) is False

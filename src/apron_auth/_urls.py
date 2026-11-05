@@ -24,6 +24,12 @@ class AuthorityCredential(Enum):
 def _scheme_and_host(url: str) -> tuple[str, str] | None:
     """Return the scheme and host of ``url``, or None when a request cannot be sent to it as written.
 
+    The scheme and host are the HTTP client's own, the parser that resolves and dials them, so a rule
+    built on them answers for the request that is sent rather than for a second reading of the URL.
+    The standard library's parser still has to read the port, which it refuses in forms the client
+    accepts and then drops, so a URL stating a port it never sends is no URL here. That parser can
+    only narrow what this accepts, never widen it.
+
     Args:
         url: The URL to read.
 
@@ -31,14 +37,13 @@ def _scheme_and_host(url: str) -> tuple[str, str] | None:
         The scheme and the host, or ``None`` when the URL cannot be read.
     """
     try:
-        parsed = urlparse(url)
         # The port is parsed only when read, so one that is not a number surfaces here.
-        _ = parsed.port
-        # The HTTP client's parser is stricter than urlparse, so a URL it cannot request is no URL here.
-        httpx.URL(url)
-    except (ValueError, httpx.InvalidURL):
+        _ = urlparse(url).port
+        parsed = httpx.URL(url)
+        host = parsed.raw_host.decode("ascii")
+    except (UnicodeDecodeError, ValueError, httpx.InvalidURL):
         return None
-    return parsed.scheme, parsed.hostname or ""
+    return parsed.scheme, host
 
 
 def authority_credential(url: str) -> AuthorityCredential:
@@ -227,8 +232,7 @@ def uses_allowed_transport(url: str, *, plain_http_allowed: bool) -> bool:
     reaches no network.
     Plain ``http`` to any other host may only when ``plain_http_allowed``.
     No other scheme may, and neither may a URL that cannot be read or names no host.
-    NOTE: This reads the URL with the standard library's parser. A rule that has to agree with the
-    host the HTTP client dials reads that host with :func:`url_host` instead.
+    The host is the one the HTTP client dials, so a host this accepts is the host the request reaches.
 
     Args:
         url: The URL to read.
