@@ -27,7 +27,9 @@ config = ProviderConfig(
 )
 store = MemoryStateStore()
 callback = AuthorizationCallback(code="code", state="state")
-pending_state = OAuthPendingState(state="state", redirect_uri="https://app.example.com/callback", created_at=0.0)
+pending_state = OAuthPendingState(
+    state="state", redirect_uri="https://app.example.com/callback", openid_requested=False, created_at=0.0
+)
 
 caller_kept = OAuthClient(config)
 stored = StoredStateClient(config, store)

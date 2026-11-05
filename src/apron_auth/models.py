@@ -1968,6 +1968,10 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         redirect_uri: Redirect URI for this flow.
         code_verifier: PKCE code verifier, if PKCE is enabled.
         nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
+        openid_requested: Whether the request asked for the ``openid`` scope, which decides whether the
+            exchange holds the response to the nonce rule. It is stated beside the nonce rather than read
+            off it, because a nonce this state reached the exchange without states a request that asked
+            for none, and the two are then indistinguishable.
         created_at: Unix timestamp when this state was created.
         context: Opaque caller-supplied context that apron-auth carries but never interprets.
             Attach application-specific data such as ``user_id`` or ``tenant_id`` here.
@@ -1977,8 +1981,35 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     redirect_uri: str
     code_verifier: str | None = None
     nonce: str | None = None
+    openid_requested: bool
     created_at: float
     context: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _nonce_presence_matches_the_openid_request(self) -> OAuthPendingState:
+        """Reject a pending state whose nonce presence contradicts the scope its request asked for.
+
+        An authorization request that asks for the ``openid`` scope sends a nonce, and no other request
+        sends one, so the two always agree when this state is the one the request recorded. A state that
+        disagrees lost a field on its way to storage and back, and the exchange it is given to would hold
+        the response to the wrong rule.
+
+        Returns:
+            The validated state, unchanged.
+
+        A nonce that states nothing checks nothing, so an empty one is no nonce either way.
+
+        Raises:
+            ValueError: If an OpenID request states no nonce, or a request that asked for no OpenID
+                scope states one.
+        """
+        if self.openid_requested and not self.nonce:
+            msg = "nonce must state a value when openid_requested is true"
+            raise ValueError(msg)
+        if not self.openid_requested and self.nonce:
+            msg = "nonce must state nothing when openid_requested is false"
+            raise ValueError(msg)
+        return self
 
     # No transport rule: the redirect URI is the one a config already stated, and a config that
     # accepts plain HTTP for it records no waiver here to read.

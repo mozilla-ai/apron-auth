@@ -63,6 +63,7 @@ def _pending_state(nonce: str | None = None, code_verifier: str = VERIFIER) -> O
         redirect_uri="https://app.example.com/callback",
         code_verifier=code_verifier,
         nonce=nonce,
+        openid_requested=bool(nonce),
         created_at=time.time(),
     )
 
@@ -193,6 +194,21 @@ class TestTokenRequestErrors:
 
         assert str(error) == "token response could not be read"
         _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN)
+
+    async def test_a_refresh_response_id_token_refusal_carries_no_token(self, httpx_mock: HTTPXMock) -> None:
+        """The claim frames hold the ID token, which names a person and is a credential of its own."""
+        httpx_mock.add_response(url="https://provider.example.com/revoke", is_reusable=True)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": ACCESS_TOKEN, "token_type": "Bearer", "id_token": f"unreadable-{ACCESS_TOKEN}"},
+        )
+
+        error = await self._refresh_error()
+
+        assert str(error) == "ID token could not be read"
+        assert error.kind is FailureKind.REFUSED
+        _assert_carries_no_secret(error, CLIENT_SECRET, REFRESH_TOKEN, ACCESS_TOKEN)
+        assert not any("_check_id_token" in name for name in _frame_names(error))
 
     async def test_a_refusal_states_no_provider_text(self, httpx_mock: HTTPXMock) -> None:
         """The endpoint chooses this text and can echo a value the request sent, so the status stands in."""

@@ -259,7 +259,6 @@ class NonceValidationError(IdTokenValidationError):
     """A code exchange is not shown to answer the authorization request whose nonce it should carry.
 
     The response may carry no ID token, or one with no nonce or a different one.
-    The pending state of an OpenID request may also have lost its nonce, so there is nothing to compare.
     The token response may answer an authorization request this client did not start.
     """
 

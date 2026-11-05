@@ -260,6 +260,28 @@ def _check_pending_age(pending: OAuthPendingState, *, max_age: float) -> None:
     raise StateError(msg)
 
 
+def _check_pending_openid(pending: OAuthPendingState) -> None:
+    """Refuse a pending authorization request whose nonce does not state what its request asked for.
+
+    A request that asked for the ``openid`` scope sent a nonce, and no other request sent one, so a
+    request stating one without the other states nothing the nonce rule can be held to.
+
+    NOTE: Validation refuses such a request, so only construction without it produces one.
+
+    Args:
+        pending: The pending authorization request to check.
+
+    Raises:
+        StateError: If an OpenID request states no nonce, or another request states one.
+    """
+    if pending.openid_requested and not pending.nonce:
+        msg = "Pending authorization request asked for OpenID and states no nonce"
+        raise StateError(msg)
+    if not pending.openid_requested and pending.nonce:
+        msg = "Pending authorization request states a nonce its request did not ask for"
+        raise StateError(msg)
+
+
 def _expires_at(token: Mapping[str, Any]) -> float | None:
     """Return the absolute expiry a token states, derived from its lifetime where it states no expiry.
 
@@ -602,7 +624,8 @@ class _OAuthClientBase:
         # The nonce is set on the built query, because the decision depends on its final scope
         # and extra_params must not be able to replace it.
         nonce = None
-        if self._sends_openid(query):
+        openid_requested = self._sends_openid(query)
+        if openid_requested:
             nonce = secrets.token_urlsafe(32)
             query["nonce"] = nonce
 
@@ -614,6 +637,7 @@ class _OAuthClientBase:
             redirect_uri=effective_redirect_uri,
             code_verifier=code_verifier,
             nonce=nonce,
+            openid_requested=openid_requested,
             created_at=time.time(),
             context=context or {},
         )
@@ -691,19 +715,15 @@ class _OAuthClientBase:
 
         Raises:
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
             StateError: If the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or its response states no access token.
         """
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
-
-        if not pending.nonce and self._requests_openid():
-            # NOTE: The code is not redeemed, so no tokens are issued that would need revoking.
-            msg = "The pending state has no nonce to check the token response against"
-            raise NonceValidationError(msg)
+        _check_pending_openid(pending)
 
         data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
@@ -831,11 +851,16 @@ class _OAuthClientBase:
 
         Returns:
             The refreshed token set, which identity can be established from.
+            Any ID token it carries names the same client and issuer as the one the original
+            authentication carried, and has not expired.
+            NOTE: OpenID Connect Core section 12.2 also holds the ID token to the subject of the
+            original, which this client does not keep, so comparing ``sub`` is the caller's.
 
         Raises:
-            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, or if its
+            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, if its
+                response carries an ID token that was not issued to this client or has expired, or if its
                 response states no access token, which RFC 6749 section 5.1 requires. A response refused for
-                stating none has every token revoked except ``refresh_token`` itself, which the caller holds.
+                either reason has every token revoked except ``refresh_token`` itself, which the caller holds.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
@@ -859,6 +884,20 @@ class _OAuthClientBase:
             if refused is not None:
                 await self._revoke_refused_tokens(refused, keep=refresh_token)
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
+        try:
+            _check_id_token(
+                response.get("id_token"), None, client_id=self._config.client_id, issuer=self._config.issuer
+            )
+        except IdTokenValidationError as exc:
+            refusal = str(exc)
+        else:
+            refusal = None
+        if refusal is not None:
+            # NOTE: This raise stays outside the except block and chains nothing, because the refused
+            # error's traceback holds the claim frames, whose locals carry the ID token.
+            # A refresh response can repeat the token it was sent, which the caller still holds.
+            await self._revoke_refused_tokens(response, keep=refresh_token)
+            raise TokenRefreshError(refusal, kind=FailureKind.REFUSED)
         if not _states_an_access_token(response):
             # A refresh response can repeat the token it was sent, which the caller still holds, so
             # that one token is spared and everything the response issued beside it is revoked.
@@ -1031,14 +1070,6 @@ class _OAuthClientBase:
             The query, with each parameter's value or values.
         """
         return authorization_query(self._config, params)
-
-    def _requests_openid(self) -> bool:
-        """Return whether this client's authorization request asks for the ``openid`` scope.
-
-        Returns:
-            ``True`` when a scope word the request sends is ``openid``.
-        """
-        return self._sends_openid(self._authorization_query(self._scope_params()))
 
     def _scope_params(self) -> dict[str, str]:
         """Return the ``scope`` request parameter for the configured scopes.
@@ -1316,8 +1347,7 @@ class OAuthClient(_OAuthClientBase):
             IssuerValidationError: If the response's ``iss`` fails validation against the provider's
                 expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
                 A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
@@ -1325,7 +1355,8 @@ class OAuthClient(_OAuthClientBase):
             StateError: If the callback carried no state, ``state`` is not the pending state's own,
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
                 access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
@@ -1462,8 +1493,7 @@ class StoredStateClient(_OAuthClientBase):
             IssuerValidationError: If the response's ``iss`` fails validation against the provider's
                 expected issuer.
             NonceValidationError: If the request sent a nonce and the response carries no ID token,
-                or an ID token that does not carry that nonce,
-                or the pending state of an OpenID request has no nonce, which is refused before the code is redeemed.
+                or an ID token that does not carry that nonce.
                 The response's tokens are revoked first when it failed the check against the nonce the request sent.
                 A revocation unfinished within the configured cleanup limit is canceled,
                 but a revocation handler that does not stop when canceled can delay the error longer.
@@ -1474,7 +1504,8 @@ class StoredStateClient(_OAuthClientBase):
                 the store holds no pending state for it because it is invalid, expired, or already consumed,
                 or the pending state is older than ``max_pending_age_seconds``,
                 carries no usable creation time,
-                or was created further ahead of this client's clock than the allowed difference.
+                or was created further ahead of this client's clock than the allowed difference,
+                or states a nonce its request did not ask for, or asked for OpenID and states none.
             TokenExchangeError: If the token endpoint rejects the exchange, or if its response states no
                 access token, which RFC 6749 section 5.1 requires. A response refused for stating none has
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
