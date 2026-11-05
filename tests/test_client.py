@@ -2534,6 +2534,109 @@ class TestRefreshToken:
         assert str(exc_info.value) == "HTTP 400"
 
 
+class TestARefreshResponseIdToken:
+    """OpenID Connect Core section 12.2 holds a refresh response's ID token to the claims of the original."""
+
+    REVOKE_URL = "https://provider.example.com/revoke"
+
+    async def _refresh(
+        self, httpx_mock: HTTPXMock, claims: object, issuer: str | None = None, revocation_url: str | None = None
+    ) -> FreshTokenSet:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={
+                "access_token": "access-new",
+                "token_type": "Bearer",
+                "refresh_token": "refresh-new",
+                "id_token": _id_token(claims),
+            },
+            is_optional=True,
+        )
+        client = OAuthClient(config=_make_config(issuer=issuer, revocation_url=revocation_url))
+        return await client.refresh_token("refresh-old")
+
+    def _revoked(self, httpx_mock: HTTPXMock) -> list[str]:
+        return [
+            parse_qs(request.content.decode())["token"][0] for request in httpx_mock.get_requests(url=self.REVOKE_URL)
+        ]
+
+    async def test_a_token_issued_to_this_client_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        tokens = await self._refresh(httpx_mock, _openid_claims())
+        assert tokens.access_token == "access-new"
+
+    @pytest.mark.parametrize(
+        ("claims", "message"),
+        [
+            pytest.param({"aud": "other-client"}, "audience does not include this client", id="another audience"),
+            pytest.param({"exp": time.time() - 120}, "has expired", id="expired"),
+            pytest.param({"azp": "other-client"}, "authorized party is not this client", id="another party"),
+        ],
+    )
+    async def test_a_token_not_issued_to_this_client_is_refused(
+        self, httpx_mock: HTTPXMock, claims: dict[str, object], message: str
+    ) -> None:
+        with pytest.raises(TokenRefreshError, match=message) as exc_info:
+            await self._refresh(httpx_mock, _openid_claims(**claims))
+
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert exc_info.value.retryable is False
+
+    async def test_a_token_naming_another_issuer_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        with pytest.raises(TokenRefreshError, match="issuer does not match"):
+            await self._refresh(
+                httpx_mock,
+                _openid_claims(iss="https://other.example.com"),
+                issuer="https://provider.example.com",
+            )
+
+    async def test_a_token_that_cannot_be_read_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-new", "token_type": "Bearer", "id_token": "not-a-token"},
+        )
+        with pytest.raises(TokenRefreshError, match="ID token could not be read"):
+            await OAuthClient(config=_make_config()).refresh_token("refresh-old")
+
+    @pytest.mark.parametrize("response", [{}, {"id_token": None}], ids=["absent", "null"])
+    async def test_a_response_carrying_no_id_token_is_accepted(
+        self, httpx_mock: HTTPXMock, response: dict[str, object]
+    ) -> None:
+        """A refresh response need carry no ID token, so one that carries none states nothing to check."""
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-new", "token_type": "Bearer", **response},
+        )
+        tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-old")
+        assert tokens.access_token == "access-new"
+
+    async def test_a_refused_response_revokes_what_it_issued(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+
+        with pytest.raises(TokenRefreshError):
+            await self._refresh(httpx_mock, _openid_claims(aud="other-client"), revocation_url=self.REVOKE_URL)
+
+        assert sorted(self._revoked(httpx_mock)) == ["access-new", "refresh-new"]
+
+    async def test_a_refused_response_spares_the_token_it_was_given(self, httpx_mock: HTTPXMock) -> None:
+        """A provider may repeat the token it was sent, which the caller still holds."""
+        httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={
+                "access_token": "access-new",
+                "token_type": "Bearer",
+                "refresh_token": "refresh-old",
+                "id_token": _id_token(_openid_claims(aud="other-client")),
+            },
+        )
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL))
+
+        with pytest.raises(TokenRefreshError):
+            await client.refresh_token("refresh-old")
+
+        assert self._revoked(httpx_mock) == ["access-new"]
+
+
 class TestRevokeToken:
     async def test_successful_revocation(self, httpx_mock):
         from apron_auth.providers._revocation import StandardRevocationHandler

@@ -827,11 +827,16 @@ class _OAuthClientBase:
 
         Returns:
             The refreshed token set, which identity can be established from.
+            Any ID token it carries names the same client and issuer as the one the original
+            authentication carried, and has not expired.
+            NOTE: OpenID Connect Core section 12.2 also holds the ID token to the subject of the
+            original, which this client does not keep, so comparing ``sub`` is the caller's.
 
         Raises:
-            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, or if its
+            TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, if its
+                response carries an ID token that was not issued to this client or has expired, or if its
                 response states no access token, which RFC 6749 section 5.1 requires. A response refused for
-                stating none has every token revoked except ``refresh_token`` itself, which the caller holds.
+                either reason has every token revoked except ``refresh_token`` itself, which the caller holds.
                 Its ``retryable`` says whether the same request may succeed later, and ``error_code``
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
@@ -855,6 +860,20 @@ class _OAuthClientBase:
             if refused is not None:
                 await self._revoke_refused_tokens(refused, keep=refresh_token)
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
+        try:
+            _check_id_token(
+                response.get("id_token"), None, client_id=self._config.client_id, issuer=self._config.issuer
+            )
+        except IdTokenValidationError as exc:
+            refusal = str(exc)
+        else:
+            refusal = None
+        if refusal is not None:
+            # NOTE: This raise stays outside the except block and chains nothing, because the refused
+            # error's traceback holds the claim frames, whose locals carry the ID token.
+            # A refresh response can repeat the token it was sent, which the caller still holds.
+            await self._revoke_refused_tokens(response, keep=refresh_token)
+            raise TokenRefreshError(refusal, kind=FailureKind.REFUSED)
         if not _states_an_access_token(response):
             # A refresh response can repeat the token it was sent, which the caller still holds, so
             # that one token is spared and everything the response issued beside it is revoked.

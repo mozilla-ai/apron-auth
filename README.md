@@ -573,6 +573,8 @@ client = OAuthClient(
 
 These merge with the defaults, which `OAuthClient.DEFAULT_RETRYABLE_ERROR_CODES` holds. A provider that rotates refresh tokens may have consumed the token before an outage was reported, so a retry that then fails with `invalid_grant` needs a new sign-in. The code exchange classifies the same codes the same way, so `TokenExchangeError` carries the same `kind` and `error_code`, but it is never `retryable`: an authorization code is single-use, and presenting it twice can revoke the tokens it issued.
 
+An ID token in a refresh response is held to the same claims as the one the original sign-in carried, which OpenID Connect Core section 12.2 requires: the audience and authorized party must name your client, the issuer must match when the config has one, and the token must not have expired. A response refused for any of those raises `TokenRefreshError` with `kind` `REFUSED`, and its tokens are revoked first, except the refresh token you passed in, which you still hold. The specification also holds the ID token to the subject of the original, which this library does not keep, so comparing `sub` against the identity you stored is yours to do.
+
 ### Token revocation
 
 ```python
@@ -913,7 +915,7 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 | `TokenExchangeError`           | Code exchange failed: the token endpoint refused the code, or its response was refused. Carries `error_code`. Never `retryable`: a code is single-use, so start a new authorization. |
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce. Subclass of `IdTokenValidationError`. |
-| `TokenRefreshError`            | Refresh failed. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
+| `TokenRefreshError`            | Refresh failed, or its response carried an ID token that was not issued to your client. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
 | `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned. |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, or did not come from the browser that started the flow. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
