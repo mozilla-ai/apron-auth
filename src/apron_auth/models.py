@@ -453,7 +453,8 @@ def _build_allowing_plain_http(
 ) -> _ModelT:
     """Build a model that accepts plain HTTP for the named URL fields, and say so in the log.
 
-    NOTE: Nothing is logged for a build that is refused, so a line in the log names a waiver in force.
+    NOTE: Nothing is logged for a build that is refused, so a line in the log names the fields a waiver
+    is in force for.
 
     Args:
         cls: The model to build.
@@ -784,8 +785,8 @@ class _RefusesWithoutRepeating(BaseModel):
         change made any other way keeps none of the rules this model enforces.
 
         NOTE: A plain-HTTP waiver this model holds is carried into the copy, because such a waiver was
-        stated in code. Neither the waiver nor a URL it covers can be changed here, so a waiver in
-        force is always one :meth:`unsafe.allow_plain_http` stated and logged.
+        stated in code. Neither the waiver nor a URL it covers can be changed here, because a waiver
+        was stated for the URL it accepted, and pointing it elsewhere would state one no code stated.
 
         Args:
             **updates: The field values the copy states instead of this model's own. Each must name a
