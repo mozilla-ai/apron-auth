@@ -1707,6 +1707,26 @@ class FreshTokenSet(TokenSet):
         """
         raise cls._stored_data_refusal()
 
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Copy a fresh token set, refusing a copy that states other values.
+
+        Freshness states the response these tokens came from. No rule anywhere else can establish
+        it, so a copy stating other values would carry the statement without the response.
+
+        Args:
+            update: The values a copy would state instead of this model's own. A copy states none.
+            deep: Whether to copy the values themselves rather than share them.
+
+        Returns:
+            The copy, stating this model's own values.
+
+        Raises:
+            ConfigurationError: If ``update`` states any value.
+        """
+        if update:
+            raise self._changed_copy_refusal()
+        return super().model_copy(deep=deep)
+
     def with_changes(self, **updates: Any) -> NoReturn:
         """Refuse to change a fresh token set.
 
@@ -1716,8 +1736,12 @@ class FreshTokenSet(TokenSet):
         Raises:
             ConfigurationError: Always.
         """
-        msg = "A fresh token set cannot be changed. Its freshness states the response it came from."
-        raise ConfigurationError(msg)
+        raise self._changed_copy_refusal()
+
+    @staticmethod
+    def _changed_copy_refusal() -> ConfigurationError:
+        msg = "A fresh token set cannot state other values. Its freshness states the response it came from."
+        return ConfigurationError(msg)
 
     @staticmethod
     def _stored_data_refusal() -> ConfigurationError:

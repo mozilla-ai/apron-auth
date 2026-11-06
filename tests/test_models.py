@@ -1588,6 +1588,13 @@ class TestAValidatedChange:
         with pytest.raises(ConfigurationError, match="freshness"):
             fresh.with_changes(scope="read")
 
+    def test_a_fresh_token_set_refuses_a_copy_stating_other_values(self) -> None:
+        """Freshness is the one rule no guard anywhere else can state, so the unvalidated copy forges it."""
+        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="freshness"):
+            fresh.model_copy(update={"access_token": "other-token"})  # pragma: allowlist secret
+
     @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
     def test_every_model_offers_the_validated_change_path(self, model: type[BaseModel]) -> None:
         """A model that offers no validated change leaves its caller the entry points that run no rule."""
