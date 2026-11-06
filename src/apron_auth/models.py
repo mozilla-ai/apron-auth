@@ -1,4 +1,11 @@
-"""Data models for OAuth configuration, tokens, and state."""
+"""Data models for OAuth configuration, tokens, and state.
+
+A rule a model states is enforced as the model is built. :meth:`with_changes` rebuilds a frozen model
+and so keeps every rule, while the framework's own ``model_copy``, ``model_construct`` and the
+:mod:`copy` functions run no validator, so an instance built through one of them carries values a model
+states it refuses. The rules that decide where a credential is sent are checked again where the request
+is built, so such an instance is refused there rather than reaching a provider.
+"""
 
 from __future__ import annotations
 
@@ -893,10 +900,10 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
             and the one a granted scope string is split on.
-            An empty value is refused at construction.
+            An empty value is refused.
             Defaults to a single space (RFC 6749 section 3.3).
         extra_params: Fixed parameters added to every authorization request.
-            A reserved parameter is refused at construction, and the error names it.
+            A reserved parameter is refused, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
             or replace the request as a whole, such as ``request_uri``.
         disconnect_fully_revokes: Whether ``revoke_token`` removes the
@@ -976,7 +983,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         resource: RFC 8707 resource indicator identifying the service the
             issued token is audience-bound to. When set, it must be an
             absolute URI without a fragment (RFC 8707); an invalid value is
-            rejected at construction. It is sent on the authorization request
+            rejected. It is sent on the authorization request
             and on the token-exchange and refresh requests, so the
             authorization server can restrict the token's audience to this
             resource. ``None`` (the default) emits no ``resource`` parameter
@@ -1002,17 +1009,16 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
-            config that contradicts one is refused at construction.
-            NOTE: The label is not an attestation. Construction checks nothing else about a config
-            against the member, so a caller must not read this as proof of where the endpoints lead.
-            NOTE: Only construction takes and checks a member's facts. A config whose provider is set
-            through :meth:`~pydantic.BaseModel.model_copy` keeps the facts it already carried.
+            config that contradicts one is refused.
+            NOTE: The label is not an attestation. Nothing else about a config is checked against the
+            member, so a caller must not read this as proof of where the endpoints lead.
+            NOTE: A member's facts are taken as a config is built and are not taken again. Changing
+            this field is therefore refused wherever the facts the config carries contradict the new
+            member, and a preset is the path to a config labeled with another provider.
         allow_insecure_http_for: The URL fields this config accepts plain HTTP for. Empty by
             default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
             out of storage is refused. A loopback host needs no waiver, because a request to one
             reaches no network.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
             NOTE: A config recording a waiver cannot be validated as a field of another model,
             because that validation cannot tell a waiver stated in code from one read out of data.
     """
@@ -1101,7 +1107,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
         A reserved parameter binds the request to the client, or replaces the request as a whole.
         The request drops such a parameter rather than sending it, so a configuration that sets one
-        never sends what it states, and refusing it at construction reports that before any sign-in.
+        never sends what it states, and refusing such a config reports that before any sign-in.
 
         Returns:
             The validated config, unchanged.
@@ -1120,7 +1126,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """Reject an extra parameter that is reserved for the authorization request itself.
 
         A reserved parameter binds the request to the client, or replaces the request as a whole.
-        Refusing it at construction reports the misconfiguration before any sign-in.
+        Refusing such a config reports the misconfiguration before any sign-in.
 
         Returns:
             The validated config, unchanged.
@@ -1267,9 +1273,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     def _revocation_endpoint_sits_with_the_token_endpoint(self) -> ProviderConfig:
         """Reject a config whose revocation endpoint is on a host revocation is not permitted at.
 
-        :meth:`permits_revocation_at` states the rule, and refusing at construction reports a
+        :meth:`permits_revocation_at` states the rule, and refusing such a config reports a
         configuration that breaks it before it sends a token anywhere.
-        NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
 
         Returns:
             The validated config, unchanged.
@@ -1438,8 +1443,6 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
             out of storage is refused. A loopback host needs no waiver, because a request to one
             reaches no network.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
             NOTE: A metadata recording a waiver cannot be validated as a field of another model,
             because that validation cannot tell a waiver stated in code from one read out of data.
     """
@@ -2162,8 +2165,6 @@ class WorkloadIssuer(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             storage is refused. A loopback host needs no waiver, because a request to one reaches no
             network. The waiver for ``jwks_url`` covers a key set URL discovered from this issuer as
             well, because a discovered URL has no field of its own to be waived for.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
     """
 
     issuer: str
