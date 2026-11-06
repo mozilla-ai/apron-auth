@@ -780,25 +780,40 @@ class _RefusesWithoutRepeating(BaseModel):
         """Return a copy stating ``updates``, validated as a model built from its values is.
 
         A frozen model refuses a change in place, and the framework's own copy runs no validator, so a
-        change made any other way keeps none of the rules this model states.
+        change made any other way keeps none of the rules this model enforces.
 
-        NOTE: A plain-HTTP waiver this model already holds is carried into the copy, because such a
-        waiver was stated in code. One named in ``updates`` is data and is refused.
+        NOTE: A plain-HTTP waiver this model holds is carried into the copy, because such a waiver was
+        stated in code. Neither the waiver nor a URL it covers can be changed here, so a waiver in
+        force is always one :meth:`unsafe.allow_plain_http` stated and logged.
 
         Args:
-            **updates: The field values the copy states instead of this model's own.
+            **updates: The field values the copy states instead of this model's own. Each must name a
+                field of this model that no plain-HTTP waiver covers.
 
         Returns:
             The validated copy.
 
         Raises:
-            ConfigurationError: If the copy is refused.
+            ConfigurationError: If an update names no field of this model, if one names the plain-HTTP
+                waiver or a URL the waiver covers, or if the copy is refused.
         """
-        values = {name: getattr(self, name) for name in type(self).model_fields}
-        stated = {**values, **updates}
-        from_code = stated.get(_PLAIN_HTTP_WAIVER) == values.get(_PLAIN_HTTP_WAIVER)
-        context = {_PLAIN_HTTP_WAIVER: _WAIVER_SENTINEL} if from_code else None
-        return type(self).model_validate(stated, context=context)
+        fields = type(self).model_fields
+        unknown = sorted(name for name in updates if name not in fields)
+        if unknown:
+            msg = f"{', '.join(unknown)}: no such field"
+            raise ConfigurationError(msg)
+        if _PLAIN_HTTP_WAIVER in updates:
+            msg = f"{_PLAIN_HTTP_WAIVER} is stated through unsafe.allow_plain_http, not changed"
+            raise ConfigurationError(msg)
+        waived: frozenset[UrlField] = getattr(self, _PLAIN_HTTP_WAIVER, frozenset())
+        covered = sorted(str(field) for field in waived if str(field) in updates)
+        if covered:
+            msg = f"{', '.join(covered)}: accepts plain http, so state the URL through unsafe.allow_plain_http"
+            raise ConfigurationError(msg)
+        # A field the framework's own build left unset states no value, and validation names it.
+        values = {name: getattr(self, name) for name in fields if hasattr(self, name)}
+        context = {_PLAIN_HTTP_WAIVER: _WAIVER_SENTINEL} if waived else None
+        return type(self).model_validate({**values, **updates}, context=context)
 
 
 class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):

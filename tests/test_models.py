@@ -1515,6 +1515,53 @@ class TestAValidatedChange:
         with pytest.raises(ConfigurationError, match="unsafe.allow_plain_http"):
             self._config().with_changes(allow_insecure_http_for=frozenset({UrlField.TOKEN_URL}))
 
+    @staticmethod
+    def _waived() -> ProviderConfig:
+        return ProviderConfig.unsafe.allow_plain_http(
+            "token_url",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="http://127.0.0.1:9000/token",
+        )
+
+    @pytest.mark.parametrize(
+        "waiver",
+        [frozenset({UrlField.TOKEN_URL}), frozenset()],
+        ids=["the waiver it already holds", "no waiver at all"],
+    )
+    def test_a_change_cannot_restate_the_waiver_a_model_holds(self, waiver: frozenset[UrlField]) -> None:
+        """Accepting a waiver that matches would pin no rule, because every such change is a waiver."""
+        with pytest.raises(ConfigurationError, match="unsafe.allow_plain_http"):
+            self._waived().with_changes(allow_insecure_http_for=waiver)
+
+    def test_a_change_cannot_point_a_waived_url_somewhere_else(self) -> None:
+        """A waiver is logged for the URL it was stated with, so re-pointing one records no waiver."""
+        with pytest.raises(ConfigurationError, match="token_url"):
+            self._waived().with_changes(token_url="http://attacker.example/token")
+
+    def test_a_change_to_a_url_no_waiver_covers_is_accepted(self) -> None:
+        """Only the fields a waiver covers are held back, so the rest of a waived config still changes."""
+        changed = self._waived().with_changes(authorize_url="https://other.example.com/authorize")
+
+        assert changed.authorize_url == "https://other.example.com/authorize"
+        assert changed.token_url == "http://127.0.0.1:9000/token"
+        assert changed.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+
+    def test_a_change_naming_no_field_is_refused(self) -> None:
+        """A model that ignores an unknown name answers a misspelled change with the values it already had."""
+        with pytest.raises(ConfigurationError, match="emial"):
+            IdentityProfile(provider=None, subject="u-1", email="user@example.com").with_changes(
+                emial="typo@example.com"
+            )
+
+    def test_a_change_to_a_model_missing_a_field_states_the_field(self) -> None:
+        """The framework's own build leaves a field unset, and every entry point here states its refusal."""
+        partial = ProviderConfig.model_construct(client_id="cid", authorize_url="https://provider.example.com/a")
+
+        with pytest.raises(ConfigurationError, match="token_url"):
+            partial.with_changes(scopes=["read"])
+
     def test_a_fresh_token_set_refuses_a_change(self) -> None:
         """Freshness states the response the tokens came from, which a changed copy does not answer for."""
         fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
