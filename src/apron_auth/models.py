@@ -1,10 +1,11 @@
 """Data models for OAuth configuration, tokens, and state.
 
-A rule a model states is enforced as the model is built. :meth:`with_changes` rebuilds a frozen model
-and so keeps every rule, while the framework's own ``model_copy``, ``model_construct`` and the
-:mod:`copy` functions run no validator, so an instance built through one of them carries values a model
-states it refuses. The rules that decide where a credential is sent are checked again where the request
-is built, so such an instance is refused there rather than reaching a provider.
+A rule a model enforces runs as the model is built, and :meth:`with_changes` rebuilds a frozen model so
+that a change runs them too. The framework's own ``model_copy``, ``model_construct`` and the :mod:`copy`
+functions run no validator, so an instance built through one of them carries values a model states it
+refuses. The rules that decide where a credential is sent are checked again where the request is built,
+so such an instance is refused there rather than reaching a provider. A rule a model documents as its
+caller's obligation is enforced on no path, and says so where it is stated.
 """
 
 from __future__ import annotations
@@ -1027,9 +1028,9 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             config that contradicts one is refused.
             NOTE: The label is not an attestation. Nothing else about a config is checked against the
             member, so a caller must not read this as proof of where the endpoints lead.
-            NOTE: A member's facts are taken as a config is built and are not taken again. Changing
-            this field is therefore refused wherever the facts the config carries contradict the new
-            member, and a preset is the path to a config labeled with another provider.
+            NOTE: A member's facts are taken as a config is built and are not taken again, so this
+            field cannot be changed. A preset builds a config labeled with its own provider, and a
+            config naming none is built by hand.
         allow_insecure_http_for: The URL fields this config accepts plain HTTP for. Empty by
             default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
             out of storage is refused. A loopback host needs no waiver, because a request to one
