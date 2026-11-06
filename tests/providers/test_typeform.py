@@ -9,22 +9,6 @@ from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig
 from apron_auth.providers import revocation_handler_for
 
 
-def _config_separated_by_comma(*, scopes: list[str]) -> ProviderConfig:
-    """Build a Typeform-endpoint config that states a comma separator, which no preset does.
-
-    Typeform's member states a single space, so a config labeled with it cannot state another
-    separator. This config names no provider, which is what lets it state one.
-    """
-    return ProviderConfig(
-        client_id="tid",
-        client_secret=SecretStr("tsecret"),  # pragma: allowlist secret
-        authorize_url="https://api.typeform.com/oauth/authorize",
-        token_url="https://api.typeform.com/oauth/token",
-        scopes=scopes,
-        scope_separator=",",
-    )
-
-
 class TestTypeformPreset:
     def test_returns_a_configuration_that_declares_no_revocation(self):
         from apron_auth.providers.typeform import preset
@@ -139,12 +123,12 @@ class TestTypeformIdentityHandler:
             await TypeformIdentityHandler().fetch_identity(material, config)
         assert httpx_mock.get_requests() == []
 
-    @pytest.mark.parametrize("blank_scope", ["", "   ", ","])
+    @pytest.mark.parametrize("blank_scope", ["", "   "])
     async def test_blank_granted_scope_is_treated_as_unknown(self, httpx_mock: HTTPXMock, blank_scope: str) -> None:
-        from apron_auth.providers.typeform import TypeformIdentityHandler
+        from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
         httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config = _config_separated_by_comma(scopes=["accounts:read"])
+        config = preset(client_id="tid", client_secret="tsecret", scopes=["accounts:read"])
         material = IdentityMaterial(access_token="access-abc", scope=blank_scope)
 
         identity = await TypeformIdentityHandler().fetch_identity(material, config)
@@ -188,17 +172,6 @@ class TestTypeformIdentityHandler:
 
         assert identity.email == "user@example.com"
 
-    async def test_granted_scope_parsed_with_config_separator(self, httpx_mock: HTTPXMock) -> None:
-        from apron_auth.providers.typeform import TypeformIdentityHandler
-
-        httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
-        config = _config_separated_by_comma(scopes=["accounts:read"])
-        material = IdentityMaterial(access_token="access-abc", scope="forms:read,accounts:read")
-
-        identity = await TypeformIdentityHandler().fetch_identity(material, config)
-
-        assert identity.email == "user@example.com"
-
     async def test_granted_scope_implying_accounts_read_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.typeform import TypeformIdentityHandler, preset
 
@@ -234,3 +207,44 @@ class TestTypeformIdentityHandler:
 
         with pytest.raises(IdentityFetchError, match="not a JSON object"):
             await TypeformIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+
+class TestAGrantedScopeIsReadWithTheConfigsOwnSeparator:
+    """The handler reads the separator off the config rather than stating one of its own.
+
+    Typeform's member states a single space, so no config labeled with it can state another
+    separator, and the read is unobservable through one. The config here names no provider, which is
+    what makes it observable, and that is the whole reason this case sits apart from the rest.
+    """
+
+    @staticmethod
+    def _config() -> ProviderConfig:
+        return ProviderConfig(
+            client_id="tid",
+            client_secret=SecretStr("tsecret"),  # pragma: allowlist secret
+            authorize_url="https://api.typeform.com/oauth/authorize",
+            token_url="https://api.typeform.com/oauth/token",
+            scopes=["accounts:read"],
+            scope_separator=",",
+        )
+
+    async def test_a_granted_scope_is_split_on_the_separator_the_config_states(self, httpx_mock: HTTPXMock) -> None:
+        from apron_auth.providers.typeform import TypeformIdentityHandler
+
+        httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
+        material = IdentityMaterial(access_token="access-abc", scope="forms:read,accounts:read")
+
+        identity = await TypeformIdentityHandler().fetch_identity(material, self._config())
+
+        assert identity.email == "user@example.com"
+
+    async def test_a_granted_scope_of_one_separator_states_nothing(self, httpx_mock: HTTPXMock) -> None:
+        """A string of separators alone names no scope, so the grant is unknown rather than refused."""
+        from apron_auth.providers.typeform import TypeformIdentityHandler
+
+        httpx_mock.add_response(url="https://api.typeform.com/me", json={"email": "user@example.com"})
+        material = IdentityMaterial(access_token="access-abc", scope=",")
+
+        identity = await TypeformIdentityHandler().fetch_identity(material, self._config())
+
+        assert identity.email == "user@example.com"
