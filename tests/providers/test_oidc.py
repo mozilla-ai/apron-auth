@@ -1885,7 +1885,7 @@ class TestOidcIdentity:
 
     async def test_refuses_a_config_naming_no_issuer(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """Section 3.1.3.7 step 2 makes ``iss`` a MUST; an issuer-less config has nothing to check against."""
-        issuerless = config.model_copy(update={"issuer": None})
+        issuerless = config.with_changes(issuer=None)
 
         with pytest.raises(ConfigurationError, match="names no issuer"):
             await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), issuerless)
