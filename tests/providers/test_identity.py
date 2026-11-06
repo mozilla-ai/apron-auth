@@ -63,7 +63,7 @@ def test_a_config_that_names_no_provider_has_no_handler() -> None:
 
 
 def test_a_config_that_allows_no_handler_of_its_own_has_none() -> None:
-    config = _config("accounts.google.com", Provider.GOOGLE).model_copy(update={"use_builtin_identity_handler": False})
+    config = _config("accounts.google.com", Provider.GOOGLE).with_changes(use_builtin_identity_handler=False)
 
     assert identity_handler_for(config) is None
 
@@ -90,9 +90,7 @@ def test_a_name_the_module_does_not_define_is_refused(monkeypatch: pytest.Monkey
 
 def test_a_config_that_allows_no_handler_is_not_host_checked() -> None:
     """A deployment on other hosts opts out without being told its endpoints are wrong."""
-    config = _config("login.acme.example", Provider.SALESFORCE).model_copy(
-        update={"use_builtin_identity_handler": False}
-    )
+    config = _config("login.acme.example", Provider.SALESFORCE).with_changes(use_builtin_identity_handler=False)
 
     assert identity_handler_for(config) is None
 

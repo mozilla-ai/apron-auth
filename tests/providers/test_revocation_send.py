@@ -421,7 +421,7 @@ async def test_a_loopback_url_needs_no_waiver() -> None:
     def transport(url: str) -> httpx.AsyncBaseTransport:
         return httpx.MockTransport(lambda request: httpx.Response(200))
 
-    local = _config().model_copy(update={"revocation_url": "http://127.0.0.1:8080/revoke"})
+    local = _config().with_changes(revocation_url="http://127.0.0.1:8080/revoke")
 
     response = await send_revocation(
         _request(url="http://127.0.0.1:8080/revoke", data={"token": TOKEN}),

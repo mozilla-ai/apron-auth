@@ -1453,6 +1453,161 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__context__ is None
 
 
+class TestAValidatedChange:
+    """A frozen model is changed through ``with_changes``, which runs every rule the model carries."""
+
+    @staticmethod
+    def _config() -> ProviderConfig:
+        return ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+
+    def test_a_change_keeps_every_value_it_was_not_asked_to_change(self) -> None:
+        config = self._config()
+
+        changed = config.with_changes(scopes=["read"])
+
+        assert changed.scopes == ["read"]
+        assert changed.client_id == config.client_id
+        assert changed.client_secret is not None
+        assert changed.client_secret.get_secret_value() == "csec"  # pragma: allowlist secret
+        assert changed.token_url == config.token_url
+        assert changed.authorize_url == config.authorize_url
+
+    def test_a_change_the_rules_refuse_is_refused(self) -> None:
+        """A model built without validation carries any value, and this path is the one that states a rule."""
+        with pytest.raises(ConfigurationError, match="absolute URI"):
+            self._config().with_changes(resource="relative/path")
+
+    def test_a_refused_change_repeats_no_secret(self) -> None:
+        """Every field is passed back through validation, so a refusal is given the secret as well."""
+        secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
+        config = self._config().with_changes(client_secret=SecretStr(secret))
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            config.with_changes(resource="relative/path")
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    def test_a_waiver_the_model_already_holds_survives_a_change(self) -> None:
+        """The waiver came from code, and a change is code, so it is not read back as data."""
+        waived = ProviderConfig.unsafe.allow_plain_http(
+            "token_url",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="http://provider.example.com/token",
+        )
+
+        changed = waived.with_changes(scopes=["read"])
+
+        assert changed.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+        assert changed.token_url == "http://provider.example.com/token"
+
+    def test_a_change_cannot_state_a_waiver(self) -> None:
+        """A waiver is stated in code alone, so a change states one no more than data does."""
+        with pytest.raises(ConfigurationError, match="unsafe.allow_plain_http"):
+            self._config().with_changes(allow_insecure_http_for=frozenset({UrlField.TOKEN_URL}))
+
+    @staticmethod
+    def _waived() -> ProviderConfig:
+        return ProviderConfig.unsafe.allow_plain_http(
+            "token_url",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="http://127.0.0.1:9000/token",
+        )
+
+    @pytest.mark.parametrize(
+        "waiver",
+        [frozenset({UrlField.TOKEN_URL}), frozenset()],
+        ids=["the waiver it already holds", "no waiver at all"],
+    )
+    def test_a_change_cannot_restate_the_waiver_a_model_holds(self, waiver: frozenset[UrlField]) -> None:
+        """Accepting a waiver that matches would pin no rule, because every such change is a waiver."""
+        with pytest.raises(ConfigurationError, match="unsafe.allow_plain_http"):
+            self._waived().with_changes(allow_insecure_http_for=waiver)
+
+    def test_a_change_cannot_point_a_waived_url_somewhere_else(self) -> None:
+        """A waiver is logged for the URL it was stated with, so re-pointing one records no waiver."""
+        with pytest.raises(ConfigurationError, match="token_url"):
+            self._waived().with_changes(token_url="http://attacker.example/token")
+
+    def test_a_change_to_a_url_no_waiver_covers_is_accepted(self) -> None:
+        """Only the fields a waiver covers are held back, so the rest of a waived config still changes."""
+        changed = self._waived().with_changes(authorize_url="https://other.example.com/authorize")
+
+        assert changed.authorize_url == "https://other.example.com/authorize"
+        assert changed.token_url == "http://127.0.0.1:9000/token"
+        assert changed.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+
+    def test_a_change_naming_no_field_is_refused(self) -> None:
+        """A model that ignores an unknown name answers a misspelled change with the values it already had."""
+        with pytest.raises(ConfigurationError, match="emial"):
+            IdentityProfile(provider=None, subject="u-1", email="user@example.com").with_changes(
+                emial="typo@example.com"
+            )
+
+    def test_a_change_to_a_model_missing_a_field_states_the_field(self) -> None:
+        """The framework's own build leaves a field unset, and every entry point here states its refusal."""
+        partial = ProviderConfig.model_construct(client_id="cid", authorize_url="https://provider.example.com/a")
+
+        with pytest.raises(ConfigurationError, match="token_url"):
+            partial.with_changes(scopes=["read"])
+
+    @pytest.mark.parametrize(
+        "provider",
+        [Provider.SLACK, Provider.TYPEFORM, None],
+        ids=["another provider", "a provider whose facts coincide", "no provider"],
+    )
+    def test_a_change_cannot_relabel_a_config(self, provider: Provider | None) -> None:
+        """The label decides which rules a config is held to, so changing it states another config."""
+        with pytest.raises(ConfigurationError, match="preset"):
+            self._config().with_changes(provider=provider)
+
+    def test_dropping_the_label_cannot_widen_the_hosts_a_token_is_revoked_at(self) -> None:
+        """A config naming no provider permits every host, so a label dropped here would drop that rule."""
+        from apron_auth.providers import google
+
+        config = google.preset(client_id="cid", client_secret="csec", scopes=["openid"])  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="preset"):
+            config.with_changes(provider=None, revocation_url="https://attacker.example/revoke")
+
+    def test_a_fresh_token_set_refuses_a_change(self) -> None:
+        """Freshness states the response the tokens came from, which a changed copy does not answer for."""
+        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="freshness"):
+            fresh.with_changes(scope="read")
+
+    def test_a_fresh_token_set_refuses_a_copy_stating_other_values(self) -> None:
+        """Freshness is the one rule no guard anywhere else can state, so the unvalidated copy forges it."""
+        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="freshness"):
+            fresh.model_copy(update={"access_token": "other-token"})  # pragma: allowlist secret
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_offers_the_validated_change_path(self, model: type[BaseModel]) -> None:
+        """A model that offers no validated change leaves its caller the entry points that run no rule."""
+        assert callable(getattr(model, "with_changes", None))
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_builds_without_validation_through_the_frameworks_own_path(
+        self, model: type[BaseModel]
+    ) -> None:
+        """The documented scope says these models run no rule here, and closing that is a decision to take."""
+        assert isinstance(model.model_construct(), model)
+
+
 class TestProviderConfigResource:
     def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
         """The resource rule reads the resource first, and the parser names an internal rather than the

@@ -1,4 +1,12 @@
-"""Data models for OAuth configuration, tokens, and state."""
+"""Data models for OAuth configuration, tokens, and state.
+
+A rule a model enforces runs as the model is built, and :meth:`with_changes` rebuilds a frozen model so
+that a change runs them too. The framework's own ``model_copy``, ``model_construct`` and the :mod:`copy`
+functions run no validator, so an instance built through one of them carries values a model states it
+refuses. The rules that decide where a credential is sent are checked again where the request is built,
+so such an instance is refused there rather than reaching a provider. A rule a model documents as its
+caller's obligation is enforced on no path, and says so where it is stated.
+"""
 
 from __future__ import annotations
 
@@ -445,7 +453,8 @@ def _build_allowing_plain_http(
 ) -> _ModelT:
     """Build a model that accepts plain HTTP for the named URL fields, and say so in the log.
 
-    NOTE: Nothing is logged for a build that is refused, so a line in the log names a waiver in force.
+    NOTE: Nothing is logged for a build that is refused, so a line in the log names the fields a waiver
+    is in force for.
 
     Args:
         cls: The model to build.
@@ -769,6 +778,45 @@ class _RefusesWithoutRepeating(BaseModel):
         # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
         raise ConfigurationError(refusals)
 
+    def with_changes(self, **updates: Any) -> Self:
+        """Return a copy stating ``updates``, validated as a model built from its values is.
+
+        A frozen model refuses a change in place, and the framework's own copy runs no validator, so a
+        change made any other way keeps none of the rules this model enforces.
+
+        NOTE: A plain-HTTP waiver this model holds is carried into the copy, because such a waiver was
+        stated in code. Neither the waiver nor a URL it covers can be changed here, because a waiver
+        was stated for the URL it accepted, and pointing it elsewhere would state one no code stated.
+
+        Args:
+            **updates: The field values the copy states instead of this model's own. Each must name a
+                field of this model that no plain-HTTP waiver covers.
+
+        Returns:
+            The validated copy.
+
+        Raises:
+            ConfigurationError: If an update names no field of this model, if one names the plain-HTTP
+                waiver or a URL the waiver covers, or if the copy is refused.
+        """
+        fields = type(self).model_fields
+        unknown = sorted(name for name in updates if name not in fields)
+        if unknown:
+            msg = f"{', '.join(unknown)}: no such field"
+            raise ConfigurationError(msg)
+        if _PLAIN_HTTP_WAIVER in updates:
+            msg = f"{_PLAIN_HTTP_WAIVER} is stated through unsafe.allow_plain_http, not changed"
+            raise ConfigurationError(msg)
+        waived: frozenset[UrlField] = getattr(self, _PLAIN_HTTP_WAIVER, frozenset())
+        covered = sorted(str(field) for field in waived if str(field) in updates)
+        if covered:
+            msg = f"{', '.join(covered)}: accepts plain http, so state the URL through unsafe.allow_plain_http"
+            raise ConfigurationError(msg)
+        # A field the framework's own build left unset states no value, and validation names it.
+        values = {name: getattr(self, name) for name in fields if hasattr(self, name)}
+        context = {_PLAIN_HTTP_WAIVER: _WAIVER_SENTINEL} if waived else None
+        return type(self).model_validate({**values, **updates}, context=context)
+
 
 class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """How long this library waits for one outbound request.
@@ -869,10 +917,10 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     Attributes:
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
             and the one a granted scope string is split on.
-            An empty value is refused at construction.
+            An empty value is refused.
             Defaults to a single space (RFC 6749 section 3.3).
         extra_params: Fixed parameters added to every authorization request.
-            A reserved parameter is refused at construction, and the error names it.
+            A reserved parameter is refused, and the error names it.
             Reserved parameters bind the request to the client, such as ``state`` and ``code_challenge``,
             or replace the request as a whole, such as ``request_uri``.
         disconnect_fully_revokes: Whether ``revoke_token`` removes the
@@ -952,7 +1000,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         resource: RFC 8707 resource indicator identifying the service the
             issued token is audience-bound to. When set, it must be an
             absolute URI without a fragment (RFC 8707); an invalid value is
-            rejected at construction. It is sent on the authorization request
+            rejected. It is sent on the authorization request
             and on the token-exchange and refresh requests, so the
             authorization server can restrict the token's audience to this
             resource. ``None`` (the default) emits no ``resource`` parameter
@@ -978,17 +1026,16 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
-            config that contradicts one is refused at construction.
-            NOTE: The label is not an attestation. Construction checks nothing else about a config
-            against the member, so a caller must not read this as proof of where the endpoints lead.
-            NOTE: Only construction takes and checks a member's facts. A config whose provider is set
-            through :meth:`~pydantic.BaseModel.model_copy` keeps the facts it already carried.
+            config that contradicts one is refused.
+            NOTE: The label is not an attestation. Nothing else about a config is checked against the
+            member, so a caller must not read this as proof of where the endpoints lead.
+            NOTE: A member's facts are taken as a config is built and are not taken again, so this
+            field cannot be changed. A preset builds a config labeled with its own provider, and a
+            config naming none is built by hand.
         allow_insecure_http_for: The URL fields this config accepts plain HTTP for. Empty by
             default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
             out of storage is refused. A loopback host needs no waiver, because a request to one
             reaches no network.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
             NOTE: A config recording a waiver cannot be validated as a field of another model,
             because that validation cannot tell a waiver stated in code from one read out of data.
     """
@@ -1077,7 +1124,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
         A reserved parameter binds the request to the client, or replaces the request as a whole.
         The request drops such a parameter rather than sending it, so a configuration that sets one
-        never sends what it states, and refusing it at construction reports that before any sign-in.
+        never sends what it states, and refusing such a config reports that before any sign-in.
 
         Returns:
             The validated config, unchanged.
@@ -1096,7 +1143,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """Reject an extra parameter that is reserved for the authorization request itself.
 
         A reserved parameter binds the request to the client, or replaces the request as a whole.
-        Refusing it at construction reports the misconfiguration before any sign-in.
+        Refusing such a config reports the misconfiguration before any sign-in.
 
         Returns:
             The validated config, unchanged.
@@ -1243,9 +1290,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     def _revocation_endpoint_sits_with_the_token_endpoint(self) -> ProviderConfig:
         """Reject a config whose revocation endpoint is on a host revocation is not permitted at.
 
-        :meth:`permits_revocation_at` states the rule, and refusing at construction reports a
+        :meth:`permits_revocation_at` states the rule, and refusing such a config reports a
         configuration that breaks it before it sends a token anywhere.
-        NOTE: A copy made with ``model_copy`` runs no validator and can carry any endpoint.
 
         Returns:
             The validated config, unchanged.
@@ -1360,6 +1406,28 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
+    def with_changes(self, **updates: Any) -> Self:
+        """Return a copy stating ``updates``, refusing a change to the provider label.
+
+        The label decides which rules a config is held to and which hosts a token may be sent to, so
+        stating another one states a different configuration rather than a changed one. A preset
+        builds a config labeled with its own provider, and a config naming none is built by hand.
+
+        Args:
+            **updates: The field values the copy states instead of this config's own.
+
+        Returns:
+            The validated copy.
+
+        Raises:
+            ConfigurationError: If an update names ``provider``, or the copy is refused for any
+                reason a change to another model is.
+        """
+        if "provider" in updates:
+            msg = "provider is stated by the preset that builds a config, not changed"
+            raise ConfigurationError(msg)
+        return super().with_changes(**updates)
+
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     _waiver_comes_from_code = _WAIVER_COMES_FROM_CODE
     _urls_state_their_transport = _URLS_STATE_THEIR_TRANSPORT
@@ -1414,8 +1482,6 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             default, and stated only through :meth:`unsafe.allow_plain_http`, so a waiver read back
             out of storage is refused. A loopback host needs no waiver, because a request to one
             reaches no network.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
             NOTE: A metadata recording a waiver cannot be validated as a field of another model,
             because that validation cannot tell a waiver stated in code from one read out of data.
     """
@@ -1641,6 +1707,42 @@ class FreshTokenSet(TokenSet):
             ConfigurationError: Always.
         """
         raise cls._stored_data_refusal()
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Copy a fresh token set, refusing a copy that states other values.
+
+        Freshness states the response these tokens came from. No rule anywhere else can establish
+        it, so a copy stating other values would carry the statement without the response.
+
+        Args:
+            update: The values a copy would state instead of this model's own. A copy states none.
+            deep: Whether to copy the values themselves rather than share them.
+
+        Returns:
+            The copy, stating this model's own values.
+
+        Raises:
+            ConfigurationError: If ``update`` states any value.
+        """
+        if update:
+            raise self._changed_copy_refusal()
+        return super().model_copy(deep=deep)
+
+    def with_changes(self, **updates: Any) -> NoReturn:
+        """Refuse to change a fresh token set.
+
+        Freshness states the response these tokens came from, which a copy stating other values does
+        not answer for.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        raise self._changed_copy_refusal()
+
+    @staticmethod
+    def _changed_copy_refusal() -> ConfigurationError:
+        msg = "A fresh token set cannot state other values. Its freshness states the response it came from."
+        return ConfigurationError(msg)
 
     @staticmethod
     def _stored_data_refusal() -> ConfigurationError:
@@ -2126,8 +2228,6 @@ class WorkloadIssuer(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             storage is refused. A loopback host needs no waiver, because a request to one reaches no
             network. The waiver for ``jwks_url`` covers a key set URL discovered from this issuer as
             well, because a discovered URL has no field of its own to be waived for.
-            NOTE: A copy made through ``model_copy``, ``copy.replace``, ``copy.copy`` or
-            ``copy.deepcopy`` runs no validator, so one can carry any waiver and any URL.
     """
 
     issuer: str
