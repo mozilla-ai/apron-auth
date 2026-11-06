@@ -1527,6 +1527,13 @@ class TestAValidatedChange:
         """A model that offers no validated change leaves its caller the entry points that run no rule."""
         assert callable(getattr(model, "with_changes", None))
 
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_builds_without_validation_through_the_frameworks_own_path(
+        self, model: type[BaseModel]
+    ) -> None:
+        """The documented scope says these models run no rule here, and closing that is a decision to take."""
+        assert isinstance(model.model_construct(), model)
+
 
 class TestProviderConfigResource:
     def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
