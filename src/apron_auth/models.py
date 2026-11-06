@@ -1406,7 +1406,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
-    def with_changes(self, **updates: Any) -> ProviderConfig:
+    def with_changes(self, **updates: Any) -> Self:
         """Return a copy stating ``updates``, refusing a change to the provider label.
 
         The label decides which rules a config is held to and which hosts a token may be sent to, so
