@@ -1404,6 +1404,28 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         return _resolve_implicit_scopes(granted, self.implicit_scopes)
 
+    def with_changes(self, **updates: Any) -> ProviderConfig:
+        """Return a copy stating ``updates``, refusing a change to the provider label.
+
+        The label decides which rules a config is held to and which hosts a token may be sent to, so
+        stating another one states a different configuration rather than a changed one. A preset
+        builds a config labeled with its own provider, and a config naming none is built by hand.
+
+        Args:
+            **updates: The field values the copy states instead of this config's own.
+
+        Returns:
+            The validated copy.
+
+        Raises:
+            ConfigurationError: If an update names ``provider``, or the copy is refused for any
+                reason a change to another model is.
+        """
+        if "provider" in updates:
+            msg = "provider is stated by the preset that builds a config, not changed"
+            raise ConfigurationError(msg)
+        return super().with_changes(**updates)
+
     _urls_carry_no_userinfo = _URLS_CARRY_NO_USERINFO
     _waiver_comes_from_code = _WAIVER_COMES_FROM_CODE
     _urls_state_their_transport = _URLS_STATE_THEIR_TRANSPORT

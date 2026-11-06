@@ -1562,6 +1562,25 @@ class TestAValidatedChange:
         with pytest.raises(ConfigurationError, match="token_url"):
             partial.with_changes(scopes=["read"])
 
+    @pytest.mark.parametrize(
+        "provider",
+        [Provider.SLACK, Provider.TYPEFORM, None],
+        ids=["another provider", "a provider whose facts coincide", "no provider"],
+    )
+    def test_a_change_cannot_relabel_a_config(self, provider: Provider | None) -> None:
+        """The label decides which rules a config is held to, so changing it states another config."""
+        with pytest.raises(ConfigurationError, match="preset"):
+            self._config().with_changes(provider=provider)
+
+    def test_dropping_the_label_cannot_widen_the_hosts_a_token_is_revoked_at(self) -> None:
+        """A config naming no provider permits every host, so a label dropped here would drop that rule."""
+        from apron_auth.providers import google
+
+        config = google.preset(client_id="cid", client_secret="csec", scopes=["openid"])  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="preset"):
+            config.with_changes(provider=None, revocation_url="https://attacker.example/revoke")
+
     def test_a_fresh_token_set_refuses_a_change(self) -> None:
         """Freshness states the response the tokens came from, which a changed copy does not answer for."""
         fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
