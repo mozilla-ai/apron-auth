@@ -769,6 +769,30 @@ class _RefusesWithoutRepeating(BaseModel):
         # NOTE: This raise stays outside the except block, so the refusal it replaces is not reachable from it.
         raise ConfigurationError(refusals)
 
+    def with_changes(self, **updates: Any) -> Self:
+        """Return a copy stating ``updates``, validated as a model built from its values is.
+
+        A frozen model refuses a change in place, and the framework's own copy runs no validator, so a
+        change made any other way keeps none of the rules this model states.
+
+        NOTE: A plain-HTTP waiver this model already holds is carried into the copy, because such a
+        waiver was stated in code. One named in ``updates`` is data and is refused.
+
+        Args:
+            **updates: The field values the copy states instead of this model's own.
+
+        Returns:
+            The validated copy.
+
+        Raises:
+            ConfigurationError: If the copy is refused.
+        """
+        values = {name: getattr(self, name) for name in type(self).model_fields}
+        stated = {**values, **updates}
+        from_code = stated.get(_PLAIN_HTTP_WAIVER) == values.get(_PLAIN_HTTP_WAIVER)
+        context = {_PLAIN_HTTP_WAIVER: _WAIVER_SENTINEL} if from_code else None
+        return type(self).model_validate(stated, context=context)
+
 
 class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """How long this library waits for one outbound request.
@@ -1641,6 +1665,18 @@ class FreshTokenSet(TokenSet):
             ConfigurationError: Always.
         """
         raise cls._stored_data_refusal()
+
+    def with_changes(self, **updates: Any) -> NoReturn:
+        """Refuse to change a fresh token set.
+
+        Freshness states the response these tokens came from, which a copy stating other values does
+        not answer for.
+
+        Raises:
+            ConfigurationError: Always.
+        """
+        msg = "A fresh token set cannot be changed. Its freshness states the response it came from."
+        raise ConfigurationError(msg)
 
     @staticmethod
     def _stored_data_refusal() -> ConfigurationError:

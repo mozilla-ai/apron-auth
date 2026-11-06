@@ -1453,6 +1453,81 @@ class TestARefusalRepeatsNoValue:
         assert exc_info.value.__context__ is None
 
 
+class TestAValidatedChange:
+    """A frozen model is changed through ``with_changes``, which runs every rule the model carries."""
+
+    @staticmethod
+    def _config() -> ProviderConfig:
+        return ProviderConfig(
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+
+    def test_a_change_keeps_every_value_it_was_not_asked_to_change(self) -> None:
+        config = self._config()
+
+        changed = config.with_changes(scopes=["read"])
+
+        assert changed.scopes == ["read"]
+        assert changed.client_id == config.client_id
+        assert changed.client_secret is not None
+        assert changed.client_secret.get_secret_value() == "csec"  # pragma: allowlist secret
+        assert changed.token_url == config.token_url
+        assert changed.authorize_url == config.authorize_url
+
+    def test_a_change_the_rules_refuse_is_refused(self) -> None:
+        """A model built without validation carries any value, and this path is the one that states a rule."""
+        with pytest.raises(ConfigurationError, match="absolute URI"):
+            self._config().with_changes(resource="relative/path")
+
+    def test_a_refused_change_repeats_no_secret(self) -> None:
+        """Every field is passed back through validation, so a refusal is given the secret as well."""
+        secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
+        config = self._config().with_changes(client_secret=SecretStr(secret))
+
+        with pytest.raises(ConfigurationError) as exc_info:
+            config.with_changes(resource="relative/path")
+
+        rendered = "".join(traceback.format_exception(exc_info.value))
+        assert secret not in rendered
+        assert exc_info.value.__cause__ is None
+        assert exc_info.value.__context__ is None
+
+    def test_a_waiver_the_model_already_holds_survives_a_change(self) -> None:
+        """The waiver came from code, and a change is code, so it is not read back as data."""
+        waived = ProviderConfig.unsafe.allow_plain_http(
+            "token_url",
+            client_id="cid",
+            client_secret=SecretStr("csec"),  # pragma: allowlist secret
+            authorize_url="https://provider.example.com/authorize",
+            token_url="http://provider.example.com/token",
+        )
+
+        changed = waived.with_changes(scopes=["read"])
+
+        assert changed.allow_insecure_http_for == frozenset({UrlField.TOKEN_URL})
+        assert changed.token_url == "http://provider.example.com/token"
+
+    def test_a_change_cannot_state_a_waiver(self) -> None:
+        """A waiver is stated in code alone, so a change states one no more than data does."""
+        with pytest.raises(ConfigurationError, match="unsafe.allow_plain_http"):
+            self._config().with_changes(allow_insecure_http_for=frozenset({UrlField.TOKEN_URL}))
+
+    def test_a_fresh_token_set_refuses_a_change(self) -> None:
+        """Freshness states the response the tokens came from, which a changed copy does not answer for."""
+        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError, match="freshness"):
+            fresh.with_changes(scope="read")
+
+    @pytest.mark.parametrize("model", MODELS, ids=lambda model: model.__name__)
+    def test_every_model_offers_the_validated_change_path(self, model: type[BaseModel]) -> None:
+        """A model that offers no validated change leaves its caller the entry points that run no rule."""
+        assert callable(getattr(model, "with_changes", None))
+
+
 class TestProviderConfigResource:
     def test_a_resource_the_parser_cannot_read_names_the_field(self) -> None:
         """The resource rule reads the resource first, and the parser names an internal rather than the
