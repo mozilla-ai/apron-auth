@@ -80,8 +80,13 @@ class LinearIdentityHandler:
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         errors = payload.get("errors")
+        if errors is not None and not isinstance(errors, list):
+            msg = "Linear GraphQL response states its errors in a shape this library cannot read"
+            raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         if errors:
-            raise IdentityFetchError(f"Linear GraphQL returned errors: {errors}", kind=FailureKind.REJECTED)
+            plural = "" if len(errors) == 1 else "s"
+            msg = f"Linear GraphQL response states {len(errors)} error{plural}"
+            raise IdentityFetchError(msg, kind=FailureKind.REJECTED)
 
         data = payload.get("data")
         if not isinstance(data, dict):
