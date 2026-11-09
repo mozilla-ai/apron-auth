@@ -19,7 +19,7 @@ import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
 from joserfc.jwt import JWTClaimsRegistry
 
-from apron_auth._claims import stated_boolean
+from apron_auth._claims import stated_boolean, stated_string
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
@@ -116,7 +116,15 @@ _MICROSOFT_USERINFO_URL = "https://graph.microsoft.com/oidc/userinfo"
 
 
 class _IdToken(NamedTuple):
-    """The fields of a Microsoft ID token whose signature and claims checked out."""
+    """The fields of a Microsoft ID token whose signature and claims checked out.
+
+    Attributes:
+        claims: Every claim of the token.
+        issuer: The issuer the token names, which is bound to the tenant.
+        subject: The token's ``sub``, the stable identifier for the person within the tenant.
+        tenant_id: The tenant GUID, lowercased, because a GUID names one tenant in any case and a
+            comparison against another spelling of it would answer that they differ.
+    """
 
     claims: dict[str, Any]
     issuer: str
@@ -207,7 +215,9 @@ def _checked_id_token(claims: dict[str, Any], client_id: str, key_issuer: object
         raise TokenValidationError(
             "Microsoft ID token claims did not validate", reason=TokenValidationReason.CLAIMS
         ) from exc
-    return _IdToken(claims=claims, issuer=issuer, subject=subject, tenant_id=tid)
+    # NOTE: The issuer is built from the claim as it arrived, because it is compared against the claim
+    # the token states, and the tenant is recorded lowercased for every comparison that follows.
+    return _IdToken(claims=claims, issuer=issuer, subject=subject, tenant_id=tid.lower())
 
 
 def _same_client(audience: object, client_id: str) -> bool:
@@ -433,7 +443,8 @@ class MicrosoftIdentityHandler:
         # A mismatch means the access token resolved a different tenant than
         # the one whose chain of trust was validated; refuse to assert
         # ownership rather than trust an unbound directory lookup.
-        if organization.get("id") != tenant_id:
+        directory_tenant = stated_string(organization.get("id"))
+        if directory_tenant is None or directory_tenant.lower() != tenant_id.lower():
             logger.warning(
                 "microsoft organization id does not match the validated tenant; not asserting domain ownership"
             )

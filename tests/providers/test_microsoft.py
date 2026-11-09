@@ -195,10 +195,12 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         request = httpx_mock.get_request()
         assert request.headers.get("authorization") == "Bearer access-abc"
 
+    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
     async def test_personal_account_tenant_yields_no_tenancy(self, httpx_mock: HTTPXMock):
         """The well-known consumers tenant is a personal account, not a
         workforce tenant; no organization lookup is performed."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
         id_token = _fake_jwt(
             {
                 "tid": _CONSUMERS_TENANT,
@@ -213,6 +215,65 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         assert identity.tenancies == ()
         # ``sub`` still comes from the validated ID token.
         assert identity.subject == "ms-sub-1"
+        requested = [str(request.url) for request in httpx_mock.get_requests()]
+        assert _ORGANIZATION_URL not in requested
+        assert _USERINFO_URL in requested
+
+    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param(_CONSUMERS_TENANT.upper(), id="upper case"),
+            pytest.param(_CONSUMERS_TENANT[:8].upper() + _CONSUMERS_TENANT[8:], id="mixed case"),
+        ],
+    )
+    async def test_the_personal_account_tenant_yields_no_tenancy_whatever_its_case(
+        self, httpx_mock: HTTPXMock, stated: str
+    ) -> None:
+        """A GUID names one tenant whatever its case, and the weaker outcome is the one a mismatch gives.
+
+        The directory answers here, so a lookup this tenant should never reach is a failed assertion
+        rather than a request the mock was not given an answer for.
+        """
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
+        id_token = _fake_jwt(
+            {
+                "tid": stated,
+                "iss": f"https://login.microsoftonline.com/{stated}/v2.0",
+                "sub": "ms-sub-1",
+            }
+        )
+
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert identity.tenancies == ()
+        assert identity.subject == "ms-sub-1"
+        requested = [str(request.url) for request in httpx_mock.get_requests()]
+        assert _ORGANIZATION_URL not in requested
+        assert _USERINFO_URL in requested
+
+    async def test_an_organization_id_in_another_case_still_binds_to_its_tenant(self, httpx_mock: HTTPXMock) -> None:
+        """The directory states the tenant's own GUID in its own case, which names the validated tenant.
+
+        The tenant here carries hex letters, because a GUID of digits alone reads the same in either case.
+        """
+        lettered = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(
+            url=_ORGANIZATION_URL,
+            json=_org_response(["contoso.com"], org_id=lettered.upper()),
+        )
+        id_token = _member_id_token(tid=lettered, iss=f"https://login.microsoftonline.com/{lettered}/v2.0")
+
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert [tenancy.domain for tenancy in identity.tenancies] == ["contoso.com"]
+        assert identity.tenancies[0].id == lettered
 
     async def test_b2b_guest_yields_no_tenancy(self, httpx_mock: HTTPXMock):
         """A guest signs in with the host tenant's ``tid`` but is not a
@@ -225,7 +286,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
 
         assert identity.tenancies == ()
 
-    @pytest.mark.parametrize("idp", [None, ["https://x"], 5, ""])
+    @pytest.mark.parametrize("idp", [None, ["https://x"], 5, "", {}])
     async def test_an_idp_that_is_not_the_issuer_yields_no_tenancy(self, httpx_mock: HTTPXMock, idp: object) -> None:
         """Any ``idp`` that is present and not exactly the issuer marks a guest, whatever its JSON type."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
