@@ -4,6 +4,7 @@ import pickle
 
 import pytest
 
+from apron_auth import errors
 from apron_auth.errors import (
     AuthorizationResponseError,
     ConfigurationError,
@@ -179,9 +180,31 @@ class TestTokenEndpointErrors:
         assert isinstance(err, TokenEndpointError)
 
     def test_an_error_outside_the_code_carrying_families_has_none(self) -> None:
-        """Only a step that reads an OAuth error member off a response reports a code."""
+        """A family reports a code only where a step on its path reads one off a response."""
         assert not hasattr(ConfigurationError("boom"), "error_code")
         assert not hasattr(RevocationError("boom", kind=FailureKind.REJECTED), "error_code")
+
+    def test_every_family_reporting_a_code_states_the_shared_base(self) -> None:
+        """A family holding its own copy of the rule could drift from the one the base states."""
+        carrying = [
+            value
+            for value in vars(errors).values()
+            if isinstance(value, type) and issubclass(value, OAuthError) and hasattr(value, "error_code")
+        ]
+
+        assert carrying
+        assert [value for value in carrying if not issubclass(value, errors._CodeCarryingError)] == []
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(TokenValidationError("bad", reason=TokenValidationReason.MALFORMED), id="a refused token"),
+            pytest.param(TokenExpiredError("old"), id="an expired token"),
+        ],
+    )
+    def test_a_member_of_a_carrying_family_that_reads_no_code_reports_none(self, error: IdentityFetchError) -> None:
+        """These take the attribute from the identity family, and no step on their path reads a code."""
+        assert error.error_code == ""
 
     def test_token_endpoint_error_without_a_kind_is_unexpected(self) -> None:
         assert TokenEndpointError("boom").kind is FailureKind.UNEXPECTED
