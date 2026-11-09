@@ -131,8 +131,6 @@ _SIGN_IN_PRESET = Preset(
 )
 
 # What a message names where an ``ok=false`` body states no error code this library can read.
-_NO_ERROR_CODE = "no error code stated"
-
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
@@ -270,18 +268,19 @@ def _slack_error_code(payload: Mapping[str, object]) -> str:
     """Return the error code a Slack ``ok=false`` body states.
 
     A response body is untrusted input, so a member that is absent, empty or not a string states no
-    code this can read, and a stand-in is returned in its place. The result is safe both to classify
-    and to name in a message.
+    code this can read.
+
+    NOTE: The result is safe to classify and safe to report, and is not safe to name in a message,
+    because the member it comes from admits text of any length that the other side chose.
 
     Args:
         payload: The decoded response body.
 
     Returns:
-        The code the body states, or a phrase naming its absence where it states none readable. The result
-        never reads as a code, so a message carrying it cannot name one the other side did not send.
+        The code the body states, or the empty string where it states none this library can read.
     """
     code = payload.get("error")
-    return code if isinstance(code, str) and code else _NO_ERROR_CODE
+    return code if isinstance(code, str) and code else ""
 
 
 def _slack_failure_kind(error: str) -> FailureKind:
@@ -411,8 +410,8 @@ class SlackIdentityHandler:
         if payload.get("ok") is False:
             error = _slack_error_code(payload)
             if error == _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
-            raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
+                raise IdentityScopeNotGrantedError("Slack identity request failed", error_code=error)
+            raise IdentityFetchError("Slack identity request failed", kind=_slack_failure_kind(error), error_code=error)
 
         email_verified = None
         if "email_verified" in payload:
@@ -501,7 +500,9 @@ class SlackIdentityHandler:
             error = _slack_error_code(team_info_payload)
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
+                raise IdentityFetchError(
+                    "Slack workspace lookup failed", kind=_slack_failure_kind(error), error_code=error
+                )
 
             auth_test_payload = await self._slack_post(
                 client, _SLACK_AUTH_TEST_URL, access_token, "auth.test", timeouts
@@ -509,7 +510,9 @@ class SlackIdentityHandler:
 
         if not auth_test_payload.get("ok"):
             error = _slack_error_code(auth_test_payload)
-            raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
+            raise IdentityFetchError(
+                "Slack workspace fallback lookup failed", kind=_slack_failure_kind(error), error_code=error
+            )
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)
 
@@ -691,7 +694,7 @@ class SlackRevocationHandler:
                 return True
             kind = _slack_failure_kind(code)
             if kind.retryable:
-                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=kind)
+                raise RevocationError("Failed to revoke Slack token", kind=kind, error_code=code)
             return False
         # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.

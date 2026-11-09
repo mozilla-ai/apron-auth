@@ -105,6 +105,9 @@ BASE_SCOPE_METADATA = [
 # The scope strings that the preset adds to the caller's scopes.
 BASE_SCOPES = [meta.scope for meta in BASE_SCOPE_METADATA]
 
+# The RFC 6750 section 3.1 code a resource server answers when the token's scopes do not cover the request.
+_INSUFFICIENT_SCOPE = "insufficient_scope"
+
 # These patterns match the ``WWW-Authenticate`` grammar of RFC 9110 section 11.6.1.
 # Later patterns build on earlier ones, so their order is fixed.
 _TOKEN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
@@ -684,9 +687,11 @@ class OidcIdentityHandler:
         except httpx.HTTPStatusError as exc:
             if (
                 exc.response.status_code == 403
-                and _bearer_error(exc.response.headers.get("www-authenticate", "")) == "insufficient_scope"
+                and _bearer_error(exc.response.headers.get("www-authenticate", "")) == _INSUFFICIENT_SCOPE
             ):
-                failure = IdentityScopeNotGrantedError("OpenID userinfo refused the token: insufficient_scope")
+                failure = IdentityScopeNotGrantedError(
+                    "OpenID userinfo refused the token for lack of scope", error_code=_INSUFFICIENT_SCOPE
+                )
             else:
                 status = http_failure(exc)
                 failure = IdentityFetchError(f"Failed to fetch OpenID identity: {status.description}", kind=status.kind)

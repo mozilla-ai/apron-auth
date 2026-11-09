@@ -927,19 +927,23 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce. Subclass of `IdTokenValidationError`. |
 | `TokenRefreshError`            | Refresh failed, or its response carried an ID token that was not issued to your client. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
-| `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned. |
+| `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned, and `error_code` carries the code the provider stated where it stated one as a lowercase identifier. |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, did not come from the browser that started the flow, or states a nonce that contradicts the scope its request asked for. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead, except the `resource_metadata_url` hint, whose value is the server's and which loses only its turn. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
-| `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal.                                     |
+| `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal. `error_code` carries the code the provider stated where it stated one as a lowercase identifier, which the Slack and OpenID handlers report and every other bundled handler leaves empty. |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Subclass of `IdentityFetchError`.                          |
 | `TokenValidationError`         | An ID token or workload token was refused. `reason` says why: `audience`, `claims`, `expired`, `malformed`, `signature`, `unknown_issuer`, `unknown_key` or `unsupported`. Subclass of `IdentityFetchError`, so catch it first. |
 | `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenValidationError`.                     |
 
-`TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
+`TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where their `error_code` lives. `AuthorizationResponseError` and `IdentityFetchError` carry one of their own, under the same rule.
+
+No message holds text a provider wrote. A provider states the reason for a failure in a field whose length and content are its own to choose, so a message names the request that failed and the condition this library read, and the provider's own value reaches you through `error_code` where it takes the shape a code takes.
+
+A failure stating several reasons, as a Linear response does, reports how many rather than any of their text, and carries no code, because the member such a reason would state one in is not one this library can name from Linear's own documentation. So a Linear identity failure tells you that the provider refused the request and how many reasons it gave, and not which: `retryable` is the signal to act on, and a throttle at that layer reads the same as a dead credential.
 
 ### What an error reporter can capture
 

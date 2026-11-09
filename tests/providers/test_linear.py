@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import IdentityFetchError
+from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
@@ -90,17 +90,40 @@ class TestLinearIdentityHandler:
 
         assert identity.tenancies == (TenancyContext(id="org-1", name=None, domain=None, raw=organization),)
 
-    async def test_graphql_errors_in_200_raises(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url=LINEAR_GRAPHQL_URL,
-            status_code=200,
-            json={"errors": [{"message": "Authentication required", "extensions": {"code": "AUTHENTICATION_ERROR"}}]},
-        )
+    @pytest.mark.parametrize(
+        ("errors", "stated"),
+        [
+            pytest.param([{"message": "Authentication required"}], "1 error", id="one error"),
+            pytest.param([{"message": "first"}, {"message": "second"}], "2 errors", id="two errors"),
+            pytest.param(["Authentication required"], "1 error", id="an entry that is not an object"),
+            pytest.param([{"message": "x" * 5000}], "1 error", id="a message longer than any message of ours"),
+        ],
+    )
+    async def test_graphql_errors_in_200_state_their_count_and_no_text_linear_wrote(
+        self, httpx_mock: HTTPXMock, errors: list[object], stated: str
+    ) -> None:
+        """A GraphQL error carries text of any length that the other side wrote, so the count is reported."""
+        httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"errors": errors})
         config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
-        handler = LinearIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Linear GraphQL returned errors"):
-            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+        with pytest.raises(IdentityFetchError, match=stated) as refusal:
+            await LinearIdentityHandler().fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+
+        message = str(refusal.value)
+        assert "Authentication required" not in message
+        assert "x" * 100 not in message
+        assert refusal.value.kind is FailureKind.REJECTED
+
+    async def test_an_errors_member_that_is_no_list_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A response body is untrusted input, so an errors member of another shape states no count."""
+        httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"errors": "Authentication required"})
+        config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
+
+        with pytest.raises(IdentityFetchError, match="cannot read") as refusal:
+            await LinearIdentityHandler().fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+
+        assert "Authentication required" not in str(refusal.value)
+        assert refusal.value.kind is FailureKind.REFUSED
 
     async def test_http_error_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=500, json={"error": "internal"})
@@ -123,7 +146,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="missing data"):
+        with pytest.raises(IdentityFetchError, match="states no identity"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
@@ -131,7 +154,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="missing data.viewer"):
+        with pytest.raises(IdentityFetchError, match="states no signed-in user"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
 

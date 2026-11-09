@@ -4,6 +4,7 @@ import pickle
 
 import pytest
 
+from apron_auth import errors
 from apron_auth.errors import (
     AuthorizationResponseError,
     ConfigurationError,
@@ -65,6 +66,15 @@ def test_errors_are_distinct() -> None:
 def test_error_message_preserved() -> None:
     err = TokenExchangeError("token endpoint returned 400", kind=FailureKind.REJECTED)
     assert str(err) == "token endpoint returned 400"
+
+
+# The error families that report a provider's own code, which every other family must not.
+CODE_CARRYING_FAMILIES = (
+    AuthorizationResponseError,
+    IdentityFetchError,
+    RevocationError,
+    TokenEndpointError,
+)
 
 
 class TestFailureKind:
@@ -179,9 +189,47 @@ class TestTokenEndpointErrors:
         assert isinstance(err, TokenEndpointError)
 
     def test_an_error_outside_the_code_carrying_families_has_none(self) -> None:
-        """Only a step that reads an OAuth error member off a response reports a code."""
+        """A family reports a code only where a step on its path reads one off a response."""
         assert not hasattr(ConfigurationError("boom"), "error_code")
-        assert not hasattr(RevocationError("boom", kind=FailureKind.REJECTED), "error_code")
+        assert not hasattr(StateError("boom"), "error_code")
+
+    @pytest.mark.parametrize("family", CODE_CARRYING_FAMILIES, ids=lambda family: family.__name__)
+    def test_every_family_reporting_a_code_shapes_it_the_same_way(self, family: type[OAuthError]) -> None:
+        """A family deciding the shape itself could report a value the others report as absent."""
+        kept = family("boom", kind=FailureKind.REJECTED, error_code="invalid_grant")
+        refused = family("boom", kind=FailureKind.REJECTED, error_code="Invalid Grant")
+
+        assert kept.error_code == "invalid_grant"
+        assert refused.error_code == ""
+
+    def test_no_other_family_reports_a_code(self) -> None:
+        """A family added later reports a code only by joining one of these, which holds it to the rule."""
+        reporting = {
+            value.__name__
+            for value in vars(errors).values()
+            if isinstance(value, type)
+            and issubclass(value, OAuthError)
+            and hasattr(value, "error_code")
+            and not value.__name__.startswith("_")
+        }
+        covered = {
+            value.__name__
+            for value in vars(errors).values()
+            if isinstance(value, type) and issubclass(value, tuple(CODE_CARRYING_FAMILIES))
+        }
+
+        assert reporting == covered
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            pytest.param(TokenValidationError("bad", reason=TokenValidationReason.MALFORMED), id="a refused token"),
+            pytest.param(TokenExpiredError("old"), id="an expired token"),
+        ],
+    )
+    def test_a_member_of_a_carrying_family_that_reads_no_code_reports_none(self, error: IdentityFetchError) -> None:
+        """These take the attribute from the identity family, and no step on their path reads a code."""
+        assert error.error_code == ""
 
     def test_token_endpoint_error_without_a_kind_is_unexpected(self) -> None:
         assert TokenEndpointError("boom").kind is FailureKind.UNEXPECTED
@@ -260,6 +308,41 @@ def test_permanent_oauth_error_is_gone() -> None:
 
     assert not hasattr(apron_auth.errors, "PermanentOAuthError")
     assert "PermanentOAuthError" not in apron_auth.__all__
+
+
+class TestIdentityErrors:
+    """An identity failure reports a provider's error code the way a token-endpoint failure does."""
+
+    def test_error_code_defaults_to_empty(self) -> None:
+        assert IdentityFetchError("boom", kind=FailureKind.REJECTED).error_code == ""
+        assert IdentityScopeNotGrantedError("boom").error_code == ""
+
+    def test_error_code_stored_and_message_preserved(self) -> None:
+        err = IdentityFetchError("Slack identity request failed", kind=FailureKind.REJECTED, error_code="invalid_auth")
+
+        assert err.error_code == "invalid_auth"
+        assert str(err) == "Slack identity request failed"
+
+    def test_a_scope_refusal_carries_the_code_too(self) -> None:
+        """The subclass names one condition, and the code says which of a provider's own it was."""
+        err = IdentityScopeNotGrantedError("Slack identity request failed", error_code="missing_scope")
+
+        assert err.error_code == "missing_scope"
+        assert isinstance(err, IdentityFetchError)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param("Invalid_Auth", id="an upper case letter"),
+            pytest.param("invalid auth", id="a space"),
+            pytest.param("a" * 65, id="longer than any code"),
+            pytest.param("", id="nothing at all"),
+            pytest.param("<b>boom</b>", id="markup"),
+        ],
+    )
+    def test_a_value_outside_the_shape_a_code_takes_is_reported_as_absent(self, code: str) -> None:
+        """The member a code arrives in admits any text, so a value of another shape names no code."""
+        assert IdentityFetchError("boom", kind=FailureKind.REJECTED, error_code=code).error_code == ""
 
 
 class TestTokenValidationError:

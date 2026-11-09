@@ -110,7 +110,30 @@ class OAuthError(Exception):
         return self.kind.retryable
 
 
-class AuthorizationResponseError(OAuthError):
+# This base precedes the A-Z block below, because Python needs a base defined before its subclasses.
+class _CodeCarryingError(OAuthError):
+    """An error that reports the code the other side stated for the failure.
+
+    The member a code arrives in admits any printable text of any length, so this class owns the shape
+    and no raise decides it. A lowercase identifier is kept, and a value of any other shape, or one
+    longer than any code, reports as absent, because it is not comparable against a known code.
+
+    NOTE: The text the other side wrote beside the code is not carried here and is never put in a
+    message, because neither its length nor its content is this library's to choose.
+    """
+
+    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
+        """Record the failure, keeping the error code only where it states one in the shape a code takes."""
+        super().__init__(*args, kind=kind)
+        self._error_code = recognized_error_code(error_code)
+
+    @property
+    def error_code(self) -> str:
+        """The code the other side stated for the failure, fixed when the error is raised."""
+        return self._error_code
+
+
+class AuthorizationResponseError(_CodeCarryingError):
     """The authorization response cannot be acted on.
 
     The server refused the request and said why (RFC 6749 section 4.1.2.1), or answered with neither a
@@ -121,22 +144,9 @@ class AuthorizationResponseError(OAuthError):
     rejected. ``retryable`` is always ``False``: this response states no code, so presenting it again
     can only fail the same way. The recovery is a new authorization request.
 
-    This class owns the shape of ``error_code``, so no raise decides it.
-    It holds the OAuth error code when one is given as a lowercase identifier, and is the empty string
-    otherwise, because the field a code arrives in admits any printable text.
-    NOTE: The description the server sent is not carried here and is never put in the message, because it
-    is text a server chose. A caller reads it off the callback it passed in.
+    ``error_code`` holds the code RFC 6749 section 4.1.2.1 names, under the rule its base states.
+    NOTE: A caller reads the description the server sent off the callback it passed in.
     """
-
-    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
-        """Record the failure, keeping the error code only where it states one in the shape a code takes."""
-        super().__init__(*args, kind=kind)
-        self._error_code = recognized_error_code(error_code)
-
-    @property
-    def error_code(self) -> str:
-        """The OAuth error code of the failure, fixed when the error is raised."""
-        return self._error_code
 
     @property
     def retryable(self) -> bool:
@@ -150,10 +160,12 @@ class ConfigurationError(OAuthError):
     default_kind = FailureKind.CONFIGURATION
 
 
-class IdentityFetchError(OAuthError):
+class IdentityFetchError(_CodeCarryingError):
     """Fetching user identity from the provider failed.
 
     ``kind`` tells an outage, which may pass, from a refusal, which cannot.
+    ``error_code`` holds the code the provider stated, under the rule its base states, and is empty
+    where the step that failed read no such member.
     """
 
 
@@ -201,8 +213,11 @@ class OidcDiscoveryError(OAuthError):
     """
 
 
-class RevocationError(OAuthError):
-    """Token revocation failed at the provider."""
+class RevocationError(_CodeCarryingError):
+    """Token revocation failed at the provider.
+
+    ``error_code`` holds the code the provider stated for the failure, under the rule its base states.
+    """
 
 
 class StateError(OAuthError):
@@ -211,23 +226,11 @@ class StateError(OAuthError):
     default_kind = FailureKind.REFUSED
 
 
-class TokenEndpointError(OAuthError):
+class TokenEndpointError(_CodeCarryingError):
     """A token-endpoint request failed. Base of the exchange and refresh errors, never raised itself.
 
-    This class owns the shape of ``error_code``, so no raise decides it.
-    It holds the OAuth error code (RFC 6749) when one is given as a lowercase identifier, and is the
-    empty string otherwise.
-    The field a code arrives in admits any printable text, so a value of another shape is reported as absent.
+    ``error_code`` holds the code RFC 6749 section 5.2 names, under the rule its base states.
     """
-
-    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
-        super().__init__(*args, kind=kind)
-        self._error_code = recognized_error_code(error_code)
-
-    @property
-    def error_code(self) -> str:
-        """The OAuth error code of the failure, fixed when the error is raised."""
-        return self._error_code
 
 
 # NonceValidationError and TokenExpiredError follow their base classes instead of A-Z order, because Python needs
