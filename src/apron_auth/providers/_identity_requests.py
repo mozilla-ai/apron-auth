@@ -34,10 +34,11 @@ def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransp
 def identity_transport(
     transport_factory: TransportFactory | None, url: str, label: str
 ) -> httpx.AsyncBaseTransport | None:
-    """Return the transport a caller's factory chose for ``url``, or ``None`` where it gave none.
+    """Return the transport a caller's factory chose for ``url``, or ``None`` where there is no factory.
 
-    A factory is the caller's own code, so it may refuse the connection by policy or fail outright.
-    Either way the fault is neither the provider's nor an outage, so the refusal is never retried.
+    A factory is the caller's own code, so it may refuse the connection by policy, fail outright, or
+    state no transport at all. None of the three is the provider's fault or an outage, and a later
+    attempt reads the same code, so none of them is retried.
 
     NOTE: The factory is called with a URL alone and before any request is built, so its own error
     carries no credential and is chained.

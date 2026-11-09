@@ -377,7 +377,7 @@ class MicrosoftIdentityHandler:
             directory yields no usable organization.
         """
         try:
-            transport = identity_transport(self._transport_factory, _MICROSOFT_ORGANIZATION_URL, "Microsoft identity")
+            transport = identity_transport(self._transport_factory, _MICROSOFT_ORGANIZATION_URL, "Microsoft directory")
         except IdentityFetchError:
             # NOTE: The caller's own factory refused this one connection, and the organization only
             # enriches an identity that already resolved, so the tenancy is withheld rather than the
