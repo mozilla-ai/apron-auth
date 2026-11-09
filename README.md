@@ -934,12 +934,14 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 | `McpDiscoveryError`            | MCP OAuth metadata discovery failed — a blocked or rejected URL the server's metadata declares, or unreachable or malformed server metadata. When no candidate URL yields a document, the message names what the candidates showed — the document could not be fetched, is not published, or is not a JSON object — and `kind` says whether a retry may pass. A URL you passed raises `ConfigurationError` instead, except the `resource_metadata_url` hint, whose value is the server's and which loses only its turn. |
 | `McpRegistrationError`         | MCP OAuth dynamic client registration (RFC 7591) failed at the server.                                          |
 | `OidcDiscoveryError`           | Reading an OpenID provider's configuration document failed, or the document named a different issuer.           |
-| `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal.                                     |
+| `IdentityFetchError`           | Fetching the user's identity failed. `kind` tells an outage from a refusal, and `error_code` carries the code the provider stated where it stated one as a lowercase identifier. |
 | `IdentityScopeNotGrantedError` | The token lacks a scope the identity endpoint needs. Subclass of `IdentityFetchError`.                          |
 | `TokenValidationError`         | An ID token or workload token was refused. `reason` says why: `audience`, `claims`, `expired`, `malformed`, `signature`, `unknown_issuer`, `unknown_key` or `unsupported`. Subclass of `IdentityFetchError`, so catch it first. |
 | `TokenExpiredError`            | An ID token or workload token verified but has expired. Subclass of `TokenValidationError`.                     |
 
-`TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where `error_code` lives.
+`TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where their `error_code` lives. `AuthorizationResponseError` and `IdentityFetchError` carry one of their own, under the same rule.
+
+No message holds text a provider wrote. A provider states the reason for a failure in a field whose length and content are its own to choose, so a message names the request that failed and the condition this library read, and the provider's own value reaches you through `error_code` where it takes the shape a code takes. A failure with several reasons, as a GraphQL response states, reports how many rather than any of their text.
 
 ### What an error reporter can capture
 
