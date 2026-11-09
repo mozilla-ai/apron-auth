@@ -54,7 +54,8 @@ class Preset:
             states the same key.
         implicit_scopes: Scopes a provider grants without naming them in a granted scope string.
         issuer: The issuer an ID token from this flow must name, or ``None`` where the flow returns none.
-        required_scope_families: Scope families a consumer must keep at least one member of.
+        required_scope_families: Scope families a selection satisfies by keeping at least one
+            member of any one of them, as :class:`~apron_auth.models.ProviderConfig` states.
         scope_metadata: Consent-UI metadata for the scopes this preset injects.
         token_endpoint_auth_method: How the client authenticates at the token endpoint.
         use_pkce: Whether the flow sends a PKCE challenge.

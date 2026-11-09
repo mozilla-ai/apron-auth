@@ -74,7 +74,13 @@ class TestSlackConsentPickerInvariant:
         )
         assert self._families_satisfied({"channels:read"}, config.required_scope_families)
 
-    def test_only_user_scope_satisfies_constraint(self):
+    def test_only_a_user_scope_does_not_satisfy_the_constraint(self):
+        """Slack accepts such a request and this flow does not, and the constraint states this flow's rule.
+
+        A selection of user scopes alone would pass authorization and then fail the token exchange,
+        which returns no token for the app itself, so a picker holding a selection to the declared
+        families must not be able to build one.
+        """
         from apron_auth.providers.slack import preset
 
         config = preset(
@@ -83,7 +89,7 @@ class TestSlackConsentPickerInvariant:
             scopes=["channels:read"],
             user_scopes=["users:read"],
         )
-        assert self._families_satisfied({"users:read"}, config.required_scope_families)
+        assert not self._families_satisfied({"users:read"}, config.required_scope_families)
 
     def test_unrelated_scope_does_not_satisfy_constraint(self):
         from apron_auth.providers.slack import preset
@@ -496,7 +502,8 @@ class TestSlackPreset:
         )
         assert config.required_scope_families == [["channels:read", "chat:write"]]
 
-    def test_bot_and_user_scopes_declare_two_required_families(self):
+    def test_only_the_bot_scopes_are_declared_as_a_required_family(self):
+        """The user scopes are optional to this flow, so naming them would state that one of them will do."""
         from apron_auth.providers.slack import preset
 
         config = preset(
@@ -505,10 +512,7 @@ class TestSlackPreset:
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
-        assert config.required_scope_families == [
-            ["channels:read"],
-            ["users:read", "channels:history"],
-        ]
+        assert config.required_scope_families == [["channels:read"]]
 
     def test_empty_user_scopes_omitted_from_required_families(self):
         from apron_auth.providers.slack import preset

@@ -724,8 +724,9 @@ def preset(
     Slack returns a token for the app itself only for a request that asks for at least one bot
     scope, and a token response carrying no access token is refused, so this flow requires one and
     refuses a request asking for user scopes alone.
-    :attr:`ProviderConfig.required_scope_families` names each family the request asks for, so a
-    consent picker can hold a selection to a set-level rule without Slack-specific knowledge.
+    :attr:`ProviderConfig.required_scope_families` names the bot scopes alone, so a consent picker
+    holding a selection to it cannot build one this flow refuses. The user scopes are not named
+    there, because dropping every one of them leaves a request this flow accepts.
 
     Args:
         client_id: The OAuth client identifier.
@@ -770,9 +771,7 @@ def preset(
         )
         raise ConfigurationError(msg)
 
-    required_scope_families: list[list[str]] = [list(scopes)]
-    if user_scopes:
-        required_scope_families.append(list(user_scopes))
+    required_scope_families = [list(scopes)]
 
     declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
     config = declared.config(
