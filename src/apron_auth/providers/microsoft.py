@@ -414,6 +414,12 @@ class MicrosoftIdentityHandler:
                 http_failure(exc).description,
             )
             return None
+        except Exception:
+            logger.warning(
+                "microsoft directory lookup could not resolve the tenant's verified domains "
+                "(request failed); not asserting domain ownership"
+            )
+            return None
 
         try:
             body = decode_json_body(response)

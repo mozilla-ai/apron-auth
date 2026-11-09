@@ -266,6 +266,12 @@ class AtlassianIdentityHandler:
                 http_failure(exc).description,
             )
             return {}
+        except Exception:
+            logger.warning(
+                "atlassian user identity lookup failed (request failed); "
+                "emitting a tenancy-only profile without person-level fields"
+            )
+            return {}
 
         try:
             payload = decode_json_body(response)

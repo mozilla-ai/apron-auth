@@ -388,6 +388,32 @@ class TestMicrosoftVerifiedTenancy:
 
         assert identity.email_verified is True
 
+    async def test_a_transport_that_fails_in_its_own_way_withholds_the_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A transport is the caller's own code, so it may fail in a way no request error describes."""
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+
+        def factory(url: str) -> httpx.AsyncBaseTransport:
+            if url == _ORGANIZATION_URL:
+
+                def failing(request: httpx.Request) -> httpx.Response:
+                    msg = "the transport failed in its own code"
+                    raise ValueError(msg)
+
+                return httpx.MockTransport(failing)
+            return httpx.AsyncHTTPTransport()
+
+        handler = MicrosoftIdentityHandler(transport_factory=factory)
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+
     async def test_a_transport_refused_for_the_directory_withholds_the_tenancy(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
