@@ -214,6 +214,53 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         # ``sub`` still comes from the validated ID token.
         assert identity.subject == "ms-sub-1"
 
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param(_CONSUMERS_TENANT.upper(), id="upper case"),
+            pytest.param(_CONSUMERS_TENANT[:8].upper() + _CONSUMERS_TENANT[8:], id="mixed case"),
+        ],
+    )
+    async def test_the_personal_account_tenant_yields_no_tenancy_whatever_its_case(
+        self, httpx_mock: HTTPXMock, stated: str
+    ) -> None:
+        """A GUID names one tenant whatever its case, and the weaker outcome is the one a mismatch gives."""
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        id_token = _fake_jwt(
+            {
+                "tid": stated,
+                "iss": f"https://login.microsoftonline.com/{stated}/v2.0",
+                "sub": "ms-sub-1",
+            }
+        )
+
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert identity.tenancies == ()
+        assert identity.subject == "ms-sub-1"
+
+    async def test_an_organization_id_in_another_case_still_binds_to_its_tenant(self, httpx_mock: HTTPXMock) -> None:
+        """The directory states the tenant's own GUID in its own case, which names the validated tenant.
+
+        The tenant here carries hex letters, because a GUID of digits alone reads the same in either case.
+        """
+        lettered = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+        httpx_mock.add_response(
+            url=_ORGANIZATION_URL,
+            json=_org_response(["contoso.com"], org_id=lettered.upper()),
+        )
+        id_token = _member_id_token(tid=lettered, iss=f"https://login.microsoftonline.com/{lettered}/v2.0")
+
+        identity = await MicrosoftIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+        )
+
+        assert [tenancy.domain for tenancy in identity.tenancies] == ["contoso.com"]
+        assert identity.tenancies[0].id == lettered
+
     async def test_b2b_guest_yields_no_tenancy(self, httpx_mock: HTTPXMock):
         """A guest signs in with the host tenant's ``tid`` but is not a
         member; the differing ``idp`` claim must suppress the tenancy."""
