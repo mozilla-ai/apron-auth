@@ -873,7 +873,7 @@ if tokens.user_token is not None:
 
 Revoking the bot token alone leaves the person's token valid. Slack does not document whether revoking an access token affects the refresh token paired with it, so revoke every refresh token you hold and treat each revocation as best effort. Slack's own `apps.uninstall` removes every token of an installation, which no single revocation here promises.
 
-`slack.preset(...)` refuses an install that asks for user scopes alone, because Slack then returns no token for the app itself and a token response carrying no access token is refused. Sign a person in with `slack.sign_in_preset(...)` instead, whose token endpoint returns the person's token as `token_set.access_token`.
+`slack.preset(...)` refuses an install that asks for user scopes alone, because Slack then returns no token for the app itself and a token response carrying no access token is refused. Sign a person in with `slack.sign_in_preset(...)` instead, whose token endpoint returns the person's token as `token_set.access_token`. The configuration states that rule for a consent picker too: `required_scope_families` names the bot scopes, which a selection satisfies by keeping at least one of them, so a picker holding a selection to it cannot build one this flow refuses. The user scopes are not named there, because an install that drops all of them is one this flow accepts.
 
 ## Scope reduction tiers
 

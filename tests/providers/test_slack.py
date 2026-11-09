@@ -74,7 +74,13 @@ class TestSlackConsentPickerInvariant:
         )
         assert self._families_satisfied({"channels:read"}, config.required_scope_families)
 
-    def test_only_user_scope_satisfies_constraint(self):
+    def test_only_a_user_scope_does_not_satisfy_the_constraint(self):
+        """Slack accepts such a request and this flow does not, and the constraint states this flow's rule.
+
+        A selection of user scopes alone would pass authorization and then fail the token exchange,
+        which returns no token for the app itself, so a picker holding a selection to the declared
+        families must not be able to build one.
+        """
         from apron_auth.providers.slack import preset
 
         config = preset(
@@ -83,7 +89,7 @@ class TestSlackConsentPickerInvariant:
             scopes=["channels:read"],
             user_scopes=["users:read"],
         )
-        assert self._families_satisfied({"users:read"}, config.required_scope_families)
+        assert not self._families_satisfied({"users:read"}, config.required_scope_families)
 
     def test_unrelated_scope_does_not_satisfy_constraint(self):
         from apron_auth.providers.slack import preset
@@ -400,11 +406,28 @@ class TestSlackSignInFlowDetection:
 
 
 class TestSlackPreset:
-    def test_raises_when_bot_and_user_scopes_are_empty(self):
+    @pytest.mark.parametrize(
+        "scopes",
+        [
+            pytest.param([], id="an empty list"),
+            pytest.param([""], id="an entry naming no scope"),
+            pytest.param(["   "], id="an entry of spaces alone"),
+            pytest.param([",", " "], id="entries of delimiters alone"),
+        ],
+    )
+    def test_a_flow_naming_no_bot_scope_is_refused_by_the_one_rule(self, scopes: list[str]) -> None:
+        """One rule states what this flow needs, and it names the preset that serves the other flow.
+
+        A list is not a scope: an entry read off an unset environment variable is one entry naming
+        nothing, which a test of the list's own length accepts and the token exchange then refuses.
+        """
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ConfigurationError, match="at least one scope"):
-            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=[])
+        with pytest.raises(ConfigurationError) as refusal:
+            preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+
+        assert "at least one bot scope" in str(refusal.value)
+        assert "sign_in_preset" in str(refusal.value)
 
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         from apron_auth.providers.slack import preset
@@ -484,7 +507,8 @@ class TestSlackPreset:
         )
         assert config.required_scope_families == [["channels:read", "chat:write"]]
 
-    def test_bot_and_user_scopes_declare_two_required_families(self):
+    def test_only_the_bot_scopes_are_declared_as_a_required_family(self):
+        """The user scopes are optional to this flow, so naming them would state that one of them will do."""
         from apron_auth.providers.slack import preset
 
         config = preset(
@@ -493,21 +517,41 @@ class TestSlackPreset:
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
-        assert config.required_scope_families == [
-            ["channels:read"],
-            ["users:read", "channels:history"],
-        ]
+        assert config.required_scope_families == [["channels:read"]]
 
-    def test_empty_user_scopes_omitted_from_required_families(self):
+    @pytest.mark.parametrize(
+        ("user_scopes", "sent"),
+        [
+            pytest.param(["users:read channels:history"], "users:read,channels:history", id="joined by a space"),
+            pytest.param(["users:read,channels:history"], "users:read,channels:history", id="joined by a comma"),
+            pytest.param(["users:read", "users:read"], "users:read", id="one word stated twice"),
+        ],
+    )
+    def test_the_user_scope_parameter_states_one_scope_per_word(self, user_scopes: list[str], sent: str) -> None:
+        """Slack reads that parameter on its own separator, so a value joined another way states one scope."""
         from apron_auth.providers.slack import preset
 
         config = preset(
             client_id="sid",
             client_secret="ssecret",  # pragma: allowlist secret
             scopes=["channels:read"],
-            user_scopes=[],
+            user_scopes=user_scopes,
         )
-        assert config.required_scope_families == [["channels:read"]]
+
+        assert config.extra_params["user_scope"] == sent
+
+    def test_a_joined_scope_value_is_declared_as_its_words(self):
+        """A picker tests a family by membership, so a family holding a joined value matches no selection."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read,chat:write"],
+        )
+
+        assert config.required_scope_families == [["channels:read", "chat:write"]]
+        assert any("channels:read" in family for family in config.required_scope_families)
 
 
 class TestSlackInstallPresetNeedsABotScope:
@@ -583,7 +627,23 @@ class TestSlackSignInPreset:
         from apron_auth.providers.slack import sign_in_preset
 
         config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["openid email"])
-        assert config.scopes == ["openid email"]
+        assert config.scopes == ["openid", "email"]
+
+    @pytest.mark.parametrize(
+        "scopes",
+        [
+            pytest.param(["openid,email"], id="joined by the provider's separator"),
+            pytest.param(["openid email"], id="joined by a space"),
+            pytest.param(["openid", "email", "openid"], id="one word stated twice"),
+        ],
+    )
+    def test_a_scope_value_is_held_as_the_words_it_carries(self, scopes: list[str]) -> None:
+        """A value joining several scopes states each of them, so the configuration holds one per entry."""
+        from apron_auth.providers.slack import sign_in_preset
+
+        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+
+        assert config.scopes == ["openid", "email"]
 
     def test_the_injected_scope_carries_consent_metadata(self) -> None:
         """A consent picker reads the metadata of every scope the preset injects."""
@@ -702,6 +762,48 @@ class TestSlackInstallPresetRefusesTheSignInScope:
                 scopes=["channels:read"],
                 extra_params={"user_scope": "profile openid"},
             )
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("", id="nothing at all"),
+            pytest.param(",", id="a delimiter alone"),
+            pytest.param("   ", id="spaces alone"),
+        ],
+    )
+    def test_a_user_scope_naming_no_scope_is_not_sent(self, stated: str) -> None:
+        """An empty parameter asks for nothing, so sending it states a request the flow did not make."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            extra_params={"user_scope": stated},
+        )
+
+        assert "user_scope" not in config.extra_params
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("users:read users:write", id="joined by a space"),
+            pytest.param("users:read,users:write", id="joined by a comma"),
+            pytest.param("users:read, users:write", id="joined by a comma and a space"),
+        ],
+    )
+    def test_a_user_scope_set_directly_is_sent_as_the_words_it_carries(self, stated: str) -> None:
+        """Slack reads that parameter on its own separator, so a value joined another way states one scope."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            extra_params={"user_scope": stated},
+        )
+
+        assert config.extra_params["user_scope"] == "users:read,users:write"
 
     def test_a_scope_entry_holding_several_words_is_read_word_by_word(self) -> None:
         """The client reads the built scope parameter word by word, so this refusal does too."""
