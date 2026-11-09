@@ -400,11 +400,23 @@ class TestSlackSignInFlowDetection:
 
 
 class TestSlackPreset:
-    def test_raises_when_bot_and_user_scopes_are_empty(self):
+    @pytest.mark.parametrize(
+        "user_scopes",
+        [
+            pytest.param([], id="no scopes at all"),
+            pytest.param(["identity.basic"], id="user scopes alone"),
+            pytest.param(None, id="user scopes left out"),
+        ],
+    )
+    def test_a_flow_without_a_bot_scope_is_refused_by_the_one_rule(self, user_scopes: list[str] | None) -> None:
+        """One rule states what this flow needs, and it names the preset that serves the other flow."""
         from apron_auth.providers.slack import preset
 
-        with pytest.raises(ConfigurationError, match="at least one scope"):
-            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=[])
+        with pytest.raises(ConfigurationError) as refusal:
+            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=user_scopes)
+
+        assert "at least one bot scope" in str(refusal.value)
+        assert "sign_in_preset" in str(refusal.value)
 
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         from apron_auth.providers.slack import preset

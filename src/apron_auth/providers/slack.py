@@ -721,12 +721,11 @@ def preset(
     to have the preset build the ``user_scope`` param automatically
     using the provider's scope separator.
 
-    Slack's token exchange enforces a set-level rule: the request must
-    ask for at least one bot scope **or** at least one user scope.
-    The preset declares this on
-    :attr:`ProviderConfig.required_scope_families` — one family per
-    non-empty token family — so a consent picker can enforce the rule
-    without Slack-specific knowledge.
+    Slack returns a token for the app itself only for a request that asks for at least one bot
+    scope, and a token response carrying no access token is refused, so this flow requires one and
+    refuses a request asking for user scopes alone.
+    :attr:`ProviderConfig.required_scope_families` names each family the request asks for, so a
+    consent picker can hold a selection to a set-level rule without Slack-specific knowledge.
 
     Args:
         client_id: The OAuth client identifier.
@@ -744,15 +743,11 @@ def preset(
         from it.
 
     Raises:
-        ConfigurationError: If both ``scopes`` and ``user_scopes`` are empty, if any scope parameter
-            asks for the ``openid`` scope, or if ``extra_params`` sets ``scope``.
+        ConfigurationError: If ``scopes`` asks for no bot scope, if any scope parameter asks for the
+            ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
     scopes = scope_sequence(scopes, "scopes")
     user_scopes = scope_sequence(user_scopes, "user_scopes")
-    if not scopes and not user_scopes:
-        msg = "Slack OAuth requires at least one scope in scopes or user_scopes"
-        raise ConfigurationError(msg)
-
     if not scopes:
         msg = (
             "Slack returns no token for the app itself when a flow asks for user scopes alone, and a "
@@ -775,9 +770,7 @@ def preset(
         )
         raise ConfigurationError(msg)
 
-    required_scope_families: list[list[str]] = []
-    if scopes:
-        required_scope_families.append(list(scopes))
+    required_scope_families: list[list[str]] = [list(scopes)]
     if user_scopes:
         required_scope_families.append(list(user_scopes))
 
