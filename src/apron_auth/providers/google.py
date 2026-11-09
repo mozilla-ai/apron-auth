@@ -25,7 +25,7 @@ from apron_auth.models import (
     TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import (
     RevocationRequest,
@@ -80,6 +80,15 @@ _TOKEN_REVOKED = 200
 class GoogleIdentityHandler:
     """Fetch identity fields from Google's OIDC userinfo endpoint."""
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Google access token.
 
@@ -96,7 +105,8 @@ class GoogleIdentityHandler:
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        async with identity_client(config.timeouts) as client:
+        transport = identity_transport(self._transport_factory, _GOOGLE_USERINFO_URL, "Google identity")
+        async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _GOOGLE_USERINFO_URL,

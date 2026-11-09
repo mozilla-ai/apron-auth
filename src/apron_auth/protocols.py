@@ -111,6 +111,11 @@ class IdentityHandler(Protocol):
         from ``config.authorize_url`` or ``config.token_url``.
         No other field of a configuration is checked against the hosts of the provider it names.
 
+        NOTE: A client passes its own transport factory to the handler it resolves from the config's
+        provider, so every request such a handler sends runs on the connection the caller shaped. A
+        handler the caller builds and passes in receives nothing, because the caller built it, so a
+        caller who pins DNS must give that handler the same factory itself.
+
         Args:
             material: The token material to establish identity from.
             config: The provider configuration the tokens were issued under.

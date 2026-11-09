@@ -11,12 +11,17 @@ from apron_auth.providers._host_match import oauth_hosts_match
 
 if TYPE_CHECKING:
     from apron_auth.models import ProviderConfig
+    from apron_auth.protocols import TransportFactory
 
 # The package holding one module per provider member, which is this module's own.
 _PROVIDER_PACKAGE = __name__.rpartition(".")[0]
 
 
-def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
+def identity_handler_for(
+    config: ProviderConfig,
+    *,
+    transport_factory: TransportFactory | None = None,
+) -> IdentityHandler | None:
     """Build the identity handler of the provider ``config`` names.
 
     The provider's endpoint hosts are a condition rather than a selector.
@@ -27,6 +32,8 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
 
     Args:
         config: The provider configuration to establish identity under.
+        transport_factory: Controls the outbound connection for every request the handler sends,
+            where a caller handling untrusted input can pin DNS to validated addresses.
 
     Returns:
         A new handler for the named provider, or ``None`` when the config names no provider or
@@ -58,4 +65,4 @@ def identity_handler_for(config: ProviderConfig) -> IdentityHandler | None:
     if not (isinstance(handler_class, type) and issubclass(handler_class, IdentityHandler)):
         msg = f"{module.__name__}.{provider.identity_handler_class_name} is not an identity handler"
         raise TypeError(msg)
-    return handler_class()
+    return handler_class(transport_factory=transport_factory)

@@ -1097,7 +1097,7 @@ class _OAuthClientBase:
             ConfigurationError: If either of the config's OAuth endpoints is not a host of the
                 provider it names.
         """
-        return identity_handler_for(self._config)
+        return identity_handler_for(self._config, transport_factory=self._transport_factory)
 
     @cached_property
     def _provider_revocation_handler(self) -> RevocationHandler | None:
