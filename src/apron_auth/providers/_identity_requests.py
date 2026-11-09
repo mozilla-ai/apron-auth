@@ -53,15 +53,21 @@ def identity_transport(
         The transport for ``url``'s host, or ``None`` where there is no factory.
 
     Raises:
-        IdentityFetchError: If the factory refuses the connection or fails.
+        IdentityFetchError: If the factory refuses the connection, fails, or returns no transport.
+            A factory that returns nothing is refused rather than defaulted, because falling back to
+            an unshaped connection would drop the policy the factory states.
     """
     if transport_factory is None:
         return None
     try:
-        return transport_factory(url)
+        transport = transport_factory(url)
     except Exception as exc:
         msg = f"Failed to fetch {label}: outbound connection refused"
         raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
+    if transport is None:
+        msg = f"Failed to fetch {label}: transport_factory returned no transport"
+        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED)
+    return transport
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:

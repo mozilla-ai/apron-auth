@@ -48,3 +48,23 @@ def test_a_factory_that_refuses_is_reported_as_a_fault_no_retry_clears(raised: B
     else:
         with pytest.raises(type(raised)):
             identity_transport(factory, "https://api.example.com/me", "Example identity")
+
+
+def test_a_factory_that_returns_no_transport_is_refused_rather_than_defaulted() -> None:
+    """A factory whose code path returns nothing states no connection, and the request must not fall back.
+
+    Defaulting here would send the request on a connection the factory was given to shape, so the
+    policy it states would be dropped without anything reporting it.
+    """
+
+    def forgetful_factory(url: str) -> httpx.AsyncBaseTransport | None:
+        if url.startswith("https://allowed.example.com"):
+            return httpx.MockTransport(lambda request: httpx.Response(200))
+        return None
+
+    with pytest.raises(IdentityFetchError) as refusal:
+        identity_transport(forgetful_factory, "https://api.example.com/me", "Example identity")
+
+    assert refusal.value.kind is FailureKind.UNEXPECTED
+    assert refusal.value.retryable is False
+    assert "Example identity" in str(refusal.value)
