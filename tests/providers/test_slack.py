@@ -766,6 +766,27 @@ class TestSlackInstallPresetRefusesTheSignInScope:
     @pytest.mark.parametrize(
         "stated",
         [
+            pytest.param("", id="nothing at all"),
+            pytest.param(",", id="a delimiter alone"),
+            pytest.param("   ", id="spaces alone"),
+        ],
+    )
+    def test_a_user_scope_naming_no_scope_is_not_sent(self, stated: str) -> None:
+        """An empty parameter asks for nothing, so sending it states a request the flow did not make."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            extra_params={"user_scope": stated},
+        )
+
+        assert "user_scope" not in config.extra_params
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
             pytest.param("users:read users:write", id="joined by a space"),
             pytest.param("users:read,users:write", id="joined by a comma"),
             pytest.param("users:read, users:write", id="joined by a comma and a space"),

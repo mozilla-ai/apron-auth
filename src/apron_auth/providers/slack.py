@@ -763,9 +763,10 @@ def preset(
     merged_extra = _extra_params_without_scope(extra_params)
     if user_scopes:
         merged_extra["user_scope"] = scope_separator.join(user_scopes)
-    stated_user_scope = merged_extra.get("user_scope")
-    if stated_user_scope is not None:
-        merged_extra["user_scope"] = scope_separator.join(scope_words_in_order([stated_user_scope], scope_separator))
+    stated_user_scope = merged_extra.pop("user_scope", None)
+    stated_user_words = scope_words_in_order([stated_user_scope or ""], scope_separator)
+    if stated_user_words:
+        merged_extra["user_scope"] = scope_separator.join(stated_user_words)
 
     requested = scope_words([*scopes, merged_extra.get("user_scope", "")], scope_separator)
     if _SLACK_SIGN_IN_SCOPE in requested:
