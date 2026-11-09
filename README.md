@@ -927,7 +927,7 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 | `IdTokenValidationError`       | The ID token is unreadable, names another audience, authorized party or issuer, or has expired. Subclass of `TokenExchangeError`. |
 | `NonceValidationError`         | The response has no ID token, or it lacks the nonce. Subclass of `IdTokenValidationError`. |
 | `TokenRefreshError`            | Refresh failed, or its response carried an ID token that was not issued to your client. `retryable` tells an outage from a dead grant, and `error_code` tells a dead grant (`invalid_grant`) from a client fault. |
-| `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned. |
+| `RevocationError`              | The revocation request could not be sent, the provider refused it, or the provider answered something that states no outcome. `retryable` tells a rate limit or an outage from a refusal, so a token worth retrying is not abandoned, and `error_code` carries the code the provider stated where it stated one as a lowercase identifier. |
 | `StateError`                   | OAuth state was missing, invalid, expired, already used, did not match the pending state, did not come from the browser that started the flow, or states a nonce that contradicts the scope its request asked for. |
 | `ConfigurationError`           | Something's wrong with the provider config (e.g. missing `redirect_uri`), or an argument you passed cannot work — such as an MCP server, registration or CIMD client-identifier URL this library refuses, a `TokenSet` reloaded from storage passed to `fetch_identity`, or a configuration an identity or revocation handler refuses. |
 | `IdentityNotSupportedError`    | No identity handler exists for this provider configuration. Subclass of `ConfigurationError`.                  |
@@ -941,7 +941,9 @@ A response that states a `Retry-After` is read as temporary whatever its status 
 
 `TokenExchangeError` and `TokenRefreshError` share the `TokenEndpointError` base, which is where their `error_code` lives. `AuthorizationResponseError` and `IdentityFetchError` carry one of their own, under the same rule.
 
-No message raised on the authorization, token-endpoint or identity paths holds text a provider wrote. A provider states the reason for a failure in a field whose length and content are its own to choose, so a message names the request that failed and the condition this library read, and the provider's own value reaches you through `error_code` where it takes the shape a code takes. A failure stating several reasons, as a GraphQL response does, reports how many rather than any of their text. Revocation is not covered: `RevocationError` carries no `error_code`, and Slack's revocation failure names the code Slack sent in its message.
+No message holds text a provider wrote. A provider states the reason for a failure in a field whose length and content are its own to choose, so a message names the request that failed and the condition this library read, and the provider's own value reaches you through `error_code` where it takes the shape a code takes.
+
+A failure stating several reasons, as a Linear response does, reports how many rather than any of their text, and carries no code, because the member such a reason would state one in is not one this library can name from Linear's own documentation. So a Linear identity failure tells you that the provider refused the request and how many reasons it gave, and not which: `retryable` is the signal to act on, and a throttle at that layer reads the same as a dead credential.
 
 ### What an error reporter can capture
 
