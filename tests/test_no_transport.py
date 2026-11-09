@@ -21,13 +21,15 @@ from apron_auth.providers._identity_requests import identity_transport
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._openid_documents import fetch_document
 
+# The one URL the stand-in factory in this module answers for.
+_ALLOWED_URL = "https://allowed.example.com/me"
 _KEYS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
 _OPENID_URL = "https://issuer.example.com/.well-known/openid-configuration"
 
 
 def _forgetful_factory(url: str) -> httpx.AsyncBaseTransport | None:
-    """Return a transport for one host and, as a factory with a missing return does, nothing for the rest."""
-    if url.startswith("https://allowed.example.com"):
+    """Return a transport for one URL and, as a factory with a missing return does, nothing for the rest."""
+    if url == _ALLOWED_URL:
         return httpx.MockTransport(lambda request: httpx.Response(200))
     return None
 

@@ -8,6 +8,9 @@ import pytest
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.providers._identity_requests import identity_transport
 
+# The one URL the stand-in factory in this module answers for.
+_ALLOWED_URL = "https://allowed.example.com/me"
+
 
 def test_no_factory_states_no_transport() -> None:
     assert identity_transport(None, "https://api.example.com/me", "Example identity") is None
@@ -58,7 +61,7 @@ def test_a_factory_that_returns_no_transport_is_refused_rather_than_defaulted() 
     """
 
     def forgetful_factory(url: str) -> httpx.AsyncBaseTransport | None:
-        if url.startswith("https://allowed.example.com"):
+        if url == _ALLOWED_URL:
             return httpx.MockTransport(lambda request: httpx.Response(200))
         return None
 
