@@ -1471,6 +1471,7 @@ class TestOidcIdentity:
             await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
         assert excinfo.value.__cause__ is None
         assert excinfo.value.__context__ is None
+        assert excinfo.value.error_code == "insufficient_scope"
 
     async def test_a_bare_403_is_not_a_scope_error(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
