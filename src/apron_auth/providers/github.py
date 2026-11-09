@@ -137,19 +137,34 @@ def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> t
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            if stated_boolean(item.get("primary")) and stated_boolean(item.get("verified")) and item.get("email"):
+            # NOTE: ``primary`` states a preference between addresses rather than a fact about one, so a
+            # value of another type is read as the preference it expresses.
+            if item.get("primary") and stated_boolean(item.get("verified")) and _stated_address(item):
                 return str(item["email"]), True
 
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            if stated_boolean(item.get("verified")) and item.get("email"):
+            if stated_boolean(item.get("verified")) and _stated_address(item):
                 return str(item["email"]), True
 
-    email = user_payload.get("email")
-    if email:
-        return str(email), False
+    profile_email = user_payload.get("email")
+    if isinstance(profile_email, str) and profile_email:
+        return profile_email, False
     return None, None
+
+
+def _stated_address(item: dict[str, Any]) -> bool:
+    """Whether ``item`` states an address this library can read.
+
+    Args:
+        item: One entry of the addresses response.
+
+    Returns:
+        Whether the entry's address is a non-empty string.
+    """
+    email = item.get("email")
+    return isinstance(email, str) and bool(email)
 
 
 class GitHubIdentityHandler:

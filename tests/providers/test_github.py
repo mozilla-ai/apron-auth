@@ -132,6 +132,50 @@ class TestGitHubIdentityHandler:
     @pytest.mark.parametrize(
         "stated",
         [
+            pytest.param({"address": "octocat@example.com"}, id="an object"),
+            pytest.param(["octocat@example.com"], id="a list"),
+            pytest.param(7, id="a number"),
+            pytest.param("", id="nothing at all"),
+        ],
+    )
+    async def test_an_address_of_another_type_is_passed_over(self, httpx_mock: HTTPXMock, stated: object) -> None:
+        """Rendering one as text would report what the response states about it, as a verified address."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[{"email": stated, "primary": True, "verified": True}],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email is None
+        assert identity.email_verified is None
+
+    async def test_a_primary_flag_of_another_type_still_states_the_preference(self, httpx_mock: HTTPXMock) -> None:
+        """A primary flag states which address is preferred, not a fact about it, so it is read as stated."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[
+                {"email": "other@example.com", "verified": True},
+                {"email": "preferred@example.com", "primary": 1, "verified": True},
+            ],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email == "preferred@example.com"
+        assert identity.email_verified is True
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
             pytest.param("false", id="the string false"),
             pytest.param("true", id="the string true"),
             pytest.param(1, id="the number one"),
