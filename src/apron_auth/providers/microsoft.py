@@ -444,7 +444,7 @@ class MicrosoftIdentityHandler:
         # the one whose chain of trust was validated; refuse to assert
         # ownership rather than trust an unbound directory lookup.
         directory_tenant = stated_string(organization.get("id"))
-        if directory_tenant is None or directory_tenant.lower() != tenant_id:
+        if directory_tenant is None or directory_tenant.lower() != tenant_id.lower():
             logger.warning(
                 "microsoft organization id does not match the validated tenant; not asserting domain ownership"
             )
