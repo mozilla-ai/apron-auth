@@ -31,6 +31,7 @@ from apron_auth._discovery import (
     IssuerNotDeclaredError,
     IssuerRefusalReason,
     MetadataListNotStringsError,
+    NoTransportError,
     discovery_client,
     require_declared_issuer,
     str_list,
@@ -749,6 +750,9 @@ def _opened_client(
         return discovery_client(url, transport_factory, timeouts)
     except OAuthError:
         raise
+    except NoTransportError:
+        msg = f"MCP OAuth was given no outbound connection ({subject})"
+        raise error_cls(msg, kind=FailureKind.UNEXPECTED) from None
     except Exception as exc:
         # Building the client calls the caller's transport factory. Whether it refused the connection by
         # policy or failed, the fault is not the server's and is not an outage, so it is never retried.

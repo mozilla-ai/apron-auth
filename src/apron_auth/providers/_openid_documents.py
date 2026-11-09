@@ -11,6 +11,7 @@ import httpx
 from apron_auth._discovery import (
     IssuerNotDeclaredError,
     IssuerRefusalReason,
+    NoTransportError,
     discovery_client,
     require_declared_issuer,
 )
@@ -173,6 +174,9 @@ async def fetch_document(
     """
     try:
         client = discovery_client(url, transport_factory, timeouts)
+    except NoTransportError:
+        msg = "could not fetch the OpenID provider configuration (transport_factory returned no transport)"
+        raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from None
     except Exception as exc:
         # Building the client calls the caller's transport factory. Whether it refused the connection by policy or
         # failed, the fault is not the provider's and is not an outage, so it is never retried.

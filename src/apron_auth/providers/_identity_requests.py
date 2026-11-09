@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._timeouts import httpx_timeout, within_request_limit
@@ -58,17 +59,14 @@ def identity_transport(
             A factory that returns nothing is refused rather than defaulted, because falling back to
             an unshaped connection would drop the policy the factory states.
     """
-    if transport_factory is None:
-        return None
     try:
-        transport = transport_factory(url)
+        return chosen_transport(transport_factory, url)
+    except NoTransportError:
+        msg = f"Failed to fetch {label}: transport_factory returned no transport"
+        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from None
     except Exception as exc:
         msg = f"Failed to fetch {label}: outbound connection refused"
         raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
-    if transport is None:
-        msg = f"Failed to fetch {label}: transport_factory returned no transport"
-        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED)
-    return transport
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:
