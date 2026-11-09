@@ -19,6 +19,7 @@ import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
 from joserfc.jwt import JWTClaimsRegistry
 
+from apron_auth._claims import stated_boolean
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
@@ -521,8 +522,7 @@ def _email_verified(id_token: _IdToken | None, email: object) -> bool | None:
     """
     if id_token is None or not isinstance(email, str) or id_token.claims.get("email") != email:
         return None
-    value = id_token.claims.get("email_verified")
-    return value if isinstance(value, bool) else None
+    return stated_boolean(id_token.claims.get("email_verified"))
 
 
 def preset(

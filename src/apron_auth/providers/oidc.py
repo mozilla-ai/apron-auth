@@ -45,6 +45,7 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
+from apron_auth._claims import stated_boolean
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
@@ -842,8 +843,7 @@ def _email_fields(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> tu
         email = _claim_str(source, "email")
         if email is None:
             continue
-        verified = source.get("email_verified")
-        return email, verified if isinstance(verified, bool) else None
+        return email, stated_boolean(source.get("email_verified"))
     return None, None
 
 
