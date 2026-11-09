@@ -45,7 +45,7 @@ from authlib.oidc.discovery import get_well_known_url
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
-from apron_auth._claims import stated_boolean
+from apron_auth._claims import stated_boolean, stated_string
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
@@ -849,10 +849,7 @@ def _email_fields(claims: dict[str, Any] | None, userinfo: dict[str, Any]) -> tu
 
 def _claim_str(source: dict[str, Any] | None, name: str) -> str | None:
     """Return a claim when it is a non-empty string, else ``None``."""
-    if source is None:
-        return None
-    value = source.get(name)
-    return value if isinstance(value, str) and value else None
+    return None if source is None else stated_string(source.get(name))
 
 
 def _select_auth_method(advertised: Sequence[str]) -> TokenEndpointAuthMethod:

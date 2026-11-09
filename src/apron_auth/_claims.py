@@ -1,4 +1,4 @@
-"""The shape a claim about an identity takes, where a provider states one."""
+"""The shapes a claim about an identity takes, where a provider states one."""
 
 from __future__ import annotations
 
@@ -19,3 +19,20 @@ def stated_boolean(value: object) -> bool | None:
         at all.
     """
     return value if isinstance(value, bool) else None
+
+
+def stated_string(value: object) -> str | None:
+    """Return the text a provider stated, or ``None`` where it stated none this library can read.
+
+    Rendering the value as text instead would put whatever the provider sent into the field that
+    reports it, and the result is a string, so nothing downstream can tell it from one the provider
+    wrote. An empty string states no value either.
+
+    Args:
+        value: The member or claim as it arrived.
+
+    Returns:
+        The text the provider stated, or ``None`` where it stated a value of another type, none at
+        all, or an empty one.
+    """
+    return value if isinstance(value, str) and value else None
