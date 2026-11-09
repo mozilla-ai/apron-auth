@@ -377,6 +377,16 @@ class MicrosoftIdentityHandler:
         """
         try:
             transport = identity_transport(self._transport_factory, _MICROSOFT_ORGANIZATION_URL, "Microsoft identity")
+        except IdentityFetchError:
+            # NOTE: The caller's own factory refused this one connection, and the organization only
+            # enriches an identity that already resolved, so the tenancy is withheld rather than the
+            # sign-in failed. The identity request has its own refusal, which does reach the caller.
+            logger.warning(
+                "microsoft directory lookup could not reach the tenant's verified domains "
+                "(outbound connection refused); not asserting domain ownership"
+            )
+            return None
+        try:
             async with identity_client(timeouts, transport=transport) as client:
                 response = await within_request_limit(
                     client.get(

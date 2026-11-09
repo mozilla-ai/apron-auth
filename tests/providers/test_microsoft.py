@@ -388,6 +388,33 @@ class TestMicrosoftVerifiedTenancy:
 
         assert identity.email_verified is True
 
+    async def test_a_transport_refused_for_the_directory_withholds_the_tenancy(
+        self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A directory failure withholds the assertion, which closes domain-gated access rather than opening it.
+
+        The caller's own factory refuses the one connection here, which must not escalate into a
+        failure to identify, because the identity itself already resolved.
+        """
+        httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
+
+        def factory(url: str) -> httpx.AsyncBaseTransport:
+            if url == _ORGANIZATION_URL:
+                msg = "refused by policy"
+                raise RuntimeError(msg)
+            return httpx.AsyncHTTPTransport()
+
+        handler = MicrosoftIdentityHandler(transport_factory=factory)
+
+        with caplog.at_level(logging.WARNING):
+            identity = await handler.fetch_identity(
+                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            )
+
+        assert identity.subject == "ms-sub-1"
+        assert identity.tenancies == ()
+        assert "outbound connection refused" in caplog.text
+
     async def test_organization_id_mismatch_suppresses_tenancy(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ):
