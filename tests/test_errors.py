@@ -262,6 +262,41 @@ def test_permanent_oauth_error_is_gone() -> None:
     assert "PermanentOAuthError" not in apron_auth.__all__
 
 
+class TestIdentityErrors:
+    """An identity failure reports a provider's error code the way a token-endpoint failure does."""
+
+    def test_error_code_defaults_to_empty(self) -> None:
+        assert IdentityFetchError("boom", kind=FailureKind.REJECTED).error_code == ""
+        assert IdentityScopeNotGrantedError("boom").error_code == ""
+
+    def test_error_code_stored_and_message_preserved(self) -> None:
+        err = IdentityFetchError("Slack identity request failed", kind=FailureKind.REJECTED, error_code="invalid_auth")
+
+        assert err.error_code == "invalid_auth"
+        assert str(err) == "Slack identity request failed"
+
+    def test_a_scope_refusal_carries_the_code_too(self) -> None:
+        """The subclass names one condition, and the code says which of a provider's own it was."""
+        err = IdentityScopeNotGrantedError("Slack identity request failed", error_code="missing_scope")
+
+        assert err.error_code == "missing_scope"
+        assert isinstance(err, IdentityFetchError)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param("Invalid_Auth", id="an upper case letter"),
+            pytest.param("invalid auth", id="a space"),
+            pytest.param("a" * 65, id="longer than any code"),
+            pytest.param("", id="nothing at all"),
+            pytest.param("<b>boom</b>", id="markup"),
+        ],
+    )
+    def test_a_value_outside_the_shape_a_code_takes_is_reported_as_absent(self, code: str) -> None:
+        """The member a code arrives in admits any text, so a value of another shape names no code."""
+        assert IdentityFetchError("boom", kind=FailureKind.REJECTED, error_code=code).error_code == ""
+
+
 class TestTokenValidationError:
     def test_reasons_are_in_alphabetical_order(self) -> None:
         names = [member.name for member in TokenValidationReason]

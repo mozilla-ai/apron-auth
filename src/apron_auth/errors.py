@@ -154,7 +154,25 @@ class IdentityFetchError(OAuthError):
     """Fetching user identity from the provider failed.
 
     ``kind`` tells an outage, which may pass, from a refusal, which cannot.
+
+    This class owns the shape of ``error_code``, so no raise decides it.
+    It holds the code a provider stated for the failure when that code is a lowercase identifier, and
+    is the empty string otherwise.
+    The member a code arrives in admits any text of any length, so a value of another shape is
+    reported as absent.
+    NOTE: The text a provider wrote for the failure is not carried here and is never put in the
+    message, because its length and content are the provider's to choose.
     """
+
+    def __init__(self, *args: object, kind: FailureKind | None = None, error_code: str = "") -> None:
+        """Record the failure, keeping the error code only where it states one in the shape a code takes."""
+        super().__init__(*args, kind=kind)
+        self._error_code = recognized_error_code(error_code)
+
+    @property
+    def error_code(self) -> str:
+        """The code the provider stated for the failure, fixed when the error is raised."""
+        return self._error_code
 
 
 class IdentityNotSupportedError(ConfigurationError):
