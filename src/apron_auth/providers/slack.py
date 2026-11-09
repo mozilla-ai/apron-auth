@@ -277,8 +277,8 @@ def _slack_error_code(payload: Mapping[str, object]) -> str:
         payload: The decoded response body.
 
     Returns:
-        The code the body states, or a phrase naming its absence where it states none readable. The result
-        never reads as a code, so a message carrying it cannot name one the other side did not send.
+        The code the body states, or a phrase naming its absence where it states none readable. The phrase
+        never reads as a code, so reporting it states no code rather than one the other side did not send.
     """
     code = payload.get("error")
     return code if isinstance(code, str) and code else _NO_ERROR_CODE
@@ -411,8 +411,8 @@ class SlackIdentityHandler:
         if payload.get("ok") is False:
             error = _slack_error_code(payload)
             if error == _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityScopeNotGrantedError(f"Slack identity request failed: {error}")
-            raise IdentityFetchError(f"Slack identity request failed: {error}", kind=_slack_failure_kind(error))
+                raise IdentityScopeNotGrantedError("Slack identity request failed", error_code=error)
+            raise IdentityFetchError("Slack identity request failed", kind=_slack_failure_kind(error), error_code=error)
 
         email_verified = None
         if "email_verified" in payload:
@@ -501,7 +501,9 @@ class SlackIdentityHandler:
             error = _slack_error_code(team_info_payload)
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
-                raise IdentityFetchError(f"Slack team.info request failed: {error}", kind=_slack_failure_kind(error))
+                raise IdentityFetchError(
+                    "Slack team.info request failed", kind=_slack_failure_kind(error), error_code=error
+                )
 
             auth_test_payload = await self._slack_post(
                 client, _SLACK_AUTH_TEST_URL, access_token, "auth.test", timeouts
@@ -509,7 +511,9 @@ class SlackIdentityHandler:
 
         if not auth_test_payload.get("ok"):
             error = _slack_error_code(auth_test_payload)
-            raise IdentityFetchError(f"Slack auth.test request failed: {error}", kind=_slack_failure_kind(error))
+            raise IdentityFetchError(
+                "Slack auth.test request failed", kind=_slack_failure_kind(error), error_code=error
+            )
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)
 

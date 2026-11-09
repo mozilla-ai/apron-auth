@@ -23,6 +23,18 @@ SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
 SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 
 
+def test_the_stand_in_for_an_absent_code_is_reported_as_no_code() -> None:
+    """An identity failure reports this stand-in, which must state an absence rather than a code.
+
+    The shape rule that decides what reaches a caller admits a lowercase identifier, so a stand-in
+    written as one would be reported as a code Slack never sent.
+    """
+    from apron_auth._error_codes import recognized_error_code
+    from apron_auth.providers.slack import _NO_ERROR_CODE
+
+    assert recognized_error_code(_NO_ERROR_CODE) == ""
+
+
 class TestSlackConsentPickerInvariant:
     """The set-level constraint must be enforceable from ProviderConfig
     fields alone — a generic consent picker validates a Slack scope
@@ -183,9 +195,11 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret="ssecret")
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="invalid_auth") as exc_info:
+        with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
             await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
         assert exc_info.value.kind is FailureKind.REJECTED
+        assert exc_info.value.error_code == "invalid_auth"
+        assert "invalid_auth" not in str(exc_info.value)
 
     @pytest.mark.parametrize(
         "body",
@@ -210,6 +224,7 @@ class TestSlackIdentityHandler:
 
         assert "unknown_error" not in str(refusal.value)
         assert refusal.value.kind is FailureKind.REJECTED
+        assert refusal.value.error_code == ""
 
     @pytest.mark.parametrize(
         "error",
@@ -254,10 +269,12 @@ class TestSlackIdentityHandler:
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
         config = sign_in_preset(client_id="sid", client_secret="ssecret")
 
-        with pytest.raises(IdentityFetchError, match=error) as exc_info:
+        with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
             await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
+        assert exc_info.value.error_code == error
+        assert error not in str(exc_info.value)
 
     async def test_ok_false_missing_scope_raises_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
@@ -269,8 +286,11 @@ class TestSlackIdentityHandler:
         )
         config = sign_in_preset(client_id="sid", client_secret="ssecret")
 
-        with pytest.raises(IdentityScopeNotGrantedError, match="missing_scope"):
+        with pytest.raises(IdentityScopeNotGrantedError, match="Slack identity request failed") as refusal:
             await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+
+        assert refusal.value.error_code == "missing_scope"
+        assert "missing_scope" not in str(refusal.value)
 
     async def test_ok_false_other_error_is_not_scope_not_granted(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
@@ -1123,8 +1143,11 @@ class TestSlackWorkspaceBotIdentity:
         )
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="auth.test.*token_revoked"):
+        with pytest.raises(IdentityFetchError, match="Slack auth.test request failed") as refusal:
             await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+
+        assert refusal.value.error_code == "token_revoked"
+        assert "token_revoked" not in str(refusal.value)
 
     async def test_auth_test_url_with_unrecognised_host_yields_no_domain(self, httpx_mock: HTTPXMock) -> None:
         """Unrecognisable workspace URL → ``domain=None`` rather than a guess."""
@@ -1279,8 +1302,11 @@ class TestSlackWorkspaceBotIdentity:
         )
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="team.info.*invalid_auth"):
+        with pytest.raises(IdentityFetchError, match="Slack team.info request failed") as refusal:
             await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+
+        assert refusal.value.error_code == "invalid_auth"
+        assert "invalid_auth" not in str(refusal.value)
         # Only the team.info request should have been made; pytest-httpx
         # otherwise fails on unused queued responses, so a missing
         # ``auth.test`` queue is itself the assertion that no fallback
