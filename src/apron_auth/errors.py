@@ -213,8 +213,11 @@ class OidcDiscoveryError(OAuthError):
     """
 
 
-class RevocationError(OAuthError):
-    """Token revocation failed at the provider."""
+class RevocationError(_CodeCarryingError):
+    """Token revocation failed at the provider.
+
+    ``error_code`` holds the code the provider stated for the failure, under the rule its base states.
+    """
 
 
 class StateError(OAuthError):

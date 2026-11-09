@@ -68,6 +68,15 @@ def test_error_message_preserved() -> None:
     assert str(err) == "token endpoint returned 400"
 
 
+# The error families that report a provider's own code, which every other family must not.
+CODE_CARRYING_FAMILIES = (
+    AuthorizationResponseError,
+    IdentityFetchError,
+    RevocationError,
+    TokenEndpointError,
+)
+
+
 class TestFailureKind:
     def test_members_are_in_alphabetical_order(self) -> None:
         names = [member.name for member in FailureKind]
@@ -182,18 +191,34 @@ class TestTokenEndpointErrors:
     def test_an_error_outside_the_code_carrying_families_has_none(self) -> None:
         """A family reports a code only where a step on its path reads one off a response."""
         assert not hasattr(ConfigurationError("boom"), "error_code")
-        assert not hasattr(RevocationError("boom", kind=FailureKind.REJECTED), "error_code")
+        assert not hasattr(StateError("boom"), "error_code")
 
-    def test_every_family_reporting_a_code_states_the_shared_base(self) -> None:
-        """A family holding its own copy of the rule could drift from the one the base states."""
-        carrying = [
-            value
+    @pytest.mark.parametrize("family", CODE_CARRYING_FAMILIES, ids=lambda family: family.__name__)
+    def test_every_family_reporting_a_code_shapes_it_the_same_way(self, family: type[OAuthError]) -> None:
+        """A family deciding the shape itself could report a value the others report as absent."""
+        kept = family("boom", kind=FailureKind.REJECTED, error_code="invalid_grant")
+        refused = family("boom", kind=FailureKind.REJECTED, error_code="Invalid Grant")
+
+        assert kept.error_code == "invalid_grant"
+        assert refused.error_code == ""
+
+    def test_no_other_family_reports_a_code(self) -> None:
+        """A family added later reports a code only by joining one of these, which holds it to the rule."""
+        reporting = {
+            value.__name__
             for value in vars(errors).values()
-            if isinstance(value, type) and issubclass(value, OAuthError) and hasattr(value, "error_code")
-        ]
+            if isinstance(value, type)
+            and issubclass(value, OAuthError)
+            and hasattr(value, "error_code")
+            and not value.__name__.startswith("_")
+        }
+        covered = {
+            value.__name__
+            for value in vars(errors).values()
+            if isinstance(value, type) and issubclass(value, tuple(CODE_CARRYING_FAMILIES))
+        }
 
-        assert carrying
-        assert [value for value in carrying if not issubclass(value, errors._CodeCarryingError)] == []
+        assert reporting == covered
 
     @pytest.mark.parametrize(
         "error",
