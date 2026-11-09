@@ -131,8 +131,6 @@ _SIGN_IN_PRESET = Preset(
 )
 
 # What a message names where an ``ok=false`` body states no error code this library can read.
-_NO_ERROR_CODE = "no error code stated"
-
 # The scopes Slack's OpenID discovery document states for Sign in with Slack.
 _SLACK_SIGN_IN_SCOPES = frozenset({"email", "openid", "profile"})
 
@@ -270,19 +268,19 @@ def _slack_error_code(payload: Mapping[str, object]) -> str:
     """Return the error code a Slack ``ok=false`` body states.
 
     A response body is untrusted input, so a member that is absent, empty or not a string states no
-    code this can read, and a stand-in is returned in its place. The result is safe to classify, and
-    safe to report under the shape rule that decides what reaches a caller. It is not safe to name in
-    a message, because the member it comes from admits text of any length that the other side chose.
+    code this can read.
+
+    NOTE: The result is safe to classify and safe to report, and is not safe to name in a message,
+    because the member it comes from admits text of any length that the other side chose.
 
     Args:
         payload: The decoded response body.
 
     Returns:
-        The code the body states, or a phrase naming its absence where it states none readable. The phrase
-        never reads as a code, so reporting it states no code rather than one the other side did not send.
+        The code the body states, or the empty string where it states none this library can read.
     """
     code = payload.get("error")
-    return code if isinstance(code, str) and code else _NO_ERROR_CODE
+    return code if isinstance(code, str) and code else ""
 
 
 def _slack_failure_kind(error: str) -> FailureKind:
@@ -696,7 +694,7 @@ class SlackRevocationHandler:
                 return True
             kind = _slack_failure_kind(code)
             if kind.retryable:
-                raise RevocationError(f"Failed to revoke Slack token: {code}", kind=kind)
+                raise RevocationError("Failed to revoke Slack token", kind=kind, error_code=code)
             return False
         # NOTE: The caught error reaches the response and so the token-bearing request, so this error must not chain it.
         # This raise stays outside the except block, where Python would set __context__ to the caught error.

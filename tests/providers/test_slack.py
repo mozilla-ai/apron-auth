@@ -23,16 +23,20 @@ SLACK_TEAM_INFO_URL = "https://slack.com/api/team.info"
 SLACK_USERINFO_URL = "https://slack.com/api/openid.connect.userInfo"
 
 
-def test_the_stand_in_for_an_absent_code_is_reported_as_no_code() -> None:
-    """An identity failure reports this stand-in, which must state an absence rather than a code.
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({}, id="no error member"),
+        pytest.param({"error": ""}, id="an empty code"),
+        pytest.param({"error": ["ratelimited"]}, id="a code that is not a string"),
+        pytest.param({"error": 7}, id="a code that is a number"),
+    ],
+)
+def test_a_body_stating_no_readable_code_reads_as_nothing(payload: dict[str, object]) -> None:
+    """An absence states itself here, rather than a phrase that another rule has to recognize."""
+    from apron_auth.providers.slack import _slack_error_code
 
-    The shape rule that decides what reaches a caller admits a lowercase identifier, so a stand-in
-    written as one would be reported as a code Slack never sent.
-    """
-    from apron_auth._error_codes import recognized_error_code
-    from apron_auth.providers.slack import _NO_ERROR_CODE
-
-    assert recognized_error_code(_NO_ERROR_CODE) == ""
+    assert _slack_error_code(payload) == ""
 
 
 class TestSlackConsentPickerInvariant:
@@ -951,6 +955,8 @@ class TestSlackRevocationHandler:
 
         assert refusal.value.kind is FailureKind.SERVER_ERROR
         assert refusal.value.retryable
+        assert refusal.value.error_code == error
+        assert error not in str(refusal.value)
 
     async def test_an_ok_false_error_that_is_not_a_string_stays_a_refusal(self, httpx_mock: HTTPXMock) -> None:
         """A body is untrusted input, so a code of the wrong JSON type names no transient condition."""
