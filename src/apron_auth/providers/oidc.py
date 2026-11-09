@@ -79,7 +79,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
     UrlField,
 )
-from apron_auth.providers._identity_requests import identity_client
+from apron_auth.providers._identity_requests import identity_client, identity_transport
 from apron_auth.providers._jwks import IssuerSigningKeys
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers._presets import scope_sequence
@@ -670,13 +670,7 @@ class OidcIdentityHandler:
                 A refusal chains the factory's exception.
                 Any other failure attaches neither the failed request's error nor the decoder's as its cause or context.
         """
-        try:
-            transport = self._transport_factory(userinfo_url) if self._transport_factory is not None else None
-        except Exception as exc:
-            # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
-            # provider's and is not an outage, so it is never retried.
-            msg = "Failed to fetch OpenID identity: outbound connection refused"
-            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
+        transport = identity_transport(self._transport_factory, userinfo_url, "OpenID identity")
         failure: IdentityFetchError | None = None
         try:
             async with identity_client(timeouts, transport=transport) as client:

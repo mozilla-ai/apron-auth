@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from apron_auth._claims import stated_boolean
@@ -24,8 +25,11 @@ from apron_auth.models import (
     TenancyContext,
     TimeoutPolicy,
 )
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
+
+if TYPE_CHECKING:
+    from apron_auth.protocols import TransportFactory
 
 # The scopes the preset always requests, with the labels a consent screen shows.
 BASE_SCOPE_METADATA = [
@@ -78,6 +82,15 @@ class SalesforceIdentityHandler:
     general "is this address real" signal.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Salesforce access token.
 
@@ -98,6 +111,7 @@ class SalesforceIdentityHandler:
                 would otherwise reach an endpoint that is not Salesforce's.
             IdentityFetchError: If the userinfo request fails, or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         host = url_host(config.authorize_url)
         # NOTE: The access token goes to a userinfo URL on this host, so the suffixes limit where it is sent.
@@ -110,7 +124,8 @@ class SalesforceIdentityHandler:
             raise ConfigurationError(msg)
         userinfo_url = f"https://{host}{_SALESFORCE_USERINFO_PATH}"
 
-        async with identity_client(config.timeouts) as client:
+        transport = identity_transport(self._transport_factory, userinfo_url, "Salesforce identity")
+        async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.get(
                     userinfo_url,

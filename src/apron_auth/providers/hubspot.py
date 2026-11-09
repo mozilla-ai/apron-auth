@@ -43,7 +43,7 @@ from apron_auth.models import (
     TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import (
     HttpMethod,
@@ -108,6 +108,15 @@ class HubSpotIdentityHandler:
     callers that need the rest of the introspection fields.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a HubSpot access token.
 
@@ -123,6 +132,7 @@ class HubSpotIdentityHandler:
             IdentityFetchError: If the introspection request fails or its
                 response cannot be parsed. Messages never include the
                 request URL, which embeds the token.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         payload = await self._introspect(material.access_token, config.timeouts)
 
@@ -175,7 +185,12 @@ class HubSpotIdentityHandler:
             IdentityFetchError: If the request fails or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
         """
-        async with identity_client(timeouts) as client:
+        # NOTE: The factory is given the prefix rather than the request URL, because the URL carries the
+        # token and a factory needs the host alone.
+        transport = identity_transport(
+            self._transport_factory, _HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX, "HubSpot identity"
+        )
+        async with identity_client(timeouts, transport=transport) as client:
             return await fetch_identity_json(
                 client.get(f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}"),
                 "HubSpot identity",

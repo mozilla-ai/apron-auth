@@ -26,7 +26,7 @@ from apron_auth.models import (
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
 from apron_auth.providers._revocation import (
     RevocationRequest,
@@ -66,6 +66,15 @@ class NotionIdentityHandler:
     available; this handler returns a workspace/bot-shaped identity.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Notion access token.
 
@@ -83,8 +92,10 @@ class NotionIdentityHandler:
             IdentityFetchError: If the userinfo request fails or its
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
-        async with identity_client(config.timeouts) as client:
+        transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
+        async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _NOTION_USERINFO_URL,

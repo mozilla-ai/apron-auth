@@ -3079,7 +3079,7 @@ class TestFetchIdentity:
         built: list[object] = []
 
         class DummyIdentityHandler:
-            def __init__(self) -> None:
+            def __init__(self, *, transport_factory: object = None) -> None:
                 built.append(self)
 
             async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:

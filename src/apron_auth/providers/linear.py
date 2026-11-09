@@ -14,11 +14,15 @@ inspects the response body even on success status codes and raises
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext, TimeoutPolicy
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
+
+if TYPE_CHECKING:
+    from apron_auth.protocols import TransportFactory
 
 # The GraphQL endpoint that the identity query goes to.
 _LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql"
@@ -44,6 +48,15 @@ _PRESET = Preset(
 class LinearIdentityHandler:
     """Fetch identity fields via Linear's GraphQL ``viewer`` query."""
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using a Linear access token.
 
@@ -60,8 +73,10 @@ class LinearIdentityHandler:
                 cannot be parsed, or it carries GraphQL errors or an
                 unexpected shape.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
-        async with identity_client(config.timeouts) as client:
+        transport = identity_transport(self._transport_factory, _LINEAR_GRAPHQL_URL, "Linear identity")
+        async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.post(
                     _LINEAR_GRAPHQL_URL,

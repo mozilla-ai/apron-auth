@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, NoReturn, assert_never
 
 import httpx
 
+from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._timeouts import httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
@@ -305,7 +306,7 @@ async def send_revocation(
     subject = f"{request.label} token" if request.label is not None else "token"
     try:
         # Inside the try, so a factory that refuses cannot escape as itself, naming the URL it refused.
-        transport = transport_factory(request.endpoint or request.url) if transport_factory is not None else None
+        transport = chosen_transport(transport_factory, request.endpoint or request.url)
         # A redirect would carry the token to a host the gate never read, so none is followed.
         async with httpx.AsyncClient(
             transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
@@ -323,6 +324,11 @@ async def send_revocation(
                 config.timeouts,
             )
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
+    except NoTransportError:
+        failure_message, kind = (
+            f"Failed to revoke {subject}: transport_factory returned no transport",
+            FailureKind.UNEXPECTED,
+        )
     except httpx.InvalidURL:
         failure_message, kind = f"Failed to revoke {subject}: invalid URL", FailureKind.REFUSED
     except UnicodeEncodeError:

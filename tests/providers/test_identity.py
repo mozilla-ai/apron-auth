@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 from pydantic import SecretStr
+from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError, FailureKind
-from apron_auth.models import Provider, ProviderConfig
+from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError
+from apron_auth.models import IdentityMaterial, Provider, ProviderConfig
 from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import identity_handler_for
 
@@ -99,3 +101,55 @@ def test_a_handler_is_built_per_call() -> None:
     config = _config("accounts.google.com", Provider.GOOGLE)
 
     assert identity_handler_for(config) is not identity_handler_for(config)
+
+
+@pytest.mark.httpx_mock(assert_all_responses_were_requested=False)
+@pytest.mark.parametrize("provider", list(Provider), ids=lambda provider: provider.value)
+async def test_every_resolved_handler_runs_on_the_callers_transport(provider: Provider, httpx_mock: HTTPXMock) -> None:
+    """A request carrying the access token reaches the provider on the connection the caller shaped.
+
+    Two things are asserted, because a handler can fail either half: one that asks for no transport
+    sends its request anyway, and one that asks and then builds its client without the answer sends
+    it somewhere the caller never shaped. The mock answers whatever the caller's transport did not,
+    so the second half fails as an assertion rather than as a real request.
+    """
+    asked: list[str] = []
+    reached: list[httpx.Request] = []
+
+    def through_the_callers_transport(request: httpx.Request) -> httpx.Response:
+        reached.append(request)
+        return httpx.Response(500, json={})
+
+    def factory(url: str) -> httpx.AsyncBaseTransport:
+        asked.append(url)
+        return httpx.MockTransport(through_the_callers_transport)
+
+    httpx_mock.add_response(json={}, is_reusable=True)
+    config = _config(provider.host_suffixes[0], provider)
+    handler = identity_handler_for(config, transport_factory=factory)
+    assert handler is not None
+
+    with pytest.raises(IdentityFetchError):
+        await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+    assert asked, f"the {provider.display_name} handler asked for no transport"
+    assert reached, f"the {provider.display_name} handler asked for a transport and sent its request elsewhere"
+
+
+@pytest.mark.parametrize("provider", list(Provider), ids=lambda provider: provider.value)
+async def test_a_factory_that_refuses_stops_every_resolved_handler(provider: Provider) -> None:
+    """The fault is the caller's policy rather than the provider's, so the same request fails the same way."""
+
+    def refusing_factory(url: str) -> httpx.AsyncBaseTransport:
+        msg = "refused by policy"
+        raise RuntimeError(msg)
+
+    config = _config(provider.host_suffixes[0], provider)
+    handler = identity_handler_for(config, transport_factory=refusing_factory)
+    assert handler is not None
+
+    with pytest.raises(IdentityFetchError) as refusal:
+        await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+    assert refusal.value.kind is FailureKind.UNEXPECTED
+    assert refusal.value.retryable is False

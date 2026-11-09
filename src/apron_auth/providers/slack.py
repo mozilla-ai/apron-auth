@@ -64,7 +64,7 @@ from apron_auth.models import (
     TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset, scope_sequence
 from apron_auth.providers._revocation import (
     RevocationRequest,
@@ -324,6 +324,15 @@ class SlackIdentityHandler:
     use Sign-in-with-Slack alongside the workspace-bot install.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields from the appropriate Slack flow.
 
@@ -345,6 +354,7 @@ class SlackIdentityHandler:
                 lacks a scope the userInfo endpoint requires.
             IdentityFetchError: If the selected Slack request fails, its
                 response cannot be parsed, or Slack reports an error.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         access_token = material.access_token
         sign_in_endpoint = _is_sign_in_flow(config)
@@ -393,7 +403,8 @@ class SlackIdentityHandler:
                 parsed, or Slack reports another ``ok=false`` error.
                 The failed request's error is not attached as its cause or context.
         """
-        async with identity_client(timeouts) as client:
+        transport = identity_transport(self._transport_factory, _SLACK_USERINFO_URL, "Slack identity")
+        async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.post(
                     _SLACK_USERINFO_URL,
@@ -489,7 +500,8 @@ class SlackIdentityHandler:
         """
         # Reuse one client for the optional fallback to keep the
         # connection pool warm across both calls.
-        async with identity_client(timeouts) as client:
+        transport = identity_transport(self._transport_factory, _SLACK_TEAM_INFO_URL, "Slack identity")
+        async with identity_client(timeouts, transport=transport) as client:
             team_info_payload = await self._slack_post(
                 client, _SLACK_TEAM_INFO_URL, access_token, "team.info", timeouts
             )

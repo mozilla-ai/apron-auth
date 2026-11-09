@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
@@ -42,9 +42,12 @@ from apron_auth.models import (
     TenancyContext,
     TimeoutPolicy,
 )
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._presets import Preset
+
+if TYPE_CHECKING:
+    from apron_auth.protocols import TransportFactory
 
 logger = logging.getLogger(__name__)
 
@@ -262,10 +265,20 @@ class MicrosoftIdentityHandler:
     A directory lookup that fails or cannot be trusted degrades the same way, to ``tenancies=()`` and a logged warning.
     """
 
-    def __init__(self) -> None:
-        """Prepare the cache of Microsoft's ID token signing keys."""
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Prepare the cache of Microsoft's ID token signing keys, and how every request reaches them.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+                The key set and the identity endpoints are different hosts, so each is asked for
+                separately.
+        """
+        self._transport_factory = transport_factory
         # Microsoft signs ID tokens with RS256 only.
-        self._signing_keys = IssuerSigningKeys(_MICROSOFT_KEYS_URL, algorithms=(SigningAlgorithm.RS256,))
+        self._signing_keys = IssuerSigningKeys(
+            _MICROSOFT_KEYS_URL, algorithms=(SigningAlgorithm.RS256,), transport_factory=transport_factory
+        )
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields and any verified tenancy.
@@ -285,6 +298,7 @@ class MicrosoftIdentityHandler:
             IdentityFetchError: If Microsoft's signing keys cannot be fetched.
                 It is also raised if the userinfo request fails, its response cannot be parsed,
                 or it names no subject or a different one than the ID token.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
                 Directory lookups never raise, and degrade to no tenancy instead.
         """
         id_token = None
@@ -328,7 +342,8 @@ class MicrosoftIdentityHandler:
                 parsed, or it is not a JSON object.
                 The failed request's error is not attached as its cause or context.
         """
-        async with identity_client(timeouts) as client:
+        transport = identity_transport(self._transport_factory, _MICROSOFT_USERINFO_URL, "Microsoft identity")
+        async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
                 client.get(
                     _MICROSOFT_USERINFO_URL,
@@ -362,7 +377,18 @@ class MicrosoftIdentityHandler:
             directory yields no usable organization.
         """
         try:
-            async with identity_client(timeouts) as client:
+            transport = identity_transport(self._transport_factory, _MICROSOFT_ORGANIZATION_URL, "Microsoft directory")
+        except IdentityFetchError:
+            # NOTE: The caller's own factory refused this one connection, and the organization only
+            # enriches an identity that already resolved, so the tenancy is withheld rather than the
+            # sign-in failed. The identity request has its own refusal, which does reach the caller.
+            logger.warning(
+                "microsoft directory lookup could not reach the tenant's verified domains "
+                "(outbound connection refused); not asserting domain ownership"
+            )
+            return None
+        try:
+            async with identity_client(timeouts, transport=transport) as client:
                 response = await within_request_limit(
                     client.get(
                         _MICROSOFT_ORGANIZATION_URL,
@@ -386,6 +412,12 @@ class MicrosoftIdentityHandler:
                 "microsoft directory lookup could not resolve the tenant's verified domains "
                 "(%s); not asserting domain ownership",
                 http_failure(exc).description,
+            )
+            return None
+        except Exception:
+            logger.warning(
+                "microsoft directory lookup could not resolve the tenant's verified domains "
+                "(request failed); not asserting domain ownership"
             )
             return None
 

@@ -13,7 +13,7 @@ from joserfc.errors import JoseError
 from joserfc.jwk import ECKey, OKPKey, RSAKey
 from joserfc.jws import CompactSignature, JWSRegistry
 
-from apron_auth._discovery import discovery_client
+from apron_auth._discovery import NoTransportError, discovery_client
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
@@ -346,6 +346,9 @@ class IssuerSigningKeys:
         """Fetch the key set and import every key in it that can verify a signature."""
         try:
             client = discovery_client(self._jwks_url, self._transport_factory, timeouts)
+        except NoTransportError:
+            msg = "Failed to fetch the issuer's signing keys: transport_factory returned no transport"
+            raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from None
         except Exception as exc:
             # The factory is caller code. Whether it refused the connection by policy or failed, the fault is not the
             # issuer's and is not an outage, so it is never retried.

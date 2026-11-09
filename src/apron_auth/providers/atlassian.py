@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -28,8 +28,11 @@ from apron_auth.models import (
     TenancyContext,
     TimeoutPolicy,
 )
-from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
+from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
+
+if TYPE_CHECKING:
+    from apron_auth.protocols import TransportFactory
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +153,15 @@ class AtlassianIdentityHandler:
     A chained HTTP client error therefore cannot carry the token.
     """
 
+    def __init__(self, *, transport_factory: TransportFactory | None = None) -> None:
+        """Configure how an identity request reaches the provider.
+
+        Args:
+            transport_factory: Controls the outbound connection for every request this handler
+                sends, where a caller handling untrusted input can pin DNS to validated addresses.
+        """
+        self._transport_factory = transport_factory
+
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
         """Fetch normalized identity fields using an Atlassian access token.
 
@@ -167,8 +179,10 @@ class AtlassianIdentityHandler:
             IdentityFetchError: If the accessible-resources request fails
                 or its response cannot be parsed. The User Identity API
                 request never raises; it degrades to a tenancy-only profile.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
-        async with identity_client(config.timeouts) as client:
+        transport = identity_transport(self._transport_factory, _ATLASSIAN_USERINFO_URL, "Atlassian identity")
+        async with identity_client(config.timeouts, transport=transport) as client:
             tenancies = await self._fetch_tenancies(client, material.access_token, config.timeouts)
             payload = await self._fetch_profile(client, material.access_token, config.timeouts)
 
@@ -250,6 +264,12 @@ class AtlassianIdentityHandler:
                 "atlassian user identity lookup failed (%s); "
                 "emitting a tenancy-only profile without person-level fields",
                 http_failure(exc).description,
+            )
+            return {}
+        except Exception:
+            logger.warning(
+                "atlassian user identity lookup failed (request failed); "
+                "emitting a tenancy-only profile without person-level fields"
             )
             return {}
 

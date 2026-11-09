@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._timeouts import httpx_timeout, within_request_limit
@@ -14,6 +15,7 @@ from apron_auth.errors import FailureKind, IdentityFetchError
 
 if TYPE_CHECKING:
     from apron_auth.models import TimeoutPolicy
+    from apron_auth.protocols import TransportFactory
 
 
 def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
@@ -28,6 +30,43 @@ def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransp
         token goes to the request's own host and nowhere else.
     """
     return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
+
+
+def identity_transport(
+    transport_factory: TransportFactory | None, url: str, label: str
+) -> httpx.AsyncBaseTransport | None:
+    """Return the transport a caller's factory chose for ``url``, or ``None`` where there is no factory.
+
+    A factory is the caller's own code, so it may refuse the connection by policy, fail outright, or
+    state no transport at all. None of the three is the provider's fault or an outage, and a later
+    attempt reads the same code, so none of them is retried.
+
+    NOTE: The factory is called with a URL alone and before any request is built, so its own error
+    carries no credential and is chained.
+
+    Args:
+        transport_factory: The caller's factory, or ``None`` where the caller gave none.
+        url: A URL on the host the client will reach, which selects the transport. A client serves
+            one host, so a handler sending several requests states any one of them, and one whose
+            URL carries a credential states the part that names the host.
+        label: What the request fetches, such as ``"GitHub identity"``, for the error message.
+
+    Returns:
+        The transport for ``url``'s host, or ``None`` where there is no factory.
+
+    Raises:
+        IdentityFetchError: If the factory refuses the connection, fails, or returns no transport.
+            A factory that returns nothing is refused rather than defaulted, because falling back to
+            an unshaped connection would drop the policy the factory states.
+    """
+    try:
+        return chosen_transport(transport_factory, url)
+    except NoTransportError:
+        msg = f"Failed to fetch {label}: transport_factory returned no transport"
+        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from None
+    except Exception as exc:
+        msg = f"Failed to fetch {label}: outbound connection refused"
+        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:

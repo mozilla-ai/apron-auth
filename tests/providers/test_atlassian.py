@@ -377,3 +377,39 @@ class TestAtlassianIdentityHandler:
             match="Failed to parse Atlassian accessible resources response",
         ):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+    async def test_a_transport_that_fails_in_its_own_way_degrades_to_a_tenancy_only_profile(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A transport is the caller's own code, so it may fail in a way no request error describes."""
+
+        asked: list[str] = []
+        reached: list[str] = []
+
+        def factory(url: str) -> httpx.AsyncBaseTransport:
+            asked.append(url)
+
+            def route(request: httpx.Request) -> httpx.Response:
+                reached.append(str(request.url))
+                if str(request.url) == ATLASSIAN_ACCESSIBLE_RESOURCES_URL:
+                    return httpx.Response(
+                        200,
+                        json=[{"id": "t1", "name": "Site", "url": "https://site.atlassian.net", "scopes": []}],
+                    )
+                msg = "the transport failed in its own code"
+                raise ValueError(msg)
+
+            return httpx.MockTransport(route)
+
+        handler = AtlassianIdentityHandler(transport_factory=factory)
+
+        with caplog.at_level(logging.WARNING):
+            config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+            profile = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert profile.email is None
+        assert len(profile.tenancies) == 1
+        assert asked == [ATLASSIAN_ME_URL]
+        assert ATLASSIAN_ME_URL in reached
+        assert "atlassian user identity lookup failed" in caplog.text
+        assert "the transport failed in its own code" not in caplog.text

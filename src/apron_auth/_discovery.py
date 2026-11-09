@@ -87,6 +87,35 @@ def require_declared_issuer(document: Mapping[str, object], expected: str) -> No
         raise IssuerNotDeclaredError(IssuerRefusalReason.MISMATCHED)
 
 
+class NoTransportError(Exception):
+    """Raised where a caller's transport factory states no transport for a URL."""
+
+
+def chosen_transport(transport_factory: TransportFactory | None, url: str) -> httpx.AsyncBaseTransport | None:
+    """Return the transport a caller's factory chose for ``url``, or ``None`` where there is no factory.
+
+    A factory shapes or refuses the outbound connection of a request carrying a credential, so a
+    factory that states no transport has stated no connection for that URL. There is nothing to fall
+    back to, because the default connection is the one the factory was given to replace.
+
+    Args:
+        transport_factory: The caller's factory, or ``None`` where the caller gave none.
+        url: A URL on the host the client will reach, which selects the transport.
+
+    Returns:
+        The transport for ``url``'s host, or ``None`` where there is no factory.
+
+    Raises:
+        NoTransportError: If the factory states no transport for ``url``.
+    """
+    if transport_factory is None:
+        return None
+    transport = transport_factory(url)
+    if transport is None:
+        raise NoTransportError
+    return transport
+
+
 def discovery_client(
     url: str, transport_factory: TransportFactory | None, timeouts: TimeoutPolicy
 ) -> httpx.AsyncClient:
@@ -105,7 +134,7 @@ def discovery_client(
     Returns:
         A client that routes through the factory's transport when one is given.
     """
-    transport = transport_factory(url) if transport_factory is not None else None
+    transport = chosen_transport(transport_factory, url)
     return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
 
 

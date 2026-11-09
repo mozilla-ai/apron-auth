@@ -19,6 +19,7 @@ import httpx
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
+from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, response_failure, status_failure
 from apron_auth._json_body import decode_json_body
@@ -1097,7 +1098,7 @@ class _OAuthClientBase:
             ConfigurationError: If either of the config's OAuth endpoints is not a host of the
                 provider it names.
         """
-        return identity_handler_for(self._config)
+        return identity_handler_for(self._config, transport_factory=self._transport_factory)
 
     @cached_property
     def _provider_revocation_handler(self) -> RevocationHandler | None:
@@ -1195,7 +1196,7 @@ class _OAuthClientBase:
         response: httpx.Response | None = None
         try:
             authentication = _client_authentication(self._config)
-            transport = self._transport_factory(self._config.token_url) if self._transport_factory is not None else None
+            transport = chosen_transport(self._transport_factory, self._config.token_url)
             async with httpx.AsyncClient(
                 transport=transport,
                 timeout=httpx_timeout(self._config.timeouts),
@@ -1246,6 +1247,8 @@ class _OAuthClientBase:
             failure = _TokenEndpointError(transport_failure.description, transport_failure.kind)
         except _UnreadableBodyError:
             failure = _TokenEndpointError("token response could not be read", FailureKind.REFUSED)
+        except NoTransportError:
+            failure = _TokenEndpointError("transport_factory returned no transport", FailureKind.UNEXPECTED)
         except Exception:
             failure = _TokenEndpointError("request failed", FailureKind.UNEXPECTED)
         # NOTE: The caught error can hold the request, which carries the client secret and the grant.
