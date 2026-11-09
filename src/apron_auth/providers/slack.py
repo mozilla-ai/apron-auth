@@ -270,8 +270,9 @@ def _slack_error_code(payload: Mapping[str, object]) -> str:
     """Return the error code a Slack ``ok=false`` body states.
 
     A response body is untrusted input, so a member that is absent, empty or not a string states no
-    code this can read, and a stand-in is returned in its place. The result is safe both to classify
-    and to name in a message.
+    code this can read, and a stand-in is returned in its place. The result is safe to classify, and
+    safe to report under the shape rule that decides what reaches a caller. It is not safe to name in
+    a message, because the member it comes from admits text of any length that the other side chose.
 
     Args:
         payload: The decoded response body.
