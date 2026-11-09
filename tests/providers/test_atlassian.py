@@ -383,9 +383,15 @@ class TestAtlassianIdentityHandler:
     ) -> None:
         """A transport is the caller's own code, so it may fail in a way no request error describes."""
 
+        asked: list[str] = []
+        reached: list[str] = []
+
         def factory(url: str) -> httpx.AsyncBaseTransport:
+            asked.append(url)
+
             def route(request: httpx.Request) -> httpx.Response:
-                if "accessible-resources" in str(request.url):
+                reached.append(str(request.url))
+                if str(request.url) == ATLASSIAN_ACCESSIBLE_RESOURCES_URL:
                     return httpx.Response(
                         200,
                         json=[{"id": "t1", "name": "Site", "url": "https://site.atlassian.net", "scopes": []}],
@@ -403,3 +409,7 @@ class TestAtlassianIdentityHandler:
 
         assert profile.email is None
         assert len(profile.tenancies) == 1
+        assert asked == [ATLASSIAN_ME_URL]
+        assert ATLASSIAN_ME_URL in reached
+        assert "atlassian user identity lookup failed" in caplog.text
+        assert "the transport failed in its own code" not in caplog.text

@@ -413,6 +413,8 @@ class TestMicrosoftVerifiedTenancy:
 
         assert identity.subject == "ms-sub-1"
         assert identity.tenancies == ()
+        assert "could not resolve the tenant's verified domains" in caplog.text
+        assert "the transport failed in its own code" not in caplog.text
 
     async def test_a_transport_refused_for_the_directory_withholds_the_tenancy(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture

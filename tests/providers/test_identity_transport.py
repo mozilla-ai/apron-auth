@@ -33,24 +33,30 @@ def test_the_factory_chooses_the_transport_for_the_url() -> None:
     [
         pytest.param(RuntimeError("refused by policy"), id="an error of the caller's own"),
         pytest.param(ValueError("not a validated address"), id="a value error"),
-        pytest.param(KeyboardInterrupt(), id="an error outside Exception's own tree"),
     ],
 )
-def test_a_factory_that_refuses_is_reported_as_a_fault_no_retry_clears(raised: BaseException) -> None:
+def test_a_factory_that_refuses_is_reported_as_a_fault_no_retry_clears(raised: Exception) -> None:
     """The fault is the caller's policy rather than the provider's, so the same request fails the same way."""
 
     def factory(url: str) -> httpx.AsyncBaseTransport:
         raise raised
 
-    if isinstance(raised, Exception):
-        with pytest.raises(IdentityFetchError) as refusal:
-            identity_transport(factory, "https://api.example.com/me", "Example identity")
-        assert refusal.value.kind is FailureKind.UNEXPECTED
-        assert refusal.value.retryable is False
-        assert "Example identity" in str(refusal.value)
-    else:
-        with pytest.raises(type(raised)):
-            identity_transport(factory, "https://api.example.com/me", "Example identity")
+    with pytest.raises(IdentityFetchError) as refusal:
+        identity_transport(factory, "https://api.example.com/me", "Example identity")
+
+    assert refusal.value.kind is FailureKind.UNEXPECTED
+    assert refusal.value.retryable is False
+    assert "Example identity" in str(refusal.value)
+
+
+def test_an_interruption_outside_the_exception_tree_reaches_the_caller() -> None:
+    """An interruption is the process ending rather than a connection being refused, so it is not converted."""
+
+    def factory(url: str) -> httpx.AsyncBaseTransport:
+        raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        identity_transport(factory, "https://api.example.com/me", "Example identity")
 
 
 def test_a_factory_that_returns_no_transport_is_refused_rather_than_defaulted() -> None:
