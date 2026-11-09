@@ -407,19 +407,24 @@ class TestSlackSignInFlowDetection:
 
 class TestSlackPreset:
     @pytest.mark.parametrize(
-        "user_scopes",
+        "scopes",
         [
-            pytest.param([], id="no scopes at all"),
-            pytest.param(["identity.basic"], id="user scopes alone"),
-            pytest.param(None, id="user scopes left out"),
+            pytest.param([], id="an empty list"),
+            pytest.param([""], id="an entry naming no scope"),
+            pytest.param(["   "], id="an entry of spaces alone"),
+            pytest.param([",", " "], id="entries of delimiters alone"),
         ],
     )
-    def test_a_flow_without_a_bot_scope_is_refused_by_the_one_rule(self, user_scopes: list[str] | None) -> None:
-        """One rule states what this flow needs, and it names the preset that serves the other flow."""
+    def test_a_flow_naming_no_bot_scope_is_refused_by_the_one_rule(self, scopes: list[str]) -> None:
+        """One rule states what this flow needs, and it names the preset that serves the other flow.
+
+        A list is not a scope: an entry read off an unset environment variable is one entry naming
+        nothing, which a test of the list's own length accepts and the token exchange then refuses.
+        """
         from apron_auth.providers.slack import preset
 
         with pytest.raises(ConfigurationError) as refusal:
-            preset(client_id="sid", client_secret="ssecret", scopes=[], user_scopes=user_scopes)
+            preset(client_id="sid", client_secret="ssecret", scopes=scopes)
 
         assert "at least one bot scope" in str(refusal.value)
         assert "sign_in_preset" in str(refusal.value)
@@ -514,16 +519,18 @@ class TestSlackPreset:
         )
         assert config.required_scope_families == [["channels:read"]]
 
-    def test_empty_user_scopes_omitted_from_required_families(self):
+    def test_a_joined_scope_value_is_declared_as_its_words(self):
+        """A picker tests a family by membership, so a family holding a joined value matches no selection."""
         from apron_auth.providers.slack import preset
 
         config = preset(
             client_id="sid",
             client_secret="ssecret",  # pragma: allowlist secret
-            scopes=["channels:read"],
-            user_scopes=[],
+            scopes=["channels:read,chat:write"],
         )
-        assert config.required_scope_families == [["channels:read"]]
+
+        assert config.required_scope_families == [["channels:read", "chat:write"]]
+        assert any("channels:read" in family for family in config.required_scope_families)
 
 
 class TestSlackInstallPresetNeedsABotScope:

@@ -724,9 +724,9 @@ def preset(
     Slack returns a token for the app itself only for a request that asks for at least one bot
     scope, and a token response carrying no access token is refused, so this flow requires one and
     refuses a request asking for user scopes alone.
-    :attr:`ProviderConfig.required_scope_families` names the bot scopes alone, so a consent picker
-    holding a selection to it cannot build one this flow refuses. The user scopes are not named
-    there, because dropping every one of them leaves a request this flow accepts.
+    :attr:`ProviderConfig.required_scope_families` names the bot scopes alone, one word per entry, so
+    a consent picker holding a selection to it cannot build one this flow refuses. The user scopes
+    are not named there, because dropping every one of them leaves a request this flow accepts.
 
     Args:
         client_id: The OAuth client identifier.
@@ -744,20 +744,20 @@ def preset(
         from it.
 
     Raises:
-        ConfigurationError: If ``scopes`` asks for no bot scope, if any scope parameter asks for the
+        ConfigurationError: If ``scopes`` names no scope, if any scope parameter asks for the
             ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
     scopes = scope_sequence(scopes, "scopes")
     user_scopes = scope_sequence(user_scopes, "user_scopes")
-    if not scopes:
+    scope_separator = Provider.SLACK.scope_separator
+    bot_scope_words = scope_words(scopes, scope_separator)
+    if not bot_scope_words:
         msg = (
             "Slack returns no token for the app itself when a flow asks for user scopes alone, and a "
             "token response carrying no access token is refused, so this flow needs at least one bot "
             "scope. Use sign_in_preset to sign a person in."
         )
         raise ConfigurationError(msg)
-
-    scope_separator = Provider.SLACK.scope_separator
 
     merged_extra = _extra_params_without_scope(extra_params)
     if user_scopes:
@@ -771,7 +771,7 @@ def preset(
         )
         raise ConfigurationError(msg)
 
-    required_scope_families = [list(scopes)]
+    required_scope_families = [sorted(bot_scope_words)]
 
     declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
     config = declared.config(
