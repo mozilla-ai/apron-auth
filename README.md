@@ -363,7 +363,7 @@ it; otherwise treat the address as untrusted user input:
 display = identity.verified_email()  # None if not verified by provider
 ```
 
-`email_verified` is honored only as a JSON boolean. A provider that states it as anything else, including the string `"false"`, asserts nothing, and the flag reads `None` rather than being coerced, because coercing that string would assert the opposite of what the provider wrote. So `None` means the provider asserted nothing this library could read, which covers an absent claim, a provider that states none at all, and a claim of the wrong type alike. Treat `None` as unknown rather than as unverified: Microsoft Entra does not emit the claim for workforce sign-in by default, so a gate that refuses `None` refuses those users.
+`email_verified` is honored only as a JSON boolean. A provider that states it as anything else, including the string `"false"`, asserts nothing this library can read, so the flag reads `None` rather than being coerced, because coercing that string would assert the opposite of what the provider wrote. Treat `None` as unknown rather than as unverified: Microsoft Entra does not emit the claim for workforce sign-in by default, and the generic OpenID handler withholds it unless you pass `trust_email_verified=True`, so a gate refusing `None` refuses those users. `False` means a provider stated the address unverified, which GitHub also reports for an address read off the profile rather than off its verified-addresses list.
 
 The verified-email assertion proves the user once controlled the inbox
 at the time of verification. It does **not** prove ongoing control,
