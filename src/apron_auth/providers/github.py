@@ -17,7 +17,7 @@ from typing import Any
 
 import httpx
 
-from apron_auth._claims import stated_boolean
+from apron_auth._claims import stated_boolean, stated_string
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -137,34 +137,21 @@ def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> t
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            # NOTE: ``primary`` states a preference between addresses rather than a fact about one, so a
-            # value of another type is read as the preference it expresses.
-            if item.get("primary") and stated_boolean(item.get("verified")) and _stated_address(item):
-                return str(item["email"]), True
+            address = stated_string(item.get("email"))
+            if address and stated_boolean(item.get("primary")) and stated_boolean(item.get("verified")):
+                return address, True
 
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            if stated_boolean(item.get("verified")) and _stated_address(item):
-                return str(item["email"]), True
+            address = stated_string(item.get("email"))
+            if address and stated_boolean(item.get("verified")):
+                return address, True
 
-    profile_email = user_payload.get("email")
-    if isinstance(profile_email, str) and profile_email:
+    profile_email = stated_string(user_payload.get("email"))
+    if profile_email:
         return profile_email, False
     return None, None
-
-
-def _stated_address(item: dict[str, Any]) -> bool:
-    """Whether ``item`` states an address this library can read.
-
-    Args:
-        item: One entry of the addresses response.
-
-    Returns:
-        Whether the entry's address is a non-empty string.
-    """
-    email = item.get("email")
-    return isinstance(email, str) and bool(email)
 
 
 class GitHubIdentityHandler:

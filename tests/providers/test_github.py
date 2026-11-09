@@ -154,14 +154,42 @@ class TestGitHubIdentityHandler:
         assert identity.email is None
         assert identity.email_verified is None
 
-    async def test_a_primary_flag_of_another_type_still_states_the_preference(self, httpx_mock: HTTPXMock) -> None:
-        """A primary flag states which address is preferred, not a fact about it, so it is read as stated."""
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("false", id="the string false"),
+            pytest.param(1, id="the number one"),
+        ],
+    )
+    async def test_a_primary_flag_of_another_type_selects_no_address(
+        self, httpx_mock: HTTPXMock, stated: object
+    ) -> None:
+        """A flag stating the address is not preferred would otherwise select it, because any text is truthy."""
         httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
         httpx_mock.add_response(
             url=_GITHUB_EMAILS_URL,
             json=[
                 {"email": "other@example.com", "verified": True},
-                {"email": "preferred@example.com", "primary": 1, "verified": True},
+                {"email": "claims-primary@example.com", "primary": stated, "verified": True},
+            ],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email == "other@example.com"
+        assert identity.email_verified is True
+
+    async def test_a_primary_flag_stated_as_a_boolean_selects_its_address(self, httpx_mock: HTTPXMock) -> None:
+        """The preference is honored where the provider states it in the type it documents."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[
+                {"email": "other@example.com", "verified": True},
+                {"email": "preferred@example.com", "primary": True, "verified": True},
             ],
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
