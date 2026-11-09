@@ -73,6 +73,7 @@ class LinearIdentityHandler:
                 cannot be parsed, or it carries GraphQL errors or an
                 unexpected shape.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _LINEAR_GRAPHQL_URL, "Linear identity")
         async with identity_client(config.timeouts, transport=transport) as client:

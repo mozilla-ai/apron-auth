@@ -74,6 +74,7 @@ class TypeformIdentityHandler:
                 response cannot be parsed. When the granted scopes are
                 unknown, a missing ``accounts:read`` also surfaces here.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         # NOTE: Typeform answers a missing scope and a bad token with the same 403, so only a known grant is checked.
         granted_scopes = parse_scope(material.scope or "", config.scope_separator)

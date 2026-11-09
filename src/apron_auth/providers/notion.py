@@ -92,6 +92,7 @@ class NotionIdentityHandler:
             IdentityFetchError: If the userinfo request fails or its
                 response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
         async with identity_client(config.timeouts, transport=transport) as client:

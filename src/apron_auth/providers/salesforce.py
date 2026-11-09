@@ -111,6 +111,7 @@ class SalesforceIdentityHandler:
                 would otherwise reach an endpoint that is not Salesforce's.
             IdentityFetchError: If the userinfo request fails, or its response cannot be parsed.
                 The failed request's error is not attached as its cause or context.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         host = url_host(config.authorize_url)
         # NOTE: The access token goes to a userinfo URL on this host, so the suffixes limit where it is sent.

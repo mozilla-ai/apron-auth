@@ -132,6 +132,7 @@ class HubSpotIdentityHandler:
             IdentityFetchError: If the introspection request fails or its
                 response cannot be parsed. Messages never include the
                 request URL, which embeds the token.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         payload = await self._introspect(material.access_token, config.timeouts)
 

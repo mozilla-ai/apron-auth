@@ -179,6 +179,7 @@ class AtlassianIdentityHandler:
             IdentityFetchError: If the accessible-resources request fails
                 or its response cannot be parsed. The User Identity API
                 request never raises; it degrades to a tenancy-only profile.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _ATLASSIAN_USERINFO_URL, "Atlassian identity")
         async with identity_client(config.timeouts, transport=transport) as client:

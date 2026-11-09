@@ -298,6 +298,7 @@ class MicrosoftIdentityHandler:
             IdentityFetchError: If Microsoft's signing keys cannot be fetched.
                 It is also raised if the userinfo request fails, its response cannot be parsed,
                 or it names no subject or a different one than the ID token.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
                 Directory lookups never raise, and degrade to no tenancy instead.
         """
         id_token = None

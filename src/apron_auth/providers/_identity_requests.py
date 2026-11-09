@@ -44,11 +44,13 @@ def identity_transport(
 
     Args:
         transport_factory: The caller's factory, or ``None`` where the caller gave none.
-        url: The URL the client will reach, which selects the transport.
+        url: A URL on the host the client will reach, which selects the transport. A client serves
+            one host, so a handler sending several requests states any one of them, and one whose
+            URL carries a credential states the part that names the host.
         label: What the request fetches, such as ``"GitHub identity"``, for the error message.
 
     Returns:
-        The transport for ``url``, or ``None`` where there is no factory.
+        The transport for ``url``'s host, or ``None`` where there is no factory.
 
     Raises:
         IdentityFetchError: If the factory refuses the connection or fails.

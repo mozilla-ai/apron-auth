@@ -354,6 +354,7 @@ class SlackIdentityHandler:
                 lacks a scope the userInfo endpoint requires.
             IdentityFetchError: If the selected Slack request fails, its
                 response cannot be parsed, or Slack reports an error.
+                A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         access_token = material.access_token
         sign_in_endpoint = _is_sign_in_flow(config)
