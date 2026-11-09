@@ -14,6 +14,7 @@ from apron_auth.errors import FailureKind, IdentityFetchError
 
 if TYPE_CHECKING:
     from apron_auth.models import TimeoutPolicy
+    from apron_auth.protocols import TransportFactory
 
 
 def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
@@ -28,6 +29,37 @@ def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransp
         token goes to the request's own host and nowhere else.
     """
     return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
+
+
+def identity_transport(
+    transport_factory: TransportFactory | None, url: str, label: str
+) -> httpx.AsyncBaseTransport | None:
+    """Return the transport a caller's factory chose for ``url``, or ``None`` where it gave none.
+
+    A factory is the caller's own code, so it may refuse the connection by policy or fail outright.
+    Either way the fault is neither the provider's nor an outage, so the refusal is never retried.
+
+    NOTE: The factory is called with a URL alone and before any request is built, so its own error
+    carries no credential and is chained.
+
+    Args:
+        transport_factory: The caller's factory, or ``None`` where the caller gave none.
+        url: The URL the client will reach, which selects the transport.
+        label: What the request fetches, such as ``"GitHub identity"``, for the error message.
+
+    Returns:
+        The transport for ``url``, or ``None`` where there is no factory.
+
+    Raises:
+        IdentityFetchError: If the factory refuses the connection or fails.
+    """
+    if transport_factory is None:
+        return None
+    try:
+        return transport_factory(url)
+    except Exception as exc:
+        msg = f"Failed to fetch {label}: outbound connection refused"
+        raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
 
 
 async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:
