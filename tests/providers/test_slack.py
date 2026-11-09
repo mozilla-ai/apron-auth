@@ -98,6 +98,30 @@ class TestSlackConsentPickerInvariant:
 
 
 class TestSlackIdentityHandler:
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("false", id="the string false"),
+            pytest.param("true", id="the string true"),
+            pytest.param(1, id="the number one"),
+            pytest.param(["true"], id="a list"),
+        ],
+    )
+    async def test_a_verified_flag_of_another_type_asserts_nothing(self, httpx_mock: HTTPXMock, stated: object) -> None:
+        """A coerced flag would read the string false as verified, which an email gate then trusts."""
+        from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
+
+        httpx_mock.add_response(
+            url=SLACK_USERINFO_URL,
+            json={"ok": True, "sub": "U1", "email": "user@example.com", "email_verified": stated},
+        )
+        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+
+        identity = await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="t"), config)
+
+        assert identity.email == "user@example.com"
+        assert identity.email_verified is None
+
     async def test_happy_path_maps_userinfo_fields(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
