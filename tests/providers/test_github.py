@@ -129,6 +129,104 @@ class TestGitHubIdentityHandler:
         assert identity.email == "octocat@example.com"
         assert identity.email_verified is True
 
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param({"address": "octocat@example.com"}, id="an object"),
+            pytest.param(["octocat@example.com"], id="a list"),
+            pytest.param(7, id="a number"),
+            pytest.param("", id="nothing at all"),
+        ],
+    )
+    async def test_an_address_of_another_type_is_passed_over(self, httpx_mock: HTTPXMock, stated: object) -> None:
+        """Rendering one as text would report what the response states about it, as a verified address."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[{"email": stated, "primary": True, "verified": True}],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email is None
+        assert identity.email_verified is None
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("false", id="the string false"),
+            pytest.param(1, id="the number one"),
+        ],
+    )
+    async def test_a_primary_flag_of_another_type_selects_no_address(
+        self, httpx_mock: HTTPXMock, stated: object
+    ) -> None:
+        """A flag stating the address is not preferred would otherwise select it, because any text is truthy."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[
+                {"email": "other@example.com", "verified": True},
+                {"email": "claims-primary@example.com", "primary": stated, "verified": True},
+            ],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email == "other@example.com"
+        assert identity.email_verified is True
+
+    async def test_a_primary_flag_stated_as_a_boolean_selects_its_address(self, httpx_mock: HTTPXMock) -> None:
+        """The preference is honored where the provider states it in the type it documents."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[
+                {"email": "other@example.com", "verified": True},
+                {"email": "preferred@example.com", "primary": True, "verified": True},
+            ],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email == "preferred@example.com"
+        assert identity.email_verified is True
+
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("false", id="the string false"),
+            pytest.param("true", id="the string true"),
+            pytest.param(1, id="the number one"),
+        ],
+    )
+    async def test_a_verified_flag_of_another_type_selects_no_address(
+        self, httpx_mock: HTTPXMock, stated: object
+    ) -> None:
+        """A coerced flag reports an address as verified on a value that asserts nothing about it."""
+        httpx_mock.add_response(url=_GITHUB_USER_URL, json={"id": 1, "login": "octocat", "email": None})
+        httpx_mock.add_response(
+            url=_GITHUB_EMAILS_URL,
+            json=[{"email": "octocat@example.com", "primary": True, "verified": stated}],
+        )
+        from apron_auth.providers.github import GitHubIdentityHandler, preset
+
+        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+
+        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+
+        assert identity.email is None
+        assert identity.email_verified is None
+
 
 class TestGitHubRevocationHandler:
     async def test_revokes_via_delete_with_basic_auth(self, httpx_mock: HTTPXMock) -> None:

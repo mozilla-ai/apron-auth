@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from apron_auth._claims import stated_boolean, stated_string
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -136,18 +137,20 @@ def _derive_github_email(user_payload: dict[str, Any], emails_payload: Any) -> t
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            if item.get("primary") and item.get("verified") and item.get("email"):
-                return str(item["email"]), True
+            address = stated_string(item.get("email"))
+            if address and stated_boolean(item.get("primary")) and stated_boolean(item.get("verified")):
+                return address, True
 
         for item in emails_payload:
             if not isinstance(item, dict):
                 continue
-            if item.get("verified") and item.get("email"):
-                return str(item["email"]), True
+            address = stated_string(item.get("email"))
+            if address and stated_boolean(item.get("verified")):
+                return address, True
 
-    email = user_payload.get("email")
-    if email:
-        return str(email), False
+    profile_email = stated_string(user_payload.get("email"))
+    if profile_email:
+        return profile_email, False
     return None, None
 
 

@@ -44,6 +44,7 @@ from urllib.parse import urlparse
 import httpx
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
+from apron_auth._claims import stated_boolean
 from apron_auth._json_body import decode_json_body
 from apron_auth.errors import (
     ConfigurationError,
@@ -413,9 +414,7 @@ class SlackIdentityHandler:
                 raise IdentityScopeNotGrantedError("Slack identity request failed", error_code=error)
             raise IdentityFetchError("Slack identity request failed", kind=_slack_failure_kind(error), error_code=error)
 
-        email_verified = None
-        if "email_verified" in payload:
-            email_verified = bool(payload.get("email_verified"))
+        email_verified = stated_boolean(payload.get("email_verified"))
 
         # Sign-in-with-Slack tokens are single-workspace, so a populated
         # ``team_id`` always maps to exactly one TenancyContext. Slack

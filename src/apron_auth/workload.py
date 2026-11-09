@@ -19,6 +19,7 @@ from joserfc.errors import ExpiredTokenError, JoseError
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import BaseModel
 
+from apron_auth._claims import stated_boolean
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._jwt import claim_refusal_reason, compact_claims, parse_compact
 from apron_auth._loop_lock import LoopLock
@@ -565,8 +566,8 @@ def _identity(issuer: str, claims: dict[str, Any]) -> WorkloadIdentity:
         msg = "Workload token claims did not validate"
         raise TokenValidationError(msg, reason=TokenValidationReason.CLAIMS)
     email = claims.get("email")
-    # Only the boolean ``true`` counts, so a string ``"true"`` does not verify an address.
-    verified_email = email if claims.get("email_verified") is True and isinstance(email, str) and email else None
+    stated_verified = stated_boolean(claims.get("email_verified"))
+    verified_email = email if stated_verified and isinstance(email, str) and email else None
     return WorkloadIdentity(
         issuer=issuer,
         subject=subject,

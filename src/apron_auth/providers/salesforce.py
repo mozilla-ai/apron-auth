@@ -12,6 +12,7 @@ import re
 from collections.abc import Sequence
 from urllib.parse import urlparse
 
+from apron_auth._claims import stated_boolean
 from apron_auth._urls import matches_suffix, url_host
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
@@ -119,11 +120,7 @@ class SalesforceIdentityHandler:
                 config.timeouts,
             )
 
-        # Honor email_verified only as a genuine boolean; a bare bool()
-        # would coerce a non-boolean (e.g. the string "false") to True.
-        email_verified = payload.get("email_verified")
-        if not isinstance(email_verified, bool):
-            email_verified = None
+        email_verified = stated_boolean(payload.get("email_verified"))
 
         username = payload.get("nickname") or payload.get("preferred_username")
 
