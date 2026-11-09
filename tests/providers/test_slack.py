@@ -519,6 +519,27 @@ class TestSlackPreset:
         )
         assert config.required_scope_families == [["channels:read"]]
 
+    @pytest.mark.parametrize(
+        ("user_scopes", "sent"),
+        [
+            pytest.param(["users:read channels:history"], "users:read,channels:history", id="joined by a space"),
+            pytest.param(["users:read,channels:history"], "users:read,channels:history", id="joined by a comma"),
+            pytest.param(["users:read", "users:read"], "users:read", id="one word stated twice"),
+        ],
+    )
+    def test_the_user_scope_parameter_states_one_scope_per_word(self, user_scopes: list[str], sent: str) -> None:
+        """Slack reads that parameter on its own separator, so a value joined another way states one scope."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            user_scopes=user_scopes,
+        )
+
+        assert config.extra_params["user_scope"] == sent
+
     def test_a_joined_scope_value_is_declared_as_its_words(self):
         """A picker tests a family by membership, so a family holding a joined value matches no selection."""
         from apron_auth.providers.slack import preset
@@ -606,7 +627,23 @@ class TestSlackSignInPreset:
         from apron_auth.providers.slack import sign_in_preset
 
         config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["openid email"])
-        assert config.scopes == ["openid email"]
+        assert config.scopes == ["openid", "email"]
+
+    @pytest.mark.parametrize(
+        "scopes",
+        [
+            pytest.param(["openid,email"], id="joined by the provider's separator"),
+            pytest.param(["openid email"], id="joined by a space"),
+            pytest.param(["openid", "email", "openid"], id="one word stated twice"),
+        ],
+    )
+    def test_a_scope_value_is_held_as_the_words_it_carries(self, scopes: list[str]) -> None:
+        """A value joining several scopes states each of them, so the configuration holds one per entry."""
+        from apron_auth.providers.slack import sign_in_preset
+
+        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+
+        assert config.scopes == ["openid", "email"]
 
     def test_the_injected_scope_carries_consent_metadata(self) -> None:
         """A consent picker reads the metadata of every scope the preset injects."""

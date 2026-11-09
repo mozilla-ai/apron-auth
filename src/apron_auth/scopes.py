@@ -76,9 +76,23 @@ def parse_scope(scope: str | list[str], separator: str = " ") -> list[str]:
 def scope_words(values: Iterable[str], separator: str = " ") -> set[str]:
     """Return every scope word the given scope values carry.
 
+    Args:
+        values: The scope values to read, each holding one or more words.
+        separator: A further delimiter the provider joins its scopes with.
+
+    Returns:
+        The words, without the delimiters that separated them.
+    """
+    return set(scope_words_in_order(values, separator))
+
+
+def scope_words_in_order(values: Iterable[str], separator: str = " ") -> list[str]:
+    """Return every scope word the given scope values carry, in the order it first appears.
+
     A scope word is delimited by whitespace (RFC 6749 section 3.3), a comma, or ``separator``.
     Reading a wider set of delimiters finds a word in more strings, which is the safe direction
-    for a caller deciding whether a request asks for a scope.
+    for a caller deciding whether a request asks for a scope. A word stated more than once is
+    returned once, because a request asking for it twice asks for it once.
 
     NOTE: An empty ``separator`` is ignored rather than splitting every character into its own
     word, which would find no scope at all.
@@ -88,13 +102,13 @@ def scope_words(values: Iterable[str], separator: str = " ") -> set[str]:
         separator: A further delimiter the provider joins its scopes with.
 
     Returns:
-        The words, without the delimiters that separated them.
+        The words, without the delimiters that separated them, each where it first appeared.
     """
     delimiters = {",", separator} - {""}
-    words: set[str] = set()
+    ordered: dict[str, None] = {}
     for value in values:
         spaced = value
         for delimiter in delimiters:
             spaced = spaced.replace(delimiter, " ")
-        words.update(spaced.split())
-    return words
+        ordered.update(dict.fromkeys(spaced.split()))
+    return list(ordered)

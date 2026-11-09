@@ -72,7 +72,7 @@ from apron_auth.providers._revocation import (
     revocation_endpoint,
     send_revocation,
 )
-from apron_auth.scopes import scope_words
+from apron_auth.scopes import scope_words, scope_words_in_order
 
 # The scope the sign-in preset always requests, with the label a consent screen shows.
 SIGN_IN_SCOPE_METADATA = [
@@ -724,9 +724,11 @@ def preset(
     Slack returns a token for the app itself only for a request that asks for at least one bot
     scope, and a token response carrying no access token is refused, so this flow requires one and
     refuses a request asking for user scopes alone.
-    :attr:`ProviderConfig.required_scope_families` names the bot scopes alone, one word per entry, so
-    a consent picker holding a selection to it cannot build one this flow refuses. The user scopes
-    are not named there, because dropping every one of them leaves a request this flow accepts.
+    Each scope parameter is read as the words it carries, so a value joining several of them states
+    each one and the configuration holds one scope per entry.
+    :attr:`ProviderConfig.required_scope_families` names the bot scopes alone, so a consent picker
+    holding a selection to it cannot build one this flow refuses. The user scopes are not named
+    there, because dropping every one of them leaves a request this flow accepts.
 
     Args:
         client_id: The OAuth client identifier.
@@ -747,11 +749,10 @@ def preset(
         ConfigurationError: If ``scopes`` names no scope, if any scope parameter asks for the
             ``openid`` scope, or if ``extra_params`` sets ``scope``.
     """
-    scopes = scope_sequence(scopes, "scopes")
-    user_scopes = scope_sequence(user_scopes, "user_scopes")
     scope_separator = Provider.SLACK.scope_separator
-    bot_scope_words = scope_words(scopes, scope_separator)
-    if not bot_scope_words:
+    scopes = scope_words_in_order(scope_sequence(scopes, "scopes"), scope_separator)
+    user_scopes = scope_words_in_order(scope_sequence(user_scopes, "user_scopes"), scope_separator)
+    if not scopes:
         msg = (
             "Slack returns no token for the app itself when a flow asks for user scopes alone, and a "
             "token response carrying no access token is refused, so this flow needs at least one bot "
@@ -771,7 +772,7 @@ def preset(
         )
         raise ConfigurationError(msg)
 
-    required_scope_families = [sorted(bot_scope_words)]
+    required_scope_families = [list(scopes)]
 
     declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
     config = declared.config(
@@ -826,15 +827,15 @@ def sign_in_preset(
         )
         raise ConfigurationError(msg)
 
-    requested = scope_sequence(scopes, "scopes")
-    outside_this_flow = sorted(scope_words(requested, Provider.SLACK.scope_separator) - _SLACK_SIGN_IN_SCOPES)
+    requested = scope_words_in_order(scope_sequence(scopes, "scopes"), Provider.SLACK.scope_separator)
+    outside_this_flow = sorted(set(requested) - _SLACK_SIGN_IN_SCOPES)
     if outside_this_flow:
         msg = (
             f"Slack serves Sign in with Slack from its own endpoints, which grant {sorted(_SLACK_SIGN_IN_SCOPES)} "
             f"alone, so {outside_this_flow} cannot be requested here. Use preset to install a workspace app."
         )
         raise ConfigurationError(msg)
-    if _SLACK_SIGN_IN_SCOPE not in scope_words(requested, Provider.SLACK.scope_separator):
+    if _SLACK_SIGN_IN_SCOPE not in requested:
         requested.insert(0, _SLACK_SIGN_IN_SCOPE)
 
     return _SIGN_IN_PRESET.config(
