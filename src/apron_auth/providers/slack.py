@@ -501,7 +501,7 @@ class SlackIdentityHandler:
             # NOTE: auth.test recovers from missing_scope here, so it must not raise IdentityScopeNotGrantedError.
             if error != _SLACK_MISSING_SCOPE_ERROR:
                 raise IdentityFetchError(
-                    "Slack team.info request failed", kind=_slack_failure_kind(error), error_code=error
+                    "Slack workspace lookup failed", kind=_slack_failure_kind(error), error_code=error
                 )
 
             auth_test_payload = await self._slack_post(
@@ -511,7 +511,7 @@ class SlackIdentityHandler:
         if not auth_test_payload.get("ok"):
             error = _slack_error_code(auth_test_payload)
             raise IdentityFetchError(
-                "Slack auth.test request failed", kind=_slack_failure_kind(error), error_code=error
+                "Slack workspace fallback lookup failed", kind=_slack_failure_kind(error), error_code=error
             )
 
         return _build_workspace_profile_from_auth_test(auth_test_payload)

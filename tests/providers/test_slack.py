@@ -1149,7 +1149,7 @@ class TestSlackWorkspaceBotIdentity:
         )
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Slack auth.test request failed") as refusal:
+        with pytest.raises(IdentityFetchError, match="Slack workspace fallback lookup failed") as refusal:
             await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
 
         assert refusal.value.error_code == "token_revoked"
@@ -1308,7 +1308,7 @@ class TestSlackWorkspaceBotIdentity:
         )
         handler = SlackIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="Slack team.info request failed") as refusal:
+        with pytest.raises(IdentityFetchError, match="Slack workspace lookup failed") as refusal:
             await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
 
         assert refusal.value.error_code == "invalid_auth"

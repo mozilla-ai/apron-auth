@@ -146,7 +146,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="missing data"):
+        with pytest.raises(IdentityFetchError, match="states no identity"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
     async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
@@ -154,7 +154,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret="lsecret", scopes=["read"])
         handler = LinearIdentityHandler()
 
-        with pytest.raises(IdentityFetchError, match="missing data.viewer"):
+        with pytest.raises(IdentityFetchError, match="states no signed-in user"):
             await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
 
 

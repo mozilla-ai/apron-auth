@@ -76,25 +76,25 @@ class LinearIdentityHandler:
             )
 
         if not isinstance(payload, dict):
-            msg = "Linear GraphQL response was not a JSON object"
+            msg = "Linear identity response was not a JSON object"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
 
         errors = payload.get("errors")
         if errors is not None and not isinstance(errors, list):
-            msg = "Linear GraphQL response states its errors in a shape this library cannot read"
+            msg = "Linear identity response states its errors in a shape this library cannot read"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         if errors:
             plural = "" if len(errors) == 1 else "s"
-            msg = f"Linear GraphQL response states {len(errors)} error{plural}"
+            msg = f"Linear identity response states {len(errors)} error{plural}"
             raise IdentityFetchError(msg, kind=FailureKind.REJECTED)
 
         data = payload.get("data")
         if not isinstance(data, dict):
-            raise IdentityFetchError("Linear GraphQL response missing data", kind=FailureKind.REFUSED)
+            raise IdentityFetchError("Linear identity response states no identity", kind=FailureKind.REFUSED)
 
         viewer = data.get("viewer")
         if not isinstance(viewer, dict):
-            raise IdentityFetchError("Linear GraphQL response missing data.viewer", kind=FailureKind.REFUSED)
+            raise IdentityFetchError("Linear identity response states no signed-in user", kind=FailureKind.REFUSED)
 
         # Gate the tenancy on ``organization.id`` — Linear's immutable
         # workspace anchor. ``name`` (display string) and ``urlKey``
