@@ -763,6 +763,27 @@ class TestSlackInstallPresetRefusesTheSignInScope:
                 extra_params={"user_scope": "profile openid"},
             )
 
+    @pytest.mark.parametrize(
+        "stated",
+        [
+            pytest.param("users:read users:write", id="joined by a space"),
+            pytest.param("users:read,users:write", id="joined by a comma"),
+            pytest.param("users:read, users:write", id="joined by a comma and a space"),
+        ],
+    )
+    def test_a_user_scope_set_directly_is_sent_as_the_words_it_carries(self, stated: str) -> None:
+        """Slack reads that parameter on its own separator, so a value joined another way states one scope."""
+        from apron_auth.providers.slack import preset
+
+        config = preset(
+            client_id="sid",
+            client_secret="ssecret",  # pragma: allowlist secret
+            scopes=["channels:read"],
+            extra_params={"user_scope": stated},
+        )
+
+        assert config.extra_params["user_scope"] == "users:read,users:write"
+
     def test_a_scope_entry_holding_several_words_is_read_word_by_word(self) -> None:
         """The client reads the built scope parameter word by word, so this refusal does too."""
         from apron_auth.providers.slack import preset
