@@ -12,6 +12,11 @@ dependencies = [
     "pydantic>=2.10",
 ]
 
+[project.urls]
+Changelog = "https://github.com/mozilla-ai/apron-auth/releases"
+Homepage = "https://github.com/mozilla-ai/apron-auth"
+Issues = "https://github.com/mozilla-ai/apron-auth/issues"
+
 [dependency-groups]
 dev = [
     { include-group = "lint" },
