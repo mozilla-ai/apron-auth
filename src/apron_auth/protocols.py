@@ -39,6 +39,10 @@ class StateStore(Protocol):
     Enforcing a maximum age is not part of this contract.
     An implementation may still expire stale entries to bound its storage.
 
+    NOTE: Both methods are awaited inside the cancellation scope of the call that reaches them.
+    A deadline or a cancellation on that call applies to the store as well.
+    An implementation whose work must finish once it has started should shield that work itself.
+
     See MemoryStateStore for a reference implementation with automatic expiry.
     """
 
