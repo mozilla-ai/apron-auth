@@ -2204,6 +2204,9 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
             NOTE: Callers must keep this where only that browser can present it, such as a ``Secure``,
             ``HttpOnly`` cookie, and must keep it out of the authorization URL and out of any page the
             browser renders. A token another browser can read binds the request to nothing.
+            NOTE: One record shared by every flow serves one flow at a time, because a later authorization
+            overwrites it and the earlier callback is then refused.
+            A caller that needs two flows at once must record each token under its own ``state``.
     """
 
     url: str
