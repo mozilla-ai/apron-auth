@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import hmac
 import json
 import math
 import time
@@ -291,6 +292,60 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         with pytest.raises(TypeError, match="browser_token"):
             await client.exchange_code(_callback())
+
+    async def test_a_missing_token_is_refused_in_the_same_words_as_a_wrong_one(self):
+        """Wording that told the two apart would state whether a cookie reached the exchange."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        another_browser = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+
+        with pytest.raises(StateError) as presented_none:
+            await client.exchange_code(_callback(state=authorization.state), browser_token=None)
+        with pytest.raises(StateError) as presented_another:
+            await client.exchange_code(
+                _callback(state=authorization.state), browser_token=another_browser.browser_token
+            )
+
+        assert str(presented_none.value) == str(presented_another.value)
+
+    async def test_an_empty_token_redeems_nothing(self, httpx_mock: HTTPXMock):
+        """A cookie cleared rather than dropped reaches the exchange as an empty string, not as None."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+
+        with pytest.raises(StateError):
+            await client.exchange_code(_callback(state=authorization.state), browser_token="")
+
+        assert httpx_mock.get_requests() == []
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-token-abc", "token_type": "Bearer"},
+        )
+        tokens = await client.exchange_code(
+            _callback(state=authorization.state), browser_token=authorization.browser_token
+        )
+        assert tokens.access_token == "access-token-abc"
+
+    async def test_the_token_check_compares_in_constant_time(self, monkeypatch: pytest.MonkeyPatch):
+        """An equality check returns as soon as two values differ, which states where they first differ."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        another_browser = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        compared: list[bytes] = []
+        compare_digest = hmac.compare_digest
+
+        def _recording_compare_digest(given: bytes, expected: bytes) -> bool:
+            compared.append(given)
+            return compare_digest(given, expected)
+
+        monkeypatch.setattr(hmac, "compare_digest", _recording_compare_digest)
+
+        with pytest.raises(StateError):
+            await client.exchange_code(
+                _callback(state=authorization.state), browser_token=another_browser.browser_token
+            )
+
+        assert authorization.state.encode() in compared
 
 
 class TestGetAuthorizationUrl:
