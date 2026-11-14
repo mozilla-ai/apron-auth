@@ -4,11 +4,13 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import itertools
 import json
 import math
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
@@ -2241,6 +2243,47 @@ class TestExchangeCodeNonceRevocation:
         )
 
         assert httpx_mock.get_requests(url=self.REVOKE_URL) == []
+
+    @pytest.mark.parametrize("refused", [1, 2])
+    async def test_a_revocation_that_fails_to_start_bounds_the_ones_already_started(
+        self, refused: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Each revocation sends a token, so one that outlives its call is an unbounded credentialed request.
+
+        Refusing the first leaves no task to cancel, and refusing the second leaves one already created.
+        """
+        reached_the_provider = asyncio.Event()
+
+        class SlowHandler:
+            async def revoke(self, token: SecretToken, config: ProviderConfig) -> bool:
+                reached_the_provider.set()
+                await asyncio.sleep(0.2)
+                return True
+
+        client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL), revocation_handler=SlowHandler())
+        requested = itertools.count(1)
+        loop = asyncio.get_running_loop()
+        original_factory = loop.get_task_factory()
+
+        def refuse_one_task(
+            task_loop: asyncio.AbstractEventLoop, coro: Coroutine[Any, Any, None], **kwargs: Any
+        ) -> asyncio.Task[None]:
+            if next(requested) == refused:
+                # The refused coroutine is never awaited, and closing it keeps asyncio from warning.
+                coro.close()
+                raise RuntimeError("the task factory refuses")
+            return asyncio.Task(coro, loop=task_loop, **kwargs)
+
+        loop.set_task_factory(refuse_one_task)
+        try:
+            with pytest.raises(RuntimeError, match="the task factory refuses"):
+                await client._revoke_refused_tokens({"access_token": "access-abc", "refresh_token": "refresh-xyz"})
+        finally:
+            loop.set_task_factory(original_factory)
+
+        await asyncio.sleep(0.05)
+        assert not reached_the_provider.is_set()
+        assert [record for record in caplog.records if record.name == "apron_auth.client"] == []
 
 
 class TestRefreshToken:

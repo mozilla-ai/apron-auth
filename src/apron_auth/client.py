@@ -851,10 +851,13 @@ class _OAuthClientBase:
             )
             return
         host = urlparse(revocation_url).hostname
-        tasks = [asyncio.create_task(self._revoke_one_refused_token(label, token, host)) for label, token in tokens]
-        for task in tasks:
-            task.add_done_callback(_read_task_exception)
+        # Every task is created inside the try, so the finally bounds one created before a later call fails.
+        tasks: list[asyncio.Task[None]] = []
         try:
+            for label, token in tokens:
+                task = asyncio.create_task(self._revoke_one_refused_token(label, token, host))
+                tasks.append(task)
+                task.add_done_callback(_read_task_exception)
             _, timed_out = await asyncio.wait(tasks, timeout=self._config.revocation_cleanup_seconds)
         finally:
             await _cancel_and_wait(tasks)
