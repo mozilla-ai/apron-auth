@@ -150,6 +150,23 @@ class TestEveryRequestIsBoundedAsAWhole:
         assert unbounded == []
 
 
+class TestEveryBodyIsReadUnderTheLimit:
+    def test_no_request_is_sent_where_its_body_arrives_before_the_limit_applies(self) -> None:
+        """A send that is not streamed reads the whole body before returning, so no cap can reach it."""
+        unstreamed = []
+        for path in sorted(_SRC.rglob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.func.attr != "send":
+                    continue
+                streamed = next((keyword.value for keyword in node.keywords if keyword.arg == "stream"), None)
+                if not (isinstance(streamed, ast.Constant) and streamed.value is True):
+                    unstreamed.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+
+        assert unstreamed == []
+
+
 class TestEveryBuilderTakesThePolicy:
     def test_every_configuration_builder_takes_the_callers_policy(self) -> None:
         """A builder added later is where this is missed, and its users can then set no limit at all."""
