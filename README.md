@@ -615,6 +615,8 @@ A whole-request limit is not a per-step one. An HTTP client's own limits bound a
 
 The token, revocation and identity requests had no whole-request limit before 0.21.0, so a provider that takes longer than ten seconds in total now fails where it used to be waited on. Raise `request_seconds` for a provider known to be slow: a cold-starting self-hosted OpenID provider, an Atlassian identity lookup that fans out across a user's sites, or a HubSpot introspection call.
 
+These limits were `TimeoutPolicy` before 0.25.0, and a configuration stated them as `ProviderConfig.timeouts`. Neither name is kept as an alias, because a name that says only time does not describe a limit on memory, and two names for one type leave a reader to work out which is current. Import `RequestLimits` in place of `TimeoutPolicy`, read `config.limits` in place of `config.timeouts`, and pass `limits=` in place of `timeouts=` to every preset, to `mcp.discover`, `mcp.register_client` and `oidc.discover`, and to `WorkloadTokenVerifier`. Nothing else about them changed.
+
 Set it where you build the configuration, and every request for that provider runs under it. Each builder takes it as a keyword, and a configuration written by hand takes it as a field:
 
 ```python
