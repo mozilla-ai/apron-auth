@@ -184,13 +184,16 @@ async def discover(
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
     limits = timeouts or TimeoutPolicy()
+    prm_document = "protected resource metadata"
     resource_meta = await _fetch_first_metadata(
         _prm_candidates(resource_metadata_url, server_url),
         url_validator,
         transport_factory,
         limits,
-        "protected resource metadata",
+        prm_document,
     )
+    if isinstance(resource_meta, _MetadataOutcome):
+        raise _no_document_error(prm_document, resource_meta)
     auth_servers = resource_meta.get("authorization_servers")
     auth_server = None
     if isinstance(auth_servers, list):
@@ -205,13 +208,16 @@ async def discover(
         msg = "protected resource metadata declares an authorization server with a query or a fragment"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
+    asm_document = "authorization server metadata"
     server_meta = await _fetch_first_metadata(
         _asm_candidates(auth_server),
         url_validator,
         transport_factory,
         limits,
-        "authorization server metadata",
+        asm_document,
     )
+    if isinstance(server_meta, _MetadataOutcome):
+        raise _no_document_error(asm_document, server_meta)
     try:
         require_declared_issuer(server_meta, auth_server)
     except IssuerNotDeclaredError as exc:
@@ -974,14 +980,27 @@ def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
     return max(observed, key=lambda outcome: outcome.fault.rank)
 
 
+def _no_document_error(what: str, outcome: _MetadataOutcome) -> McpDiscoveryError:
+    """Return the error for a metadata fetch that yielded no document.
+
+    Args:
+        what: The document that was fetched.
+        outcome: What the fetch showed.
+
+    Returns:
+        The error naming the document and the fault that says most about it.
+    """
+    return McpDiscoveryError(f"{what} {outcome.fault.value}", kind=outcome.kind)
+
+
 async def _fetch_first_metadata(
     candidates: Sequence[_Candidate],
     url_validator: UrlValidator | None,
     transport_factory: TransportFactory | None,
     timeouts: TimeoutPolicy,
     what: str,
-) -> dict[str, Any]:
-    """Fetch and return the first candidate URL that yields a JSON object.
+) -> dict[str, Any] | _MetadataOutcome:
+    """Fetch the first candidate URL that yields a JSON object, or state why none did.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
     skipping request errors, non-200 responses, and non-object bodies. A hint that
@@ -997,14 +1016,12 @@ async def _fetch_first_metadata(
         what: The document this fetches, for the error and the debug lines.
 
     Returns:
-        The first candidate's body that is a JSON object.
+        The first candidate's body that is a JSON object, or, where no candidate yielded one, the fault
+        that says most about the document and what it says about a retry.
 
     Raises:
         ConfigurationError: If a candidate the caller chose, and that is no hint, cannot be used.
-        McpDiscoveryError: If a candidate the other side chose, and that is no hint, cannot be used, or
-            if no candidate succeeds. The error names ``what`` and the fault that says most about the
-            document. Its ``kind`` tells a fetch that may pass later from one that cannot, except where a
-            caller's own hook failed, which is never retried.
+        McpDiscoveryError: If a candidate the other side chose, and that is no hint, cannot be used.
         OAuthError: As a caller's own hook raised it, for a candidate that is no hint.
     """
     observed: list[_MetadataOutcome] = []
@@ -1055,6 +1072,4 @@ async def _fetch_first_metadata(
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
             observed.append(unreadable)
-    outcome = _reported_outcome(observed)
-    msg = f"{what} {outcome.fault.value}"
-    raise McpDiscoveryError(msg, kind=outcome.kind)
+    return _reported_outcome(observed)
