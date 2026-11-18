@@ -10,6 +10,10 @@ Discovery fetches URLs taken from server-supplied metadata.
 It requires HTTPS, refuses userinfo, blocks the name ``localhost`` and names under it, blocks IP-literal
 hosts that are not globally reachable, and applies an optional ``url_validator`` to every URL.
 
+OAuth 2.1 section 1.5 states two transport rules, and each URL is held to the one that covers it.
+An authorization server endpoint uses HTTPS and has no loopback allowance.
+A redirect URI is either loopback or HTTPS.
+
 NOTE: These checks do not stop DNS rebinding.
 A caller handling untrusted input should supply a ``transport_factory`` whose transport pins DNS to validated addresses.
 """
@@ -803,6 +807,8 @@ def _require_no_authority_credential(url: str, *, subject: str, caller_supplied:
 def _require_secure_transport(url: str, *, subject: str, caller_supplied: bool) -> None:
     """Refuse a URL that states no protection for what a request carries.
 
+    Plain HTTP on a loopback host states protection, under the OAuth 2.1 section 1.5 rule for a redirect
+    URI rather than the stricter rule for an authorization server endpoint.
     The fault class is decided by where the URL came from.
 
     Args:
@@ -843,6 +849,8 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
     whatever its source.
     The host is the HTTP client's own, so the host rule answers for the request that would be sent rather
     than for a second reading of the URL. A URL the client cannot read names no host and is malformed.
+    Every URL is held to HTTPS, with no loopback allowance and no plain-HTTP waiver, because OAuth 2.1
+    section 1.5 requires HTTPS for every authorization server endpoint.
 
     Args:
         url: The URL to check.
