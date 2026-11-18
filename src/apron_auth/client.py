@@ -151,7 +151,12 @@ def _audience_names(audience: object) -> set[str] | None:
 
 
 async def _cancel_and_wait(tasks: Sequence[asyncio.Task[None]]) -> None:
-    """Cancel the tasks that are still running, and wait until every task has finished.
+    """Cancel the tasks that are still running, and wait for every task to finish.
+
+    NOTE: The wait is cancelable. A cancellation delivered during it raises out of this call, with every
+    task cancel-requested and some of them possibly unfinished, so work one started can outlive the call.
+    Shielding the wait does not change that, because the outer await still raises. Holding the call open
+    until the tasks finish means suppressing the cancellation and waiting again, which is unbounded.
 
     Args:
         tasks: The tasks to cancel and wait for.
