@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 
 from apron_auth._claims import stated_boolean, stated_string
+from apron_auth._timeouts import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -183,13 +184,11 @@ class GitHubIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         return await fetch_identity_json(
-            client.send(
-                client.build_request(
-                    "GET",
-                    url,
-                    headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
-                ),
-                stream=True,
+            streamed(
+                client,
+                "GET",
+                url,
+                headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
             ),
             "GitHub identity",
             timeouts,

@@ -56,7 +56,7 @@ from apron_auth._discovery import (
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
-from apron_auth._timeouts import within_request_limit
+from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,
@@ -675,13 +675,11 @@ class OidcIdentityHandler:
         try:
             async with identity_client(timeouts, transport=transport) as client:
                 answer = await within_request_limit(
-                    client.send(
-                        client.build_request(
-                            "GET",
-                            userinfo_url,
-                            headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
-                        ),
-                        stream=True,
+                    streamed(
+                        client,
+                        "GET",
+                        userinfo_url,
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                     ),
                     timeouts,
                 )

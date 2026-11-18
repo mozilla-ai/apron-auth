@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from apron_auth._claims import stated_boolean
+from apron_auth._timeouts import streamed
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
@@ -109,13 +110,11 @@ class GoogleIdentityHandler:
         transport = identity_transport(self._transport_factory, _GOOGLE_USERINFO_URL, "Google identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "GET",
-                        _GOOGLE_USERINFO_URL,
-                        headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "GET",
+                    _GOOGLE_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Google identity",
                 config.timeouts,

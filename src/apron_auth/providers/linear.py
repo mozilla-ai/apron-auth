@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from apron_auth._timeouts import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TenancyContext, TimeoutPolicy
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
@@ -78,17 +79,15 @@ class LinearIdentityHandler:
         transport = identity_transport(self._transport_factory, _LINEAR_GRAPHQL_URL, "Linear identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "POST",
-                        _LINEAR_GRAPHQL_URL,
-                        headers={
-                            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
-                            "Content-Type": "application/json",
-                        },
-                        json={"query": _LINEAR_VIEWER_QUERY},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "POST",
+                    _LINEAR_GRAPHQL_URL,
+                    headers={
+                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"query": _LINEAR_VIEWER_QUERY},
                 ),
                 "Linear identity",
                 config.timeouts,

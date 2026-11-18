@@ -6,6 +6,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from apron_auth._timeouts import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import TimeoutPolicy
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
@@ -21,7 +22,7 @@ async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchErr
     async with httpx.AsyncClient() as client:
         with pytest.raises(IdentityFetchError) as exc_info:
             await fetch_identity_json(
-                client.get(request_url, headers={"Authorization": f"Bearer {token}"}),
+                streamed(client, "GET", request_url, headers={"Authorization": f"Bearer {token}"}),
                 "Example identity",
                 _TIMEOUTS,
             )
@@ -34,7 +35,7 @@ async def test_returns_the_decoded_body(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(url=URL, json={"sub": "u-1"})
 
     async with httpx.AsyncClient() as client:
-        payload = await fetch_identity_json(client.get(URL), "Example identity", _TIMEOUTS)
+        payload = await fetch_identity_json(streamed(client, "GET", URL), "Example identity", _TIMEOUTS)
 
     assert payload == {"sub": "u-1"}
 

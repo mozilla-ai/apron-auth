@@ -18,7 +18,7 @@ from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
 from apron_auth._loop_lock import LoopLock
-from apron_auth._timeouts import within_request_limit
+from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -356,9 +356,7 @@ class IssuerSigningKeys:
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             async with client:
-                answer = await within_request_limit(
-                    client.send(client.build_request("GET", self._jwks_url), stream=True), timeouts
-                )
+                answer = await within_request_limit(streamed(client, "GET", self._jwks_url), timeouts)
                 answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code

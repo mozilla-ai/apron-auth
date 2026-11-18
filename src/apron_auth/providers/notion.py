@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from apron_auth._timeouts import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -97,16 +98,14 @@ class NotionIdentityHandler:
         transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "GET",
-                        _NOTION_USERINFO_URL,
-                        headers={
-                            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
-                            "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
-                        },
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "GET",
+                    _NOTION_USERINFO_URL,
+                    headers={
+                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
+                        "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
+                    },
                 ),
                 "Notion identity",
                 config.timeouts,

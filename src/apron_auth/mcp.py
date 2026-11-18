@@ -43,7 +43,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import within_request_limit
+from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -470,9 +470,7 @@ async def register_client(
     )
     async with client:
         try:
-            answer = await within_request_limit(
-                client.send(client.build_request("POST", registration_url, json=payload), stream=True), limits
-            )
+            answer = await within_request_limit(streamed(client, "POST", registration_url, json=payload), limits)
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
@@ -1154,9 +1152,7 @@ async def _fetch_first_metadata(
             continue
         async with client:
             try:
-                answer = await within_request_limit(
-                    client.send(client.build_request("GET", url), stream=True), timeouts
-                )
+                answer = await within_request_limit(streamed(client, "GET", url), timeouts)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input rather than a dead candidate, so it ends the
                 # fetch, unless it is the hint, which cannot decide the fetch however it proves unusable.

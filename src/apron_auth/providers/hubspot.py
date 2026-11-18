@@ -32,6 +32,7 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
+from apron_auth._timeouts import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -192,14 +193,12 @@ class HubSpotIdentityHandler:
         )
         async with identity_client(timeouts, transport=transport) as client:
             return await fetch_identity_json(
-                client.send(
-                    # NOTE: The URL carries the token, so it is built here rather than bound to a local a
-                    # traceback would render.
-                    client.build_request(
-                        "GET",
-                        f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}",
-                    ),
-                    stream=True,
+                # NOTE: The URL carries the token, so it is stated here rather than bound to a local a
+                # traceback would render.
+                streamed(
+                    client,
+                    "GET",
+                    f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}",
                 ),
                 "HubSpot identity",
                 timeouts,

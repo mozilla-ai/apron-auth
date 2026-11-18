@@ -25,7 +25,7 @@ from apron_auth._http_errors import http_failure, response_failure, status_failu
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
-from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
+from apron_auth._timeouts import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import (
     SERVER_ERROR,
@@ -1229,14 +1229,12 @@ class _OAuthClientBase:
                 follow_redirects=False,
             ) as client:
                 answer = await within_request_limit(
-                    client.send(
-                        client.build_request(
-                            "POST",
-                            self._config.token_url,
-                            data=data | authentication.form,
-                            headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
-                        ),
-                        stream=True,
+                    streamed(
+                        client,
+                        "POST",
+                        self._config.token_url,
+                        data=data | authentication.form,
+                        headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
                     ),
                     self._config.timeouts,
                 )

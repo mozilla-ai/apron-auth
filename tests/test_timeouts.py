@@ -17,6 +17,12 @@ from apron_auth.providers import google
 # The HTTP clients this library builds, each of which states the policy's per-step limits.
 _CLIENTS = {"AsyncClient", "AsyncOAuth2Client"}
 
+# The functions that await a request under the limits in force, and so state what may be given to them.
+_BOUNDED_AWAITS = {"fetch_identity_json", "within_request_limit"}
+
+# The one function that sends a request, which leaves the body unread so a limit can be put on it.
+_SENDER_OF_RECORD = "streamed"
+
 # The client methods that send a request.
 _SENDERS = {"fetch_token", "get", "post", "request", "send"}
 
@@ -25,6 +31,18 @@ _CONFIG_BUILDERS = {"preset", "sign_in_preset", "to_provider_config"}
 
 # The library's source tree, walked to keep every request path bounded.
 _SRC = Path(__file__).resolve().parents[1] / "src" / "apron_auth"
+
+
+def _sends_of_the_librarys_own(path: Path) -> list[ast.AST]:
+    """Return every node of ``path`` outside the one function that is allowed to send a request."""
+    tree = ast.parse(path.read_text())
+    of_record = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == _SENDER_OF_RECORD and not node.col_offset
+    ]
+    excused = {id(node) for definition in of_record for node in ast.walk(definition)}
+    return [node for node in ast.walk(tree) if id(node) not in excused]
 
 
 class TestHttpxTimeout:
@@ -140,7 +158,7 @@ class TestEveryRequestIsBoundedAsAWhole:
         unbounded = [
             f"{path.relative_to(_SRC)}:{node.value.lineno}"
             for path in sorted(_SRC.rglob("*.py"))
-            for node in ast.walk(ast.parse(path.read_text()))
+            for node in _sends_of_the_librarys_own(path)
             if isinstance(node, ast.Await)
             and isinstance(node.value, ast.Call)
             and isinstance(node.value.func, ast.Attribute)
@@ -151,20 +169,37 @@ class TestEveryRequestIsBoundedAsAWhole:
 
 
 class TestEveryBodyIsReadUnderTheLimit:
-    def test_no_request_is_sent_where_its_body_arrives_before_the_limit_applies(self) -> None:
-        """A send that is not streamed reads the whole body before returning, so no cap can reach it."""
-        unstreamed = []
-        for path in sorted(_SRC.rglob("*.py")):
-            for node in ast.walk(ast.parse(path.read_text())):
-                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                    continue
-                if node.func.attr != "send":
-                    continue
-                streamed = next((keyword.value for keyword in node.keywords if keyword.arg == "stream"), None)
-                if not (isinstance(streamed, ast.Constant) and streamed.value is True):
-                    unstreamed.append(f"{path.relative_to(_SRC)}:{node.lineno}")
+    def test_no_request_given_to_a_bounded_await_reads_its_body_as_it_is_made(self) -> None:
+        """A client's own sender reads the whole body before it answers, so the limit on one never applies.
 
-        assert unstreamed == []
+        The whole-request limit still bounds such a request in time, which is why the other guards stay
+        green for it, and that is what makes this one its own check rather than a case of theirs.
+        """
+        read_as_made = []
+        for path in sorted(_SRC.rglob("*.py")):
+            for node in _sends_of_the_librarys_own(path):
+                if not isinstance(node, ast.Call) or getattr(node.func, "id", "") not in _BOUNDED_AWAITS:
+                    continue
+                read_as_made += [
+                    f"{path.relative_to(_SRC)}:{given.lineno}"
+                    for given in node.args
+                    if isinstance(given, ast.Call)
+                    and isinstance(given.func, ast.Attribute)
+                    and given.func.attr in _SENDERS
+                ]
+
+        assert read_as_made == []
+
+    def test_no_request_is_sent_outside_the_one_sender_that_leaves_the_body_unread(self) -> None:
+        """One function sends, so there is one place a request can be sent without leaving its body unread."""
+        sent_elsewhere = [
+            f"{path.relative_to(_SRC)}:{node.lineno}"
+            for path in sorted(_SRC.rglob("*.py"))
+            for node in _sends_of_the_librarys_own(path)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "send"
+        ]
+
+        assert sent_elsewhere == []
 
 
 class TestEveryBuilderTakesThePolicy:

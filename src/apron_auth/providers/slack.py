@@ -46,6 +46,7 @@ import httpx
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._claims import stated_boolean
 from apron_auth._json_body import decode_json_body
+from apron_auth._timeouts import streamed
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -406,13 +407,11 @@ class SlackIdentityHandler:
         transport = identity_transport(self._transport_factory, _SLACK_USERINFO_URL, "Slack identity")
         async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "POST",
-                        _SLACK_USERINFO_URL,
-                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "POST",
+                    _SLACK_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Slack identity",
                 timeouts,
@@ -557,12 +556,7 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         payload = await fetch_identity_json(
-            client.send(
-                client.build_request(
-                    "POST", url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}
-                ),
-                stream=True,
-            ),
+            streamed(client, "POST", url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
             f"Slack {endpoint_label}",
             timeouts,
         )

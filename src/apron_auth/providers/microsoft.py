@@ -24,7 +24,7 @@ from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
-from apron_auth._timeouts import within_request_limit
+from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth.errors import (
     FailureKind,
     IdentityFetchError,
@@ -345,13 +345,11 @@ class MicrosoftIdentityHandler:
         transport = identity_transport(self._transport_factory, _MICROSOFT_USERINFO_URL, "Microsoft identity")
         async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "GET",
-                        _MICROSOFT_USERINFO_URL,
-                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "GET",
+                    _MICROSOFT_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Microsoft identity",
                 timeouts,
@@ -394,13 +392,11 @@ class MicrosoftIdentityHandler:
         try:
             async with identity_client(timeouts, transport=transport) as client:
                 answer = await within_request_limit(
-                    client.send(
-                        client.build_request(
-                            "GET",
-                            _MICROSOFT_ORGANIZATION_URL,
-                            headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
-                        ),
-                        stream=True,
+                    streamed(
+                        client,
+                        "GET",
+                        _MICROSOFT_ORGANIZATION_URL,
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                     ),
                     timeouts,
                 )

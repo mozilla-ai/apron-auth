@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from apron_auth._claims import stated_boolean
+from apron_auth._timeouts import streamed
 from apron_auth._urls import matches_suffix, url_host
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
@@ -127,13 +128,11 @@ class SalesforceIdentityHandler:
         transport = identity_transport(self._transport_factory, userinfo_url, "Salesforce identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.send(
-                    client.build_request(
-                        "GET",
-                        userinfo_url,
-                        headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "GET",
+                    userinfo_url,
+                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Salesforce identity",
                 config.timeouts,

@@ -11,7 +11,7 @@ import httpx
 
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure, response_failure
-from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
+from apron_auth._timeouts import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import BasicAuthCredential, SecretToken, UrlField
@@ -310,22 +310,18 @@ async def send_revocation(
         transport = chosen_transport(transport_factory, request.endpoint or request.url)
         # A redirect would carry the token to a host the gate never read, so none is followed.
         async with httpx.AsyncClient(
-            auth=_presented_auth(request.auth),
-            transport=transport,
-            timeout=httpx_timeout(config.timeouts),
-            follow_redirects=False,
+            transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
         ) as client:
             answer = await within_request_limit(
-                client.send(
-                    client.build_request(
-                        request.method,
-                        request.url,
-                        data=request.data,
-                        headers=request.headers,
-                        json=request.json_body,
-                        params=request.params,
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    request.method,
+                    request.url,
+                    auth=_presented_auth(request.auth),
+                    data=request.data,
+                    headers=request.headers,
+                    json=request.json_body,
+                    params=request.params,
                 ),
                 config.timeouts,
             )

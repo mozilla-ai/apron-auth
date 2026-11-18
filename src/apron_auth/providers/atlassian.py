@@ -17,7 +17,7 @@ import httpx
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import within_request_limit
+from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
@@ -217,13 +217,11 @@ class AtlassianIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         resources = await fetch_identity_json(
-            client.send(
-                client.build_request(
-                    "GET",
-                    _ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
-                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
-                ),
-                stream=True,
+            streamed(
+                client,
+                "GET",
+                _ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+                headers={"Authorization": f"Bearer {token.get_secret_value()}"},
             ),
             "Atlassian accessible resources",
             timeouts,
@@ -251,13 +249,11 @@ class AtlassianIdentityHandler:
         """
         try:
             answer = await within_request_limit(
-                client.send(
-                    client.build_request(
-                        "GET",
-                        _ATLASSIAN_USERINFO_URL,
-                        headers={"Authorization": f"Bearer {token.get_secret_value()}"},
-                    ),
-                    stream=True,
+                streamed(
+                    client,
+                    "GET",
+                    _ATLASSIAN_USERINFO_URL,
+                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
                 ),
                 timeouts,
             )

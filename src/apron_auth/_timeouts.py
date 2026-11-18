@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable
+    from collections.abc import Awaitable, Mapping
 
     from apron_auth.models import TimeoutPolicy
 
@@ -48,6 +48,40 @@ def httpx_timeout(policy: TimeoutPolicy) -> httpx.Timeout:
     return httpx.Timeout(policy.request_seconds, connect=policy.connect_seconds)
 
 
+async def streamed(
+    client: httpx.AsyncClient,
+    method: str,
+    url: str,
+    *,
+    auth: tuple[str, str] | None = None,
+    data: Mapping[str, Any] | None = None,
+    headers: Mapping[str, str] | None = None,
+    json: Any = None,
+    params: Mapping[str, Any] | None = None,
+) -> httpx.Response:
+    """Send one request and answer before its body arrives, so a limit can be put on the body.
+
+    Nothing is built until this is awaited, so a header or a URL that cannot be sent fails where the
+    caller awaits the request rather than where it describes one. A caller that classifies a failed
+    request therefore reaches that failure too.
+
+    Args:
+        client: The client that sends the request.
+        method: The HTTP method.
+        url: The URL to request.
+        auth: The credential to present, which is presented on this request alone.
+        data: The form fields to send.
+        headers: The headers to send.
+        json: The value to send as a JSON body.
+        params: The query parameters to send.
+
+    Returns:
+        The response, whose body has not been read.
+    """
+    request = client.build_request(method, url, data=data, headers=headers, json=json, params=params)
+    return await client.send(request, auth=auth, stream=True)
+
+
 async def within_request_limit(request: Awaitable[httpx.Response], policy: TimeoutPolicy) -> BoundedResponse:
     """Await one streamed request and read its body, refusing it past the policy's limits.
 
@@ -58,8 +92,8 @@ async def within_request_limit(request: Awaitable[httpx.Response], policy: Timeo
 
     NOTE: The refusal is raised as the HTTP client's own timeout, so every caller that already classifies
     a failed request reports it as a timeout rather than as an error of a kind it does not recognize.
-    NOTE: The request must be sent with ``stream=True``, which answers before the body arrives. One sent
-    without it reads the body unbounded before this is reached.
+    NOTE: The request must be one ``streamed`` built. A request sent any other way reads its whole body
+    before this is reached, and no limit can then apply to it.
 
     Args:
         request: The pending streamed request, which is canceled when the limit passes.
