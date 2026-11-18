@@ -831,7 +831,7 @@ class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         connect_seconds: The limit on establishing a connection, which counts toward the whole-request
             limit and so cannot exceed it.
         max_body_bytes: The limit on the decoded body a response may state. It is counted as the body
-            arrives, so a compressed body that expands past it is refused without being held whole.
+            arrives, so no more than this is retained however far a compressed body would expand.
         request_seconds: The limit on a whole request, however many steps it takes, including reading
             the body it answers with.
     """

@@ -85,11 +85,14 @@ async def streamed(
 async def within_request_limit(request: Awaitable[httpx.Response], policy: TimeoutPolicy) -> BoundedResponse:
     """Await one streamed request and read its body, refusing it past the policy's limits.
 
-    The body is counted as it decodes and the read stops at the byte that passes the limit, so a
-    compressed body that expands past it is never held whole. A body that passed the limit is reported
-    rather than raised, because what an unreadable body means belongs to whoever reads it.
+    The body is counted as it decodes and the read stops at the byte that passes the limit, so no more
+    than the limit is retained however far a compressed body would expand. A body that passed the limit
+    is reported rather than raised, because what an unreadable body means belongs to whoever reads it.
     One limit covers receiving the response and reading its body, which arrives after it.
 
+    NOTE: The limit bounds what is retained, not what one decode step allocates. The HTTP client
+    decompresses a whole chunk off the socket before this sees it, so a compressed body can allocate
+    several times the limit for the step it is refused on.
     NOTE: The refusal is raised as the HTTP client's own timeout, so every caller that already classifies
     a failed request reports it as a timeout rather than as an error of a kind it does not recognize.
     NOTE: The request must be one ``streamed`` built. A request sent any other way reads its whole body
