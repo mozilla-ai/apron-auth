@@ -143,6 +143,10 @@ async def discover(
     Fetches the RFC 9728 protected-resource metadata (trying the ``resource_metadata_url`` hint, then
     well-known locations), reads its resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback).
+    A server that states it publishes no protected-resource metadata, and for which the caller named no
+    such document, is read as its own authorization server: its RFC 8414 metadata is fetched at its
+    origin, and is accepted only where the document declares that origin as its issuer. No endpoint is
+    guessed, so an absent one is still a refusal, and no resource identifier is invented.
     The HTTPS requirement and the block on ``localhost`` names and on IP literals that are not globally
     reachable are defense-in-depth.
     They do not stop any other hostname that resolves to an internal address, so untrusted ``server_url``
@@ -153,7 +157,9 @@ async def discover(
         resource_metadata_url: Optional hint from a ``WWW-Authenticate``
             challenge, tried before the well-known locations. Its value is the
             server's, so one that cannot be used loses its turn and the
-            well-known locations are still tried.
+            well-known locations are still tried. Passing one names a
+            protected-resource document, so the server's origin is not read as
+            its own authorization server.
         url_validator: Optional policy invoked on each URL before it is
             requested; raising rejects that URL. Rejecting any URL but the
             ``resource_metadata_url`` hint fails discovery, and rejecting the
@@ -168,8 +174,10 @@ async def discover(
         The discovered metadata.
 
     Raises:
-        ConfigurationError: If a URL the caller chose is rejected: ``server_url``, or
-            a protected-resource metadata URL derived from it.
+        ConfigurationError: If a URL the caller chose is rejected: ``server_url``, a
+            protected-resource metadata URL derived from it, or, where the origin is
+            read as the authorization server, that origin and the metadata URLs
+            derived from it.
         McpDiscoveryError: If a URL a fetched document declares is rejected, no
             metadata document can be fetched, a required field is absent, or the
             authorization server metadata does not declare the server it was
@@ -179,38 +187,47 @@ async def discover(
             reported here too, as a fault that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
             NOTE: None of these refusals ends discovery for the ``resource_metadata_url``
-            hint, which costs only its turn however it proves unusable.
+            hint, which loses its turn however it proves unusable. A hint that lost
+            its turn still names a document, so the origin is not read as the
+            authorization server either way.
     """
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
     limits = timeouts or TimeoutPolicy()
     prm_document = "protected resource metadata"
-    resource_meta = await _fetch_first_metadata(
+    fetched = await _fetch_first_metadata(
         _prm_candidates(resource_metadata_url, server_url),
         url_validator,
         transport_factory,
         limits,
         prm_document,
     )
-    if isinstance(resource_meta, _MetadataOutcome):
-        raise _no_document_error(prm_document, resource_meta)
-    auth_servers = resource_meta.get("authorization_servers")
-    auth_server = None
-    if isinstance(auth_servers, list):
-        auth_server = next((item for item in auth_servers if isinstance(item, str) and item), None)
-    if not auth_server:
-        msg = "protected resource metadata declares no authorization server"
-        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-    _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=False)
-    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would drop them.
-    # The delimiters are checked, so an empty query or fragment counts.
-    if "?" in auth_server or "#" in auth_server:
-        msg = "protected resource metadata declares an authorization server with a query or a fragment"
-        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    # No protected-resource metadata means the server's own origin was read as its authorization server.
+    resource_meta: dict[str, Any] | None = None
+    if isinstance(fetched, _MetadataOutcome):
+        if not _falls_back_to_origin(fetched, hinted=bool(resource_metadata_url)):
+            raise _no_document_error(prm_document, fetched)
+        auth_server = _origin(server_url)
+        _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=True)
+    else:
+        resource_meta = fetched
+        auth_servers = resource_meta.get("authorization_servers")
+        auth_server = ""
+        if isinstance(auth_servers, list):
+            auth_server = next((item for item in auth_servers if isinstance(item, str) and item), "")
+        if not auth_server:
+            msg = "protected resource metadata declares no authorization server"
+            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+        _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=False)
+        # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would
+        # drop them. The delimiters are checked, so an empty query or fragment counts.
+        if "?" in auth_server or "#" in auth_server:
+            msg = "protected resource metadata declares an authorization server with a query or a fragment"
+            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
 
     asm_document = "authorization server metadata"
     server_meta = await _fetch_first_metadata(
-        _asm_candidates(auth_server),
+        _asm_candidates(auth_server, caller_supplied=resource_meta is None),
         url_validator,
         transport_factory,
         limits,
@@ -218,6 +235,8 @@ async def discover(
     )
     if isinstance(server_meta, _MetadataOutcome):
         raise _no_document_error(asm_document, server_meta)
+    if resource_meta is None:
+        auth_server = _origin_issuer_variant(server_meta, auth_server)
     try:
         require_declared_issuer(server_meta, auth_server)
     except IssuerNotDeclaredError as exc:
@@ -250,7 +269,7 @@ async def discover(
         if url is not None:
             _validate_url(url, url_validator, subject=subject, caller_supplied=False)
 
-    resource = resource_meta.get("resource")
+    resource = resource_meta.get("resource") if resource_meta is not None else None
     if isinstance(resource, str):
         _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
     try:
@@ -921,7 +940,7 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     if resource_metadata_url:
         candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True))
     parsed = urlparse(server_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
+    base = _origin(server_url)
     if parsed.path and parsed.path != "/":
         candidates.append(
             _Candidate(urljoin(base, f"{_WELL_KNOWN_PRM}{parsed.path}"), caller_supplied=True, is_hint=False)
@@ -930,17 +949,22 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     return candidates
 
 
-def _asm_candidates(auth_server: str) -> list[_Candidate]:
+def _asm_candidates(auth_server: str, *, caller_supplied: bool) -> list[_Candidate]:
     """Return the ordered RFC 8414 metadata URLs to try, with OIDC fallback, each with its source.
 
     A terminating slash on the identifier's path is removed before the well-known segment is inserted,
     as RFC 8414 section 3.1 requires. The identifier itself is not changed.
 
-    Every candidate derives from the identifier the resource metadata declared, so none is the caller's and
-    none is a hint: they differ only in where this library looks, so a refusal applies to all of them.
+    No candidate is a hint: they differ only in where this library looks, so a refusal applies to all of
+    them.
+
+    Args:
+        auth_server: The authorization server identifier the URLs derive from.
+        caller_supplied: The identifier derives from an argument of this library's caller rather than from
+            a fetched document, so a refusal of a URL is a fault in the caller's own configuration.
     """
     parsed = urlparse(auth_server)
-    base = f"{parsed.scheme}://{parsed.netloc}"
+    base = _origin(auth_server)
     path = parsed.path.rstrip("/")
     urls = (
         [
@@ -951,7 +975,7 @@ def _asm_candidates(auth_server: str) -> list[_Candidate]:
         if path
         else [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
     )
-    return [_Candidate(url, caller_supplied=False, is_hint=False) for url in urls]
+    return [_Candidate(url, caller_supplied=caller_supplied, is_hint=False) for url in urls]
 
 
 def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
@@ -978,6 +1002,52 @@ def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
     if retryable is not None:
         return retryable
     return max(observed, key=lambda outcome: outcome.fault.rank)
+
+
+def _origin(url: str) -> str:
+    """Return a URL's origin: its scheme and authority, with the path, query and fragment discarded."""
+    parsed = urlparse(url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _origin_issuer_variant(document: dict[str, Any], origin: str) -> str:
+    """Return whichever form of ``origin`` a document declares: the bare one, or one terminating in a slash.
+
+    An origin read as an authorization server is this library's own construction rather than an identifier
+    a document declared, so the bare form and the terminating-slash form name the same server. The declared
+    form becomes the identifier, because RFC 9207 compares an authorization response's ``iss`` to it exactly.
+
+    Args:
+        document: The decoded authorization server metadata.
+        origin: The origin the document was fetched for, which carries no terminating slash.
+
+    Returns:
+        ``origin`` with a terminating slash where the document declares that form, and ``origin`` otherwise.
+    """
+    with_slash = f"{origin}/"
+    return with_slash if document.get("issuer") == with_slash else origin
+
+
+def _falls_back_to_origin(outcome: _MetadataOutcome, *, hinted: bool) -> bool:
+    """Return whether a protected-resource metadata fetch that found no document reads the server's origin.
+
+    The MCP authorization specification of 2025-03-26 predates protected-resource metadata, so a server
+    that publishes none may still state its OAuth endpoints at its own origin. Only a document the server
+    says it does not serve says that, and only where the caller named no document of its own.
+
+    Args:
+        outcome: What the fetch showed.
+        hinted: The caller passed a protected-resource metadata URL, which names a document and so names a
+            server that publishes one.
+
+    Returns:
+        Whether the origin is read as the server's own authorization server.
+
+    NOTE: A fault that may pass on retry stops the fallback although the fault itself says the document is
+    not published. A not-found that states when to come back is a throttle rather than an answer about the
+    document.
+    """
+    return not hinted and outcome.fault is _MetadataFault.UNPUBLISHED and not outcome.kind.retryable
 
 
 def _no_document_error(what: str, outcome: _MetadataOutcome) -> McpDiscoveryError:
