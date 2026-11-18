@@ -102,7 +102,7 @@ async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, ti
         failure_message, kind = f"Failed to fetch {label}: request failed", FailureKind.UNEXPECTED
     else:
         try:
-            return decode_json_body(answer)
+            return decode_json_body(answer.body)
         except ValueError:
             failure_message, kind = f"Failed to parse {label} response", FailureKind.REFUSED
     # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.

@@ -3,19 +3,16 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from apron_auth._timeouts import BoundedResponse
+from typing import Any
 
 
-def decode_json_body(answer: BoundedResponse) -> Any:
-    """Return the body of an answered request decoded as JSON.
+def decode_json_body(body: bytes | None) -> Any:
+    """Return a response body decoded as JSON.
 
     The error for an unreadable body carries a fixed message and no chain to the decoder's own error.
 
     Args:
-        answer: The response and the body it stated.
+        body: The body as it arrived, or ``None`` where it passed the limit on one.
 
     Returns:
         The decoded body.
@@ -23,11 +20,11 @@ def decode_json_body(answer: BoundedResponse) -> Any:
     Raises:
         ValueError: If the body passed the limit on one, is not JSON, or nests too deeply to decode.
     """
-    if answer.body is None:
+    if body is None:
         msg = "the body is too large to read"
         raise ValueError(msg)
     try:
-        return json.loads(answer.body)
+        return json.loads(body)
     except RecursionError:
         msg = "the body nests too deeply to decode"
     except ValueError:

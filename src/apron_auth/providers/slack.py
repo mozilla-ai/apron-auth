@@ -686,7 +686,7 @@ class SlackRevocationHandler:
         if not response.is_success:
             refuse_an_unexpected_status(response, label=request.label)
         try:
-            data = decode_json_body(answer)
+            data = decode_json_body(answer.body)
         except ValueError:
             unparsed = "Failed to parse Slack revocation response"
         else:

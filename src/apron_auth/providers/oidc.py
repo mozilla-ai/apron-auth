@@ -715,7 +715,7 @@ class OidcIdentityHandler:
                 msg = "OpenID provider returned a signed userinfo response, which is not supported"
                 raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
             try:
-                payload = decode_json_body(answer)
+                payload = decode_json_body(answer.body)
             except ValueError:
                 failure = IdentityFetchError("Failed to parse OpenID identity response", kind=FailureKind.REFUSED)
         if failure is not None:

@@ -484,7 +484,7 @@ async def register_client(
             msg = f"client registration failed: {status.description}"
             raise McpRegistrationError(msg, kind=status.kind)
         try:
-            data = decode_json_body(answer)
+            data = decode_json_body(answer.body)
         except ValueError:
             data = None
             failure = "client registration returned a non-JSON response"
@@ -1177,7 +1177,7 @@ async def _fetch_first_metadata(
                 observed.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
-                payload = decode_json_body(answer)
+                payload = decode_json_body(answer.body)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
                 observed.append(unreadable)

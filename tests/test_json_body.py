@@ -26,7 +26,7 @@ async def _streamed(body: bytes, policy: TimeoutPolicy, *, headers: dict[str, st
     stream = LazyByteStream([body[at : at + _CHUNK_BYTES] for at in range(0, len(body), _CHUNK_BYTES)])
     async with httpx.AsyncClient(transport=LazyBodyTransport(stream, headers=headers)) as client:
         request = client.build_request("GET", "https://documents.test/d")
-        return decode_json_body(await within_request_limit(client.send(request, stream=True), policy))
+        return decode_json_body((await within_request_limit(client.send(request, stream=True), policy)).body)
 
 
 def _decodes_a_body_directly(call: ast.Call) -> bool:
@@ -91,8 +91,8 @@ def test_every_decode_site_uses_the_shared_decoder(path: Path) -> None:
     assert lines == [], f"{path.name} decodes a response body directly at {lines}; use decode_json_body"
 
 
-async def test_returns_the_decoded_body() -> None:
-    assert await _streamed(b'{"ok": true}', TimeoutPolicy()) == {"ok": True}
+def test_returns_the_decoded_body() -> None:
+    assert decode_json_body(b'{"ok": true}') == {"ok": True}
 
 
 @pytest.mark.parametrize(
@@ -105,10 +105,10 @@ async def test_returns_the_decoded_body() -> None:
     ],
     ids=["not JSON", "truncated JSON", "not text", "deeply nested"],
 )
-async def test_an_unreadable_body_is_a_value_error_with_no_chain(content: bytes, message: str) -> None:
+def test_an_unreadable_body_is_a_value_error_with_no_chain(content: bytes, message: str) -> None:
     """Every unreadable body gives one fixed message, with no chain to the decoder's error, which holds the body."""
     with pytest.raises(ValueError) as excinfo:
-        await _streamed(content, TimeoutPolicy(max_body_bytes=1_000_000))
+        decode_json_body(content)
 
     assert str(excinfo.value) == message
     assert excinfo.value.__context__ is None
@@ -134,7 +134,7 @@ class TestTheBodyIsReadUnderTheLimit:
 
         assert answer.body == b""
         with pytest.raises(ValueError, match="the body is not JSON"):
-            decode_json_body(answer)
+            decode_json_body(answer.body)
 
     async def test_a_body_past_the_limit_is_refused_as_unreadable(self) -> None:
         body = b'{"filler": "' + b"f" * 100_000 + b'"}'
@@ -158,7 +158,7 @@ class TestTheBodyIsReadUnderTheLimit:
         assert stream.pulled < len(body) / 10
         assert answer.body is None, "a body past the limit states no body, which an empty one does not"
         with pytest.raises(ValueError, match="the body is too large to read"):
-            decode_json_body(answer)
+            decode_json_body(answer.body)
 
     async def test_a_compressed_body_that_expands_past_the_limit_is_refused(self) -> None:
         """A limit on what crosses the wire is not a limit on what the decoder produces."""

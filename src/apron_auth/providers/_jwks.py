@@ -382,7 +382,7 @@ class IssuerSigningKeys:
             msg = "Failed to fetch the issuer's signing keys: request failed"
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
-            document = decode_json_body(answer)
+            document = decode_json_body(answer.body)
         except ValueError as exc:
             msg = "The issuer's signing keys could not be read"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc

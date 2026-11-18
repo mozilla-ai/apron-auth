@@ -282,7 +282,7 @@ class AtlassianIdentityHandler:
             return {}
 
         try:
-            payload = decode_json_body(answer)
+            payload = decode_json_body(answer.body)
         except ValueError:
             logger.warning(
                 "atlassian user identity lookup could not parse the response; "

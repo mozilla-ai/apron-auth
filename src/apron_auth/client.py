@@ -426,7 +426,7 @@ def _object_body(answer: BoundedResponse | None) -> dict[str, Any] | None:
     if answer is None:
         return None
     try:
-        body = decode_json_body(answer)
+        body = decode_json_body(answer.body)
     except ValueError:
         return None
     return body if isinstance(body, dict) else None

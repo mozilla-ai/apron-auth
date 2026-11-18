@@ -426,7 +426,7 @@ class MicrosoftIdentityHandler:
             return None
 
         try:
-            body = decode_json_body(answer)
+            body = decode_json_body(answer.body)
         except ValueError:
             logger.warning(
                 "microsoft directory lookup could not parse the tenant's verified domains; "

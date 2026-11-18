@@ -206,7 +206,7 @@ async def fetch_document(
             msg = f"OpenID provider configuration returned {status.description}"
             raise OidcDiscoveryError(msg, kind=status.kind)
         try:
-            document = decode_json_body(answer)
+            document = decode_json_body(answer.body)
         except ValueError as exc:
             msg = "OpenID provider configuration was not JSON"
             raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
