@@ -850,7 +850,26 @@ class _OAuthClientBase:
                 "tokens from a refused token response stay valid, because the provider has no revocation endpoint"
             )
             return
-        host = urlparse(revocation_url).hostname
+        await self._revoke_all(tokens, host=urlparse(revocation_url).hostname)
+
+    async def _revoke_all(self, tokens: Sequence[tuple[str, str]], *, host: str | None) -> None:
+        """Revoke every given token at once, under one time limit bound to this call.
+
+        A revocation unfinished at the limit is canceled, as is every revocation still running when
+        this call ends for any other reason.
+        Each revocation that fails, is canceled on its own, or is unfinished at the limit is logged.
+        A log line names the token kind and the host, never error text.
+        The error of a revocation unfinished at the limit is not raised.
+        If the caller is canceled, the revocations are canceled with it, and nothing is logged.
+
+        Args:
+            tokens: Each token to revoke, with the kind a log line names it by.
+            host: The revocation endpoint's host, for the log line.
+
+        Raises:
+            BaseException: If a revocation that finished before the limit raised an error that is not an exception,
+                which revoke_token does not convert.
+        """
         # Every task is created inside the try, so the finally bounds one created before a later call fails.
         revocations: list[tuple[str, asyncio.Task[None]]] = []
         try:
