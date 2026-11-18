@@ -1583,6 +1583,15 @@ class TestPrmCandidateUrls:
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
                 ],
             ),
+            # A parameter belongs to the path segment it follows, so the scoped location carries it.
+            (
+                None,
+                "https://mcp.example.com/mcp;tenant=blue",
+                [
+                    "https://mcp.example.com/.well-known/oauth-protected-resource/mcp;tenant=blue",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                ],
+            ),
         ],
     )
     def test_candidate_order(self, hint: str | None, server_url: str, expected: list[str]) -> None:
@@ -1613,6 +1622,15 @@ class TestAsmCandidateUrls:
                     "https://auth.example.com/.well-known/oauth-authorization-server/tenant",
                     "https://auth.example.com/.well-known/openid-configuration/tenant",
                     "https://auth.example.com/tenant/.well-known/openid-configuration",
+                ],
+            ),
+            # A parameter belongs to the path segment it follows, so every location carries it.
+            (
+                "https://auth.example.com/tenant;region=eu",
+                [
+                    "https://auth.example.com/.well-known/oauth-authorization-server/tenant;region=eu",
+                    "https://auth.example.com/.well-known/openid-configuration/tenant;region=eu",
+                    "https://auth.example.com/tenant;region=eu/.well-known/openid-configuration",
                 ],
             ),
         ],

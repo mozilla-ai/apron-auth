@@ -945,7 +945,7 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     candidates: list[_Candidate] = []
     if resource_metadata_url:
         candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True))
-    parsed = urlparse(server_url)
+    parsed = urlsplit(server_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
     if parsed.path and parsed.path != "/":
         candidates.append(
@@ -969,7 +969,7 @@ def _asm_candidates(auth_server: str, *, caller_supplied: bool) -> list[_Candida
         caller_supplied: The identifier derives from an argument of this library's caller rather than from
             a fetched document, so a refusal of a URL is a fault in the caller's own configuration.
     """
-    parsed = urlparse(auth_server)
+    parsed = urlsplit(auth_server)
     base = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")
     urls = (
