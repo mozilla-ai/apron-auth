@@ -951,11 +951,11 @@ def _asm_candidates(auth_server: str) -> list[_Candidate]:
 def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
     """Return the outcome a metadata fetch reports, given what each candidate showed.
 
-    A retryable outcome decides, because the fallback locations answer a client error as a rule.
-    An outage on the real URL must not be hidden by one of them.
+    A retryable outcome decides, because a candidate that failed that way was never really tried.
+    The fallback locations answer a client error as a rule, and none of them must hide an outage.
     Among the outcomes that are not retryable, the highest-ranked fault decides.
-    Candidates that showed the same fault are settled by the order they were tried.
-    An empty sequence reports that nothing is known about the document.
+    The first candidate to show the deciding fault is the one reported.
+    An empty sequence reports that no candidate could be fetched.
 
     Args:
         observed: What each candidate showed, in the order they were tried.

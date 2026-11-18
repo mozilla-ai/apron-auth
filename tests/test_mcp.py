@@ -556,6 +556,16 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.REFUSED
         assert exc_info.value.retryable is False
 
+    async def test_an_outage_decides_over_a_candidate_that_answered(self, httpx_mock: HTTPXMock) -> None:
+        """A corrupt document does not settle a fetch whose other candidate may still serve one."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=503)
+        with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
     @pytest.mark.parametrize(
         ("status", "content", "kind", "fault"),
         [
@@ -1359,11 +1369,11 @@ class TestReportedOutcome:
     _UNPUBLISHED = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
     _UNREADABLE = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
 
-    def test_a_retryable_outcome_decides_wherever_it_came(self) -> None:
-        """The fallback locations answer a client error as a rule, which must not hide an outage."""
+    def test_a_retryable_outcome_decides_over_a_fault_that_outranks_it(self) -> None:
+        """A candidate that failed retryably was never really tried, whatever another candidate showed."""
         outage = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR)
-        assert _reported_outcome([outage, self._UNPUBLISHED]) == outage
-        assert _reported_outcome([self._UNPUBLISHED, outage]) == outage
+        assert _reported_outcome([self._UNREADABLE, outage]) == outage
+        assert _reported_outcome([outage, self._UNREADABLE]) == outage
 
     def test_the_fault_that_says_most_decides_among_the_rest(self) -> None:
         assert _reported_outcome([self._UNREADABLE, self._UNPUBLISHED]) == self._UNREADABLE
