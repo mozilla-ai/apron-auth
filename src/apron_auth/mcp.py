@@ -487,7 +487,7 @@ async def register_client(
             data = decode_json_body(answer.body)
         except ValueError:
             data = None
-            failure = "client registration returned a non-JSON response"
+            failure = "client registration returned a response that could not be read"
         else:
             failure = None
     # NOTE: This raise stays outside the except block, so the error carries no context.
@@ -1179,7 +1179,7 @@ async def _fetch_first_metadata(
             try:
                 payload = decode_json_body(answer.body)
             except ValueError:
-                logger.debug("MCP discovery: %s returned a non-JSON body", what)
+                logger.debug("MCP discovery: %s returned a body that could not be read", what)
                 observed.append(unreadable)
                 continue
             if isinstance(payload, dict):

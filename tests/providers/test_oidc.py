@@ -296,14 +296,14 @@ class TestDiscover:
         """A body that does not parse as JSON is a discovery failure."""
         httpx_mock.add_response(url=DOCUMENT_URL, text="not json")
 
-        with pytest.raises(OidcDiscoveryError, match="not JSON"):
+        with pytest.raises(OidcDiscoveryError, match="could not be read"):
             await discover(ISSUER)
 
     async def test_reports_a_deeply_nested_document(self, httpx_mock: HTTPXMock) -> None:
         """A body that nests too deeply to decode is a discovery failure, not a raw recursion error."""
         httpx_mock.add_response(url=DOCUMENT_URL, content=b"[" * 100_000 + b"]" * 100_000)
 
-        with pytest.raises(OidcDiscoveryError, match="not JSON"):
+        with pytest.raises(OidcDiscoveryError, match="could not be read"):
             await discover(ISSUER)
 
     async def test_honors_a_document_url_override(self, httpx_mock: HTTPXMock):

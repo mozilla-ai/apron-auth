@@ -208,7 +208,7 @@ async def fetch_document(
         try:
             document = decode_json_body(answer.body)
         except ValueError as exc:
-            msg = "OpenID provider configuration was not JSON"
+            msg = "OpenID provider configuration could not be read"
             raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
     if not isinstance(document, dict):
         msg = "OpenID provider configuration was not a JSON object"
