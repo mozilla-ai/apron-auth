@@ -127,9 +127,13 @@ class SalesforceIdentityHandler:
         transport = identity_transport(self._transport_factory, userinfo_url, "Salesforce identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
-                    userinfo_url,
-                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                client.send(
+                    client.build_request(
+                        "GET",
+                        userinfo_url,
+                        headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                    ),
+                    stream=True,
                 ),
                 "Salesforce identity",
                 config.timeouts,

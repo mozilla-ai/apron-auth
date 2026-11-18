@@ -356,8 +356,10 @@ class IssuerSigningKeys:
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
             async with client:
-                response = await within_request_limit(client.get(self._jwks_url), timeouts)
-                response.raise_for_status()
+                answer = await within_request_limit(
+                    client.send(client.build_request("GET", self._jwks_url), stream=True), timeouts
+                )
+                answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             status = exc.response.status_code
             if 300 <= status < 400:
@@ -382,7 +384,7 @@ class IssuerSigningKeys:
             msg = "Failed to fetch the issuer's signing keys: request failed"
             raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
         try:
-            document = decode_json_body(response)
+            document = decode_json_body(answer)
         except ValueError as exc:
             msg = "The issuer's signing keys could not be read"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED) from exc

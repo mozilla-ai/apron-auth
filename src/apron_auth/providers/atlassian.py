@@ -217,8 +217,13 @@ class AtlassianIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         resources = await fetch_identity_json(
-            client.get(
-                _ATLASSIAN_ACCESSIBLE_RESOURCES_URL, headers={"Authorization": f"Bearer {token.get_secret_value()}"}
+            client.send(
+                client.build_request(
+                    "GET",
+                    _ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+                    headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                ),
+                stream=True,
             ),
             "Atlassian accessible resources",
             timeouts,
@@ -245,11 +250,18 @@ class AtlassianIdentityHandler:
             unavailable.
         """
         try:
-            response = await within_request_limit(
-                client.get(_ATLASSIAN_USERINFO_URL, headers={"Authorization": f"Bearer {token.get_secret_value()}"}),
+            answer = await within_request_limit(
+                client.send(
+                    client.build_request(
+                        "GET",
+                        _ATLASSIAN_USERINFO_URL,
+                        headers={"Authorization": f"Bearer {token.get_secret_value()}"},
+                    ),
+                    stream=True,
+                ),
                 timeouts,
             )
-            response.raise_for_status()
+            answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # The status is the whole diagnostic: 401 separates a missing
             # scope or disabled User Identity API from a transient failure.
@@ -274,7 +286,7 @@ class AtlassianIdentityHandler:
             return {}
 
         try:
-            payload = decode_json_body(response)
+            payload = decode_json_body(answer)
         except ValueError:
             logger.warning(
                 "atlassian user identity lookup could not parse the response; "

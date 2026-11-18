@@ -86,9 +86,13 @@ class TypeformIdentityHandler:
         transport = identity_transport(self._transport_factory, _TYPEFORM_USERINFO_URL, "Typeform identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
-                    _TYPEFORM_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                client.send(
+                    client.build_request(
+                        "GET",
+                        _TYPEFORM_USERINFO_URL,
+                        headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                    ),
+                    stream=True,
                 ),
                 "Typeform identity",
                 config.timeouts,

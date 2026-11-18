@@ -67,6 +67,9 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# The default limit, in bytes, on the decoded body one outbound request may read.
+_DEFAULT_BODY_BYTES = 1_048_576
+
 # The default wall clock, in seconds, allowed for revoking the tokens of a refused response.
 _DEFAULT_REVOCATION_CLEANUP_SECONDS = 10.0
 
@@ -819,23 +822,27 @@ class _RefusesWithoutRepeating(BaseModel):
 
 
 class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
-    """How long this library waits for one outbound request.
+    """What this library spends on one outbound request, in time and in memory.
 
-    One policy governs every request this library sends. Each limit is a positive finite number of
-    seconds, so no limit can be turned off.
+    One policy governs every request this library sends. Each limit is positive and finite, so no
+    limit can be turned off.
 
     Attributes:
         connect_seconds: The limit on establishing a connection, which counts toward the whole-request
             limit and so cannot exceed it.
-        request_seconds: The limit on a whole request, however many steps it takes.
+        max_body_bytes: The limit on the decoded body a response may state. It is counted as the body
+            arrives, so a compressed body that expands past it is refused without being held whole.
+        request_seconds: The limit on a whole request, however many steps it takes, including reading
+            the body it answers with.
     """
 
     connect_seconds: float = _DEFAULT_CONNECT_SECONDS
+    max_body_bytes: int = _DEFAULT_BODY_BYTES
     request_seconds: float = _DEFAULT_REQUEST_SECONDS
 
     @model_validator(mode="after")
     def _every_limit_is_positive_and_finite(self) -> TimeoutPolicy:
-        """Reject a limit that waits forever or refuses every request.
+        """Reject a limit that bounds nothing or refuses every request.
 
         Returns:
             The validated policy, unchanged.
@@ -1019,7 +1026,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             NOTE: A revocation handler that does not stop when it is canceled can still delay the
             refusal, because this library waits for the cancellation it asked for.
             Must be a positive finite number. Defaults to 10.
-        timeouts: The time limits on every request sent for this provider.
+        timeouts: The limits on every request sent for this provider.
             This library reads them wherever it sends one.
             An identity or revocation handler of a caller's own reads them from the config it is given.
             Defaults to :class:`TimeoutPolicy`'s own limits.

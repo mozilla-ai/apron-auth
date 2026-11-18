@@ -3,15 +3,30 @@
 from __future__ import annotations
 
 import ast
+import gzip
 from pathlib import Path
 
 import httpx
 import pytest
+from support import LazyBodyTransport, LazyByteStream
 
 import apron_auth
 from apron_auth._json_body import decode_json_body
+from apron_auth._timeouts import within_request_limit
+from apron_auth.models import TimeoutPolicy
 
 _PACKAGE_ROOT = Path(apron_auth.__file__).parent
+
+# A body small enough that one chunk of it cannot reach a cap stated in this test.
+_CHUNK_BYTES = 1024
+
+
+async def _streamed(body: bytes, policy: TimeoutPolicy, *, headers: dict[str, str] | None = None) -> object:
+    """Decode ``body`` as it arrives from a transport that yields it one chunk at a time."""
+    stream = LazyByteStream([body[at : at + _CHUNK_BYTES] for at in range(0, len(body), _CHUNK_BYTES)])
+    async with httpx.AsyncClient(transport=LazyBodyTransport(stream, headers=headers)) as client:
+        request = client.build_request("GET", "https://documents.test/d")
+        return decode_json_body(await within_request_limit(client.send(request, stream=True), policy))
 
 
 def _decodes_a_body_directly(call: ast.Call) -> bool:
@@ -76,8 +91,8 @@ def test_every_decode_site_uses_the_shared_decoder(path: Path) -> None:
     assert lines == [], f"{path.name} decodes a response body directly at {lines}; use decode_json_body"
 
 
-def test_returns_the_decoded_body() -> None:
-    assert decode_json_body(httpx.Response(200, json={"ok": True})) == {"ok": True}
+async def test_returns_the_decoded_body() -> None:
+    assert await _streamed(b'{"ok": true}', TimeoutPolicy()) == {"ok": True}
 
 
 @pytest.mark.parametrize(
@@ -90,12 +105,56 @@ def test_returns_the_decoded_body() -> None:
     ],
     ids=["not JSON", "truncated JSON", "not text", "deeply nested"],
 )
-def test_an_unreadable_body_is_a_value_error_with_no_chain(content: bytes, message: str) -> None:
+async def test_an_unreadable_body_is_a_value_error_with_no_chain(content: bytes, message: str) -> None:
     """Every unreadable body gives one fixed message, with no chain to the decoder's error, which holds the body."""
     with pytest.raises(ValueError) as excinfo:
-        decode_json_body(httpx.Response(200, content=content))
+        await _streamed(content, TimeoutPolicy(max_body_bytes=1_000_000))
 
     assert str(excinfo.value) == message
     assert excinfo.value.__context__ is None
     assert excinfo.value.__cause__ is None
     assert "SECRET-ISH-DATA" not in repr(excinfo.value.args)
+
+
+class TestTheBodyIsReadUnderTheLimit:
+    """The limit is counted as the body decodes, so a body past it is refused rather than held."""
+
+    async def test_a_body_at_the_limit_is_read(self) -> None:
+        body = b'{"filler": "' + b"f" * 900 + b'"}'
+
+        assert await _streamed(body, TimeoutPolicy(max_body_bytes=len(body))) == {"filler": "f" * 900}
+
+    async def test_a_body_past_the_limit_is_refused_as_unreadable(self) -> None:
+        body = b'{"filler": "' + b"f" * 100_000 + b'"}'
+
+        with pytest.raises(ValueError, match="the body is too large to read") as excinfo:
+            await _streamed(body, TimeoutPolicy(max_body_bytes=4096))
+
+        assert excinfo.value.__context__ is None
+        assert excinfo.value.__cause__ is None
+
+    async def test_a_body_past_the_limit_is_refused_before_the_rest_of_it_arrives(self) -> None:
+        """A cap on a body already read bounds nothing, because the allocation has happened."""
+        body = b'{"filler": "' + b"f" * 1_000_000 + b'"}'
+        chunks = [body[at : at + _CHUNK_BYTES] for at in range(0, len(body), _CHUNK_BYTES)]
+        stream = LazyByteStream(chunks)
+
+        async with httpx.AsyncClient(transport=LazyBodyTransport(stream)) as client:
+            request = client.build_request("GET", "https://documents.test/d")
+            answer = await within_request_limit(client.send(request, stream=True), TimeoutPolicy(max_body_bytes=4096))
+
+        assert stream.pulled < len(body) / 10
+        assert answer.body == b""
+        assert not answer.complete
+        with pytest.raises(ValueError, match="the body is too large to read"):
+            decode_json_body(answer)
+
+    async def test_a_compressed_body_that_expands_past_the_limit_is_refused(self) -> None:
+        """A limit on what crosses the wire is not a limit on what the decoder produces."""
+        compressed = gzip.compress(b'{"filler": "' + b"f" * 5_000_000 + b'"}')
+        headers = {"content-type": "application/json", "content-encoding": "gzip"}
+
+        with pytest.raises(ValueError, match="the body is too large to read"):
+            await _streamed(compressed, TimeoutPolicy(max_body_bytes=1_048_576), headers=headers)
+
+        assert len(compressed) < 1_048_576

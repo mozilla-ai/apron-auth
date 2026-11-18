@@ -25,7 +25,7 @@ from apron_auth._http_errors import http_failure, response_failure, status_failu
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
 from apron_auth._numbers import finite_number
-from apron_auth._timeouts import httpx_timeout, within_request_limit
+from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import (
     SERVER_ERROR,
@@ -414,17 +414,19 @@ def _nested_user_token(extras: Mapping[str, Any]) -> tuple[str, UserToken] | Non
     return nested[0] if len(nested) == 1 else None
 
 
-def _object_body(response: httpx.Response) -> dict[str, Any] | None:
+def _object_body(answer: BoundedResponse | None) -> dict[str, Any] | None:
     """Return the JSON object a token-endpoint response states.
 
     Args:
-        response: The response the endpoint sent.
+        answer: The response the endpoint sent and the body it stated, or ``None`` where none arrived.
 
     Returns:
         The body, or ``None`` where it states no object and so names no token.
     """
+    if answer is None:
+        return None
     try:
-        body = decode_json_body(response)
+        body = decode_json_body(answer)
     except ValueError:
         return None
     return body if isinstance(body, dict) else None
@@ -487,22 +489,17 @@ def _state_for_browser_token(browser_token: str) -> str:
     return hashlib.sha256(browser_token.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def _stated_error_member(response: httpx.Response | None) -> object:
+def _stated_error_member(answer: BoundedResponse | None) -> object:
     """Return the ``error`` member of a token-endpoint response, as it arrived.
 
     Args:
-        response: The response the endpoint sent, or ``None`` when none was received.
+        answer: The response the endpoint sent and the body it stated, or ``None`` where none arrived.
 
     Returns:
         The member, or an empty string when the response carries no JSON object or no such member.
     """
-    if response is None:
-        return ""
-    try:
-        body = decode_json_body(response)
-    except ValueError:
-        return ""
-    return body.get("error", "") if isinstance(body, dict) else ""
+    body = _object_body(answer)
+    return body.get("error", "") if body is not None else ""
 
 
 def _states_an_access_token(response: Mapping[str, Any]) -> bool:
@@ -1183,20 +1180,20 @@ class _OAuthClientBase:
             values.add(self._config.client_secret.get_secret_value())
         return frozenset(value for value in values if value)
 
-    def _stated_error_code(self, response: httpx.Response | None, sent: dict[str, str]) -> str:
+    def _stated_error_code(self, answer: BoundedResponse | None, sent: dict[str, str]) -> str:
         """Return the error code a token response states, or an empty string when it states none to report.
 
         A value the request sent as a secret is not reported.
         An endpoint may echo what it was sent, and a secret can take the shape a code takes.
 
         Args:
-            response: The response the endpoint sent, or ``None`` when none was received.
+            answer: The response the endpoint sent and the body it stated, or ``None`` where none arrived.
             sent: The form fields the request sent.
 
         Returns:
             The error code, or an empty string.
         """
-        code = recognized_error_code(_stated_error_member(response))
+        code = recognized_error_code(_stated_error_member(answer))
         return "" if code in self._sent_secrets(sent) else code
 
     async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
@@ -1222,7 +1219,7 @@ class _OAuthClientBase:
                 The caught error is not attached as its cause or context.
                 Its message is this library's own text and states nothing the endpoint sent.
         """
-        response: httpx.Response | None = None
+        answer: BoundedResponse | None = None
         try:
             authentication = _client_authentication(self._config)
             transport = chosen_transport(self._transport_factory, self._config.token_url)
@@ -1231,26 +1228,30 @@ class _OAuthClientBase:
                 timeout=httpx_timeout(self._config.timeouts),
                 follow_redirects=False,
             ) as client:
-                response = await within_request_limit(
-                    client.post(
-                        self._config.token_url,
-                        data=data | authentication.form,
-                        headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
+                answer = await within_request_limit(
+                    client.send(
+                        client.build_request(
+                            "POST",
+                            self._config.token_url,
+                            data=data | authentication.form,
+                            headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
+                        ),
+                        stream=True,
                     ),
                     self._config.timeouts,
                 )
-            body = _object_body(response)
+            body = _object_body(answer)
             if body is not None and "error" in body:
                 raise _StatedOAuthError
-            response.raise_for_status()
+            answer.response.raise_for_status()
             if body is None:
                 raise _UnreadableBodyError
             return body
         except _StatedOAuthError:
             # An OAuth error body, which an endpoint may send with any status.
-            error_code = self._stated_error_code(response, data)
-            status_code = response.status_code if response is not None else None
-            kind = self._kind_for_token_response(response, error_code)
+            error_code = self._stated_error_code(answer, data)
+            status_code = answer.response.status_code if answer is not None else None
+            kind = self._kind_for_token_response(answer, error_code)
             if status_code is not None and httpx.codes.is_error(status_code):
                 description = status_failure(status_code).description
             else:
@@ -1260,16 +1261,16 @@ class _OAuthClientBase:
                 description,
                 kind,
                 error_code=error_code,
-                refused_response=_object_body(response) if response is not None else None,
+                refused_response=_object_body(answer) if answer is not None else None,
             )
         except httpx.HTTPStatusError as exc:
             # An error status stating no OAuth error of its own.
             # The body may still carry an OAuth error code, which then decides the kind.
-            error_code = self._stated_error_code(exc.response, data)
-            kind = self._kind_for_token_response(exc.response, error_code)
+            error_code = self._stated_error_code(answer, data)
+            kind = self._kind_for_token_response(answer, error_code)
             status = status_failure(exc.response.status_code)
             failure = _TokenEndpointError(
-                status.description, kind, error_code=error_code, refused_response=_object_body(exc.response)
+                status.description, kind, error_code=error_code, refused_response=_object_body(answer)
             )
         except httpx.RequestError as exc:
             transport_failure = http_failure(exc)
@@ -1284,7 +1285,7 @@ class _OAuthClientBase:
         # This raise stays outside the except block, where Python would set __context__ to the caught error.
         raise failure
 
-    def _kind_for_token_response(self, response: httpx.Response | None, error_code: str) -> FailureKind:
+    def _kind_for_token_response(self, answer: BoundedResponse | None, error_code: str) -> FailureKind:
         """Return the kind of a failed token-endpoint response.
 
         A response stating a temporary condition is retryable whatever code the body carries.
@@ -1293,14 +1294,14 @@ class _OAuthClientBase:
         may pass later.
 
         Args:
-            response: The response the endpoint answered with, or ``None`` when none arrived.
+            answer: The response the endpoint answered with, or ``None`` when none arrived.
             error_code: The error code the response stated, or an empty string when it stated none
                 in the shape a code takes.
 
         Returns:
             The kind.
         """
-        status_kind = response_failure(response).kind if response is not None else None
+        status_kind = response_failure(answer.response).kind if answer is not None else None
         if status_kind is FailureKind.SERVER_ERROR or not error_code:
             return FailureKind.REJECTED if status_kind is None else status_kind
         return FailureKind.SERVER_ERROR if error_code in self._retryable_error_codes else FailureKind.REJECTED

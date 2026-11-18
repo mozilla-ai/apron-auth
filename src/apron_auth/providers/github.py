@@ -183,9 +183,13 @@ class GitHubIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         return await fetch_identity_json(
-            client.get(
-                url,
-                headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
+            client.send(
+                client.build_request(
+                    "GET",
+                    url,
+                    headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
+                ),
+                stream=True,
             ),
             "GitHub identity",
             timeouts,
@@ -288,7 +292,8 @@ class GitHubRevocationHandler:
             headers=_GITHUB_API_HEADERS,
             json_body={"access_token": token.get_secret_value()},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         # 204: grant removed. 404: already gone, an idempotent re-disconnect.
         if response.status_code in (204, 404):
             return True

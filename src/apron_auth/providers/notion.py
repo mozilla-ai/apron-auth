@@ -97,12 +97,16 @@ class NotionIdentityHandler:
         transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
-                    _NOTION_USERINFO_URL,
-                    headers={
-                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
-                        "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
-                    },
+                client.send(
+                    client.build_request(
+                        "GET",
+                        _NOTION_USERINFO_URL,
+                        headers={
+                            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
+                            "Notion-Version": _NOTION_VERSION_HEADER_VALUE,
+                        },
+                    ),
+                    stream=True,
                 ),
                 "Notion identity",
                 config.timeouts,
@@ -213,7 +217,8 @@ class NotionRevocationHandler:
             auth=config.basic_auth(),
             json_body={"token": token.get_secret_value()},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in (200, 400):
             return True
         refuse_an_unexpected_status(response, label=request.label)

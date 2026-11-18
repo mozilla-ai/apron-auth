@@ -192,7 +192,15 @@ class HubSpotIdentityHandler:
         )
         async with identity_client(timeouts, transport=transport) as client:
             return await fetch_identity_json(
-                client.get(f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}"),
+                client.send(
+                    # NOTE: The URL carries the token, so it is built here rather than bound to a local a
+                    # traceback would render.
+                    client.build_request(
+                        "GET",
+                        f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}",
+                    ),
+                    stream=True,
+                ),
                 "HubSpot identity",
                 timeouts,
             )
@@ -252,7 +260,8 @@ class HubSpotRevocationHandler:
             method=HttpMethod.DELETE,
             endpoint=endpoint,
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in (204, 404):
             return True
         refuse_an_unexpected_status(response, label=request.label)

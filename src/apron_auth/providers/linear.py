@@ -78,13 +78,17 @@ class LinearIdentityHandler:
         transport = identity_transport(self._transport_factory, _LINEAR_GRAPHQL_URL, "Linear identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.post(
-                    _LINEAR_GRAPHQL_URL,
-                    headers={
-                        "Authorization": f"Bearer {material.access_token.get_secret_value()}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"query": _LINEAR_VIEWER_QUERY},
+                client.send(
+                    client.build_request(
+                        "POST",
+                        _LINEAR_GRAPHQL_URL,
+                        headers={
+                            "Authorization": f"Bearer {material.access_token.get_secret_value()}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"query": _LINEAR_VIEWER_QUERY},
+                    ),
+                    stream=True,
                 ),
                 "Linear identity",
                 config.timeouts,

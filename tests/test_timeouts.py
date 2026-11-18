@@ -6,9 +6,10 @@ from pathlib import Path
 
 import httpx
 import pytest
+from support import LazyBodyTransport, LazyByteStream
 
 from apron_auth._http_errors import http_failure
-from apron_auth._timeouts import httpx_timeout, within_request_limit
+from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind
 from apron_auth.models import TimeoutPolicy
 from apron_auth.providers import google
@@ -36,39 +37,78 @@ class TestHttpxTimeout:
         assert limits.pool == 7.0
 
 
-class TestWithinRequestLimit:
-    async def test_a_request_that_finishes_in_time_answers_normally(self) -> None:
-        async def answer() -> str:
-            return "answered"
+class _RefusingTransport(httpx.AsyncBaseTransport):
+    """A transport that refuses every request with the error it was built for."""
 
-        assert await within_request_limit(answer(), TimeoutPolicy()) == "answered"
+    def __init__(self, refusal: Exception) -> None:
+        self._refusal = refusal
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise self._refusal
+
+
+class _SleepingTransport(httpx.AsyncBaseTransport):
+    """A transport that answers no request before the limit can pass."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(60)
+        raise AssertionError
+
+
+class TestWithinRequestLimit:
+    @staticmethod
+    def _client(transport: httpx.AsyncBaseTransport) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=transport)
+
+    @staticmethod
+    async def _answer(client: httpx.AsyncClient, policy: TimeoutPolicy) -> BoundedResponse:
+        request = client.build_request("GET", "https://documents.test/d")
+        return await within_request_limit(client.send(request, stream=True), policy)
+
+    async def test_a_request_that_finishes_in_time_answers_normally(self) -> None:
+        stream = LazyByteStream([b'{"ok": true}'])
+
+        async with self._client(LazyBodyTransport(stream)) as client:
+            answer = await self._answer(client, TimeoutPolicy())
+
+        assert answer.response.status_code == 200
+        assert answer.body == b'{"ok": true}'
+        assert answer.complete
 
     async def test_a_request_that_outlives_the_limit_is_refused_as_a_timeout(self) -> None:
         """A step limit bounds one read, so only this bounds a response that arrives slowly in many steps."""
+        async with self._client(_SleepingTransport()) as client:
+            with pytest.raises(httpx.TimeoutException):
+                await self._answer(client, TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
 
-        async def never() -> str:
-            await asyncio.sleep(60)
-            return "answered"
+    async def test_a_body_that_arrives_slowly_is_refused_within_the_same_limit(self) -> None:
+        """The response arrives before its body does, so a limit that ends at the headers bounds no body."""
+        stream = LazyByteStream([b"f" * 16] * 100, chunk_seconds=0.05)
 
-        with pytest.raises(httpx.TimeoutException):
-            await within_request_limit(never(), TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
+        async with self._client(LazyBodyTransport(stream)) as client:
+            with pytest.raises(httpx.TimeoutException):
+                await self._answer(client, TimeoutPolicy(connect_seconds=0.1, request_seconds=0.2))
 
     async def test_the_refusal_is_classified_as_a_timeout(self) -> None:
-        async def never() -> str:
-            await asyncio.sleep(60)
-            return "answered"
-
-        with pytest.raises(httpx.TimeoutException) as refusal:
-            await within_request_limit(never(), TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
+        async with self._client(_SleepingTransport()) as client:
+            with pytest.raises(httpx.TimeoutException) as refusal:
+                await self._answer(client, TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
 
         assert http_failure(refusal.value) == (FailureKind.TIMEOUT, "request timed out")
 
     async def test_another_failure_is_left_alone(self) -> None:
-        async def refuse() -> str:
-            raise httpx.ConnectError("refused")
+        async with self._client(_RefusingTransport(httpx.ConnectError("refused"))) as client:
+            with pytest.raises(httpx.ConnectError):
+                await self._answer(client, TimeoutPolicy())
 
-        with pytest.raises(httpx.ConnectError):
-            await within_request_limit(refuse(), TimeoutPolicy())
+    async def test_the_response_is_closed_once_its_body_is_read(self) -> None:
+        """A streamed response holds the connection until it is closed."""
+        stream = LazyByteStream([b'{"ok": true}'])
+
+        async with self._client(LazyBodyTransport(stream)) as client:
+            answer = await self._answer(client, TimeoutPolicy())
+
+        assert answer.response.is_closed
 
 
 class TestEveryClientTheLibraryBuildsStatesItsLimits:

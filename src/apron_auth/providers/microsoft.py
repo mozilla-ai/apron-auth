@@ -345,9 +345,13 @@ class MicrosoftIdentityHandler:
         transport = identity_transport(self._transport_factory, _MICROSOFT_USERINFO_URL, "Microsoft identity")
         async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
-                    _MICROSOFT_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                client.send(
+                    client.build_request(
+                        "GET",
+                        _MICROSOFT_USERINFO_URL,
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                    ),
+                    stream=True,
                 ),
                 "Microsoft identity",
                 timeouts,
@@ -389,14 +393,18 @@ class MicrosoftIdentityHandler:
             return None
         try:
             async with identity_client(timeouts, transport=transport) as client:
-                response = await within_request_limit(
-                    client.get(
-                        _MICROSOFT_ORGANIZATION_URL,
-                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                answer = await within_request_limit(
+                    client.send(
+                        client.build_request(
+                            "GET",
+                            _MICROSOFT_ORGANIZATION_URL,
+                            headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                        ),
+                        stream=True,
                     ),
                     timeouts,
                 )
-                response.raise_for_status()
+                answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # The status is the whole diagnostic here — it separates a
             # permanent consent or permission problem from a transient
@@ -422,7 +430,7 @@ class MicrosoftIdentityHandler:
             return None
 
         try:
-            body = decode_json_body(response)
+            body = decode_json_body(answer)
         except ValueError:
             logger.warning(
                 "microsoft directory lookup could not parse the tenant's verified domains; "

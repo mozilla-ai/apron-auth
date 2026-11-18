@@ -129,9 +129,9 @@ async def test_the_response_is_returned_for_the_handler_to_read() -> None:
 
         return httpx.MockTransport(respond)
 
-    response = await send_revocation(_request(data={"token": TOKEN}), _config(), transport_factory=transport)
+    answer = await send_revocation(_request(data={"token": TOKEN}), _config(), transport_factory=transport)
 
-    assert response.status_code == 418
+    assert answer.response.status_code == 418
     assert len(sent) == 1
     assert sent[0].method == "POST"
 
@@ -315,13 +315,13 @@ async def test_a_host_the_config_permits_is_sent_to() -> None:
         asked.append(url)
         return httpx.MockTransport(lambda request: httpx.Response(200))
 
-    response = await send_revocation(
+    answer = await send_revocation(
         _request(url="https://slack.com/api/auth.revoke", data={"token": TOKEN}),
         _slack_config(),
         transport_factory=transport,
     )
 
-    assert response.status_code == 200
+    assert answer.response.status_code == 200
     assert asked == ["https://slack.com/api/auth.revoke"]
 
 
@@ -333,13 +333,13 @@ async def test_a_config_naming_no_provider_permits_the_host_it_reaches() -> None
         asked.append(url)
         return httpx.MockTransport(lambda request: httpx.Response(200))
 
-    response = await send_revocation(
+    answer = await send_revocation(
         _request(url=OFF_HOST_URL, data={"token": TOKEN}),
         _config(),
         transport_factory=transport,
     )
 
-    assert response.status_code == 200
+    assert answer.response.status_code == 200
     assert asked == [OFF_HOST_URL]
 
 
@@ -406,13 +406,13 @@ async def test_a_cleartext_url_a_config_waived_in_code_is_sent_to() -> None:
     def transport(url: str) -> httpx.AsyncBaseTransport:
         return httpx.MockTransport(lambda request: httpx.Response(200))
 
-    response = await send_revocation(
+    answer = await send_revocation(
         _request(url="http://auth.example.com/revoke", data={"token": TOKEN}),
         waived,
         transport_factory=transport,
     )
 
-    assert response.status_code == 200
+    assert answer.response.status_code == 200
 
 
 async def test_a_loopback_url_needs_no_waiver() -> None:
@@ -423,13 +423,13 @@ async def test_a_loopback_url_needs_no_waiver() -> None:
 
     local = _config().with_changes(revocation_url="http://127.0.0.1:8080/revoke")
 
-    response = await send_revocation(
+    answer = await send_revocation(
         _request(url="http://127.0.0.1:8080/revoke", data={"token": TOKEN}),
         local,
         transport_factory=transport,
     )
 
-    assert response.status_code == 200
+    assert answer.response.status_code == 200
 
 
 @pytest.mark.parametrize(
@@ -482,13 +482,13 @@ async def test_a_redirect_is_not_followed() -> None:
 
         return httpx.MockTransport(respond)
 
-    response = await send_revocation(
+    answer = await send_revocation(
         _request(url="https://slack.com/api/auth.revoke", data={"token": TOKEN}),
         _slack_config(),
         transport_factory=transport,
     )
 
-    assert response.status_code == 302
+    assert answer.response.status_code == 302
     assert reached == ["https://slack.com/api/auth.revoke"], "the token must not follow the redirect"
 
 

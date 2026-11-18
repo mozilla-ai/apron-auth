@@ -406,9 +406,13 @@ class SlackIdentityHandler:
         transport = identity_transport(self._transport_factory, _SLACK_USERINFO_URL, "Slack identity")
         async with identity_client(timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.post(
-                    _SLACK_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                client.send(
+                    client.build_request(
+                        "POST",
+                        _SLACK_USERINFO_URL,
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                    ),
+                    stream=True,
                 ),
                 "Slack identity",
                 timeouts,
@@ -553,7 +557,12 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         payload = await fetch_identity_json(
-            client.post(url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
+            client.send(
+                client.build_request(
+                    "POST", url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}
+                ),
+                stream=True,
+            ),
             f"Slack {endpoint_label}",
             timeouts,
         )
@@ -678,11 +687,12 @@ class SlackRevocationHandler:
             label="Slack",
             headers={"Authorization": f"Bearer {token.get_secret_value()}"},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if not response.is_success:
             refuse_an_unexpected_status(response, label=request.label)
         try:
-            data = decode_json_body(response)
+            data = decode_json_body(answer)
         except ValueError:
             unparsed = "Failed to parse Slack revocation response"
         else:

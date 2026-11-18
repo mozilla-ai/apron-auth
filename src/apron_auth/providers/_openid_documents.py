@@ -184,7 +184,7 @@ async def fetch_document(
         raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from exc
     async with client:
         try:
-            response = await within_request_limit(client.get(url), timeouts)
+            answer = await within_request_limit(client.send(client.build_request("GET", url), stream=True), timeouts)
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"could not fetch the OpenID provider configuration ({transport.description})"
@@ -192,6 +192,7 @@ async def fetch_document(
         except httpx.InvalidURL as exc:
             msg = "could not fetch the OpenID provider configuration (invalid URL)"
             raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc
+        response = answer.response
         if response.status_code != 200:
             if 300 <= response.status_code < 400:
                 # The target is provider-controlled text, so it is not logged.
@@ -205,7 +206,7 @@ async def fetch_document(
             msg = f"OpenID provider configuration returned {status.description}"
             raise OidcDiscoveryError(msg, kind=status.kind)
         try:
-            document = decode_json_body(response)
+            document = decode_json_body(answer)
         except ValueError as exc:
             msg = "OpenID provider configuration was not JSON"
             raise OidcDiscoveryError(msg, kind=FailureKind.REFUSED) from exc

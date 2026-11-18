@@ -2974,6 +2974,19 @@ class TestTimeoutPolicy:
         with pytest.raises(ConfigurationError):
             TimeoutPolicy(read_seconds=1.0)
 
+    def test_the_default_bounds_the_body_a_request_may_read(self) -> None:
+        assert TimeoutPolicy().max_body_bytes == 1_048_576
+
+    @pytest.mark.parametrize(
+        "value",
+        [0, -1, float("inf"), float("nan"), 1.5],
+        ids=["zero", "negative", "infinite", "not-a-number", "fractional"],
+    )
+    def test_a_body_cap_that_bounds_nothing_or_counts_no_whole_bytes_is_refused(self, value: float) -> None:
+        """A cap a caller can turn off is a cap that is not there, and a part of a byte is not a count."""
+        with pytest.raises(ConfigurationError):
+            TimeoutPolicy(max_body_bytes=value)
+
     def test_frozen(self) -> None:
         policy = TimeoutPolicy()
         with pytest.raises(ConfigurationError):

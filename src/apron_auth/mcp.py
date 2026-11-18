@@ -470,7 +470,9 @@ async def register_client(
     )
     async with client:
         try:
-            response = await within_request_limit(client.post(registration_url, json=payload), limits)
+            answer = await within_request_limit(
+                client.send(client.build_request("POST", registration_url, json=payload), stream=True), limits
+            )
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
@@ -479,12 +481,12 @@ async def register_client(
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
             raise McpRegistrationError(msg, kind=transport.kind) from exc
-        if response.status_code not in (200, 201):
-            status = response_failure(response)
+        if answer.response.status_code not in (200, 201):
+            status = response_failure(answer.response)
             msg = f"client registration failed: {status.description}"
             raise McpRegistrationError(msg, kind=status.kind)
         try:
-            data = decode_json_body(response)
+            data = decode_json_body(answer)
         except ValueError:
             data = None
             failure = "client registration returned a non-JSON response"
@@ -1152,7 +1154,9 @@ async def _fetch_first_metadata(
             continue
         async with client:
             try:
-                response = await within_request_limit(client.get(url), timeouts)
+                answer = await within_request_limit(
+                    client.send(client.build_request("GET", url), stream=True), timeouts
+                )
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input rather than a dead candidate, so it ends the
                 # fetch, unless it is the hint, which cannot decide the fetch however it proves unusable.
@@ -1166,6 +1170,7 @@ async def _fetch_first_metadata(
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
                 observed.append(_MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind))
                 continue
+            response = answer.response
             if response.status_code != 200:
                 status = response_failure(response)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
@@ -1176,7 +1181,7 @@ async def _fetch_first_metadata(
                 observed.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
-                payload = decode_json_body(response)
+                payload = decode_json_body(answer)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
                 observed.append(unreadable)

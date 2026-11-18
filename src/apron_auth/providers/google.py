@@ -109,9 +109,13 @@ class GoogleIdentityHandler:
         transport = identity_transport(self._transport_factory, _GOOGLE_USERINFO_URL, "Google identity")
         async with identity_client(config.timeouts, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
-                    _GOOGLE_USERINFO_URL,
-                    headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                client.send(
+                    client.build_request(
+                        "GET",
+                        _GOOGLE_USERINFO_URL,
+                        headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
+                    ),
+                    stream=True,
                 ),
                 "Google identity",
                 config.timeouts,
@@ -199,7 +203,8 @@ class GoogleRevocationHandler:
             label="Google",
             params={"token": token.get_secret_value()},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in (_TOKEN_REVOKED, _TOKEN_NOT_VALID):
             return True
         refuse_an_unexpected_status(response, label=request.label)

@@ -674,11 +674,18 @@ class OidcIdentityHandler:
         failure: IdentityFetchError | None = None
         try:
             async with identity_client(timeouts, transport=transport) as client:
-                response = await within_request_limit(
-                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
+                answer = await within_request_limit(
+                    client.send(
+                        client.build_request(
+                            "GET",
+                            userinfo_url,
+                            headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                        ),
+                        stream=True,
+                    ),
                     timeouts,
                 )
-                response.raise_for_status()
+                answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if (
                 exc.response.status_code == 403
@@ -704,13 +711,13 @@ class OidcIdentityHandler:
             # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
             failure = IdentityFetchError("Failed to fetch OpenID identity: request failed", kind=FailureKind.UNEXPECTED)
         else:
-            media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            media_type = answer.response.headers.get("content-type", "").split(";")[0].strip().lower()
             if media_type == "application/jwt":
                 # Its signing algorithm is agreed at client registration, which this handler does not know.
                 msg = "OpenID provider returned a signed userinfo response, which is not supported"
                 raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
             try:
-                payload = decode_json_body(response)
+                payload = decode_json_body(answer)
             except ValueError:
                 failure = IdentityFetchError("Failed to parse OpenID identity response", kind=FailureKind.REFUSED)
         if failure is not None:
