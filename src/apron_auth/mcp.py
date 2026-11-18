@@ -83,12 +83,23 @@ _WELL_KNOWN_PRM = "/.well-known/oauth-protected-resource"
 class _MetadataFault(Enum):
     """Each member is one way a candidate URL failed to yield a metadata document.
 
-    A member's value says what the error reports about the document, after the document's name.
+    A member's value is what the error reports about the document, after the document's name.
+    A member's rank is how much the fault says about the document.
+    A higher rank says more.
+    The members are listed by rank rather than alphabetically.
     """
 
-    UNAVAILABLE = "could not be fetched"
-    UNPUBLISHED = "is not published"
-    UNREADABLE = "is not a JSON object"
+    rank: int
+
+    def __new__(cls, value: str, rank: int) -> _MetadataFault:
+        member = object.__new__(cls)
+        member._value_ = value
+        member.rank = rank
+        return member
+
+    UNPUBLISHED = ("is not published", 0)
+    UNAVAILABLE = ("could not be fetched", 1)
+    UNREADABLE = ("is not a JSON object", 2)
 
 
 class _MetadataOutcome(NamedTuple):
@@ -937,21 +948,27 @@ def _asm_candidates(auth_server: str) -> list[_Candidate]:
     return [_Candidate(url, caller_supplied=False, is_hint=False) for url in urls]
 
 
-def _reported_outcome(reported: _MetadataOutcome, observed: _MetadataOutcome) -> _MetadataOutcome:
-    """Return the outcome a metadata fetch reports, given a further candidate's outcome.
+def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
+    """Return the outcome a metadata fetch reports, given what each candidate showed.
 
-    A retryable outcome stands, because the fallback locations answer a client error as a rule and must not
-    hide an outage on the real URL.
-    Otherwise the further candidate's outcome replaces it.
+    A retryable outcome decides, because the fallback locations answer a client error as a rule.
+    An outage on the real URL must not be hidden by one of them.
+    Among the outcomes that are not retryable, the highest-ranked fault decides.
+    Candidates that showed the same fault are settled by the order they were tried.
+    An empty sequence reports that nothing is known about the document.
 
     Args:
-        reported: The outcome the candidates tried so far report.
-        observed: The outcome a further candidate showed.
+        observed: What each candidate showed, in the order they were tried.
 
     Returns:
         The outcome to report.
     """
-    return reported if reported.kind.retryable else observed
+    if not observed:
+        return _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+    retryable = next((outcome for outcome in observed if outcome.kind.retryable), None)
+    if retryable is not None:
+        return retryable
+    return max(observed, key=lambda outcome: outcome.fault.rank)
 
 
 async def _fetch_first_metadata(
@@ -982,13 +999,12 @@ async def _fetch_first_metadata(
     Raises:
         ConfigurationError: If a candidate the caller chose, and that is no hint, cannot be used.
         McpDiscoveryError: If a candidate the other side chose, and that is no hint, cannot be used, or
-            if no candidate succeeds. The error names ``what`` and the fault the candidates showed. Its
-            ``kind`` tells a fetch that may pass later from one that cannot, except where a caller's own
-            hook failed, which is never retried.
+            if no candidate succeeds. The error names ``what`` and the fault that says most about the
+            document. Its ``kind`` tells a fetch that may pass later from one that cannot, except where a
+            caller's own hook failed, which is never retried.
         OAuthError: As a caller's own hook raised it, for a candidate that is no hint.
     """
-    # The seed is not retryable, so the first candidate's outcome replaces it.
-    outcome = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+    observed: list[_MetadataOutcome] = []
     unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
     for candidate in candidates:
         url, caller_supplied = candidate.url, candidate.caller_supplied
@@ -1015,8 +1031,7 @@ async def _fetch_first_metadata(
             except httpx.RequestError as exc:
                 transport = http_failure(exc)
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
-                failure = _MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind)
-                outcome = _reported_outcome(outcome, failure)
+                observed.append(_MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind))
                 continue
             if response.status_code != 200:
                 status = response_failure(response)
@@ -1025,17 +1040,18 @@ async def _fetch_first_metadata(
                 # A redirect this library will not follow says nothing about one either.
                 serves_no_document = response.status_code in _ABSENT_DOCUMENT_STATUSES
                 fault = _MetadataFault.UNPUBLISHED if serves_no_document else _MetadataFault.UNAVAILABLE
-                outcome = _reported_outcome(outcome, _MetadataOutcome(fault, status.kind))
+                observed.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
                 payload = decode_json_body(response)
             except ValueError:
                 logger.debug("MCP discovery: %s returned a non-JSON body", what)
-                outcome = _reported_outcome(outcome, unreadable)
+                observed.append(unreadable)
                 continue
             if isinstance(payload, dict):
                 return payload
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
-            outcome = _reported_outcome(outcome, unreadable)
+            observed.append(unreadable)
+    outcome = _reported_outcome(observed)
     msg = f"{what} {outcome.fault.value}"
     raise McpDiscoveryError(msg, kind=outcome.kind)

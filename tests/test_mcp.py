@@ -556,6 +556,29 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.REFUSED
         assert exc_info.value.retryable is False
 
+    @pytest.mark.parametrize(
+        ("status", "content", "kind", "fault"),
+        [
+            # A body that answered but did not decode.
+            pytest.param(200, b"not json", FailureKind.REFUSED, "is not a JSON object", id="unreadable"),
+            # A refusal that may guard a document that exists.
+            pytest.param(403, b"", FailureKind.REJECTED, "could not be fetched", id="refused"),
+            # A redirect this library will not follow.
+            pytest.param(302, b"", FailureKind.REFUSED, "could not be fetched", id="redirect"),
+        ],
+    )
+    async def test_a_not_found_fallback_does_not_hide_what_an_earlier_candidate_showed(
+        self, httpx_mock: HTTPXMock, status: int, content: bytes, kind: FailureKind, fault: str
+    ) -> None:
+        """A not-found says least about the document, so a candidate that showed more decides over it."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, status_code=status, content=content)
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
+        with pytest.raises(McpDiscoveryError, match=fault) as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is kind
+        assert exc_info.value.retryable is False
+
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
         httpx_mock.add_response(
@@ -1332,16 +1355,38 @@ class TestAsmCandidateUrls:
 
 
 class TestReportedOutcome:
-    def test_a_retryable_outcome_stands_over_a_later_refusal(self) -> None:
+    _UNAVAILABLE = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REJECTED)
+    _UNPUBLISHED = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
+    _UNREADABLE = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
+
+    def test_a_retryable_outcome_decides_wherever_it_came(self) -> None:
         """The fallback locations answer a client error as a rule, which must not hide an outage."""
         outage = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR)
-        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
-        assert _reported_outcome(outage, refusal) == outage
+        assert _reported_outcome([outage, self._UNPUBLISHED]) == outage
+        assert _reported_outcome([self._UNPUBLISHED, outage]) == outage
 
-    def test_a_further_outcome_replaces_one_that_is_not_retryable(self) -> None:
-        unreadable = _MetadataOutcome(_MetadataFault.UNREADABLE, FailureKind.REFUSED)
-        refusal = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.REJECTED)
-        assert _reported_outcome(unreadable, refusal) == refusal
+    def test_the_fault_that_says_most_decides_among_the_rest(self) -> None:
+        assert _reported_outcome([self._UNREADABLE, self._UNPUBLISHED]) == self._UNREADABLE
+        assert _reported_outcome([self._UNPUBLISHED, self._UNREADABLE]) == self._UNREADABLE
+        assert _reported_outcome([self._UNAVAILABLE, self._UNPUBLISHED]) == self._UNAVAILABLE
+        assert _reported_outcome([self._UNPUBLISHED, self._UNAVAILABLE]) == self._UNAVAILABLE
+        assert _reported_outcome([self._UNREADABLE, self._UNAVAILABLE]) == self._UNREADABLE
+
+    def test_not_published_is_reported_only_where_every_candidate_showed_it(self) -> None:
+        """A not-found everywhere is the one answer that says the server publishes no such document."""
+        assert _reported_outcome([self._UNPUBLISHED, self._UNPUBLISHED]) == self._UNPUBLISHED
+
+    def test_candidates_showing_one_fault_are_settled_by_the_order_they_were_tried(self) -> None:
+        later = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+        assert _reported_outcome([self._UNAVAILABLE, later]) == self._UNAVAILABLE
+
+    def test_no_candidate_tried_says_nothing_about_the_document(self) -> None:
+        assert _reported_outcome([]) == _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.REFUSED)
+
+    def test_every_fault_ranks_on_its_own(self) -> None:
+        """A shared rank would let the order of the candidates decide again."""
+        ranks = [fault.rank for fault in _MetadataFault]
+        assert len(set(ranks)) == len(ranks)
 
 
 class TestValidateUrl:
