@@ -852,17 +852,19 @@ class _OAuthClientBase:
             return
         host = urlparse(revocation_url).hostname
         # Every task is created inside the try, so the finally bounds one created before a later call fails.
-        tasks: list[asyncio.Task[None]] = []
+        revocations: list[tuple[str, asyncio.Task[None]]] = []
         try:
             for label, token in tokens:
                 task = asyncio.create_task(self._revoke_one_refused_token(label, token, host))
-                tasks.append(task)
+                revocations.append((label, task))
                 task.add_done_callback(_read_task_exception)
-            _, timed_out = await asyncio.wait(tasks, timeout=self._config.revocation_cleanup_seconds)
+            _, timed_out = await asyncio.wait(
+                [task for _, task in revocations], timeout=self._config.revocation_cleanup_seconds
+            )
         finally:
-            await _cancel_and_wait(tasks)
+            await _cancel_and_wait([task for _, task in revocations])
         error: BaseException | None = None
-        for (label, _), task in zip(tokens, tasks, strict=True):
+        for label, task in revocations:
             if task in timed_out:
                 logger.warning(
                     "revoking the %s of a refused token response at %s did not finish within the time limit",
