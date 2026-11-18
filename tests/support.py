@@ -56,6 +56,7 @@ class LazyByteStream(httpx.AsyncByteStream):
     against one. This yields on demand, so a test can state what a reader pulled and what it did not.
 
     Attributes:
+        closed: Whether the body was released, which a reader that stops before the end must do.
         pulled: The bytes yielded so far, as they arrive on the wire.
     """
 
@@ -68,6 +69,7 @@ class LazyByteStream(httpx.AsyncByteStream):
         """
         self._chunks = chunks
         self._chunk_seconds = chunk_seconds
+        self.closed = False
         self.pulled = 0
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
@@ -83,7 +85,8 @@ class LazyByteStream(httpx.AsyncByteStream):
             yield chunk
 
     async def aclose(self) -> None:
-        """Release the body, which holds nothing to release."""
+        """Release the body, which holds nothing to release but records that it was asked."""
+        self.closed = True
 
 
 class LazyBodyTransport(httpx.AsyncBaseTransport):

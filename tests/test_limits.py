@@ -127,6 +127,27 @@ class TestWithinRequestLimit:
 
         assert answer.response.is_closed
 
+    async def test_the_response_is_closed_when_the_body_passes_the_limit(self) -> None:
+        """A body past the limit is abandoned part way, so nothing reaches the end of it to close it."""
+        stream = LazyByteStream([b"x" * 64] * 200)
+
+        async with self._client(LazyBodyTransport(stream)) as client:
+            answer = await self._answer(client, RequestLimits(max_body_bytes=128))
+
+            assert answer.body is None
+            assert answer.response.is_closed
+            assert stream.closed
+
+    async def test_the_body_is_released_when_the_limit_interrupts_the_read(self) -> None:
+        """A body still arriving when the limit passes is abandoned part way for the same reason."""
+        stream = LazyByteStream([b"y" * 16] * 100, chunk_seconds=0.05)
+
+        async with self._client(LazyBodyTransport(stream)) as client:
+            with pytest.raises(httpx.TimeoutException):
+                await self._answer(client, RequestLimits(connect_seconds=0.1, request_seconds=0.2))
+
+            assert stream.closed
+
 
 class TestEveryClientTheLibraryBuildsStatesItsLimits:
     def test_no_request_path_builds_a_client_outside_the_limits(self) -> None:
