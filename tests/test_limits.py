@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import tracemalloc
 from pathlib import Path
 
 import httpx
@@ -13,6 +14,9 @@ from apron_auth._limits import BoundedResponse, httpx_timeout, within_request_li
 from apron_auth.errors import FailureKind
 from apron_auth.models import RequestLimits
 from apron_auth.providers import google
+
+# How far past the limit a read may hold while it runs, which a chunk of its own size costs nothing to meet.
+_CHUNK_OVERHEAD_ALLOWED = 10
 
 # The HTTP clients this library builds, each of which states the per-step limits in force.
 _CLIENTS = {"AsyncClient", "AsyncOAuth2Client"}
@@ -137,6 +141,20 @@ class TestWithinRequestLimit:
             assert answer.body is None
             assert answer.response.is_closed
             assert stream.closed
+
+    async def test_a_body_split_into_many_chunks_is_held_in_what_the_limit_allows(self) -> None:
+        """The other side chooses how it splits a body, so a bound per chunk is no bound at all."""
+        cap = 64 * 1024
+        stream = LazyByteStream([b"x"] * cap)
+
+        async with self._client(LazyBodyTransport(stream)) as client:
+            tracemalloc.start()
+            answer = await self._answer(client, RequestLimits(max_body_bytes=cap))
+            _, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+        assert answer.body == b"x" * cap
+        assert peak < cap * _CHUNK_OVERHEAD_ALLOWED
 
     async def test_the_body_is_released_when_the_limit_interrupts_the_read(self) -> None:
         """A body still arriving when the limit passes is abandoned part way for the same reason."""

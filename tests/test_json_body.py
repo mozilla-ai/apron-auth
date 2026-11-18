@@ -124,6 +124,12 @@ class TestTheBodyIsReadUnderTheLimit:
 
         assert await _streamed(body, RequestLimits(max_body_bytes=len(body))) == {"filler": "f" * 900}
 
+    async def test_a_body_one_byte_past_the_limit_is_refused(self) -> None:
+        body = b'{"filler": "' + b"f" * 900 + b'"}'
+
+        with pytest.raises(ValueError, match="the body is too large to read"):
+            await _streamed(body, RequestLimits(max_body_bytes=len(body) - 1))
+
     async def test_a_body_that_states_nothing_is_read_as_the_empty_body_it_is(self) -> None:
         """A response that states no body states one the limit allowed, which a refused body does not."""
         stream = LazyByteStream([])

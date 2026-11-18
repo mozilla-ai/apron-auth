@@ -139,15 +139,16 @@ async def _body_within_limit(response: httpx.Response, max_bytes: int) -> Bounde
         response: The streamed response, whose body has not been read.
         max_bytes: The most decoded bytes to hold.
 
+    The bytes read are held in one buffer, so what this holds follows the limit rather than the number
+    of chunks the other side split the body into.
+
     Returns:
         The response and the body it stated, which is ``None`` where the body passed the limit.
     """
-    read: list[bytes] = []
-    size = 0
+    read = bytearray()
     # NOTE: The caller closes the response, which releases the stream this abandons past the limit.
     async for chunk in response.aiter_bytes():
-        size += len(chunk)
-        if size > max_bytes:
+        if len(read) + len(chunk) > max_bytes:
             return BoundedResponse(response, None)
-        read.append(chunk)
-    return BoundedResponse(response, b"".join(read))
+        read += chunk
+    return BoundedResponse(response, bytes(read))
