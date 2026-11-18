@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, NamedTuple
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -16,7 +17,8 @@ if TYPE_CHECKING:
 _WHOLE_REQUEST_REFUSAL = "request did not finish within the time allowed"
 
 
-class BoundedResponse(NamedTuple):
+@dataclass(frozen=True)
+class BoundedResponse:
     """One response and the body it stated, read under the limits in force.
 
     A body past the limit is stated as no body at all rather than as the bytes read before it passed,
@@ -24,6 +26,9 @@ class BoundedResponse(NamedTuple):
 
     NOTE: The body is held here rather than on the response, which never reads its own content, so
     ``response.content`` and ``response.text`` state nothing about what arrived.
+    NOTE: The body states nothing in a repr, and this is no sequence, because the other side writes
+    the body and may echo a credential in it. An error reporter records the frame locals of every
+    frame on a traceback, and a caller that holds this is on the traceback of the error it raises.
 
     Attributes:
         response: The response, for its status and its headers.
@@ -31,7 +36,7 @@ class BoundedResponse(NamedTuple):
     """
 
     response: httpx.Response
-    body: bytes | None
+    body: bytes | None = field(repr=False)
 
 
 def httpx_timeout(limits: RequestLimits) -> httpx.Timeout:

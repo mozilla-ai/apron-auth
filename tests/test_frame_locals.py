@@ -261,3 +261,23 @@ class TestAnIdentityFailure:
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []
         assert _locals_stating(caught.value, TOKEN) == []
+
+    @pytest.mark.httpx_mock(assert_all_responses_were_requested=False, can_send_already_matched_responses=True)
+    @pytest.mark.parametrize("provider", list(IDENTITY_CASES), ids=lambda provider: provider.value)
+    async def test_a_provider_handler_states_no_token_a_response_echoed(
+        self, provider: Provider, httpx_mock: HTTPXMock
+    ) -> None:
+        """A body is the other side's to write, so what holds one holds whatever that side put in it.
+
+        A provider that echoes the token in a body this library cannot read puts the token in every
+        local that body reaches.
+        """
+        httpx_mock.add_response(content=f"<html>no account for {TOKEN}</html>".encode())
+        handler, config = IDENTITY_CASES[provider]()
+
+        with pytest.raises(Exception) as caught:  # noqa: B017, PT011
+            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating(caught.value, TOKEN) == []
