@@ -24,9 +24,9 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
-    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
@@ -167,14 +167,14 @@ class GitHubIdentityHandler:
         """
         self._transport_factory = transport_factory
 
-    async def _fetch(self, client: httpx.AsyncClient, url: str, token: SecretToken, timeouts: TimeoutPolicy) -> Any:
+    async def _fetch(self, client: httpx.AsyncClient, url: str, token: SecretToken, limits: RequestLimits) -> Any:
         """Fetch one GitHub identity endpoint with the token presented as a bearer credential.
 
         Args:
             client: The HTTP client to issue the request with.
             url: The endpoint to request.
             token: The bearer access token the request carries.
-            timeouts: The limits in force for the request.
+            limits: The limits in force for the request.
 
         Returns:
             The decoded JSON body.
@@ -191,7 +191,7 @@ class GitHubIdentityHandler:
                 headers={"Authorization": f"Bearer {token.get_secret_value()}", **_GITHUB_API_HEADERS},
             ),
             "GitHub identity",
-            timeouts,
+            limits,
         )
 
     async def fetch_identity(self, material: IdentityMaterial, config: ProviderConfig) -> IdentityProfile:
@@ -212,9 +212,9 @@ class GitHubIdentityHandler:
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _GITHUB_USER_URL, "GitHub identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
-            user_payload = await self._fetch(client, _GITHUB_USER_URL, material.access_token, config.timeouts)
-            emails_payload = await self._fetch(client, _GITHUB_EMAILS_URL, material.access_token, config.timeouts)
+        async with identity_client(config.limits, transport=transport) as client:
+            user_payload = await self._fetch(client, _GITHUB_USER_URL, material.access_token, config.limits)
+            emails_payload = await self._fetch(client, _GITHUB_EMAILS_URL, material.access_token, config.limits)
 
         email, email_verified = _derive_github_email(user_payload, emails_payload)
         subject = user_payload.get("id")
@@ -314,7 +314,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a GitHub OAuth provider configuration.
 
@@ -329,8 +329,8 @@ def preset(
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -342,6 +342,6 @@ def preset(
         implicit_scopes=IMPLICIT_SCOPES,
     )
     config = declared.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )
     return config

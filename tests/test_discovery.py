@@ -15,7 +15,7 @@ from apron_auth._discovery import (
     str_list,
 )
 from apron_auth._timeouts import httpx_timeout
-from apron_auth.models import TimeoutPolicy
+from apron_auth.models import RequestLimits
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -124,15 +124,15 @@ class TestTheIssuerRefusalStaysInternal:
 class TestTheDiscoveryClientTakesThePolicysLimits:
     async def test_every_step_of_a_discovery_request_is_bounded(self) -> None:
         """A mock transport applies no limit of its own, so only the client it is given states these."""
-        policy = TimeoutPolicy(connect_seconds=2.0, request_seconds=7.0)
+        limits = RequestLimits(connect_seconds=2.0, request_seconds=7.0)
 
-        async with discovery_client("https://as.example.com/.well-known/openid-configuration", None, policy) as client:
-            assert client.timeout == httpx_timeout(policy)
+        async with discovery_client("https://as.example.com/.well-known/openid-configuration", None, limits) as client:
+            assert client.timeout == httpx_timeout(limits)
             assert client.timeout.connect == 2.0
             assert client.timeout.read == 7.0
 
     async def test_it_follows_no_redirect(self) -> None:
         async with discovery_client(
-            "https://as.example.com/.well-known/openid-configuration", None, TimeoutPolicy()
+            "https://as.example.com/.well-known/openid-configuration", None, RequestLimits()
         ) as client:
             assert client.follow_redirects is False

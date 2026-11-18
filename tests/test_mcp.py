@@ -48,8 +48,8 @@ from apron_auth.models import (
     IdentityProfile,
     OAuthPendingState,
     ProviderConfig,
+    RequestLimits,
     ServerMetadata,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 
@@ -2360,13 +2360,13 @@ class TestEndToEndFlow:
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
 
-class TestTheTimeoutPolicyBoundsMcpRequests:
+class TestTheRequestLimitsBoundMcpRequests:
     async def test_a_metadata_fetch_that_never_lands_is_refused_as_a_timeout(self) -> None:
         with pytest.raises(McpDiscoveryError) as refusal:
             await discover(
                 "https://mcp.example.com",
                 transport_factory=_crawling_transport,
-                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+                limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT
@@ -2377,7 +2377,7 @@ class TestTheTimeoutPolicyBoundsMcpRequests:
                 "https://as.example.com/register",
                 "https://app.example.com/callback",
                 transport_factory=_crawling_transport,
-                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+                limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT

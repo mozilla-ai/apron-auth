@@ -11,10 +11,10 @@ from support import LazyBodyTransport, LazyByteStream
 from apron_auth._http_errors import http_failure
 from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind
-from apron_auth.models import TimeoutPolicy
+from apron_auth.models import RequestLimits
 from apron_auth.providers import google
 
-# The HTTP clients this library builds, each of which states the policy's per-step limits.
+# The HTTP clients this library builds, each of which states the per-step limits in force.
 _CLIENTS = {"AsyncClient", "AsyncOAuth2Client"}
 
 # The functions that await a request under the limits in force, and so state what may be given to them.
@@ -47,7 +47,7 @@ def _sends_of_the_librarys_own(path: Path) -> list[ast.AST]:
 
 class TestHttpxTimeout:
     def test_every_step_of_a_request_is_bounded(self) -> None:
-        limits = httpx_timeout(TimeoutPolicy(connect_seconds=2.0, request_seconds=7.0))
+        limits = httpx_timeout(RequestLimits(connect_seconds=2.0, request_seconds=7.0))
 
         assert limits.connect == 2.0
         assert limits.read == 7.0
@@ -79,15 +79,15 @@ class TestWithinRequestLimit:
         return httpx.AsyncClient(transport=transport)
 
     @staticmethod
-    async def _answer(client: httpx.AsyncClient, policy: TimeoutPolicy) -> BoundedResponse:
+    async def _answer(client: httpx.AsyncClient, limits: RequestLimits) -> BoundedResponse:
         request = client.build_request("GET", "https://documents.test/d")
-        return await within_request_limit(client.send(request, stream=True), policy)
+        return await within_request_limit(client.send(request, stream=True), limits)
 
     async def test_a_request_that_finishes_in_time_answers_normally(self) -> None:
         stream = LazyByteStream([b'{"ok": true}'])
 
         async with self._client(LazyBodyTransport(stream)) as client:
-            answer = await self._answer(client, TimeoutPolicy())
+            answer = await self._answer(client, RequestLimits())
 
         assert answer.response.status_code == 200
         assert answer.body == b'{"ok": true}'
@@ -96,7 +96,7 @@ class TestWithinRequestLimit:
         """A step limit bounds one read, so only this bounds a response that arrives slowly in many steps."""
         async with self._client(_SleepingTransport()) as client:
             with pytest.raises(httpx.TimeoutException):
-                await self._answer(client, TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
+                await self._answer(client, RequestLimits(connect_seconds=0.01, request_seconds=0.01))
 
     async def test_a_body_that_arrives_slowly_is_refused_within_the_same_limit(self) -> None:
         """The response arrives before its body does, so a limit that ends at the headers bounds no body."""
@@ -104,33 +104,33 @@ class TestWithinRequestLimit:
 
         async with self._client(LazyBodyTransport(stream)) as client:
             with pytest.raises(httpx.TimeoutException):
-                await self._answer(client, TimeoutPolicy(connect_seconds=0.1, request_seconds=0.2))
+                await self._answer(client, RequestLimits(connect_seconds=0.1, request_seconds=0.2))
 
     async def test_the_refusal_is_classified_as_a_timeout(self) -> None:
         async with self._client(_SleepingTransport()) as client:
             with pytest.raises(httpx.TimeoutException) as refusal:
-                await self._answer(client, TimeoutPolicy(connect_seconds=0.01, request_seconds=0.01))
+                await self._answer(client, RequestLimits(connect_seconds=0.01, request_seconds=0.01))
 
         assert http_failure(refusal.value) == (FailureKind.TIMEOUT, "request timed out")
 
     async def test_another_failure_is_left_alone(self) -> None:
         async with self._client(_RefusingTransport(httpx.ConnectError("refused"))) as client:
             with pytest.raises(httpx.ConnectError):
-                await self._answer(client, TimeoutPolicy())
+                await self._answer(client, RequestLimits())
 
     async def test_the_response_is_closed_once_its_body_is_read(self) -> None:
         """A streamed response holds the connection until it is closed."""
         stream = LazyByteStream([b'{"ok": true}'])
 
         async with self._client(LazyBodyTransport(stream)) as client:
-            answer = await self._answer(client, TimeoutPolicy())
+            answer = await self._answer(client, RequestLimits())
 
         assert answer.response.is_closed
 
 
 class TestEveryClientTheLibraryBuildsStatesItsLimits:
-    def test_no_request_path_builds_a_client_outside_the_policy(self) -> None:
-        """A client built with limits of its own, or with none, is a request path the policy does not reach."""
+    def test_no_request_path_builds_a_client_outside_the_limits(self) -> None:
+        """A client built with limits of its own, or with none, is a request path the limits do not reach."""
         outside = []
         for path in sorted(_SRC.rglob("*.py")):
             for node in ast.walk(ast.parse(path.read_text())):
@@ -139,9 +139,9 @@ class TestEveryClientTheLibraryBuildsStatesItsLimits:
                 name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
                 if name not in _CLIENTS:
                     continue
-                limits = next((keyword.value for keyword in node.keywords if keyword.arg == "timeout"), None)
-                from_the_policy = isinstance(limits, ast.Call) and getattr(limits.func, "id", "") == "httpx_timeout"
-                if not from_the_policy:
+                stated = next((keyword.value for keyword in node.keywords if keyword.arg == "timeout"), None)
+                in_force = isinstance(stated, ast.Call) and getattr(stated.func, "id", "") == "httpx_timeout"
+                if not in_force:
                     outside.append(f"{path.relative_to(_SRC)}:{node.lineno}")
 
         assert outside == []
@@ -201,8 +201,8 @@ class TestEveryBodyIsReadUnderTheLimit:
         assert sent_elsewhere == []
 
 
-class TestEveryBuilderTakesThePolicy:
-    def test_every_configuration_builder_takes_the_callers_policy(self) -> None:
+class TestEveryBuilderTakesTheLimits:
+    def test_every_configuration_builder_takes_the_callers_limits(self) -> None:
         """A builder added later is where this is missed, and its users can then set no limit at all."""
         missing = []
         for path in sorted(_SRC.rglob("*.py")):
@@ -211,19 +211,19 @@ class TestEveryBuilderTakesThePolicy:
                     continue
                 if node.name not in _CONFIG_BUILDERS:
                     continue
-                if not any(argument.arg == "timeouts" for argument in node.args.kwonlyargs):
+                if not any(argument.arg == "limits" for argument in node.args.kwonlyargs):
                     missing.append(f"{path.relative_to(_SRC)}:{node.name}")
 
         assert missing == []
 
-    def test_a_preset_carries_the_policy_onto_the_configuration(self) -> None:
-        policy = TimeoutPolicy(request_seconds=30.0)
+    def test_a_preset_carries_the_limits_onto_the_configuration(self) -> None:
+        limits = RequestLimits(request_seconds=30.0)
 
-        config = google.preset("client", "secret", scopes=["openid"], timeouts=policy)  # pragma: allowlist secret
+        config = google.preset("client", "secret", scopes=["openid"], limits=limits)  # pragma: allowlist secret
 
-        assert config.timeouts == policy
+        assert config.limits == limits
 
-    def test_a_preset_defaults_to_the_policys_own_limits(self) -> None:
+    def test_a_preset_defaults_to_the_standard_limits(self) -> None:
         config = google.preset("client", "secret", scopes=["openid"])  # pragma: allowlist secret
 
-        assert config.timeouts == TimeoutPolicy()
+        assert config.limits == RequestLimits()

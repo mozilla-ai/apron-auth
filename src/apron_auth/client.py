@@ -1225,7 +1225,7 @@ class _OAuthClientBase:
             transport = chosen_transport(self._transport_factory, self._config.token_url)
             async with httpx.AsyncClient(
                 transport=transport,
-                timeout=httpx_timeout(self._config.timeouts),
+                timeout=httpx_timeout(self._config.limits),
                 follow_redirects=False,
             ) as client:
                 answer = await within_request_limit(
@@ -1236,7 +1236,7 @@ class _OAuthClientBase:
                         data=data | authentication.form,
                         headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
                     ),
-                    self._config.timeouts,
+                    self._config.limits,
                 )
             body = _object_body(answer)
             if body is not None and "error" in body:

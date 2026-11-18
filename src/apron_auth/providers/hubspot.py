@@ -38,10 +38,10 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
@@ -135,7 +135,7 @@ class HubSpotIdentityHandler:
                 request URL, which embeds the token.
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
-        payload = await self._introspect(material.access_token, config.timeouts)
+        payload = await self._introspect(material.access_token, config.limits)
 
         user_id = payload.get("user_id")
         hub_id = payload.get("hub_id")
@@ -170,14 +170,14 @@ class HubSpotIdentityHandler:
             raw=payload,
         )
 
-    async def _introspect(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> Any:
+    async def _introspect(self, access_token: SecretToken, limits: RequestLimits) -> Any:
         """Request the introspection endpoint and return the decoded body.
 
         The endpoint states the token in its path, so the URL is built where the request is sent.
 
         Args:
             access_token: The access token the introspection URL states.
-            timeouts: The limits in force for the introspection request.
+            limits: The limits in force for the introspection request.
 
         Returns:
             The decoded JSON body.
@@ -191,7 +191,7 @@ class HubSpotIdentityHandler:
         transport = identity_transport(
             self._transport_factory, _HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX, "HubSpot identity"
         )
-        async with identity_client(timeouts, transport=transport) as client:
+        async with identity_client(limits, transport=transport) as client:
             return await fetch_identity_json(
                 # NOTE: The URL carries the token, so it is stated here rather than bound to a local a
                 # traceback would render.
@@ -201,7 +201,7 @@ class HubSpotIdentityHandler:
                     f"{_HUBSPOT_TOKEN_INTROSPECT_URL_PREFIX}{quote(access_token.get_secret_value(), safe='')}",
                 ),
                 "HubSpot identity",
-                timeouts,
+                limits,
             )
 
 
@@ -273,7 +273,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a HubSpot OAuth provider configuration.
 
@@ -294,13 +294,13 @@ def preset(
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from apron_auth._timeouts import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
-from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, TimeoutPolicy
+from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, RequestLimits
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
 from apron_auth.scopes import parse_scope
@@ -85,7 +85,7 @@ class TypeformIdentityHandler:
                 raise IdentityScopeNotGrantedError(f"Typeform identity requires the {_TYPEFORM_USERINFO_SCOPE} scope")
 
         transport = identity_transport(self._transport_factory, _TYPEFORM_USERINFO_URL, "Typeform identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
+        async with identity_client(config.limits, transport=transport) as client:
             payload = await fetch_identity_json(
                 streamed(
                     client,
@@ -94,7 +94,7 @@ class TypeformIdentityHandler:
                     headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Typeform identity",
-                config.timeouts,
+                config.limits,
             )
 
         if not isinstance(payload, dict):
@@ -126,7 +126,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Typeform OAuth provider configuration.
 
@@ -139,13 +139,13 @@ def preset(
         scopes: The scopes to request.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. It declares no revocation endpoint, because Typeform
         exposes none.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

@@ -23,10 +23,10 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._presets import Preset
@@ -182,9 +182,9 @@ class AtlassianIdentityHandler:
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _ATLASSIAN_USERINFO_URL, "Atlassian identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
-            tenancies = await self._fetch_tenancies(client, material.access_token, config.timeouts)
-            payload = await self._fetch_profile(client, material.access_token, config.timeouts)
+        async with identity_client(config.limits, transport=transport) as client:
+            tenancies = await self._fetch_tenancies(client, material.access_token, config.limits)
+            payload = await self._fetch_profile(client, material.access_token, config.limits)
 
         return IdentityProfile(
             provider=Provider.ATLASSIAN,
@@ -199,14 +199,14 @@ class AtlassianIdentityHandler:
         )
 
     async def _fetch_tenancies(
-        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, limits: RequestLimits
     ) -> tuple[TenancyContext, ...]:
         """Resolve the sites the token can access into tenancies.
 
         Args:
             client: The HTTP client to issue the request with.
             token: The bearer access token the request carries.
-            timeouts: The limits in force for the tenancy request.
+            limits: The limits in force for the tenancy request.
 
         Returns:
             One tenancy per accessible site, in response order.
@@ -224,13 +224,13 @@ class AtlassianIdentityHandler:
                 headers={"Authorization": f"Bearer {token.get_secret_value()}"},
             ),
             "Atlassian accessible resources",
-            timeouts,
+            limits,
         )
 
         return _build_tenancies(resources)
 
     async def _fetch_profile(
-        self, client: httpx.AsyncClient, token: SecretToken, timeouts: TimeoutPolicy
+        self, client: httpx.AsyncClient, token: SecretToken, limits: RequestLimits
     ) -> dict[str, Any]:
         """Fetch the person-level profile from the User Identity API.
 
@@ -241,7 +241,7 @@ class AtlassianIdentityHandler:
         Args:
             client: The HTTP client to issue the request with.
             token: The bearer access token the request carries.
-            timeouts: The limits in force for the profile request.
+            limits: The limits in force for the profile request.
 
         Returns:
             The parsed ``/me`` payload, or an empty dict when it is
@@ -255,7 +255,7 @@ class AtlassianIdentityHandler:
                     _ATLASSIAN_USERINFO_URL,
                     headers={"Authorization": f"Bearer {token.get_secret_value()}"},
                 ),
-                timeouts,
+                limits,
             )
             answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
@@ -306,7 +306,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create an Atlassian OAuth provider configuration.
 
@@ -319,13 +319,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``audience`` and ``prompt=consent`` defaults.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

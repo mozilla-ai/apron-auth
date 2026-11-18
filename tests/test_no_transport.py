@@ -16,7 +16,7 @@ from apron_auth.errors import (
     RevocationError,
     TokenRefreshError,
 )
-from apron_auth.models import Provider, ProviderConfig, SecretToken, TimeoutPolicy
+from apron_auth.models import Provider, ProviderConfig, RequestLimits, SecretToken
 from apron_auth.providers._identity_requests import identity_transport
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 from apron_auth.providers._openid_documents import fetch_document
@@ -85,12 +85,12 @@ class TestEveryOutboundPathFailsClosed:
     async def test_the_signing_key_fetch_refuses(self) -> None:
         keys = IssuerSigningKeys(_KEYS_URL, algorithms=(SigningAlgorithm.RS256,), transport_factory=_forgetful_factory)
         with pytest.raises(IdentityFetchError) as refusal:
-            await keys._fetch(TimeoutPolicy())
+            await keys._fetch(RequestLimits())
         assert refusal.value.retryable is False
 
     async def test_openid_discovery_refuses(self) -> None:
         with pytest.raises(OidcDiscoveryError) as refusal:
-            await fetch_document(_OPENID_URL, _forgetful_factory, TimeoutPolicy())
+            await fetch_document(_OPENID_URL, _forgetful_factory, RequestLimits())
         assert refusal.value.retryable is False
 
     async def test_mcp_discovery_refuses(self) -> None:

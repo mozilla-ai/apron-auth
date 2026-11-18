@@ -8,7 +8,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
-from apron_auth.models import IdentityMaterial, ProviderConfig, SecretToken, TenancyContext, TimeoutPolicy
+from apron_auth.models import IdentityMaterial, ProviderConfig, RequestLimits, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.google import GoogleRevocationHandler
@@ -330,7 +330,7 @@ class TestGoogleRevocationHandler:
         assert httpx_mock.get_requests() == []
 
 
-class TestTheTimeoutPolicyBoundsTheIdentityRequest:
+class TestTheRequestLimitsBoundTheIdentityRequest:
     async def test_a_userinfo_response_that_never_lands_is_refused_as_a_timeout(self, httpx_mock: HTTPXMock) -> None:
         """A handler builds its own client, so this is the only place a caller's limits can reach the request."""
 
@@ -345,7 +345,7 @@ class TestTheTimeoutPolicyBoundsTheIdentityRequest:
             client_id="gid",
             client_secret="gsecret",  # pragma: allowlist secret
             scopes=["openid"],
-            timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+            limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
         )
 
         with pytest.raises(IdentityFetchError) as refusal:

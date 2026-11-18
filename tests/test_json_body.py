@@ -13,7 +13,7 @@ from support import LazyBodyTransport, LazyByteStream
 import apron_auth
 from apron_auth._json_body import decode_json_body
 from apron_auth._timeouts import within_request_limit
-from apron_auth.models import TimeoutPolicy
+from apron_auth.models import RequestLimits
 
 _PACKAGE_ROOT = Path(apron_auth.__file__).parent
 
@@ -21,12 +21,12 @@ _PACKAGE_ROOT = Path(apron_auth.__file__).parent
 _CHUNK_BYTES = 1024
 
 
-async def _streamed(body: bytes, policy: TimeoutPolicy, *, headers: dict[str, str] | None = None) -> object:
+async def _streamed(body: bytes, limits: RequestLimits, *, headers: dict[str, str] | None = None) -> object:
     """Decode ``body`` as it arrives from a transport that yields it one chunk at a time."""
     stream = LazyByteStream([body[at : at + _CHUNK_BYTES] for at in range(0, len(body), _CHUNK_BYTES)])
     async with httpx.AsyncClient(transport=LazyBodyTransport(stream, headers=headers)) as client:
         request = client.build_request("GET", "https://documents.test/d")
-        return decode_json_body((await within_request_limit(client.send(request, stream=True), policy)).body)
+        return decode_json_body((await within_request_limit(client.send(request, stream=True), limits)).body)
 
 
 def _decodes_a_body_directly(call: ast.Call) -> bool:
@@ -122,7 +122,7 @@ class TestTheBodyIsReadUnderTheLimit:
     async def test_a_body_at_the_limit_is_read(self) -> None:
         body = b'{"filler": "' + b"f" * 900 + b'"}'
 
-        assert await _streamed(body, TimeoutPolicy(max_body_bytes=len(body))) == {"filler": "f" * 900}
+        assert await _streamed(body, RequestLimits(max_body_bytes=len(body))) == {"filler": "f" * 900}
 
     async def test_a_body_that_states_nothing_is_read_as_the_empty_body_it_is(self) -> None:
         """A response that states no body states one the limit allowed, which a refused body does not."""
@@ -130,7 +130,7 @@ class TestTheBodyIsReadUnderTheLimit:
 
         async with httpx.AsyncClient(transport=LazyBodyTransport(stream)) as client:
             request = client.build_request("GET", "https://documents.test/d")
-            answer = await within_request_limit(client.send(request, stream=True), TimeoutPolicy())
+            answer = await within_request_limit(client.send(request, stream=True), RequestLimits())
 
         assert answer.body == b""
         with pytest.raises(ValueError, match="the body is not JSON"):
@@ -140,7 +140,7 @@ class TestTheBodyIsReadUnderTheLimit:
         body = b'{"filler": "' + b"f" * 100_000 + b'"}'
 
         with pytest.raises(ValueError, match="the body is too large to read") as excinfo:
-            await _streamed(body, TimeoutPolicy(max_body_bytes=4096))
+            await _streamed(body, RequestLimits(max_body_bytes=4096))
 
         assert excinfo.value.__context__ is None
         assert excinfo.value.__cause__ is None
@@ -153,7 +153,7 @@ class TestTheBodyIsReadUnderTheLimit:
 
         async with httpx.AsyncClient(transport=LazyBodyTransport(stream)) as client:
             request = client.build_request("GET", "https://documents.test/d")
-            answer = await within_request_limit(client.send(request, stream=True), TimeoutPolicy(max_body_bytes=4096))
+            answer = await within_request_limit(client.send(request, stream=True), RequestLimits(max_body_bytes=4096))
 
         assert stream.pulled < len(body) / 10
         assert answer.body is None, "a body past the limit states no body, which an empty one does not"
@@ -166,6 +166,6 @@ class TestTheBodyIsReadUnderTheLimit:
         headers = {"content-type": "application/json", "content-encoding": "gzip"}
 
         with pytest.raises(ValueError, match="the body is too large to read"):
-            await _streamed(compressed, TimeoutPolicy(max_body_bytes=1_048_576), headers=headers)
+            await _streamed(compressed, RequestLimits(max_body_bytes=1_048_576), headers=headers)
 
         assert len(compressed) < 1_048_576

@@ -21,9 +21,9 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
@@ -96,7 +96,7 @@ class NotionIdentityHandler:
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
+        async with identity_client(config.limits, transport=transport) as client:
             payload = await fetch_identity_json(
                 streamed(
                     client,
@@ -108,7 +108,7 @@ class NotionIdentityHandler:
                     },
                 ),
                 "Notion identity",
-                config.timeouts,
+                config.limits,
             )
 
         bot = payload.get("bot") if isinstance(payload, dict) else None
@@ -230,7 +230,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Notion OAuth provider configuration.
 
@@ -246,13 +246,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``owner=user`` default.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

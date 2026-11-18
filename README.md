@@ -607,7 +607,7 @@ A config whose provider exposes no revocation endpoint, such as Microsoft's or T
 
 ### Request limits
 
-One policy bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, and MCP registration. `TimeoutPolicy` states what a request may spend. `connect_seconds` bounds establishing a connection, `request_seconds` bounds a whole request however many steps it takes, and `max_body_bytes` bounds the decoded body a response may state. Each must be positive and finite, so no limit can be turned off, and a connect limit longer than the request limit is refused rather than accepted and ignored. The defaults are 5 seconds, 10 seconds and 1 MiB.
+One set of limits bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, and MCP registration. `RequestLimits` states what a request may spend. `connect_seconds` bounds establishing a connection, `request_seconds` bounds a whole request however many steps it takes, and `max_body_bytes` bounds the decoded body a response may state. Each must be positive and finite, so no limit can be turned off, and a connect limit longer than the request limit is refused rather than accepted and ignored. The defaults are 5 seconds, 10 seconds and 1 MiB.
 
 A whole-request limit is not a per-step one. An HTTP client's own limits bound a single read or write, so a response arriving slowly in many steps outlives all of them. `request_seconds` bounds the request itself, including reading the body it answers with, and a request that passes it fails with the `TIMEOUT` failure kind.
 
@@ -618,21 +618,21 @@ The token, revocation and identity requests had no whole-request limit before 0.
 Set it where you build the configuration, and every request for that provider runs under it. Each builder takes it as a keyword, and a configuration written by hand takes it as a field:
 
 ```python
-from apron_auth import OAuthClient, TimeoutPolicy
+from apron_auth import OAuthClient, RequestLimits
 from apron_auth.providers import google
 
 config = google.preset(
     client_id="...",
     client_secret="...",
     scopes=["openid", "email"],
-    timeouts=TimeoutPolicy(connect_seconds=2.0, request_seconds=30.0),
+    limits=RequestLimits(connect_seconds=2.0, request_seconds=30.0),
 )
 client = OAuthClient(config)
 ```
 
 The functions that run before a configuration exists take the same keyword, because they have none to read it from: `mcp.discover`, `mcp.register_client`, `oidc.discover` and `WorkloadTokenVerifier`.
 
-A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.timeouts` is the policy in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and nothing in this library bounds them for it.
+A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.limits` is the set of limits in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and nothing in this library bounds them for it.
 
 `ProviderConfig.revocation_cleanup_seconds` is a separate limit, because it bounds this library's own work rather than one request: when a token response is refused, the tokens it carried are revoked, and each revocation is canceled past that limit so the refusal is reported rather than waited on. It defaults to ten seconds. A revocation handler that does not stop when it is canceled can still delay the refusal, because this library waits for the cancellation it asked for.
 

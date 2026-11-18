@@ -30,11 +30,11 @@ from apron_auth.models import (
     OAuthPendingState,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     ServerMetadata,
     TenancyContext,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
     TokenSet,
     UrlField,
@@ -704,7 +704,7 @@ class TestUnknownFieldRefusals:
             "OAuthPendingState",
             "ProviderConfig",
             "ServerMetadata",
-            "TimeoutPolicy",
+            "RequestLimits",
             "TokenSet",
             "UserToken",
             "WorkloadIssuer",
@@ -2082,8 +2082,8 @@ class TestProviderConfigTimeouts:
         defaults.update(overrides)
         return ProviderConfig(**defaults)
 
-    def test_a_config_carries_the_default_policy(self) -> None:
-        assert self._config().timeouts == TimeoutPolicy()
+    def test_a_config_carries_the_default_limits(self) -> None:
+        assert self._config().limits == RequestLimits()
 
     def test_a_config_bounds_the_cleanup_after_a_refusal_itself(self) -> None:
         """The cleanup limit bounds this library's own orchestration, not one request, so it sits here."""
@@ -2096,14 +2096,14 @@ class TestProviderConfigTimeouts:
             self._config(revocation_cleanup_seconds=value)
 
     def test_a_caller_states_a_policy_of_its_own(self) -> None:
-        policy = TimeoutPolicy(connect_seconds=1.0, request_seconds=30.0)
+        limits = RequestLimits(connect_seconds=1.0, request_seconds=30.0)
 
-        assert self._config(timeouts=policy).timeouts == policy
+        assert self._config(limits=limits).limits == limits
 
-    def test_a_policy_that_is_not_one_is_refused(self) -> None:
+    def test_limits_that_are_not_limits_are_refused(self) -> None:
         """Every request reads these limits, so a config cannot carry something that states none."""
         with pytest.raises(ConfigurationError):
-            self._config(timeouts=None)
+            self._config(limits=None)
 
 
 class TestProviderConfigProvider:
@@ -2943,20 +2943,20 @@ class TestWorkloadIssuer:
             WorkloadIssuer(issuer="https://user:secret@token.actions.example.com")  # pragma: allowlist secret
 
 
-class TestTimeoutPolicy:
+class TestRequestLimits:
     def test_the_defaults_bound_a_connect_and_a_whole_request(self) -> None:
-        policy = TimeoutPolicy()
+        limits = RequestLimits()
 
-        assert policy.connect_seconds == 5.0
-        assert policy.request_seconds == 10.0
+        assert limits.connect_seconds == 5.0
+        assert limits.request_seconds == 10.0
 
     def test_a_connect_limit_the_request_limit_would_cancel_first_is_refused(self) -> None:
         """A connect limit longer than the whole-request limit can never elapse, so it states nothing."""
         with pytest.raises(ConfigurationError, match="connect_seconds must not exceed request_seconds"):
-            TimeoutPolicy(connect_seconds=10.0, request_seconds=5.0)
+            RequestLimits(connect_seconds=10.0, request_seconds=5.0)
 
     def test_a_connect_limit_equal_to_the_request_limit_is_accepted(self) -> None:
-        assert TimeoutPolicy(connect_seconds=5.0, request_seconds=5.0).connect_seconds == 5.0
+        assert RequestLimits(connect_seconds=5.0, request_seconds=5.0).connect_seconds == 5.0
 
     @pytest.mark.parametrize("limit", ["connect_seconds", "request_seconds"])
     @pytest.mark.parametrize(
@@ -2965,17 +2965,17 @@ class TestTimeoutPolicy:
         ids=["zero", "negative", "infinite", "not-a-number"],
     )
     def test_a_limit_that_waits_forever_or_refuses_every_request_is_refused(self, limit: str, value: float) -> None:
-        """A limit a caller can turn off is a limit that is not there, which is what this policy exists to stop."""
+        """A limit a caller can turn off is a limit that is not there, which is what this rule exists to stop."""
         with pytest.raises(ConfigurationError, match=f"{limit} must be a positive finite number"):
-            TimeoutPolicy(**{limit: value, "connect_seconds": value if limit == "connect_seconds" else 0.01})
+            RequestLimits(**{limit: value, "connect_seconds": value if limit == "connect_seconds" else 0.01})
 
     def test_an_unknown_field_is_refused(self) -> None:
         """A caller writes this model, so a mistyped limit cannot be dropped and leave the default in force."""
         with pytest.raises(ConfigurationError):
-            TimeoutPolicy(read_seconds=1.0)
+            RequestLimits(read_seconds=1.0)
 
     def test_the_default_bounds_the_body_a_request_may_read(self) -> None:
-        assert TimeoutPolicy().max_body_bytes == 1_048_576
+        assert RequestLimits().max_body_bytes == 1_048_576
 
     @pytest.mark.parametrize(
         "value",
@@ -2985,12 +2985,12 @@ class TestTimeoutPolicy:
     def test_a_body_cap_that_bounds_nothing_or_counts_no_whole_bytes_is_refused(self, value: float) -> None:
         """A cap a caller can turn off is a cap that is not there, and a part of a byte is not a count."""
         with pytest.raises(ConfigurationError):
-            TimeoutPolicy(max_body_bytes=value)
+            RequestLimits(max_body_bytes=value)
 
     def test_frozen(self) -> None:
-        policy = TimeoutPolicy()
+        limits = RequestLimits()
         with pytest.raises(ConfigurationError):
-            policy.request_seconds = 1.0
+            limits.request_seconds = 1.0
 
 
 class TestProviderFactsAreDerived:

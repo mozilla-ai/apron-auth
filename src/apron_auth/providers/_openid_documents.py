@@ -22,7 +22,7 @@ from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import FailureKind, OidcDiscoveryError
 
 if TYPE_CHECKING:
-    from apron_auth.models import TimeoutPolicy
+    from apron_auth.models import RequestLimits
     from apron_auth.protocols import TransportFactory
 
 # The logger name is part of the documented interface, so it does not follow __name__.
@@ -153,9 +153,7 @@ def optional_url(document: dict[str, Any], *, key: str, field: str, allow_insecu
     return require_url(value, field=field, allow_insecure_http=allow_insecure_http, caller_supplied=False)
 
 
-async def fetch_document(
-    url: str, transport_factory: TransportFactory | None, timeouts: TimeoutPolicy
-) -> dict[str, Any]:
+async def fetch_document(url: str, transport_factory: TransportFactory | None, limits: RequestLimits) -> dict[str, Any]:
     """Fetch the configuration document at ``url``.
 
     Redirects are not followed, so the request goes to ``url`` and nowhere else.
@@ -163,7 +161,7 @@ async def fetch_document(
     Args:
         url: The document URL, already validated.
         transport_factory: Optional factory controlling the outbound connection.
-        timeouts: The limits in force for the fetch.
+        limits: The limits in force for the fetch.
 
     Returns:
         The document as a JSON object.
@@ -173,7 +171,7 @@ async def fetch_document(
             the response is not HTTP 200, or its body is not a JSON object.
     """
     try:
-        client = discovery_client(url, transport_factory, timeouts)
+        client = discovery_client(url, transport_factory, limits)
     except NoTransportError:
         msg = "could not fetch the OpenID provider configuration (transport_factory returned no transport)"
         raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from None
@@ -184,7 +182,7 @@ async def fetch_document(
         raise OidcDiscoveryError(msg, kind=FailureKind.UNEXPECTED) from exc
     async with client:
         try:
-            answer = await within_request_limit(streamed(client, "GET", url), timeouts)
+            answer = await within_request_limit(streamed(client, "GET", url), limits)
         except httpx.RequestError as exc:
             transport = http_failure(exc)
             msg = f"could not fetch the OpenID provider configuration ({transport.description})"

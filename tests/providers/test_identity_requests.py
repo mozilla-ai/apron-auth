@@ -8,14 +8,14 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth._timeouts import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError
-from apron_auth.models import TimeoutPolicy
+from apron_auth.models import RequestLimits
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client
 
 URL = "https://provider.example.com/me"
 TOKEN = "access-SECRET-xyz"  # pragma: allowlist secret
 
 # The limits every request in these tests runs under.
-_TIMEOUTS = TimeoutPolicy()
+_LIMITS = RequestLimits()
 
 
 async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchError:
@@ -24,7 +24,7 @@ async def _error(request_url: str = URL, token: str = TOKEN) -> IdentityFetchErr
             await fetch_identity_json(
                 streamed(client, "GET", request_url, headers={"Authorization": f"Bearer {token}"}),
                 "Example identity",
-                _TIMEOUTS,
+                _LIMITS,
             )
     assert exc_info.value.__cause__ is None
     assert exc_info.value.__context__ is None
@@ -35,7 +35,7 @@ async def test_returns_the_decoded_body(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(url=URL, json={"sub": "u-1"})
 
     async with httpx.AsyncClient() as client:
-        payload = await fetch_identity_json(streamed(client, "GET", URL), "Example identity", _TIMEOUTS)
+        payload = await fetch_identity_json(streamed(client, "GET", URL), "Example identity", _LIMITS)
 
     assert payload == {"sub": "u-1"}
 
@@ -97,7 +97,7 @@ class _SleepingTransport(httpx.AsyncBaseTransport):
 
 async def test_a_request_that_outlives_the_limit_is_a_timeout() -> None:
     """Every identity request is bounded by this one await, which no walk of the source can see."""
-    limits = TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05)
+    limits = RequestLimits(connect_seconds=0.05, request_seconds=0.05)
 
     async with identity_client(limits, transport=_SleepingTransport()) as client:
         with pytest.raises(IdentityFetchError) as refusal:
@@ -114,12 +114,12 @@ async def test_the_client_follows_no_redirect() -> None:
         reached.append(str(request.url))
         return httpx.Response(302, headers={"Location": "https://attacker.example/me"})
 
-    async with identity_client(_TIMEOUTS, transport=httpx.MockTransport(respond)) as client:
+    async with identity_client(_LIMITS, transport=httpx.MockTransport(respond)) as client:
         with pytest.raises(IdentityFetchError) as exc_info:
             await fetch_identity_json(
                 streamed(client, "GET", URL, headers={"Authorization": f"Bearer {TOKEN}"}),
                 "Example identity",
-                _TIMEOUTS,
+                _LIMITS,
             )
 
     assert reached == [URL], "the token must not follow the redirect"

@@ -1,4 +1,4 @@
-"""The limits a policy puts on one outbound request."""
+"""The limits this library puts on one outbound request."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import httpx
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Mapping
 
-    from apron_auth.models import TimeoutPolicy
+    from apron_auth.models import RequestLimits
 
 # What a refusal of a request that outlived its limit states. It names no URL and no endpoint.
 _WHOLE_REQUEST_REFUSAL = "request did not finish within the time allowed"
@@ -34,19 +34,19 @@ class BoundedResponse(NamedTuple):
     body: bytes | None
 
 
-def httpx_timeout(policy: TimeoutPolicy) -> httpx.Timeout:
-    """Return the per-step limits an HTTP client applies under ``policy``.
+def httpx_timeout(limits: RequestLimits) -> httpx.Timeout:
+    """Return the per-step limits an HTTP client applies to one request.
 
     Each step of a request gets the whole-request limit, which bounds no request on its own because a
     request takes as many steps as the other side answers in. ``within_request_limit`` bounds the request.
 
     Args:
-        policy: The limits in force.
+        limits: The limits in force.
 
     Returns:
         The limits on connecting, reading, writing, and waiting for a pooled connection.
     """
-    return httpx.Timeout(policy.request_seconds, connect=policy.connect_seconds)
+    return httpx.Timeout(limits.request_seconds, connect=limits.connect_seconds)
 
 
 async def streamed(
@@ -89,8 +89,8 @@ async def streamed(
     return await client.send(request, auth=auth, stream=True)
 
 
-async def within_request_limit(request: Awaitable[httpx.Response], policy: TimeoutPolicy) -> BoundedResponse:
-    """Await one streamed request and read its body, refusing it past the policy's limits.
+async def within_request_limit(request: Awaitable[httpx.Response], limits: RequestLimits) -> BoundedResponse:
+    """Await one streamed request and read its body, refusing it past the limits in force.
 
     The body is counted as it decodes and the read stops at the byte that passes the limit, so no more
     than the limit is retained however far a compressed body would expand. A body that passed the limit
@@ -107,20 +107,20 @@ async def within_request_limit(request: Awaitable[httpx.Response], policy: Timeo
 
     Args:
         request: The pending streamed request, which is canceled when the limit passes.
-        policy: The limits in force.
+        limits: The limits in force.
 
     Returns:
         The response and the body it stated.
 
     Raises:
-        httpx.TimeoutException: If the request and its body do not arrive within ``policy.request_seconds``.
+        httpx.TimeoutException: If the request and its body do not arrive within ``limits.request_seconds``.
             Whatever else the request raises is left alone.
     """
     try:
-        async with asyncio.timeout(policy.request_seconds):
+        async with asyncio.timeout(limits.request_seconds):
             response = await request
             try:
-                return await _body_within_limit(response, policy.max_body_bytes)
+                return await _body_within_limit(response, limits.max_body_bytes)
             finally:
                 await response.aclose()
     except TimeoutError as exc:

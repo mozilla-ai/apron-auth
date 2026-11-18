@@ -310,7 +310,7 @@ async def send_revocation(
         transport = chosen_transport(transport_factory, request.endpoint or request.url)
         # A redirect would carry the token to a host the gate never read, so none is followed.
         async with httpx.AsyncClient(
-            transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
+            transport=transport, timeout=httpx_timeout(config.limits), follow_redirects=False
         ) as client:
             answer = await within_request_limit(
                 streamed(
@@ -323,7 +323,7 @@ async def send_revocation(
                     json=request.json_body,
                     params=request.params,
                 ),
-                config.timeouts,
+                config.limits,
             )
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except NoTransportError:

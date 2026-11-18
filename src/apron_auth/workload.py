@@ -34,7 +34,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import SecretToken, TimeoutPolicy, UrlField, WorkloadIssuer
+from apron_auth.models import RequestLimits, SecretToken, UrlField, WorkloadIssuer
 from apron_auth.providers._jwks import IssuerSigningKeys, VerifiedToken
 from apron_auth.providers._openid_documents import fetch_document, optional_url, require_openid_issuer, require_url
 from apron_auth.providers.oidc import discovery_url
@@ -143,7 +143,7 @@ class _TrustedIssuer:
         issuer: WorkloadIssuer,
         *,
         transport_factory: TransportFactory | None,
-        timeouts: TimeoutPolicy,
+        limits: RequestLimits,
         clock: Callable[[], float],
     ) -> None:
         """Bind to one issuer, refusing a URL this library could not fetch from.
@@ -151,7 +151,7 @@ class _TrustedIssuer:
         Args:
             issuer: The issuer to accept tokens from.
             transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
-            timeouts: The limits on the document and key set fetches.
+            limits: The limits on the document and key set fetches.
             clock: The monotonic clock that paces rediscovery.
 
         Raises:
@@ -174,7 +174,7 @@ class _TrustedIssuer:
             raise ConfigurationError(str(exc)) from exc
         self._issuer = issuer.issuer
         self._transport_factory = transport_factory
-        self._timeouts = timeouts
+        self._limits = limits
         self._clock = clock
         self._key_set_url = issuer.jwks_url
         self._discovers_the_key_set = issuer.jwks_url is None
@@ -245,7 +245,7 @@ class _TrustedIssuer:
         if moved is None:
             return None
         try:
-            verified = await moved.keys.verify(SecretToken(token), self._timeouts)
+            verified = await moved.keys.verify(SecretToken(token), self._limits)
         except (IdentityFetchError, TokenValidationError):
             # NOTE: The failure is not logged with its value, because a failed request can render itself.
             logger.warning(
@@ -285,7 +285,7 @@ class _TrustedIssuer:
             OidcDiscoveryError: If the document cannot be fetched or read, names another issuer, or names
                 no key set.
         """
-        document = await fetch_document(self._document_url, self._transport_factory, self._timeouts)
+        document = await fetch_document(self._document_url, self._transport_factory, self._limits)
         require_openid_issuer(document, self._issuer)
         jwks_url = optional_url(
             document,
@@ -324,7 +324,7 @@ class WorkloadTokenVerifier:
         issuers: Collection[WorkloadIssuer],
         *,
         transport_factory: TransportFactory | None = None,
-        timeouts: TimeoutPolicy | None = None,
+        limits: RequestLimits | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Bind the verifier to the issuers whose tokens it accepts.
@@ -333,8 +333,8 @@ class WorkloadTokenVerifier:
             issuers: The issuers to accept tokens from, each named once.
             transport_factory: Optional factory returning an httpx transport for the document and key set URLs.
                 Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
-            timeouts: The limits on the document and key set fetches.
-                Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+            limits: The limits on the document and key set fetches.
+                Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
             clock: The monotonic clock that ages the cached keys and paces rediscovery.
 
         Raises:
@@ -345,14 +345,14 @@ class WorkloadTokenVerifier:
         if not stated or not all(isinstance(entry, WorkloadIssuer) for entry in stated):
             msg = "A verifier accepts one or more issuers, each stated as a WorkloadIssuer"
             raise ConfigurationError(msg)
-        self._timeouts = timeouts or TimeoutPolicy()
+        self._limits = limits or RequestLimits()
         self._issuers: dict[str, _TrustedIssuer] = {}
         for entry in stated:
             if entry.issuer in self._issuers:
                 msg = "A verifier accepts each issuer once, and one of them is named more than once"
                 raise ConfigurationError(msg)
             self._issuers[entry.issuer] = _TrustedIssuer(
-                entry, transport_factory=transport_factory, timeouts=self._timeouts, clock=clock
+                entry, transport_factory=transport_factory, limits=self._limits, clock=clock
             )
 
     @property
@@ -467,7 +467,7 @@ class WorkloadTokenVerifier:
         """
         signing_keys = await trusted.keys()
         try:
-            return await signing_keys.verify(SecretToken(token), self._timeouts)
+            return await signing_keys.verify(SecretToken(token), self._limits)
         except TokenValidationError as refusal:
             if refusal.reason is not TokenValidationReason.UNKNOWN_KEY:
                 raise

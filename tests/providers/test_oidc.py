@@ -31,8 +31,8 @@ from apron_auth.models import (
     FreshTokenSet,
     IdentityMaterial,
     ProviderConfig,
+    RequestLimits,
     ServerMetadata,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
     UrlField,
 )
@@ -1991,7 +1991,7 @@ class TestBearerError:
         assert _bearer_error(header) is None
 
 
-class TestTheTimeoutPolicyBoundsTheDocumentFetch:
+class TestTheRequestLimitsBoundTheDocumentFetch:
     async def test_a_document_that_never_lands_is_refused_as_a_timeout(self) -> None:
         async def crawl(request: httpx.Request) -> httpx.Response:
             await asyncio.sleep(5)
@@ -2001,7 +2001,7 @@ class TestTheTimeoutPolicyBoundsTheDocumentFetch:
             await discover(
                 ISSUER,
                 transport_factory=lambda url: httpx.MockTransport(crawl),
-                timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+                limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
             )
 
         assert refusal.value.kind is FailureKind.TIMEOUT
