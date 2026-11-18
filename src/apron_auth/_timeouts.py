@@ -19,18 +19,19 @@ _WHOLE_REQUEST_REFUSAL = "request did not finish within the time allowed"
 class BoundedResponse(NamedTuple):
     """One response and the body it stated, read under the limits in force.
 
+    A body past the limit is stated as no body at all rather than as the bytes read before it passed,
+    so a reader that takes the body for what arrived cannot mistake a refused body for an empty one.
+
     NOTE: The body is held here rather than on the response, which never reads its own content, so
     ``response.content`` and ``response.text`` state nothing about what arrived.
 
     Attributes:
         response: The response, for its status and its headers.
-        body: The body as it decoded, or empty where the body passed the limit on one.
-        complete: Whether the whole body arrived.
+        body: The body as it decoded, or ``None`` where the body passed the limit on one.
     """
 
     response: httpx.Response
-    body: bytes
-    complete: bool
+    body: bytes | None
 
 
 def httpx_timeout(policy: TimeoutPolicy) -> httpx.Timeout:
@@ -64,6 +65,11 @@ async def streamed(
     Nothing is built until this is awaited, so a header or a URL that cannot be sent fails where the
     caller awaits the request rather than where it describes one. A caller that classifies a failed
     request therefore reaches that failure too.
+
+    NOTE: This states the request as its parts rather than taking a built one, for the same reason.
+    A built request is a value the caller holds, so it is a frame local on the traceback of whatever
+    the caller raises, and its repr states the URL. Where the URL carries a credential, so does that
+    frame.
 
     Args:
         client: The client that sends the request.
@@ -128,7 +134,7 @@ async def _body_within_limit(response: httpx.Response, max_bytes: int) -> Bounde
         max_bytes: The most decoded bytes to hold.
 
     Returns:
-        The response and the body it stated, which is empty where the body passed the limit.
+        The response and the body it stated, which is ``None`` where the body passed the limit.
     """
     read: list[bytes] = []
     size = 0
@@ -136,6 +142,6 @@ async def _body_within_limit(response: httpx.Response, max_bytes: int) -> Bounde
     async for chunk in response.aiter_bytes():
         size += len(chunk)
         if size > max_bytes:
-            return BoundedResponse(response, b"", complete=False)
+            return BoundedResponse(response, None)
         read.append(chunk)
-    return BoundedResponse(response, b"".join(read), complete=True)
+    return BoundedResponse(response, b"".join(read))

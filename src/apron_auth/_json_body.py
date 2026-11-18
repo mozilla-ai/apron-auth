@@ -23,7 +23,7 @@ def decode_json_body(answer: BoundedResponse) -> Any:
     Raises:
         ValueError: If the body passed the limit on one, is not JSON, or nests too deeply to decode.
     """
-    if not answer.complete:
+    if answer.body is None:
         msg = "the body is too large to read"
         raise ValueError(msg)
     try:

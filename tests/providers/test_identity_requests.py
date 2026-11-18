@@ -87,17 +87,21 @@ async def test_deeply_nested_body_is_a_parse_failure(httpx_mock: HTTPXMock) -> N
     assert str(error) == "Failed to parse Example identity response"
 
 
-async def test_a_request_that_outlives_the_limit_is_a_timeout(httpx_mock: HTTPXMock) -> None:
-    """Every identity request is bounded by this one await, which no walk of the source can see."""
+class _SleepingTransport(httpx.AsyncBaseTransport):
+    """A transport that answers no request before the limit can pass."""
 
-    async def never() -> httpx.Response:
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         await asyncio.sleep(5)
-        return httpx.Response(200, json={})
+        raise AssertionError
 
-    with pytest.raises(IdentityFetchError) as refusal:
-        await fetch_identity_json(
-            never(), "Example identity", TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05)
-        )
+
+async def test_a_request_that_outlives_the_limit_is_a_timeout() -> None:
+    """Every identity request is bounded by this one await, which no walk of the source can see."""
+    limits = TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05)
+
+    async with identity_client(limits, transport=_SleepingTransport()) as client:
+        with pytest.raises(IdentityFetchError) as refusal:
+            await fetch_identity_json(streamed(client, "GET", URL), "Example identity", limits)
 
     assert refusal.value.kind is FailureKind.TIMEOUT
 
@@ -113,7 +117,9 @@ async def test_the_client_follows_no_redirect() -> None:
     async with identity_client(_TIMEOUTS, transport=httpx.MockTransport(respond)) as client:
         with pytest.raises(IdentityFetchError) as exc_info:
             await fetch_identity_json(
-                client.get(URL, headers={"Authorization": f"Bearer {TOKEN}"}), "Example identity", _TIMEOUTS
+                streamed(client, "GET", URL, headers={"Authorization": f"Bearer {TOKEN}"}),
+                "Example identity",
+                _TIMEOUTS,
             )
 
     assert reached == [URL], "the token must not follow the redirect"

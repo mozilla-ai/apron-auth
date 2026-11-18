@@ -91,7 +91,6 @@ class TestWithinRequestLimit:
 
         assert answer.response.status_code == 200
         assert answer.body == b'{"ok": true}'
-        assert answer.complete
 
     async def test_a_request_that_outlives_the_limit_is_refused_as_a_timeout(self) -> None:
         """A step limit bounds one read, so only this bounds a response that arrives slowly in many steps."""
