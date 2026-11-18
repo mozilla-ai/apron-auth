@@ -67,15 +67,16 @@ async def streamed(
     request therefore reaches that failure too.
 
     NOTE: This states the request as its parts rather than taking a built one, for the same reason.
-    A built request is a value the caller holds, so it is a frame local on the traceback of whatever
-    the caller raises, and its repr states the URL. Where the URL carries a credential, so does that
-    frame.
+    A built request is a local of the caller, so it is on the traceback of the error the caller raises
+    and its repr states a URL that may carry a credential. A local here is not, because a failed
+    request is reported as a new error raised outside the except block.
 
     Args:
         client: The client that sends the request.
         method: The HTTP method.
         url: The URL to request.
-        auth: The credential to present, which is presented on this request alone.
+        auth: The credential to present, which is presented on this request alone. It states what the
+            request presents outright, so a client carrying a credential of its own presents none here.
         data: The form fields to send.
         headers: The headers to send.
         json: The value to send as a JSON body.
