@@ -11,7 +11,7 @@ import httpx
 
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure, response_failure
-from apron_auth._timeouts import BoundedResponse, httpx_timeout, streamed, within_request_limit
+from apron_auth._limits import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import BasicAuthCredential, SecretToken, UrlField

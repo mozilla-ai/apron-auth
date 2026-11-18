@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import RequestLimits
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client

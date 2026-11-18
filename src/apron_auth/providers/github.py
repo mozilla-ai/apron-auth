@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 
 from apron_auth._claims import stated_boolean, stated_string
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,

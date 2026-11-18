@@ -17,7 +17,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import streamed, within_request_limit
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential
 from apron_auth.errors import FailureKind, OidcDiscoveryError
 

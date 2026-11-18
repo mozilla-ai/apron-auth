@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, RequestLimits, TenancyContext
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport

@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 from apron_auth._claims import stated_boolean
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth._urls import matches_suffix, url_host
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (

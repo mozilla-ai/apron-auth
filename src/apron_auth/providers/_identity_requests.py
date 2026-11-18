@@ -9,7 +9,7 @@ import httpx
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import httpx_timeout, within_request_limit
+from apron_auth._limits import httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind, IdentityFetchError
 
 if TYPE_CHECKING:

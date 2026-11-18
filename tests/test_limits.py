@@ -9,7 +9,7 @@ import pytest
 from support import LazyBodyTransport, LazyByteStream
 
 from apron_auth._http_errors import http_failure
-from apron_auth._timeouts import BoundedResponse, httpx_timeout, within_request_limit
+from apron_auth._limits import BoundedResponse, httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind
 from apron_auth.models import RequestLimits
 from apron_auth.providers import google

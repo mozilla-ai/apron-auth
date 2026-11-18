@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from apron_auth._timeouts import httpx_timeout
+from apron_auth._limits import httpx_timeout
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:

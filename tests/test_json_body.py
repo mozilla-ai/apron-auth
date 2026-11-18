@@ -12,7 +12,7 @@ from support import LazyBodyTransport, LazyByteStream
 
 import apron_auth
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import within_request_limit
+from apron_auth._limits import within_request_limit
 from apron_auth.models import RequestLimits
 
 _PACKAGE_ROOT = Path(apron_auth.__file__).parent

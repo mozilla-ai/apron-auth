@@ -17,8 +17,8 @@ from apron_auth._discovery import NoTransportError, discovery_client
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import compact_claims, jws_registry, parse_compact
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth._loop_lock import LoopLock
-from apron_auth._timeouts import streamed, within_request_limit
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,

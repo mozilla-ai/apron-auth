@@ -14,7 +14,7 @@ from apron_auth._discovery import (
     require_declared_issuer,
     str_list,
 )
-from apron_auth._timeouts import httpx_timeout
+from apron_auth._limits import httpx_timeout
 from apron_auth.models import RequestLimits
 
 if TYPE_CHECKING:

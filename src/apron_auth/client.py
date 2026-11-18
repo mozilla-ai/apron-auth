@@ -24,8 +24,8 @@ from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, response_failure, status_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import unverified_claims
+from apron_auth._limits import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._numbers import finite_number
-from apron_auth._timeouts import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, uses_allowed_transport
 from apron_auth.errors import (
     SERVER_ERROR,

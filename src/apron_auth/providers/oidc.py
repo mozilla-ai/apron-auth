@@ -56,7 +56,7 @@ from apron_auth._discovery import (
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
-from apron_auth._timeouts import streamed, within_request_limit
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,

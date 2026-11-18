@@ -46,7 +46,7 @@ import httpx
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._claims import stated_boolean
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,

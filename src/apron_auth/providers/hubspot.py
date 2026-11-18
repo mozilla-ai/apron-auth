@@ -32,7 +32,7 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
-from apron_auth._timeouts import streamed
+from apron_auth._limits import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
