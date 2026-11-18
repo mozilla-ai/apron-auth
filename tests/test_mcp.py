@@ -566,6 +566,16 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
+    async def test_a_not_found_naming_a_time_to_come_back_decides(self, httpx_mock: HTTPXMock) -> None:
+        """It is read as temporary, so it decides over a corrupt document although it says least."""
+        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
+        httpx_mock.add_response(url=_ASM_OIDC, status_code=404, headers={"Retry-After": "30"})
+        with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.SERVER_ERROR
+        assert exc_info.value.retryable is True
+
     @pytest.mark.parametrize(
         ("status", "content", "kind", "fault"),
         [
@@ -1374,6 +1384,11 @@ class TestReportedOutcome:
         outage = _MetadataOutcome(_MetadataFault.UNAVAILABLE, FailureKind.SERVER_ERROR)
         assert _reported_outcome([self._UNREADABLE, outage]) == outage
         assert _reported_outcome([outage, self._UNREADABLE]) == outage
+
+    def test_a_retryable_outcome_decides_although_its_fault_says_least(self) -> None:
+        """A not-found naming a time to come back carries the lowest rank and still decides."""
+        comeback = _MetadataOutcome(_MetadataFault.UNPUBLISHED, FailureKind.SERVER_ERROR)
+        assert _reported_outcome([self._UNREADABLE, comeback]) == comeback
 
     def test_the_fault_that_says_most_decides_among_the_rest(self) -> None:
         assert _reported_outcome([self._UNREADABLE, self._UNPUBLISHED]) == self._UNREADABLE
