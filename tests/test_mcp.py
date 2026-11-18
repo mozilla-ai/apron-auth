@@ -1049,6 +1049,19 @@ class TestDiscover:
             await discover("https://\x80\x80.example.com")
         assert exc_info.value.kind is FailureKind.CONFIGURATION
 
+    async def test_an_authority_the_client_cannot_read_is_refused_before_any_request(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """The origin is built from an authority the HTTP client accepted, so one it refuses never reaches it.
+
+        An IPvFuture literal is the case the two parsers read differently: the URL parser reads a host
+        inside the brackets, and the HTTP client reads no host at all.
+        """
+        with pytest.raises(ConfigurationError, match="malformed URL") as exc_info:
+            await discover("https://[v1.fe80]")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert not httpx_mock.get_requests()
+
 
 class TestAServerThatPublishesNoProtectedResourceMetadata:
     """Test the origin fallback for a server built to an MCP revision that predates RFC 9728."""
@@ -1076,14 +1089,6 @@ class TestAServerThatPublishesNoProtectedResourceMetadata:
         meta = await discover(_ORIGIN)
         assert meta.token_url == f"{_ORIGIN}/token"
 
-    async def test_a_document_declaring_another_issuer_ends_discovery(self, httpx_mock: HTTPXMock) -> None:
-        """The issuer check is what stops the fallback from pointing discovery at another origin."""
-        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
-        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload(issuer="https://evil.example.com"))
-        with pytest.raises(McpDiscoveryError, match="declares a different issuer") as exc_info:
-            await discover(_ORIGIN)
-        assert exc_info.value.kind is FailureKind.REFUSED
-
     async def test_a_document_declaring_no_issuer_ends_discovery(self, httpx_mock: HTTPXMock) -> None:
         payload = _origin_asm_payload()
         del payload["issuer"]
@@ -1092,12 +1097,34 @@ class TestAServerThatPublishesNoProtectedResourceMetadata:
         with pytest.raises(McpDiscoveryError, match="declares no issuer"):
             await discover(_ORIGIN)
 
-    async def test_the_terminating_slash_variant_of_the_origin_is_accepted(self, httpx_mock: HTTPXMock) -> None:
-        """The origin is this library's own construction, so both of its forms name the same server."""
+    async def test_a_host_spelled_in_another_case_names_the_same_origin(self, httpx_mock: HTTPXMock) -> None:
+        """A host is compared without case (RFC 3986 section 3.2.2), so its spelling is no issuer mismatch."""
         httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
-        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload(issuer=f"{_ORIGIN}/"))
-        meta = await discover(_ORIGIN)
-        assert meta.issuer == f"{_ORIGIN}/"
+        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload())
+        meta = await discover("https://MCP.Example.com")
+        assert meta.issuer == _ORIGIN
+
+    async def test_an_ipv6_host_keeps_the_brackets_its_authority_needs(self, httpx_mock: HTTPXMock) -> None:
+        """An address literal is read without its brackets and written back inside them."""
+        origin = "https://[2606:4700::1]"
+        httpx_mock.add_response(url=f"{origin}/.well-known/oauth-protected-resource", status_code=404)
+        httpx_mock.add_response(
+            url=f"{origin}/.well-known/oauth-authorization-server",
+            json=_asm_payload(
+                issuer=origin,
+                authorization_endpoint=f"{origin}/authorize",
+                token_endpoint=f"{origin}/token",
+            ),
+        )
+        meta = await discover(origin)
+        assert meta.issuer == origin
+
+    async def test_the_schemes_default_port_is_no_part_of_the_origin(self, httpx_mock: HTTPXMock) -> None:
+        """A stated port that the scheme makes default names the same server (RFC 3986 section 3.2.3)."""
+        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
+        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload())
+        meta = await discover("https://mcp.example.com:443")
+        assert meta.issuer == _ORIGIN
 
     async def test_the_origin_identifier_reaches_the_callers_policy(self, httpx_mock: HTTPXMock) -> None:
         """The identifier is checked before it is used, as a declared one is."""
@@ -1114,6 +1141,94 @@ class TestAServerThatPublishesNoProtectedResourceMetadata:
         httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload())
         meta = await discover(_ORIGIN, resource_metadata_url="")
         assert meta.token_url == f"{_ORIGIN}/token"
+
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            pytest.param(_ORIGIN, id="the same spelling"),
+            pytest.param(f"{_ORIGIN}/", id="a terminating slash"),
+            pytest.param(f"{_ORIGIN}:443", id="the port HTTPS makes default"),
+            pytest.param("https://MCP.Example.com", id="another case"),
+        ],
+    )
+    async def test_any_spelling_of_the_origin_names_it(self, httpx_mock: HTTPXMock, declared: str) -> None:
+        """An origin is a scheme, a host and an effective port, so its spelling is no issuer mismatch."""
+        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
+        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload(issuer=declared))
+        meta = await discover(_ORIGIN)
+        assert meta.issuer == declared
+
+    @pytest.mark.parametrize(
+        "declared",
+        [
+            pytest.param("https://evil.example.com", id="another host"),
+            pytest.param(f"{_ORIGIN}:8443", id="a port the scheme does not make default"),
+            pytest.param("http://mcp.example.com", id="another scheme"),
+            pytest.param(f"{_ORIGIN}/tenant", id="a path below the root"),
+            pytest.param(f"{_ORIGIN}/;tenant=blue", id="a parameter on the root path"),
+            pytest.param(f"{_ORIGIN}?tenant=1", id="a query"),
+            pytest.param(f"{_ORIGIN}#tenant", id="a fragment"),
+            pytest.param(f"{_ORIGIN}/?", id="an empty query"),
+            pytest.param(f"{_ORIGIN}/#", id="an empty fragment"),
+            pytest.param("https://user:pw@mcp.example.com", id="a credential"),  # pragma: allowlist secret
+            pytest.param(f"{_ORIGIN}:99999", id="a port out of range"),
+        ],
+    )
+    async def test_an_identifier_stating_more_than_the_origin_ends_discovery(
+        self, httpx_mock: HTTPXMock, declared: str
+    ) -> None:
+        """Anything the origin does not state names another server, or something under this one."""
+        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
+        httpx_mock.add_response(url=_ORIGIN_ASM, json=_origin_asm_payload(issuer=declared))
+        with pytest.raises(McpDiscoveryError, match="declares a different issuer") as exc_info:
+            await discover(_ORIGIN)
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert declared not in str(exc_info.value)
+
+    async def test_an_internationalized_host_names_the_host_the_request_reaches(self, httpx_mock: HTTPXMock) -> None:
+        """A name is dialed in its ASCII form, which is the form a server declares as its issuer."""
+        ascii_origin = "https://xn--bcher-kva.example"
+        httpx_mock.add_response(url=f"{ascii_origin}/.well-known/oauth-protected-resource", status_code=404)
+        httpx_mock.add_response(
+            url=f"{ascii_origin}/.well-known/oauth-authorization-server",
+            json=_asm_payload(
+                issuer=ascii_origin,
+                authorization_endpoint=f"{ascii_origin}/authorize",
+                token_endpoint=f"{ascii_origin}/token",
+            ),
+        )
+        meta = await discover("https://b\u00fccher.example")
+        assert meta.issuer == ascii_origin
+
+    async def test_an_ipv4_literal_needs_no_brackets(self, httpx_mock: HTTPXMock) -> None:
+        """Only an IPv6 literal is written inside brackets, so an IPv4 one must not gain any."""
+        origin = "https://1.1.1.1"
+        httpx_mock.add_response(url=f"{origin}/.well-known/oauth-protected-resource", status_code=404)
+        httpx_mock.add_response(
+            url=f"{origin}/.well-known/oauth-authorization-server",
+            json=_asm_payload(
+                issuer=origin,
+                authorization_endpoint=f"{origin}/authorize",
+                token_endpoint=f"{origin}/token",
+            ),
+        )
+        meta = await discover(origin)
+        assert meta.issuer == origin
+
+    async def test_an_address_literal_names_the_address_not_its_spelling(self, httpx_mock: HTTPXMock) -> None:
+        """One address has many spellings, and all of them name the same server (RFC 5952)."""
+        origin = "https://[2606:4700::1]"
+        httpx_mock.add_response(url=f"{origin}/.well-known/oauth-protected-resource", status_code=404)
+        httpx_mock.add_response(
+            url=f"{origin}/.well-known/oauth-authorization-server",
+            json=_asm_payload(
+                issuer="https://[2606:4700:0:0:0:0:0:1]",
+                authorization_endpoint=f"{origin}/authorize",
+                token_endpoint=f"{origin}/token",
+            ),
+        )
+        meta = await discover(origin)
+        assert meta.issuer == "https://[2606:4700:0:0:0:0:0:1]"
 
     async def test_a_hint_leaves_the_server_read_as_a_current_one(self, httpx_mock: HTTPXMock) -> None:
         """A caller that relayed a protected-resource URL names a document, so no fallback applies."""

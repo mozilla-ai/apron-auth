@@ -25,7 +25,7 @@ import logging
 from collections.abc import Callable, Sequence
 from enum import Enum, unique
 from typing import Any, NamedTuple, assert_never
-from urllib.parse import ParseResult, unquote, urljoin, urlparse
+from urllib.parse import ParseResult, unquote, urljoin, urlparse, urlsplit
 
 import httpx
 from pydantic import SecretStr
@@ -71,6 +71,12 @@ logger = logging.getLogger(__name__)
 
 # The response statuses that say the server serves no such document: not found and gone.
 _ABSENT_DOCUMENT_STATUSES = (404, 410)
+
+# The IP version whose address literals a URL authority writes inside brackets (RFC 3986 section 3.2.2).
+_BRACKETED_IP_VERSION = 6
+
+# The port each scheme makes default, which an origin omits (RFC 3986 section 3.2.3).
+_DEFAULT_PORTS = {"https": 443}
 
 # The well-known paths of the discovery documents: authorization server (RFC 8414),
 # OpenID provider (OpenID Connect Discovery 1.0) and protected resource (RFC 9728).
@@ -145,8 +151,8 @@ async def discover(
     server's RFC 8414 metadata (with an OIDC fallback).
     A server that states it publishes no protected-resource metadata, and for which the caller named no
     such document, is read as its own authorization server: its RFC 8414 metadata is fetched at its
-    origin, and is accepted only where the document declares that origin as its issuer. No endpoint is
-    guessed, so an absent one is still a refusal, and no resource identifier is invented.
+    origin, and is accepted only where the document declares that origin as its issuer, however it spells
+    it. No endpoint is guessed, so an absent one is still a refusal, and no resource identifier is invented.
     The HTTPS requirement and the block on ``localhost`` names and on IP literals that are not globally
     reachable are defense-in-depth.
     They do not stop any other hostname that resolves to an internal address, so untrusted ``server_url``
@@ -236,7 +242,7 @@ async def discover(
     if isinstance(server_meta, _MetadataOutcome):
         raise _no_document_error(asm_document, server_meta)
     if resource_meta is None:
-        auth_server = _origin_issuer_variant(server_meta, auth_server)
+        auth_server = _origin_issuer(server_meta, auth_server)
     try:
         require_declared_issuer(server_meta, auth_server)
     except IssuerNotDeclaredError as exc:
@@ -940,7 +946,7 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     if resource_metadata_url:
         candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True))
     parsed = urlparse(server_url)
-    base = _origin(server_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
     if parsed.path and parsed.path != "/":
         candidates.append(
             _Candidate(urljoin(base, f"{_WELL_KNOWN_PRM}{parsed.path}"), caller_supplied=True, is_hint=False)
@@ -964,7 +970,7 @@ def _asm_candidates(auth_server: str, *, caller_supplied: bool) -> list[_Candida
             a fetched document, so a refusal of a URL is a fault in the caller's own configuration.
     """
     parsed = urlparse(auth_server)
-    base = _origin(auth_server)
+    base = f"{parsed.scheme}://{parsed.netloc}"
     path = parsed.path.rstrip("/")
     urls = (
         [
@@ -1005,27 +1011,64 @@ def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
 
 
 def _origin(url: str) -> str:
-    """Return a URL's origin: its scheme and authority, with the path, query and fragment discarded."""
-    parsed = urlparse(url)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    """Return the origin a URL names, in the one form that identifies it, so that two URLs can be compared.
+
+    NOTE: This is a comparison key, not a prefix to build a request URL on. A candidate URL keeps the
+    authority its own source wrote, so a caller's policy and transport see the string they were given.
+
+    The scheme is lowercased and a port the scheme makes default is omitted, which RFC 3986 sections 3.2.3
+    and 6.2.2.1 state do not change which server a URL names. The host is read in the form the request
+    would dial it, so an internationalized name reads as its ASCII form and an address literal as the
+    shortest form of that address (RFC 5952 section 4). The path, query, fragment and any userinfo are
+    dropped.
+
+    Args:
+        url: A URL whose authority the HTTP client can read, and whose port this library has accepted.
+
+    Returns:
+        The origin, with an address literal in the brackets the URL syntax requires.
+    """
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    host = url_host(url)
+    address = parse_ip(host)
+    if address is not None:
+        host = f"[{address}]" if address.version == _BRACKETED_IP_VERSION else str(address)
+    port = parsed.port
+    authority = host if port is None or port == _DEFAULT_PORTS.get(scheme) else f"{host}:{port}"
+    return f"{scheme}://{authority}"
 
 
-def _origin_issuer_variant(document: dict[str, Any], origin: str) -> str:
-    """Return whichever form of ``origin`` a document declares: the bare one, or one terminating in a slash.
+def _origin_issuer(document: dict[str, Any], origin: str) -> str:
+    """Return an identifier to hold the document to: its own issuer where that names ``origin``, else ``origin``.
 
     An origin read as an authorization server is this library's own construction rather than an identifier
-    a document declared, so the bare form and the terminating-slash form name the same server. The declared
-    form becomes the identifier, because RFC 9207 compares an authorization response's ``iss`` to it exactly.
+    a document declared, so every spelling of that origin names the same server. RFC 6454 section 4 makes
+    an origin a scheme, a host and an effective port, and nothing else. The declared spelling becomes the
+    identifier, because RFC 9207 compares an authorization response's ``iss`` to it exactly.
+
+    An identifier that states a credential, a path below the root, a query or a fragment states something
+    the origin does not, as does an authority no HTTP client can read. None of those names the origin, so
+    each yields ``origin`` itself.
+
+    NOTE: This widens what the issuer check accepts; it performs no check of its own. The caller must still
+    hold the document to the identifier returned, which is what refuses a document naming another server.
 
     Args:
         document: The decoded authorization server metadata.
-        origin: The origin the document was fetched for, which carries no terminating slash.
+        origin: The origin the document was fetched for.
 
     Returns:
-        ``origin`` with a terminating slash where the document declares that form, and ``origin`` otherwise.
+        The declared issuer where it names ``origin``, and ``origin`` itself otherwise.
     """
-    with_slash = f"{origin}/"
-    return with_slash if document.get("issuer") == with_slash else origin
+    issuer = document.get("issuer")
+    if not isinstance(issuer, str) or authority_credential(issuer) is not AuthorityCredential.ABSENT:
+        return origin
+    # The delimiters are read rather than the components, so an empty query or fragment counts, as it does
+    # for an authorization server a protected-resource document declares.
+    if "?" in issuer or "#" in issuer or urlsplit(issuer).path not in ("", "/"):
+        return origin
+    return issuer if _origin(issuer) == origin else origin
 
 
 def _falls_back_to_origin(outcome: _MetadataOutcome, *, hinted: bool) -> bool:
