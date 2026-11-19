@@ -466,8 +466,8 @@ def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> li
 def _sent_form(*fields: Mapping[str, str | SecretStr]) -> dict[str, str]:
     """Return the form a token request sends, with every credential unwrapped for the wire.
 
-    NOTE: The result states every credential the request carries. Callers must pass it straight to
-    the request rather than binding it to a local, which an error reporter would record.
+    NOTE: The result states every credential the request carries, so it belongs only in a frame
+    that raises nothing. A frame that can raise must hold the fields wrapped instead.
 
     Args:
         *fields: The field mappings to merge, each later one taking precedence.
@@ -1209,7 +1209,9 @@ class _OAuthClientBase:
         Returns:
             The values, without any the request left empty.
         """
-        values = {_sent_form(sent)[field] for field in _SENT_SECRET_FIELDS if field in sent}
+        # This frame raises nothing, so the unwrapped values it binds reach no traceback.
+        form = _sent_form(sent)
+        values = {form[field] for field in _SENT_SECRET_FIELDS if field in sent}
         if self._config.client_secret is not None:
             values.add(self._config.client_secret.get_secret_value())
         return frozenset(value for value in values if value)
