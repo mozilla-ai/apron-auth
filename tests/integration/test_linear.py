@@ -39,7 +39,7 @@ class TestLinearRefresh:
             scopes=["read"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(linear_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(linear_env["refresh_token"]))
         assert tokens.access_token
 
 
@@ -52,6 +52,6 @@ class TestLinearRevocation:
             scopes=["read"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(linear_env["refresh_token"])
-        result = await client.revoke_token(SecretToken(tokens.access_token))
+        tokens = await client.refresh_token(SecretToken(linear_env["refresh_token"]))
+        result = await client.revoke_token(tokens.access_token)
         assert result is True

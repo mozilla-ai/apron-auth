@@ -28,7 +28,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.provider == "google"
         assert identity.tenancies == (TenancyContext(domain="mozilla.ai", owns_email_domain=True),)
@@ -45,7 +45,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.owns_domain("mozilla.ai") is True
         assert identity.owns_domain("other.example") is False
@@ -63,7 +63,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
         assert identity.domain_owning_tenancies() == ()
@@ -79,7 +79,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -95,7 +95,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -125,7 +125,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.email_verified is expected
 
@@ -139,7 +139,7 @@ class TestGoogleIdentityHandler:
         config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.email_verified is None
 
@@ -350,6 +350,8 @@ class TestTheRequestLimitsBoundTheIdentityRequest:
         )
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await GoogleIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await GoogleIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access-abc")), config
+            )
 
         assert refusal.value.kind is FailureKind.TIMEOUT

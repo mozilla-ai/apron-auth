@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.atlassian import (
@@ -102,7 +102,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -158,7 +158,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 2
         assert identity.tenancies[0].id == "cloud-1"
@@ -172,7 +172,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -190,7 +190,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-2"
@@ -203,7 +203,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-1"
@@ -220,7 +220,7 @@ class TestAtlassianIdentityHandler:
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -242,7 +242,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -267,7 +267,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -285,7 +285,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -303,7 +303,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -321,7 +321,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
         config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.email is None
@@ -340,7 +340,7 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -359,7 +359,7 @@ class TestAtlassianIdentityHandler:
         # Distinct message per sub-request so log triage can identify
         # which endpoint failed without reproducing the call.
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
         # ``/me`` is never reached: the pytest-httpx teardown check would
         # fail if an unused ``/me`` response had been registered here.
         assert [str(r.url) for r in httpx_mock.get_requests()] == [ATLASSIAN_ACCESSIBLE_RESOURCES_URL]
@@ -377,7 +377,7 @@ class TestAtlassianIdentityHandler:
             IdentityFetchError,
             match="Failed to parse Atlassian accessible resources response",
         ):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_a_transport_that_fails_in_its_own_way_degrades_to_a_tenancy_only_profile(
         self, caplog: pytest.LogCaptureFixture
@@ -406,7 +406,7 @@ class TestAtlassianIdentityHandler:
 
         with caplog.at_level(logging.WARNING):
             config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
-            profile = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            profile = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert profile.email is None
         assert len(profile.tenancies) == 1

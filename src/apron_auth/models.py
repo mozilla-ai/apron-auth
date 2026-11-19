@@ -145,6 +145,14 @@ class SecretToken(SecretStr):
         raise TypeError(msg)
 
 
+# A token this library holds, which arrives wrapped so no frame local between here and the wire states it.
+# It is stated here rather than with the other constants, because it names the class above.
+Credential = Annotated[SecretToken, BeforeValidator(wrapped_credential)]
+
+# The same, for a token a provider need not state.
+OptionalCredential = Annotated[SecretToken | None, BeforeValidator(wrapped_credential)]
+
+
 @unique
 class UrlTransport(Enum):
     """Each member is one rule for what a URL field's scheme has to state about its transport."""
@@ -1609,9 +1617,10 @@ class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     none and keeps the member in its extras.
 
     Attributes:
-        access_token: The access token issued for the person.
+        access_token: The access token issued for the person, wrapped so no frame local states it.
         token_type: Token type, as the provider states it.
         refresh_token: The refresh token for this token, where the provider rotates it.
+            It is wrapped so no frame local states it.
         expires_in: Token lifetime in seconds as reported by the provider.
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted for this token, delimited by the provider's scope separator.
@@ -1623,9 +1632,9 @@ class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             field of the same name here, which states only what the provider sent.
     """
 
-    access_token: str
+    access_token: Credential
     token_type: str = "Bearer"
-    refresh_token: str | None = None
+    refresh_token: OptionalCredential = None
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
@@ -1643,9 +1652,10 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     one cannot be dropped silently and lose what the provider or the caller attached.
 
     Attributes:
-        access_token: The access token issued by the provider.
+        access_token: The access token issued by the provider, wrapped so no frame local states it.
         token_type: Token type, typically ``"Bearer"``.
         refresh_token: Optional refresh token for obtaining new access tokens.
+            It is wrapped so no frame local states it.
         expires_in: Token lifetime in seconds as reported by the provider.
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted by the provider, delimited by the
@@ -1663,9 +1673,9 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             It is empty for a token set that does not come from a code exchange.
     """
 
-    access_token: str
+    access_token: Credential
     token_type: str = "Bearer"
-    refresh_token: str | None = None
+    refresh_token: OptionalCredential = None
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
@@ -1821,8 +1831,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             grant and must not infer one.
     """
 
-    access_token: SecretToken
-    id_token: SecretToken | None = None
+    access_token: Credential
+    id_token: OptionalCredential = None
     scope: str | None = None
 
     @model_validator(mode="after")
@@ -1859,7 +1869,7 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         """
         id_token = tokens.extras.get("id_token")
         return cls(
-            access_token=SecretToken(tokens.access_token),
+            access_token=tokens.access_token,
             id_token=SecretToken(id_token) if isinstance(id_token, str) and id_token else None,
             scope=tokens.scope,
         )

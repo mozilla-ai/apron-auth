@@ -1484,7 +1484,7 @@ class TestARefusalRepeatsNoValue:
         ("model", "payload", "field"),
         [
             pytest.param(ClientRegistration, {"client_id": "cid"}, "client_id", id="a registration"),
-            pytest.param(IdentityMaterial, {"access_token": "at"}, "id_token", id="identity material"),
+            pytest.param(IdentityMaterial, {"access_token": SecretToken("at")}, "id_token", id="identity material"),
             pytest.param(
                 OAuthPendingState,
                 {
@@ -1496,7 +1496,7 @@ class TestARefusalRepeatsNoValue:
                 "code_verifier",
                 id="a pending state",
             ),
-            pytest.param(TokenSet, {"access_token": "at"}, "refresh_token", id="a token set"),
+            pytest.param(TokenSet, {"access_token": SecretToken("at")}, "refresh_token", id="a token set"),
         ],
     )
     def test_a_refused_change_repeats_no_value(
@@ -1647,14 +1647,14 @@ class TestAValidatedChange:
 
     def test_a_fresh_token_set_refuses_a_change(self) -> None:
         """Freshness states the response the tokens came from, which a changed copy does not answer for."""
-        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"), token_type="Bearer")  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="freshness"):
             fresh.with_changes(scope="read")
 
     def test_a_fresh_token_set_refuses_a_copy_stating_other_values(self) -> None:
         """Freshness is the one rule no guard anywhere else can state, so the unvalidated copy forges it."""
-        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"), token_type="Bearer")  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="freshness"):
             fresh.model_copy(update={"access_token": "other-token"})  # pragma: allowlist secret
@@ -1834,9 +1834,29 @@ class TestScopeMetadata:
 
 
 class TestTokenSet:
+    @pytest.mark.parametrize("field", ["access_token", "refresh_token"])
+    def test_a_token_supplied_as_plain_text_is_refused(self, field: str) -> None:
+        """A plain string is a frame local for the whole call, so it is refused rather than wrapped."""
+        values: dict[str, Any] = {"access_token": SecretToken("access-abc")}
+        values[field] = "plain-text-token"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as caught:
+            TokenSet.model_validate(values)
+
+        assert "plain-text-token" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_wrapped_token_reaches_the_token_set(self) -> None:
+        token = TokenSet(access_token=SecretToken("access-abc"), refresh_token=SecretToken("refresh-xyz"))
+
+        assert token.access_token.get_secret_value() == "access-abc"
+        assert token.refresh_token is not None
+        assert token.refresh_token.get_secret_value() == "refresh-xyz"
+        assert "access-abc" not in repr(token)
+
     def test_minimal_token(self) -> None:
-        token = TokenSet(access_token="access-abc")
-        assert token.access_token == "access-abc"
+        token = TokenSet(access_token=SecretToken("access-abc"))
+        assert token.access_token.get_secret_value() == "access-abc"
         assert token.token_type == "Bearer"
         assert token.refresh_token is None
         assert token.expires_in is None
@@ -1846,37 +1866,37 @@ class TestTokenSet:
 
     def test_full_token(self) -> None:
         token = TokenSet(
-            access_token="access-abc",
+            access_token=SecretToken("access-abc"),
             token_type="Bearer",
-            refresh_token="refresh-xyz",
+            refresh_token=SecretToken("refresh-xyz"),
             expires_in=3600,
             expires_at=1700000000.0,
             scope="read write",
             extras={"team_id": "T123"},
         )
-        assert token.refresh_token == "refresh-xyz"
+        assert token.refresh_token.get_secret_value() == "refresh-xyz"
         assert token.expires_in == 3600
         assert token.extras == {"team_id": "T123"}
 
     def test_context_defaults_to_empty_dict(self) -> None:
-        token = TokenSet(access_token="access-abc")
+        token = TokenSet(access_token=SecretToken("access-abc"))
         assert token.context == {}
 
     def test_context_round_trips(self) -> None:
         ctx = {"user_id": "U123", "tenant_id": "T456"}
-        token = TokenSet(access_token="access-abc", context=ctx)
+        token = TokenSet(access_token=SecretToken("access-abc"), context=ctx)
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
     def test_extras_isolated_from_caller_mutation(self) -> None:
         original = {"team_id": "T123"}
-        token = TokenSet(access_token="access-abc", extras=original)
+        token = TokenSet(access_token=SecretToken("access-abc"), extras=original)
         original["team_id"] = "mutated"
         assert token.extras["team_id"] == "T123"
 
     def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
-        token = TokenSet(access_token="access-abc", context=original)
+        token = TokenSet(access_token=SecretToken("access-abc"), context=original)
         original["user_id"] = "mutated"
         assert token.context["user_id"] == "U123"
 
@@ -1897,7 +1917,7 @@ class TestTokenSet:
             TokenSet.model_validate(stored)
 
     def test_frozen(self) -> None:
-        token = TokenSet(access_token="access-abc")
+        token = TokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             token.access_token = "other"
 
@@ -1913,13 +1933,13 @@ class _Sessions(BaseModel):
 
 class TestFreshTokenSet:
     def test_keyword_construction_builds_a_token_set(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": "id-jwt"})
         assert isinstance(tokens, TokenSet)
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
         assert tokens.extras == {"id_token": "id-jwt"}
 
     def test_frozen(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             tokens.access_token = "other"
 
@@ -1936,7 +1956,11 @@ class TestFreshTokenSet:
             FreshTokenSet.model_validate_strings({"access_token": "access-abc"})
 
     def test_the_fields_reload_as_a_plain_token_set(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", extras={"id_token": "id-jwt"})
+        fresh = FreshTokenSet(
+            access_token=SecretToken("access-abc"),
+            refresh_token=SecretToken("refresh-xyz"),
+            extras={"id_token": "id-jwt"},
+        )
         stored = TokenSet.model_validate(fresh.model_dump())
         assert not isinstance(stored, FreshTokenSet)
         assert stored.model_dump() == fresh.model_dump()
@@ -1946,7 +1970,7 @@ class TestFreshTokenSet:
             _Session.model_validate({"user": "U123", "tokens": {"access_token": "access-abc"}})
 
     def test_a_model_holding_one_cannot_reload_it_from_json(self) -> None:
-        session = _Session(user="U123", tokens=FreshTokenSet(access_token="access-abc"))
+        session = _Session(user="U123", tokens=FreshTokenSet(access_token=SecretToken("access-abc")))
         with pytest.raises(ConfigurationError, match="stored data"):
             _Session.model_validate_json(session.model_dump_json())
 
@@ -1955,21 +1979,21 @@ class TestFreshTokenSet:
             _Sessions.model_validate({"tokens": [{"access_token": "access-abc"}]})
 
     def test_a_model_can_hold_an_existing_one(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         assert _Session(user="U123", tokens=fresh).tokens is fresh
         assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
 
     def test_pickling_is_refused(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError, match="cannot be stored"):
             pickle.dumps(fresh)
 
     def test_a_plain_token_set_still_pickles(self) -> None:
-        stored = pickle.loads(pickle.dumps(TokenSet(access_token="access-abc")))
-        assert stored == TokenSet(access_token="access-abc")
+        stored = pickle.loads(pickle.dumps(TokenSet(access_token=SecretToken("access-abc"))))
+        assert stored == TokenSet(access_token=SecretToken("access-abc"))
 
     def test_copying_keeps_the_type(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         assert isinstance(copy.deepcopy(fresh), FreshTokenSet)
         assert isinstance(fresh.model_copy(), FreshTokenSet)
 
@@ -2003,17 +2027,17 @@ class TestSecretToken:
 
 class TestIdentityMaterial:
     def test_minimal_defaults_id_token_to_none(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is None
 
     def test_frozen(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
     def test_from_token_set_extracts_id_token_from_extras(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is not None
@@ -2021,7 +2045,7 @@ class TestIdentityMaterial:
 
     def test_an_id_token_the_response_states_as_nothing_is_absent(self) -> None:
         """A token stating nothing carries nothing to verify, so the narrowing reports it as absent."""
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": ""})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": ""})
 
         assert IdentityMaterial.from_token_set(tokens).id_token is None
 
@@ -2029,7 +2053,7 @@ class TestIdentityMaterial:
         "payload",
         [
             pytest.param({"access_token": ""}, id="an access token stating nothing"),
-            pytest.param({"access_token": "access-abc", "id_token": ""}, id="an ID token stating nothing"),
+            pytest.param({"access_token": SecretToken("access-abc"), "id_token": ""}, id="an ID token stating nothing"),
         ],
     )
     def test_a_token_stating_nothing_is_refused(self, payload: dict[str, str]) -> None:
@@ -2039,7 +2063,7 @@ class TestIdentityMaterial:
 
     def test_neither_token_is_stated_in_a_repr(self) -> None:
         """An error reporter records the repr of each frame local, so this material must state neither."""
-        tokens = FreshTokenSet(access_token="s3cr3t-access", extras={"id_token": "s3cr3t-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("s3cr3t-access"), extras={"id_token": "s3cr3t-jwt"})
 
         material = IdentityMaterial.from_token_set(tokens)
 
@@ -2048,12 +2072,12 @@ class TestIdentityMaterial:
         assert material.access_token.get_secret_value() == "s3cr3t-access"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_non_string_id_token_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": 12345})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
@@ -2061,8 +2085,8 @@ class TestIdentityMaterial:
         """The narrowing must not surface the refresh token or caller
         context — those fields are structurally absent from the type."""
         tokens = FreshTokenSet(
-            access_token="access-abc",
-            refresh_token="refresh-xyz",
+            access_token=SecretToken("access-abc"),
+            refresh_token=SecretToken("refresh-xyz"),
             extras={"id_token": "id-jwt"},
             context={"user_id": "U123"},
         )
@@ -2072,16 +2096,16 @@ class TestIdentityMaterial:
         assert set(material.model_dump()) == {"access_token", "id_token", "scope"}
 
     def test_minimal_defaults_scope_to_none(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         assert material.scope is None
 
     def test_from_token_set_carries_granted_scope(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", scope="accounts:read forms:read")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), scope="accounts:read forms:read")
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope == "accounts:read forms:read"
 
     def test_from_token_set_absent_scope_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"))
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope is None
 

@@ -30,7 +30,7 @@ class TestNotionIdentityHandler:
         handler = NotionIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Notion identity"):
-            await handler.fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("bad-token")), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -42,7 +42,7 @@ class TestNotionIdentityHandler:
         handler = NotionIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Notion identity response"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_external_user_owned_bot_maps_owner_user_identity(self, httpx_mock: HTTPXMock) -> None:
         payload = {
@@ -68,7 +68,7 @@ class TestNotionIdentityHandler:
         config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="notion",
@@ -103,7 +103,7 @@ class TestNotionIdentityHandler:
         config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -123,7 +123,7 @@ class TestNotionIdentityHandler:
         config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == (TenancyContext(id="33333333-3333-3333-3333-333333333333", name=None),)
 
@@ -144,7 +144,7 @@ class TestNotionIdentityHandler:
         config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="notion",

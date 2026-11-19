@@ -12,7 +12,14 @@ from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
 from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError, TokenValidationReason
-from apron_auth.models import FreshTokenSet, IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import (
+    FreshTokenSet,
+    IdentityMaterial,
+    IdentityProfile,
+    ProviderConfig,
+    SecretToken,
+    TenancyContext,
+)
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.microsoft import MicrosoftIdentityHandler, preset
 
@@ -180,7 +187,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         fallback tenancy; identity is still returned from userinfo."""
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc"), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc")), _config()
         )
 
         assert identity == IdentityProfile(
@@ -210,7 +217,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
             }
         )
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.tenancies == ()
@@ -247,7 +254,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         )
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.tenancies == ()
@@ -270,7 +277,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         id_token = _member_id_token(tid=lettered, iss=f"https://login.microsoftonline.com/{lettered}/v2.0")
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert [tenancy.domain for tenancy in identity.tenancies] == ["contoso.com"]
@@ -282,7 +289,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         id_token = _member_id_token(idp="https://login.microsoftonline.com/home-tenant/v2.0")
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.tenancies == ()
@@ -293,7 +300,8 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token(idp=idp)), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token(idp=idp))),
+            _config(),
         )
 
         assert identity.tenancies == ()
@@ -304,7 +312,7 @@ class TestMicrosoftIdentityNoVerifiedTenancy:
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
         id_token = _member_id_token(idp=_ISSUER)
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.tenancies == (
@@ -319,7 +327,8 @@ class TestMicrosoftVerifiedTenancy:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+            _config(),
         )
 
         assert identity.subject == "ms-sub-1"
@@ -335,7 +344,8 @@ class TestMicrosoftVerifiedTenancy:
             json=_org_response(["contoso.com", "contoso.co.uk", "contoso.onmicrosoft.com"]),
         )
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+            _config(),
         )
 
         assert identity.tenancies == (
@@ -356,7 +366,8 @@ class TestMicrosoftVerifiedTenancy:
             json=_org_response(["contoso.onmicrosoft.com", "contoso.com", "contoso.co.uk"]),
         )
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+            _config(),
         )
 
         assert identity.owns_domain("contoso.com") is True
@@ -370,7 +381,8 @@ class TestMicrosoftVerifiedTenancy:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"], display_name=None))
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+            _config(),
         )
 
         assert identity.tenancies == (
@@ -382,7 +394,8 @@ class TestMicrosoftVerifiedTenancy:
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
         identity = await MicrosoftIdentityHandler().fetch_identity(
             IdentityMaterial(
-                access_token="access-abc", id_token=_member_id_token(email="user@contoso.com", email_verified=True)
+                access_token=SecretToken("access-abc"),
+                id_token=SecretToken(_member_id_token(email="user@contoso.com", email_verified=True)),
             ),
             _config(),
         )
@@ -409,7 +422,8 @@ class TestMicrosoftVerifiedTenancy:
 
         with caplog.at_level(logging.WARNING):
             identity = await handler.fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -437,7 +451,8 @@ class TestMicrosoftVerifiedTenancy:
 
         with caplog.at_level(logging.WARNING):
             identity = await handler.fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -456,7 +471,8 @@ class TestMicrosoftVerifiedTenancy:
         )
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.tenancies == ()
@@ -467,7 +483,8 @@ class TestMicrosoftVerifiedTenancy:
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response([]))
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.tenancies == ()
@@ -497,7 +514,8 @@ class TestMicrosoftVerifiedTenancy:
         )
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -538,7 +556,7 @@ class TestMicrosoftEmailVerified:
             }
         )
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.email_verified is expected
@@ -555,14 +573,16 @@ class TestMicrosoftEmailVerified:
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
             IdentityMaterial(
-                access_token="access-abc",
-                id_token=_fake_jwt(
-                    {
-                        "tid": _CONSUMERS_TENANT,
-                        "iss": f"https://login.microsoftonline.com/{_CONSUMERS_TENANT}/v2.0",
-                        "sub": "ms-sub-1",
-                        **claims,
-                    }
+                access_token=SecretToken("access-abc"),
+                id_token=SecretToken(
+                    _fake_jwt(
+                        {
+                            "tid": _CONSUMERS_TENANT,
+                            "iss": f"https://login.microsoftonline.com/{_CONSUMERS_TENANT}/v2.0",
+                            "sub": "ms-sub-1",
+                            **claims,
+                        }
+                    )
                 ),
             ),
             _config(),
@@ -582,7 +602,7 @@ class TestMicrosoftEmailVerified:
             }
         )
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
         )
 
         assert identity.email_verified is None
@@ -592,12 +612,16 @@ class TestMicrosoftIdentityErrors:
     async def test_userinfo_401_raises(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=_USERINFO_URL, status_code=401, json={"error": "invalid_token"})
         with pytest.raises(IdentityFetchError, match="Failed to fetch Microsoft identity"):
-            await MicrosoftIdentityHandler().fetch_identity(IdentityMaterial(access_token="bad-token"), _config())
+            await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("bad-token")), _config()
+            )
 
     async def test_userinfo_non_json_raises(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(url=_USERINFO_URL, status_code=200, content=b"not-json")
         with pytest.raises(IdentityFetchError, match="Failed to parse Microsoft identity response"):
-            await MicrosoftIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), _config())
+            await MicrosoftIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access-abc")), _config()
+            )
 
 
 class TestMicrosoftOrganizationDegradation:
@@ -614,7 +638,8 @@ class TestMicrosoftOrganizationDegradation:
         httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=403, json={"error": "forbidden"})
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -634,7 +659,8 @@ class TestMicrosoftOrganizationDegradation:
         httpx_mock.add_exception(httpx.ConnectError("boom"), url=_ORGANIZATION_URL)
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -648,7 +674,8 @@ class TestMicrosoftOrganizationDegradation:
         httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=200, content=b"not-json")
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -663,7 +690,8 @@ class TestMicrosoftOrganizationDegradation:
         httpx_mock.add_response(url=_ORGANIZATION_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -677,7 +705,8 @@ class TestMicrosoftOrganizationDegradation:
         httpx_mock.add_response(url=_ORGANIZATION_URL, json={"value": []})
         with caplog.at_level(logging.WARNING):
             identity = await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
         assert identity.subject == "ms-sub-1"
@@ -694,7 +723,7 @@ class TestMicrosoftIdTokenVerification:
 
         with pytest.raises(IdentityFetchError, match="signature did not verify"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=forged), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(forged)), _config()
             )
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [_KEYS_URL]
@@ -718,7 +747,10 @@ class TestMicrosoftIdTokenVerification:
         """A signed token issued for another client, outside its lifetime, or without a subject is refused."""
         with pytest.raises(TokenValidationError, match=message) as exc_info:
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token(**claims)), _config()
+                IdentityMaterial(
+                    access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token(**claims))
+                ),
+                _config(),
             )
         if "expired" in message:
             expected = TokenValidationReason.EXPIRED
@@ -734,7 +766,10 @@ class TestMicrosoftIdTokenVerification:
         """An expired token raises its own refusal, so the caller can tell it from a forged one."""
         with pytest.raises(TokenExpiredError) as exc_info:
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token(exp=int(time.time()) - 3600)),
+                IdentityMaterial(
+                    access_token=SecretToken("access-abc"),
+                    id_token=SecretToken(_member_id_token(exp=int(time.time()) - 3600)),
+                ),
                 _config(),
             )
         assert exc_info.value.reason is TokenValidationReason.EXPIRED
@@ -753,7 +788,8 @@ class TestMicrosoftIdTokenVerification:
 
         with pytest.raises(IdentityFetchError, match=message):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
     async def test_the_client_keeps_the_handler_it_built(self, httpx_mock: HTTPXMock) -> None:
@@ -761,7 +797,7 @@ class TestMicrosoftIdTokenVerification:
         httpx_mock.add_response(url=_USERINFO_URL, json=_USERINFO, is_reusable=True)
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]), is_reusable=True)
         client = OAuthClient(_config())
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": _member_id_token()})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": _member_id_token()})
 
         await client.fetch_identity(tokens)
         await client.fetch_identity(tokens)
@@ -777,7 +813,7 @@ class TestMicrosoftIdTokenVerification:
         id_token = _fake_jwt({"tid": bad_tid, "iss": _ISSUER, "sub": "ms-sub-1"})
         with pytest.raises(IdentityFetchError, match="invalid tid claim"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
             )
 
     async def test_issuer_not_bound_to_tid_is_refused(self) -> None:
@@ -785,7 +821,7 @@ class TestMicrosoftIdTokenVerification:
         id_token = _member_id_token(iss="https://login.microsoftonline.com/22222222-2222-2222-2222-222222222222/v2.0")
         with pytest.raises(IdentityFetchError, match="invalid iss claim"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=id_token), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(id_token)), _config()
             )
 
     @pytest.mark.parametrize(
@@ -802,7 +838,7 @@ class TestMicrosoftIdTokenVerification:
         """A malformed ID token stops the sign-in before any Graph call, as it does for any OpenID provider."""
         with pytest.raises(IdentityFetchError, match="not a compact signed token"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=malformed), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(malformed)), _config()
             )
 
         assert _USERINFO_URL not in [str(request.url) for request in httpx_mock.get_requests()]
@@ -815,7 +851,10 @@ class TestMicrosoftIdTokenVerification:
         config = preset(client_id=app_id.upper(), client_secret=SecretStr("msecret"), scopes=["openid"])
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token(aud=app_id)), config
+            IdentityMaterial(
+                access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token(aud=app_id))
+            ),
+            config,
         )
 
         assert identity.subject == "ms-sub-1"
@@ -833,7 +872,8 @@ class TestMicrosoftIdTokenVerification:
         httpx_mock.add_response(url=_ORGANIZATION_URL, json=_org_response(["contoso.com"]))
 
         identity = await MicrosoftIdentityHandler().fetch_identity(
-            IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+            IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+            _config(),
         )
 
         assert identity.subject == "ms-sub-1"
@@ -846,7 +886,8 @@ class TestMicrosoftIdTokenVerification:
 
         with pytest.raises(IdentityFetchError, match="signing key belongs to another issuer"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=_member_id_token()), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(_member_id_token())),
+                _config(),
             )
 
     async def test_refuses_an_algorithm_microsoft_does_not_use(self) -> None:
@@ -859,5 +900,5 @@ class TestMicrosoftIdTokenVerification:
 
         with pytest.raises(IdentityFetchError, match="signing algorithm"):
             await MicrosoftIdentityHandler().fetch_identity(
-                IdentityMaterial(access_token="access-abc", id_token=token), _config()
+                IdentityMaterial(access_token=SecretToken("access-abc"), id_token=SecretToken(token)), _config()
             )

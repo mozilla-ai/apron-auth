@@ -49,6 +49,7 @@ from apron_auth.models import (
     OAuthPendingState,
     ProviderConfig,
     RequestLimits,
+    SecretToken,
     ServerMetadata,
     TokenEndpointAuthMethod,
 )
@@ -344,7 +345,7 @@ class TestToProviderConfigIdentity:
         client = OAuthClient(to_provider_config(claimed_metadata, ClientRegistration(client_id="c")))
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access")))
 
         assert httpx_mock.get_requests() == []
 
@@ -365,7 +366,7 @@ class TestToProviderConfigIdentity:
         handler = McpIdentityHandler()
         client = OAuthClient(config, identity_handler=handler)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access")))
 
         assert identity.identity_key() == ("mcp", "u-1")
         assert [(material.access_token.get_secret_value(), used_config) for material, used_config in handler.calls] == [
@@ -2377,7 +2378,7 @@ class TestEndToEndFlow:
         tokens = await client.exchange_code(
             AuthorizationCallback(code="auth-code", state=pending.state), pending_state=pending
         )
-        assert tokens.access_token == "final-token"
+        assert tokens.access_token.get_secret_value() == "final-token"
 
         # Every outbound connection was made through the injected transport factory.
         assert registration_url in seen

@@ -219,8 +219,9 @@ authorization = await client.get_authorization_url(redirect_uri="https://yourapp
 # mapping, or any mapping of the names to their values.
 callback = AuthorizationCallback.from_query(query)
 tokens = await client.exchange_code(callback, browser_token=cookie_browser_token)
-print(tokens.access_token)
-print(tokens.refresh_token)
+print(tokens.access_token.get_secret_value())
+if tokens.refresh_token is not None:
+    print(tokens.refresh_token.get_secret_value())
 ```
 
 A callback that reaches your redirect URI with no such cookie is refused with `StateError`, the same refusal as a callback whose `state` the token does not mint. Both mean the callback cannot be bound to a browser, and neither consumes the store nor redeems the code.
@@ -235,8 +236,9 @@ url, pending_state = await client.get_authorization_url(redirect_uri="https://yo
 
 callback = AuthorizationCallback.from_query(query)
 tokens = await client.exchange_code(callback, pending_state=pending_state)
-print(tokens.access_token)
-print(tokens.refresh_token)
+print(tokens.access_token.get_secret_value())
+if tokens.refresh_token is not None:
+    print(tokens.refresh_token.get_secret_value())
 ```
 
 ### Identity fetch (optional)
@@ -262,22 +264,26 @@ from storage is a type error and raises `ConfigurationError`. Persist
 the fields as before. A stored set comes back as a plain `TokenSet`, and
 `refresh_token` turns it into a fresh one; when the provider issued no
 refresh token, run authorization again. Restore it with
-`TokenSet.model_validate`, and pass the model's own fields and nothing
-else: a field the model does not define is refused rather than ignored,
-and a `UserToken` nested in the record is held to the same rule. If your
+`TokenSet.model_validate`, wrapping each token in `SecretToken` as you
+pass it, and pass the model's own fields and nothing else: a token
+supplied as a plain string is refused, as is a field the model does not
+define, and a `UserToken` nested in the record is held to both rules.
+A dump states each token as a mask rather than as its value, so the
+record you persist holds the values you read off the model yourself. If your
 store adds keys of its own, select the model's fields out of the record
 first. A model you persist must hold a `TokenSet`, not a
 `FreshTokenSet`: reloading a `FreshTokenSet` field from storage raises
 `ConfigurationError`. The fresh set is narrowed to an `IdentityMaterial`
 — exposing only the access token and, for OIDC providers, the ID token —
 before being handed to the provider's identity handler, so handlers
-never receive the refresh token or caller context. Each token on it is a
-`SecretToken`, as is the token `revoke_token` and a `RevocationHandler`
-take, so a handler unwraps one with `get_secret_value()` into the request
-it sends and binds the unwrapped value to no variable of its own. A
-`SecretToken` states nothing as text, so formatting one or sending one
-without that call raises `TypeError` rather than sending a masked value a
-provider would accept. See [what an error reporter can
+never receive the refresh token or caller context. Every token this library
+holds or hands back is a `SecretToken`, on a `TokenSet`, on a
+`UserToken`, on an `IdentityMaterial`, and as the argument `revoke_token`,
+`refresh_token` and a `RevocationHandler` take, so you read one with
+`get_secret_value()` into the request you send and bind the unwrapped
+value to no variable of your own. A `SecretToken` states nothing as text,
+so formatting one or sending one without that call raises `TypeError`
+rather than sending a masked value a provider would accept. See [what an error reporter can
 capture](#what-an-error-reporter-can-capture).
 
 A built-in identity handler comes from the provider the config names. Every bundled `preset(...)` names its own, and a `ProviderConfig` you build by hand gets one by passing `provider=Provider.GOOGLE` (or any other member). A config that names no provider gets no built-in handler, so `fetch_identity` raises `IdentityNotSupportedError` unless you pass an `identity_handler` to the client. The generic OpenID preset and `mcp.to_provider_config` name none, and neither does a hand-built config that leaves `provider` out. Setting `use_builtin_identity_handler=False` refuses the named provider's handler as well, which both of those presets also do. A config that names a provider whose host suffixes do not cover both its authorization and token endpoints constructs fine but is refused at `fetch_identity` with `ConfigurationError`, because an identity handler may derive the endpoint it sends the access token to from the config. Pass your own `identity_handler` for a deployment on other hosts, such as a Salesforce org on a custom login domain. The built-in Salesforce handler is not that handler, because it sends the access token only to a `salesforce.com` host, so a custom domain needs a handler of its own. For a provider this library does not know, pass a custom `identity_handler`.
@@ -594,10 +600,8 @@ An ID token in a refresh response is held to the same claims as the one the orig
 ### Token revocation
 
 ```python
-from apron_auth import SecretToken
-
 client = OAuthClient(config)
-await client.revoke_token(SecretToken(tokens.access_token))
+await client.revoke_token(tokens.access_token)
 ```
 
 The client revokes through the handler the config's provider needs, so a preset's config needs no handler passed with it. Google, GitHub, Slack, Notion and HubSpot each revoke their own way, and the rest take RFC 7009 revocation. A config that names no provider, such as one from `oidc.preset(...)` or `mcp.to_provider_config(...)`, takes RFC 7009 revocation through the client's `transport_factory`. Pass `revocation_handler=` to either client to revoke through a handler of your own instead; the handler classes stay public, and `apron_auth.providers.revocation_handler_for(config)` returns the one a config resolves to.
@@ -885,13 +889,13 @@ tokens = await client.exchange_code(
 Each token is revoked on its own, so disconnecting the install revokes both, and the refresh token beside each one where the install rotates its tokens:
 
 ```python
-await client.revoke_token(SecretToken(tokens.access_token))
+await client.revoke_token(tokens.access_token)
 if tokens.refresh_token is not None:
-    await client.revoke_token(SecretToken(tokens.refresh_token))
+    await client.revoke_token(tokens.refresh_token)
 if tokens.user_token is not None:
-    await client.revoke_token(SecretToken(tokens.user_token.access_token))
+    await client.revoke_token(tokens.user_token.access_token)
     if tokens.user_token.refresh_token is not None:
-        await client.revoke_token(SecretToken(tokens.user_token.refresh_token))
+        await client.revoke_token(tokens.user_token.refresh_token)
 ```
 
 `OAuthClient.refresh_token` refreshes the token in `token_set.access_token`, so it cannot refresh the user token: Slack returns a refreshed user token nested as well, and a response carrying no token at the top level is refused. Passing `token_set.user_token.refresh_token` to it spends that token at Slack and then fails, though the refusal revokes whatever the response issued, so nothing is left valid and unreachable. Refresh a rotating user token with Slack's own endpoint for now.
@@ -984,7 +988,7 @@ The guarantee is about what a value states, so a reporter that walks object attr
 
 Your own frames are yours. A token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretToken(...)` and anything you unwrap in a handler of your own.
 
-**The token-endpoint paths are not covered.** `exchange_code` and `refresh_token` take the authorization code, the PKCE verifier and the refresh token as plain strings, and each raises from its own frames, so a captured traceback of a failed exchange or refresh states them. Measured against a refused exchange, the code appears in five frame locals and the verifier in five; against a refused refresh, the refresh token appears in two. Covering those means wrapping the token fields of `TokenSet` itself, which is not done.
+**The code exchange is not covered yet.** `exchange_code` takes the authorization code and the PKCE verifier as plain strings, and raises from its own frames, so a captured traceback of a failed exchange states them. Measured against a refused exchange, the code appears in four frame locals and the verifier in five. A refused refresh states neither its refresh token nor the client secret, because both reach the request wrapped.
 
 So for code that handles tokens, turn local-variable capture off or scrub it, with Sentry's `include_local_variables=False` or a `before_send` hook. The wrapping above reduces what a capture reveals; it does not make the capture safe.
 

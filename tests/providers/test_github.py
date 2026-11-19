@@ -123,7 +123,7 @@ class TestGitHubIdentityHandler:
         config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         handler = GitHubIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.provider == "github"
         assert identity.subject == "12345"
@@ -150,7 +150,9 @@ class TestGitHubIdentityHandler:
 
         config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email is None
         assert identity.email_verified is None
@@ -178,7 +180,9 @@ class TestGitHubIdentityHandler:
 
         config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email == "other@example.com"
         assert identity.email_verified is True
@@ -197,7 +201,9 @@ class TestGitHubIdentityHandler:
 
         config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email == "preferred@example.com"
         assert identity.email_verified is True
@@ -223,7 +229,9 @@ class TestGitHubIdentityHandler:
 
         config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email is None
         assert identity.email_verified is None

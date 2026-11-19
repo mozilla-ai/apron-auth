@@ -33,6 +33,7 @@ from apron_auth.models import (
     IdentityMaterial,
     ProviderConfig,
     RequestLimits,
+    SecretToken,
     ServerMetadata,
     TokenEndpointAuthMethod,
     UrlField,
@@ -1015,7 +1016,7 @@ class TestHandlerInference:
         client = OAuthClient(config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access")))
 
         assert httpx_mock.get_requests() == []
 
@@ -1027,7 +1028,7 @@ class TestHandlerInference:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
         client = OAuthClient(config, identity_handler=identity_handler(claimed_metadata))
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access")))
 
         assert identity.identity_key() == (f"oidc:{claimed_metadata.issuer}", "u-1")
 
@@ -1073,8 +1074,10 @@ class TestOidcIdentity:
 
         identity = await trusting_handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True, groups=["staff"]),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(
+                    id_token(sub="u-1", email="person@acme.com", email_verified=True, groups=["staff"])
+                ),
             ),
             config,
         )
@@ -1114,8 +1117,8 @@ class TestOidcIdentity:
 
         identity = await handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="ceo@other-tenant.com", email_verified=True),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", email="ceo@other-tenant.com", email_verified=True)),
             ),
             config,
         )
@@ -1132,8 +1135,8 @@ class TestOidcIdentity:
 
         identity = await trusting_handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", email="person@acme.com", email_verified=True)),
             ),
             config,
         )
@@ -1149,8 +1152,8 @@ class TestOidcIdentity:
 
         identity = await handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", email="person@acme.com", email_verified=True)),
             ),
             config,
         )
@@ -1164,7 +1167,7 @@ class TestOidcIdentity:
         """Userinfo alone identifies the user, but cannot vouch for email verification."""
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com"})
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert identity.subject == "u-1"
         assert identity.email_verified is None
@@ -1175,8 +1178,8 @@ class TestOidcIdentity:
 
         identity = await handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=True),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", email="person@acme.com", email_verified=True)),
             ),
             config,
         )
@@ -1194,8 +1197,8 @@ class TestOidcIdentity:
 
         identity = await trusting_handler.fetch_identity(
             IdentityMaterial(
-                access_token="access",
-                id_token=id_token(sub="u-1", email="person@acme.com", email_verified=False),
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", email="person@acme.com", email_verified=False)),
             ),
             config,
         )
@@ -1211,7 +1214,7 @@ class TestOidcIdentity:
             url=USERINFO_URL, json={"sub": "u-1", "email": "person@acme.com", "email_verified": "false"}
         )
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert identity.email_verified is None
 
@@ -1219,7 +1222,9 @@ class TestOidcIdentity:
         """An ``iss`` other than the configured issuer is refused."""
         with pytest.raises(TokenValidationError, match=r"invalid iss claim") as exc_info:
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(iss="https://attacker.example")),
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(iss="https://attacker.example"))
+                ),
                 config,
             )
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_ISSUER
@@ -1230,7 +1235,9 @@ class TestOidcIdentity:
     ) -> None:
         """``iss`` must be exactly the issuer string, not a list that contains it."""
         with pytest.raises(IdentityFetchError, match=r"invalid iss claim"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(iss=iss)), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(iss=iss))), config
+            )
 
     async def test_refuses_an_id_token_minted_for_another_client(
         self, handler: OidcIdentityHandler, config: ProviderConfig
@@ -1238,7 +1245,9 @@ class TestOidcIdentity:
         """An ``aud`` that does not name this client is refused."""
         with pytest.raises(TokenValidationError, match=r"invalid aud claim") as exc_info:
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(aud="someone-else")),
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(aud="someone-else"))
+                ),
                 config,
             )
         assert exc_info.value.reason is TokenValidationReason.AUDIENCE
@@ -1251,7 +1260,8 @@ class TestOidcIdentity:
 
         identity = await handler.fetch_identity(
             IdentityMaterial(
-                access_token="access", id_token=id_token(sub="u-1", aud=["other", CLIENT_ID], azp=CLIENT_ID)
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", aud=["other", CLIENT_ID], azp=CLIENT_ID)),
             ),
             config,
         )
@@ -1262,7 +1272,9 @@ class TestOidcIdentity:
         """A token expired well beyond the leeway is refused as expired."""
         with pytest.raises(TokenExpiredError, match=r"has expired") as exc_info:
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(exp=time.time() - 3600)),
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(exp=time.time() - 3600))
+                ),
                 config,
             )
         assert exc_info.value.reason is TokenValidationReason.EXPIRED
@@ -1274,7 +1286,9 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", exp=time.time() - 30)),
+            IdentityMaterial(
+                access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", exp=time.time() - 30))
+            ),
             config,
         )
 
@@ -1291,7 +1305,7 @@ class TestOidcIdentity:
         """
         with pytest.raises(IdentityFetchError, match=rf"missing the {claim} claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(**{claim: _OMIT})),
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(**{claim: _OMIT}))),
                 config,
             )
 
@@ -1303,7 +1317,7 @@ class TestOidcIdentity:
 
         with pytest.raises(IdentityFetchError, match="different subject"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")),
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))),
                 config,
             )
 
@@ -1319,7 +1333,7 @@ class TestOidcIdentity:
 
         with pytest.raises(IdentityFetchError, match="names no subject"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")),
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))),
                 config,
             )
 
@@ -1339,7 +1353,9 @@ class TestOidcIdentity:
     ) -> None:
         """A token that does not verify stops the sign-in, so identity never rests on userinfo alone."""
         with pytest.raises(IdentityFetchError, match=message) as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(token)), config
+            )
 
         assert token not in str(excinfo.value)
         assert USERINFO_URL not in [str(request.url) for request in httpx_mock.get_requests()]
@@ -1352,7 +1368,9 @@ class TestOidcIdentity:
         forged = id_token(key=jwk.RSAKey.generate_key(2048))
 
         with pytest.raises(IdentityFetchError, match="signature did not verify"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=forged), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(forged)), config
+            )
 
     async def test_verifies_before_any_userinfo_request(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1361,7 +1379,9 @@ class TestOidcIdentity:
         forged = id_token(key=jwk.RSAKey.generate_key(2048))
 
         with pytest.raises(IdentityFetchError):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=forged), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(forged)), config
+            )
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
 
@@ -1378,7 +1398,9 @@ class TestOidcIdentity:
 
         handler = identity_handler(metadata(), transport_factory=factory)
 
-        await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), config)
+        await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token())), config
+        )
 
         assert JWKS_URL in requested
 
@@ -1389,7 +1411,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"email": "person@acme.com"})
 
         with pytest.raises(IdentityFetchError, match="no subject"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     async def test_reports_a_failed_userinfo_request(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1398,7 +1420,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, status_code=401)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     @pytest.mark.parametrize("status", [401, 403, 500, 503])
     async def test_userinfo_failure_degrades_to_the_id_token(
@@ -1415,8 +1437,8 @@ class TestOidcIdentity:
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
             identity = await handler.fetch_identity(
                 IdentityMaterial(
-                    access_token="access",
-                    id_token=id_token(sub="u-1", email="person@acme.com", name="A Person"),
+                    access_token=SecretToken("access"),
+                    id_token=SecretToken(id_token(sub="u-1", email="person@acme.com", name="A Person")),
                 ),
                 config,
             )
@@ -1445,7 +1467,7 @@ class TestOidcIdentity:
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
             identity = await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))), config
             )
 
         assert identity.subject == "u-1"
@@ -1460,7 +1482,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, status_code=403)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     async def test_maps_insufficient_scope_to_a_scope_error_without_an_id_token(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1473,7 +1495,7 @@ class TestOidcIdentity:
         )
 
         with pytest.raises(IdentityScopeNotGrantedError) as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
         assert excinfo.value.__cause__ is None
         assert excinfo.value.__context__ is None
         assert excinfo.value.error_code == "insufficient_scope"
@@ -1485,7 +1507,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, status_code=403, headers={"WWW-Authenticate": 'Bearer realm="x"'})
 
         with pytest.raises(IdentityFetchError) as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
 
@@ -1503,7 +1525,7 @@ class TestOidcIdentity:
         )
 
         with pytest.raises(IdentityScopeNotGrantedError):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     @pytest.mark.parametrize("code", NEAR_MISS_SCOPE_CODES)
     async def test_a_near_miss_error_code_is_not_a_scope_error(
@@ -1515,7 +1537,7 @@ class TestOidcIdentity:
         )
 
         with pytest.raises(IdentityFetchError) as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert not isinstance(excinfo.value, IdentityScopeNotGrantedError)
 
@@ -1526,7 +1548,9 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "someone-else"})
 
         with pytest.raises(IdentityFetchError, match="different subject"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))), config
+            )
 
     def test_refuses_a_userinfo_url_that_cannot_be_requested(self):
         """A URL the request itself would reject is the caller's own, so no handler is built on it."""
@@ -1543,7 +1567,7 @@ class TestOidcIdentity:
         token = "access-SECRET-\u00e9"
 
         with pytest.raises(IdentityFetchError, match="request failed") as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token=token), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken(token)), config)
 
         assert token not in repr(excinfo.value.args)
         assert excinfo.value.__cause__ is None
@@ -1556,7 +1580,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, content=b"[" * 100_000 + b"]" * 100_000)
 
         with pytest.raises(IdentityFetchError, match="Failed to parse") as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
         assert excinfo.value.__cause__ is None
         assert excinfo.value.__context__ is None
 
@@ -1567,7 +1591,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json=["not", "an", "object"])
 
         with pytest.raises(IdentityFetchError, match="not a JSON object"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     async def test_refuses_a_multi_audience_token_without_azp(
         self, handler: OidcIdentityHandler, config: ProviderConfig
@@ -1575,7 +1599,10 @@ class TestOidcIdentity:
         """Section 3.1.3.7 step 4 — ``aud`` arrays are accepted, so the condition is reachable."""
         with pytest.raises(IdentityFetchError, match=r"missing the azp claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", aud=["other", CLIENT_ID])),
+                IdentityMaterial(
+                    access_token=SecretToken("access"),
+                    id_token=SecretToken(id_token(sub="u-1", aud=["other", CLIENT_ID])),
+                ),
                 config,
             )
 
@@ -1589,7 +1616,9 @@ class TestOidcIdentity:
         """
         with pytest.raises(IdentityFetchError, match=r"invalid azp claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", azp="someone-else")),
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", azp="someone-else"))
+                ),
                 config,
             )
 
@@ -1600,7 +1629,9 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", azp=CLIENT_ID)),
+            IdentityMaterial(
+                access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", azp=CLIENT_ID))
+            ),
             config,
         )
 
@@ -1613,7 +1644,10 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1"})
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", at_hash=_at_hash("access"))),
+            IdentityMaterial(
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(sub="u-1", at_hash=_at_hash("access"))),
+            ),
             config,
         )
 
@@ -1630,7 +1664,10 @@ class TestOidcIdentity:
         """
         with pytest.raises(IdentityFetchError, match=r"invalid at_hash claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", at_hash=_at_hash("other"))),
+                IdentityMaterial(
+                    access_token=SecretToken("access"),
+                    id_token=SecretToken(id_token(sub="u-1", at_hash=_at_hash("other"))),
+                ),
                 config,
             )
 
@@ -1646,7 +1683,9 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email": "real@acme.com", "email_verified": True})
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", email="other@acme.com")),
+            IdentityMaterial(
+                access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", email="other@acme.com"))
+            ),
             config,
         )
 
@@ -1661,7 +1700,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, json={"sub": "u-1", "email_verified": True})
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")),
+            IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))),
             config,
         )
 
@@ -1676,7 +1715,7 @@ class TestOidcIdentity:
         """
         with pytest.raises(IdentityFetchError, match=r"missing the sub claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub=_OMIT)),
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub=_OMIT))),
                 config,
             )
 
@@ -1700,10 +1739,12 @@ class TestOidcIdentity:
         )
 
         mine = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
+            IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))), config
         )
         theirs = await identity_handler(other_metadata).fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", iss=other_issuer)),
+            IdentityMaterial(
+                access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", iss=other_issuer))
+            ),
             other_config,
         )
 
@@ -1720,7 +1761,7 @@ class TestOidcIdentity:
 
         handler = identity_handler(metadata(), transport_factory=factory)
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert seen == [USERINFO_URL]
         assert identity.subject == "u-1"
@@ -1739,7 +1780,7 @@ class TestOidcIdentity:
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers.oidc"):
             identity = await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1")), config
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1"))), config
             )
 
         assert identity.subject == "u-1"
@@ -1755,7 +1796,7 @@ class TestOidcIdentity:
         handler = identity_handler(metadata(), transport_factory=refuse)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch") as excinfo:
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
         assert "secret-detail" not in str(excinfo.value)
         assert isinstance(excinfo.value.__cause__, PermissionError)
@@ -1771,7 +1812,7 @@ class TestOidcIdentity:
         )
 
         with pytest.raises(IdentityFetchError, match="signed userinfo"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     async def test_reports_an_unparseable_userinfo_body(
         self, handler: OidcIdentityHandler, config: ProviderConfig, httpx_mock: HTTPXMock
@@ -1780,7 +1821,7 @@ class TestOidcIdentity:
         httpx_mock.add_response(url=USERINFO_URL, status_code=200, content=b"<html>nope</html>")
 
         with pytest.raises(IdentityFetchError, match="Failed to parse"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     @pytest.mark.parametrize("payload", [b"", b"{not json", b'["a","list"]'])
     async def test_refuses_a_signed_token_whose_payload_is_not_a_claims_object(
@@ -1790,7 +1831,9 @@ class TestOidcIdentity:
         token = jws.serialize_compact({"alg": "RS256", "kid": "rsa-1"}, payload, RSA_KEY)
 
         with pytest.raises(IdentityFetchError, match="claims are not a JSON object"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(token)), config
+            )
 
     @pytest.mark.parametrize("audience", [42, {"aud": "otari"}, ["other"], []])
     async def test_refuses_an_id_token_whose_audience_is_not_a_string_or_array(
@@ -1804,7 +1847,9 @@ class TestOidcIdentity:
         """
         with pytest.raises(IdentityFetchError, match=r"invalid a(ud|zp) claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", aud=audience)),
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", aud=audience))
+                ),
                 config,
             )
 
@@ -1817,13 +1862,18 @@ class TestOidcIdentity:
         token = f"{_b64(json.dumps({'alg': 5}).encode())}.{_b64(json.dumps(payload).encode())}.signature"
 
         with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=token), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(token)), config
+            )
 
     async def test_error_text_is_ours_not_the_validators(self, handler: OidcIdentityHandler, config: ProviderConfig):
         """A joserfc rewording must not change the user-facing contract."""
         with pytest.raises(IdentityFetchError) as excinfo:
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(iss="https://evil.example")), config
+                IdentityMaterial(
+                    access_token=SecretToken("access"), id_token=SecretToken(id_token(iss="https://evil.example"))
+                ),
+                config,
             )
 
         assert str(excinfo.value) == "OpenID ID token has an invalid iss claim"
@@ -1842,7 +1892,8 @@ class TestOidcIdentity:
 
         with pytest.raises(TokenValidationError, match="ID token has an invalid sub claim") as exc_info:
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub=subject)), config
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub=subject))),
+                config,
             )
         assert exc_info.value.reason is TokenValidationReason.CLAIMS
 
@@ -1851,7 +1902,7 @@ class TestOidcIdentity:
         handler = identity_handler(metadata(userinfo_url=None))
 
         with pytest.raises(IdentityFetchError, match="no subject"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access")), config)
 
     @pytest.mark.filterwarnings("ignore:EdDSA is deprecated:joserfc.errors.SecurityWarning")
     async def test_accepts_an_eddsa_token_with_a_sha512_at_hash(
@@ -1862,7 +1913,10 @@ class TestOidcIdentity:
         at_hash = _b64(hashlib.sha512(b"access").digest()[:32])
 
         identity = await handler.fetch_identity(
-            IdentityMaterial(access_token="access", id_token=id_token(alg="EdDSA", sub="u-1", at_hash=at_hash)),
+            IdentityMaterial(
+                access_token=SecretToken("access"),
+                id_token=SecretToken(id_token(alg="EdDSA", sub="u-1", at_hash=at_hash)),
+            ),
             config,
         )
 
@@ -1876,7 +1930,8 @@ class TestOidcIdentity:
         with pytest.raises(IdentityFetchError, match="invalid at_hash claim"):
             await handler.fetch_identity(
                 IdentityMaterial(
-                    access_token="access", id_token=id_token(alg="EdDSA", sub="u-1", at_hash=_at_hash("access"))
+                    access_token=SecretToken("access"),
+                    id_token=SecretToken(id_token(alg="EdDSA", sub="u-1", at_hash=_at_hash("access"))),
                 ),
                 config,
             )
@@ -1885,7 +1940,7 @@ class TestOidcIdentity:
         """A present-but-untyped ``azp`` is a claim that cannot be checked, so it fails closed."""
         with pytest.raises(IdentityFetchError, match=r"invalid azp claim"):
             await handler.fetch_identity(
-                IdentityMaterial(access_token="access", id_token=id_token(sub="u-1", azp=42)),
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token(sub="u-1", azp=42))),
                 config,
             )
 
@@ -1894,7 +1949,9 @@ class TestOidcIdentity:
         issuerless = config.with_changes(issuer=None)
 
         with pytest.raises(ConfigurationError, match="names no issuer"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), issuerless)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token())), issuerless
+            )
 
     @pytest.mark.parametrize("with_id_token", [True, False])
     async def test_refuses_a_config_for_another_issuer_before_any_request(
@@ -1909,8 +1966,8 @@ class TestOidcIdentity:
             metadata=metadata(issuer=other_issuer, userinfo_url=f"{other_issuer}/userinfo"),
         )
         material = IdentityMaterial(
-            access_token="access",
-            id_token=id_token(iss=other_issuer) if with_id_token else None,
+            access_token=SecretToken("access"),
+            id_token=SecretToken(id_token(iss=other_issuer)) if with_id_token else None,
         )
 
         with pytest.raises(ConfigurationError, match="different issuer"):
@@ -1928,7 +1985,9 @@ class TestOidcIdentity:
         )
 
         with pytest.raises(IdentityFetchError, match="invalid aud claim"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access", id_token=id_token()), other)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access"), id_token=SecretToken(id_token())), other
+            )
 
 
 class TestBearerError:

@@ -33,7 +33,6 @@ from apron_auth import (
     TokenRefreshError,
     TokenSet,
 )
-from apron_auth.models import SecretToken
 
 
 def _nonce(url: str) -> str:
@@ -91,8 +90,8 @@ class TestFullOAuthFlow:
             AuthorizationCallback(code="authorization-code", state=authorization.state),
             browser_token=authorization.browser_token,
         )
-        assert tokens.access_token == "access-token-abc"
-        assert tokens.refresh_token == "refresh-token-xyz"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
+        assert tokens.refresh_token.get_secret_value() == "refresh-token-xyz"
         assert tokens.expires_at is not None
         assert authorization.state not in store._states
 
@@ -106,14 +105,14 @@ class TestFullOAuthFlow:
             },
         )
         refreshed = await client.refresh_token(refresh_token=tokens.refresh_token)
-        assert refreshed.access_token == "new-access-token"
+        assert refreshed.access_token.get_secret_value() == "new-access-token"
 
         # Step 4: Revoke token.
         httpx_mock.add_response(
             url="https://provider.example.com/revoke",
             status_code=200,
         )
-        result = await client.revoke_token(token=SecretToken(refreshed.access_token))
+        result = await client.revoke_token(token=refreshed.access_token)
         assert result is True
 
 
@@ -262,7 +261,7 @@ class TestSlackSignInFlow:
             browser_token=authorization.browser_token,
         )
 
-        assert tokens.access_token == "xoxp-user-token"
+        assert tokens.access_token.get_secret_value() == "xoxp-user-token"
 
     async def test_an_id_token_from_another_issuer_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """The preset names Slack's issuer, so a token minted elsewhere cannot sign a person in."""

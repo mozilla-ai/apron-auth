@@ -16,9 +16,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
+from apron_auth._credentials import refuse_plain_text
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, response_failure, status_failure
@@ -442,8 +444,10 @@ def _read_task_exception(task: asyncio.Task[None]) -> None:
         task.exception()
 
 
-def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
+def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, SecretToken]]:
     """Return the tokens a token-endpoint response or one of its members carries.
+
+    Each token is wrapped as it is read, so no frame it is carried through states it.
 
     Args:
         token: A token-endpoint response, or a member of one that carries a token of its own.
@@ -453,10 +457,29 @@ def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> li
         Each token with the kind a log line names it by, the refresh token first.
     """
     return [
-        (f"{label_prefix}{label}", value)
+        (f"{label_prefix}{label}", SecretToken(value))
         for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
         if isinstance(value := token.get(field), str) and value
     ]
+
+
+def _sent_form(*fields: Mapping[str, str | SecretStr]) -> dict[str, str]:
+    """Return the form a token request sends, with every credential unwrapped for the wire.
+
+    NOTE: The result states every credential the request carries. Callers must pass it straight to
+    the request rather than binding it to a local, which an error reporter would record.
+
+    Args:
+        *fields: The field mappings to merge, each later one taking precedence.
+
+    Returns:
+        The merged form, as the wire states it.
+    """
+    return {
+        name: value.get_secret_value() if isinstance(value, SecretStr) else value
+        for part in fields
+        for name, value in part.items()
+    }
 
 
 def _same_secret(given: str, expected: str) -> bool:
@@ -547,7 +570,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     # A member is read onto its field only where it holds what that field states. One of any other
     # type is carried as it arrived, because the token beside it is usable either way and a refusal
     # here would lose a token the response issued.
-    named: dict[str, Any] = {"access_token": access_token}
+    named: dict[str, Any] = {"access_token": SecretToken(access_token)}
     extras: dict[str, Any] = {}
     for member, value in nested.items():
         if member == "access_token":
@@ -555,7 +578,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
         field = _USER_TOKEN_STRINGS.get(member)
         lifetime = finite_number(value) if member in {"expires_at", "expires_in"} else None
         if field is not None and isinstance(value, str):
-            named[field] = value
+            named[field] = SecretToken(value) if field == "refresh_token" else value
         elif member == "expires_in" and lifetime is not None:
             named["expires_in"] = int(lifetime)
         elif member == "expires_at" and lifetime is not None:
@@ -813,7 +836,7 @@ class _OAuthClientBase:
             raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.context)
 
-    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: str | None = None) -> None:
+    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: SecretToken | None = None) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
         Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
@@ -843,7 +866,11 @@ class _OAuthClientBase:
             if isinstance(value, dict):
                 tokens += _revocable_tokens(value, label_prefix="nested ")
         if keep is not None:
-            tokens = [(label, token) for label, token in tokens if not _same_secret(token, keep)]
+            tokens = [
+                (label, token)
+                for label, token in tokens
+                if not _same_secret(token.get_secret_value(), keep.get_secret_value())
+            ]
         if not tokens:
             return
         revocation_url = self._config.revocation_url
@@ -854,7 +881,7 @@ class _OAuthClientBase:
             return
         await self._revoke_all(tokens, host=urlparse(revocation_url).hostname)
 
-    async def _revoke_all(self, tokens: Sequence[tuple[str, str]], *, host: str | None) -> None:
+    async def _revoke_all(self, tokens: Sequence[tuple[str, SecretToken]], *, host: str | None) -> None:
         """Revoke every given token at once, under one time limit bound to this call.
 
         A revocation unfinished at the limit is canceled, as is every revocation still running when
@@ -901,7 +928,7 @@ class _OAuthClientBase:
         if error is not None:
             raise error
 
-    async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
+    async def _revoke_one_refused_token(self, label: str, token: SecretToken, host: str | None) -> None:
         """Revoke one token of a refused token response, and log a failure instead of raising it.
 
         A configuration that cannot revoke is logged like any other failure, because the refusal
@@ -913,17 +940,17 @@ class _OAuthClientBase:
             host: The revocation endpoint's host, for the log line.
         """
         try:
-            await self.revoke_token(SecretToken(token))
+            await self.revoke_token(token)
         except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
-    async def refresh_token(self, refresh_token: str) -> FreshTokenSet:
+    async def refresh_token(self, refresh_token: SecretToken) -> FreshTokenSet:
         """Refresh an access token using a refresh token.
 
         Args:
-            refresh_token: The refresh token to exchange for a new access
-                token.
+            refresh_token: The refresh token to exchange for a new access token, wrapped so this
+                frame states it to no error reporter.
 
         Returns:
             The refreshed token set, which identity can be established from.
@@ -933,6 +960,7 @@ class _OAuthClientBase:
             original, which this client does not keep, so comparing ``sub`` is the caller's.
 
         Raises:
+            ConfigurationError: If the refresh token is supplied as plain text.
             TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, if its
                 response carries an ID token that was not issued to this client or has expired, or if its
                 response states no access token, which RFC 6749 section 5.1 requires. A response refused for
@@ -941,7 +969,8 @@ class _OAuthClientBase:
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
-        data = {
+        refuse_plain_text(refresh_token, "refresh_token")
+        data: dict[str, str | SecretStr] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         }
@@ -994,13 +1023,15 @@ class _OAuthClientBase:
             ``True`` when the provider confirms revocation.
 
         Raises:
-            ConfigurationError: If the provider has no revocation endpoint configured, or if the
+            ConfigurationError: If the token is supplied as plain text, if the provider has no
+                revocation endpoint configured, or if the
                 handler refuses the configuration or the token it is given.
                 It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
                 It chains nothing from the handler.
         """
+        refuse_plain_text(token, "token")
         if not self._config.revocation_url:
             msg = "revocation_url is not configured for this provider"
             raise ConfigurationError(msg)
@@ -1166,7 +1197,7 @@ class _OAuthClientBase:
         """
         return "openid" in sent_scope_words(query, "scope", self._config.scope_separator)
 
-    def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
+    def _sent_secrets(self, sent: Mapping[str, str | SecretStr]) -> frozenset[str]:
         """Return the secret values a token request sends, which are the client secret and the grant's own.
 
         Args:
@@ -1175,12 +1206,12 @@ class _OAuthClientBase:
         Returns:
             The values, without any the request left empty.
         """
-        values = {sent[field] for field in _SENT_SECRET_FIELDS if field in sent}
+        values = {_sent_form(sent)[field] for field in _SENT_SECRET_FIELDS if field in sent}
         if self._config.client_secret is not None:
             values.add(self._config.client_secret.get_secret_value())
         return frozenset(value for value in values if value)
 
-    def _stated_error_code(self, answer: BoundedResponse | None, sent: dict[str, str]) -> str:
+    def _stated_error_code(self, answer: BoundedResponse | None, sent: Mapping[str, str | SecretStr]) -> str:
         """Return the error code a token response states, or an empty string when it states none to report.
 
         A value the request sent as a secret is not reported.
@@ -1196,7 +1227,7 @@ class _OAuthClientBase:
         code = recognized_error_code(_stated_error_member(answer))
         return "" if code in self._sent_secrets(sent) else code
 
-    async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
+    async def _token_request(self, data: Mapping[str, str | SecretStr]) -> dict[str, Any]:
         """Send a token request to the configured token endpoint.
 
         An OAuth error the body states names the failure, whatever status carries it. Otherwise an
@@ -1233,7 +1264,7 @@ class _OAuthClientBase:
                         client,
                         "POST",
                         self._config.token_url,
-                        data=data | authentication.form,
+                        data=_sent_form(data, authentication.form),
                         headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
                     ),
                     self._config.limits,
@@ -1333,7 +1364,7 @@ class _OAuthClientBase:
             if value is None:
                 continue
             if isinstance(value, str):
-                named[field] = value
+                named[field] = SecretToken(value) if field == "refresh_token" else value
             else:
                 extras[field] = value
         for field in _TOKEN_SET_NUMBERS:
@@ -1357,7 +1388,7 @@ class _OAuthClientBase:
         named["expires_at"] = _expires_at(named)
 
         return FreshTokenSet(
-            access_token=data["access_token"],
+            access_token=SecretToken(data["access_token"]),
             user_token=user_token,
             extras=extras,
             context=context or {},

@@ -20,7 +20,8 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.errors import ConfigurationError
+from apron_auth.client import OAuthClient
+from apron_auth.errors import ConfigurationError, TokenRefreshError
 from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
@@ -260,6 +261,37 @@ class TestAConfigurationRefusal:
         assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
 
 
+class TestATokenRefreshFailure:
+    """Test that a refused refresh leaves the refresh token in no frame local.
+
+    The token is a parameter of the call that fails, so no rule about the raise site reaches it.
+    """
+
+    async def test_a_refused_refresh_states_no_refresh_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenRefreshError) as caught:
+            await client.refresh_token(SecretToken(TOKEN))
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+    async def test_a_refused_refresh_states_no_client_secret(self) -> None:
+        """The request presents the secret to the token endpoint, so what builds the request holds it too."""
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenRefreshError) as caught:
+            await client.refresh_token(SecretToken(TOKEN))
+
+        assert CLIENT_SECRET in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
+
+
 class TestARevocationFailure:
     """Test that a failed revocation leaves no credential in a frame local."""
 
@@ -317,7 +349,9 @@ class TestAnIdTokenFailure:
         handler, config = IDENTITY_CASES[Provider.MICROSOFT]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN, id_token=ID_TOKEN), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken(TOKEN), id_token=SecretToken(ID_TOKEN)), config
+            )
 
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []
@@ -340,7 +374,7 @@ class TestAnIdentityFailure:
         handler, config = IDENTITY_CASES[provider]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken(TOKEN)), config)
 
         assert TOKEN in "".join(_request_text(request) for request in httpx_mock.get_requests())
         _assert_chains_nothing(caught.value)
@@ -361,7 +395,7 @@ class TestAnIdentityFailure:
         handler, config = IDENTITY_CASES[provider]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken(TOKEN)), config)
 
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []

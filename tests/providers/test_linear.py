@@ -5,7 +5,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, IdentityFetchError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.linear import LinearIdentityHandler, preset
@@ -30,7 +30,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
         handler = LinearIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="linear",
@@ -57,7 +57,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
         handler = LinearIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -73,7 +73,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
         handler = LinearIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -87,7 +87,7 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
         handler = LinearIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == (TenancyContext(id="org-1", name=None, domain=None, raw=organization),)
 
@@ -108,7 +108,9 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
 
         with pytest.raises(IdentityFetchError, match=stated) as refusal:
-            await LinearIdentityHandler().fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+            await LinearIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("bad-token")), config
+            )
 
         message = str(refusal.value)
         assert "Authentication required" not in message
@@ -121,7 +123,9 @@ class TestLinearIdentityHandler:
         config = preset(client_id="lid", client_secret=SecretStr("lsecret"), scopes=["read"])
 
         with pytest.raises(IdentityFetchError, match="cannot read") as refusal:
-            await LinearIdentityHandler().fetch_identity(IdentityMaterial(access_token="bad-token"), config)
+            await LinearIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("bad-token")), config
+            )
 
         assert "Authentication required" not in str(refusal.value)
         assert refusal.value.kind is FailureKind.REFUSED
@@ -132,7 +136,7 @@ class TestLinearIdentityHandler:
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Linear identity"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, content=b"not-json")
@@ -140,7 +144,7 @@ class TestLinearIdentityHandler:
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Linear identity response"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_missing_data_object_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": None})
@@ -148,7 +152,7 @@ class TestLinearIdentityHandler:
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="states no identity"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_missing_data_viewer_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=LINEAR_GRAPHQL_URL, status_code=200, json={"data": {}})
@@ -156,7 +160,7 @@ class TestLinearIdentityHandler:
         handler = LinearIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="states no signed-in user"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
 
 class TestLinearPreset:

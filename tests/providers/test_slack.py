@@ -123,7 +123,7 @@ class TestSlackIdentityHandler:
         )
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
-        identity = await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="t"), config)
+        identity = await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token=SecretToken("t")), config)
 
         assert identity.email == "user@example.com"
         assert identity.email_verified is None
@@ -147,7 +147,7 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
         assert identity == IdentityProfile(
             provider="slack",
@@ -175,7 +175,7 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -190,7 +190,7 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
         assert identity.tenancies == (TenancyContext(id="T67890", name=None, domain=None),)
         request = httpx_mock.get_request()
@@ -206,7 +206,7 @@ class TestSlackIdentityHandler:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Slack identity"):
-            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
     async def test_non_json_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
@@ -216,7 +216,7 @@ class TestSlackIdentityHandler:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Slack identity response"):
-            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
     async def test_ok_false_in_2xx_raises_identity_fetch_error(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
@@ -230,7 +230,7 @@ class TestSlackIdentityHandler:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
-            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
         assert exc_info.value.kind is FailureKind.REJECTED
         assert exc_info.value.error_code == "invalid_auth"
         assert "invalid_auth" not in str(exc_info.value)
@@ -254,7 +254,7 @@ class TestSlackIdentityHandler:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
         assert "unknown_error" not in str(refusal.value)
         assert refusal.value.kind is FailureKind.REJECTED
@@ -280,7 +280,7 @@ class TestSlackIdentityHandler:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("user-token-abc")), config)
 
         assert refusal.value.kind is FailureKind.REJECTED
 
@@ -304,7 +304,9 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
-            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await SlackIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("user-token-abc")), config
+            )
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
         assert exc_info.value.error_code == error
@@ -321,7 +323,9 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityScopeNotGrantedError, match="Slack identity request failed") as refusal:
-            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await SlackIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("user-token-abc")), config
+            )
 
         assert refusal.value.error_code == "missing_scope"
         assert "missing_scope" not in str(refusal.value)
@@ -337,7 +341,9 @@ class TestSlackIdentityHandler:
         config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityFetchError) as exc_info:
-            await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
+            await SlackIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("user-token-abc")), config
+            )
         assert not isinstance(exc_info.value, IdentityScopeNotGrantedError)
 
 
@@ -847,7 +853,7 @@ class TestSlackFlowMismatchIsRefused:
     def _handler_and_material() -> tuple[object, IdentityMaterial]:
         from apron_auth.providers.slack import SlackIdentityHandler
 
-        return SlackIdentityHandler(), IdentityMaterial(access_token="token-abc")
+        return SlackIdentityHandler(), IdentityMaterial(access_token=SecretToken("token-abc"))
 
     async def test_the_sign_in_scope_as_a_user_scope_does_not_satisfy_the_sign_in_endpoint(self) -> None:
         """Slack's user_scope parameter carries no nonce, so it cannot stand in for the scope parameter."""
@@ -1276,7 +1282,9 @@ class TestSlackWorkspaceBotIdentity:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Slack workspace fallback lookup failed") as refusal:
-            await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+            )
 
         assert refusal.value.error_code == "token_revoked"
         assert "token_revoked" not in str(refusal.value)
@@ -1298,7 +1306,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_AUTH_TEST_URL, json=auth_test_payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert identity.tenancies == (
             TenancyContext(
@@ -1330,7 +1340,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].raw == team
@@ -1349,7 +1361,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert identity == IdentityProfile(
             provider="slack",
@@ -1375,7 +1389,9 @@ class TestSlackWorkspaceBotIdentity:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="team.info"):
-            await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+            )
 
     async def test_team_info_missing_scope_falls_back_to_auth_test(self, httpx_mock: HTTPXMock) -> None:
         from apron_auth.providers.slack import SlackIdentityHandler
@@ -1396,7 +1412,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_AUTH_TEST_URL, json=auth_test_payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert identity == IdentityProfile(
             provider="slack",
@@ -1419,7 +1437,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert identity.tenancies == ()
         assert identity.raw == payload
@@ -1435,7 +1455,9 @@ class TestSlackWorkspaceBotIdentity:
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Slack workspace lookup failed") as refusal:
-            await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+            )
 
         assert refusal.value.error_code == "invalid_auth"
         assert "invalid_auth" not in str(refusal.value)
@@ -1454,7 +1476,9 @@ class TestSlackWorkspaceBotIdentity:
         httpx_mock.add_response(url=SLACK_TEAM_INFO_URL, json=payload)
         handler = SlackIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="xoxb-bot-token"), self._bot_config())
+        identity = await handler.fetch_identity(
+            IdentityMaterial(access_token=SecretToken("xoxb-bot-token")), self._bot_config()
+        )
 
         assert identity.subject is None
         assert identity.email is None

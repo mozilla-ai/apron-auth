@@ -39,7 +39,7 @@ class TestGoogleRefresh:
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
         assert tokens.access_token
         assert tokens.token_type.lower() == "bearer"
 
@@ -50,7 +50,7 @@ class TestGoogleRefresh:
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
         assert tokens.expires_in is not None
         assert tokens.expires_in > 0
 
@@ -64,6 +64,6 @@ class TestGoogleRevocation:
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
-        result = await client.revoke_token(SecretToken(tokens.access_token))
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
+        result = await client.revoke_token(tokens.access_token)
         assert result is True
