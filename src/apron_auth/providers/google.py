@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from pydantic import SecretStr
+
 from apron_auth._claims import stated_boolean
 from apron_auth._limits import streamed
 from apron_auth.errors import ConfigurationError
@@ -211,7 +213,7 @@ class GoogleRevocationHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -225,7 +227,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret.
+        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
         scopes: Additional scopes to request; merged with the required
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.

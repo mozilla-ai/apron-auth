@@ -26,7 +26,7 @@ class TestNotionIdentityHandler:
             status_code=401,
             json={"object": "error", "message": "unauthorized"},
         )
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Notion identity"):
@@ -38,7 +38,7 @@ class TestNotionIdentityHandler:
             status_code=200,
             content=b"not-json",
         )
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Notion identity response"):
@@ -65,7 +65,7 @@ class TestNotionIdentityHandler:
             },
         }
         httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -100,7 +100,7 @@ class TestNotionIdentityHandler:
             "bot": {"owner": {"type": "workspace"}, "workspace_name": "Stale"},
         }
         httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -120,7 +120,7 @@ class TestNotionIdentityHandler:
             },
         }
         httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -141,7 +141,7 @@ class TestNotionIdentityHandler:
             },
         }
         httpx_mock.add_response(url=NOTION_ME_URL, json=payload)
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         handler = NotionIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
@@ -166,23 +166,23 @@ class TestNotionIdentityHandler:
 
 class TestNotionPreset:
     def test_config_has_correct_endpoints(self) -> None:
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         assert config.authorize_url == "https://api.notion.com/v1/oauth/authorize"
         assert config.token_url == "https://api.notion.com/v1/oauth/token"
         assert config.revocation_url == NOTION_REVOKE_URL
 
     def test_extra_params_include_owner(self) -> None:
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         assert config.extra_params["owner"] == "user"
 
     def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         assert isinstance(config, ProviderConfig)
         assert isinstance(revocation_handler_for(config), NotionRevocationHandler)
         assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_uses_client_secret_basic(self) -> None:
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
 
@@ -252,7 +252,7 @@ class TestNotionRevocationHandler:
 class TestNotionRevocationViaOAuthClient:
     async def test_revoke_token_succeeds_with_preset(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=NOTION_REVOKE_URL, status_code=200)
-        config = preset(client_id="nid", client_secret="nsecret", scopes=[])
+        config = preset(client_id="nid", client_secret=SecretStr("nsecret"), scopes=[])
         client = OAuthClient(config=config)
         result = await client.revoke_token(SecretToken("access-token-abc"))
         assert result is True

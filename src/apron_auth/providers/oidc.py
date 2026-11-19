@@ -269,7 +269,7 @@ def _fields_needing_a_waiver(urls: Mapping[UrlField, str | None]) -> tuple[UrlFi
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -295,7 +295,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier registered at the provider.
-        client_secret: The OAuth client secret paired with it.
+        client_secret: The OAuth client secret paired with it, wrapped so this frame states it to no error reporter.
         scopes: Scopes to request, merged with the required ``openid`` scope.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
@@ -344,7 +344,7 @@ def preset(
 
     values: dict[str, Any] = {
         "client_id": client_id,
-        "client_secret": SecretStr(client_secret),
+        "client_secret": client_secret,
         "authorize_url": metadata.authorize_url,
         "token_url": metadata.token_url,
         "revocation_url": metadata.revocation_url,

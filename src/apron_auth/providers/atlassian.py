@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
@@ -301,7 +302,7 @@ class AtlassianIdentityHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -314,7 +315,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret.
+        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
         scopes: Additional scopes to request; merged with the base scopes.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over

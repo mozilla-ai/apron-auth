@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.models import ProviderConfig
 from apron_auth.providers import (
@@ -53,7 +54,7 @@ def test_preset_disconnect_fully_revokes_matches_fixture(name: str, expected: bo
     factory, _ = EXPECTED[name]
     config = factory(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["dummy"],
     )
     assert config.disconnect_fully_revokes is expected
@@ -63,7 +64,7 @@ def test_provider_config_default_is_false() -> None:
     """``ProviderConfig`` defaults to ``False`` so unconfigured callers stay tier-3."""
     config = ProviderConfig(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         authorize_url="https://example.com/authorize",
         token_url="https://example.com/token",
     )

@@ -66,7 +66,7 @@ def test_it_resolves_the_class_the_member_names_for_a_preset_config(provider: Pr
     """A preset's own endpoints must reach the handler its member names, or revocation changes hands."""
     config = MODULES[provider].preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["dummy"],
     )
 

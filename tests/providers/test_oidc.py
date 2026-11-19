@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 from joserfc import jwk, jws
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth._discovery import IssuerNotDeclaredError
@@ -52,7 +53,7 @@ TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 USERINFO_URL = f"{ISSUER}/protocol/openid-connect/userinfo"
 JWKS_URL = f"{ISSUER}/protocol/openid-connect/certs"
 CLIENT_ID = "otari"
-CLIENT_SECRET = "s3cret"  # pragma: allowlist secret
+CLIENT_SECRET = SecretStr("s3cret")  # pragma: allowlist secret
 # Codes that differ from ``insufficient_scope`` by a prefix, a suffix, padding or letter case.
 NEAR_MISS_SCOPE_CODES = ("x_insufficient_scope", "insufficient_scope_v2", " insufficient_scope", "Insufficient_Scope")
 

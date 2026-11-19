@@ -14,6 +14,7 @@ from urllib.parse import unquote, unquote_plus
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 from support import ANY_SUCCESS_STATUS, revoked_status
 
@@ -29,7 +30,7 @@ RAW_TEXT = "raw transport text"
 def _standard() -> ProviderConfig:
     config = ProviderConfig(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         authorize_url="https://provider.example.com/authorize",
         token_url="https://provider.example.com/token",
         revocation_url="https://provider.example.com/revoke",
@@ -39,7 +40,7 @@ def _standard() -> ProviderConfig:
 
 def _preset(preset: Callable[..., ProviderConfig], scopes: list[str]) -> Callable[[], ProviderConfig]:
     def build() -> ProviderConfig:
-        return preset(client_id="cid", client_secret="csecret", scopes=scopes)  # pragma: allowlist secret
+        return preset(client_id="cid", client_secret=SecretStr("csecret"), scopes=scopes)  # pragma: allowlist secret
 
     return build
 

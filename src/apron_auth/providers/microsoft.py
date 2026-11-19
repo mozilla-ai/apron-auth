@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 import httpx
 from joserfc.errors import ClaimError, ExpiredTokenError, JoseError, MissingClaimError
 from joserfc.jwt import JWTClaimsRegistry
+from pydantic import SecretStr
 
 from apron_auth._claims import stated_boolean, stated_string
 from apron_auth._clock import CLOCK_SKEW_SECONDS
@@ -574,7 +575,7 @@ def _email_verified(id_token: _IdToken | None, email: object) -> bool | None:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -589,7 +590,7 @@ def preset(
     Args:
         client_id: The OAuth client identifier. A GUID is stored in lowercase, which names the same
             application and is how Entra names it in an ID token's audience.
-        client_secret: The OAuth client secret.
+        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
         scopes: Additional scopes to request; merged with the required
             base scopes.
         redirect_uri: The redirect URI for the authorization flow.

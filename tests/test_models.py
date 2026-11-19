@@ -10,6 +10,7 @@ import traceback
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
@@ -337,6 +338,63 @@ class TestProviderConfig:
                 token_url="https://provider.example.com/token",
                 resource=bad_resource,
             )
+
+    def test_a_client_secret_supplied_as_plain_text_is_refused(self) -> None:
+        """A plain string is a frame local for the whole call, so it is refused rather than wrapped."""
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig(
+                client_id="test-client",
+                client_secret="plain-text-secret",  # ty: ignore[invalid-argument-type]
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+            )
+
+        assert "plain-text-secret" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_client_secret_supplied_as_plain_text_is_refused_through_validation(self) -> None:
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "test-client",
+                    "client_secret": "plain-text-secret",  # pragma: allowlist secret
+                    "authorize_url": "https://provider.example.com/authorize",
+                    "token_url": "https://provider.example.com/token",
+                }
+            )
+
+        assert "plain-text-secret" not in str(caught.value)
+
+    def test_a_dumped_client_secret_cannot_be_reloaded(self) -> None:
+        """A dump states a secret as a mask, so reloading one is refused rather than loading the mask.
+
+        A configuration carrying the mask as its secret authenticates nothing and fails at the token
+        endpoint, which is the failure a refusal here replaces.
+        """
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("real-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            ProviderConfig.model_validate_json(config.model_dump_json())
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    def test_a_client_secret_stating_nothing_is_no_credential_to_refuse(self, stated: str) -> None:
+        """A string holding no non-blank character states no secret, so it yields a public client."""
+        config = ProviderConfig.model_validate(
+            {
+                "client_id": "public-client",
+                "client_secret": stated,
+                "authorize_url": "https://provider.example.com/authorize",
+                "token_url": "https://provider.example.com/token",
+                "token_endpoint_auth_method": "none",
+            }
+        )
+
+        assert config.client_secret is None
 
     def test_public_client_omits_client_secret(self) -> None:
         config = ProviderConfig(
@@ -789,15 +847,19 @@ class TestUrlFieldTransport:
 class TestUnsafeAllowPlainHttp:
     """The one way to accept plain http where it would cross a network."""
 
-    def _values(self, **overrides: str) -> dict[str, str]:
-        values = {
+    def _values(self, **overrides: Any) -> dict[str, Any]:
+        values: dict[str, Any] = {
             "client_id": "cid",
-            "client_secret": "csec",  # pragma: allowlist secret
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
             "authorize_url": "https://provider.example.com/authorize",
             "token_url": "https://provider.example.com/token",
         }
         values.update(overrides)
         return values
+
+    def _public_values(self, **overrides: Any) -> dict[str, Any]:
+        """The same values for a public client, whose dump masks no secret a reload would then refuse."""
+        return self._values(client_secret=None, token_endpoint_auth_method="none", **overrides)
 
     def test_it_accepts_plain_http_for_the_field_it_names(self) -> None:
         config = ProviderConfig.unsafe.allow_plain_http(
@@ -862,7 +924,7 @@ class TestUnsafeAllowPlainHttp:
     def test_a_waiver_read_back_out_of_storage_is_refused(self) -> None:
         """A waiver is a statement about one machine, and storage carries it to another."""
         config = ProviderConfig.unsafe.allow_plain_http(
-            "token_url", **self._values(token_url="http://keycloak:8080/token")
+            "token_url", **self._public_values(token_url="http://keycloak:8080/token")
         )
 
         with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
@@ -875,7 +937,7 @@ class TestUnsafeAllowPlainHttp:
                 ProviderConfig,
                 {
                     "client_id": "cid",
-                    "client_secret": "csec",  # pragma: allowlist secret
+                    "token_endpoint_auth_method": "none",
                     "authorize_url": "https://provider.example.com/authorize",
                     "token_url": "http://keycloak:8080/token",
                     "allow_insecure_http_for": ["token_url"],
@@ -1018,7 +1080,7 @@ class TestUnsafeAllowPlainHttp:
 
     def test_a_config_with_no_waiver_round_trips(self) -> None:
         """Only a waiver blocks a reload, so an ordinary stored config still loads."""
-        config = ProviderConfig(**self._values())
+        config = ProviderConfig(**self._public_values())
 
         reloaded = ProviderConfig.model_validate_json(config.model_dump_json())
 
@@ -1271,7 +1333,7 @@ class TestARefusalRepeatsNoValue:
         secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
         payload = {
             "client_id": "cid",
-            "client_secret": secret,
+            "client_secret": SecretStr(secret),
             "authorize_url": "https://provider.example.com/authorize",
             "token_url": "https://operator:" + "sesame@provider.example.com/token",
         }
@@ -1576,7 +1638,9 @@ class TestAValidatedChange:
         """A config naming no provider permits every host, so a label dropped here would drop that rule."""
         from apron_auth.providers import google
 
-        config = google.preset(client_id="cid", client_secret="csec", scopes=["openid"])  # pragma: allowlist secret
+        config = google.preset(
+            client_id="cid", client_secret=SecretStr("csec"), scopes=["openid"]
+        )  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="preset"):
             config.with_changes(provider=None, revocation_url="https://attacker.example/revoke")
@@ -1628,7 +1692,7 @@ class TestProviderConfigKeepsTheCallersMapping:
         raw = {
             "provider": "google",
             "client_id": "cid",
-            "client_secret": "csec",  # pragma: allowlist secret
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
             "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_url": "https://oauth2.googleapis.com/token",
         }
@@ -1647,7 +1711,7 @@ class TestProviderConfigTakesFactsFromAnyMapping:
             {
                 "provider": "google",
                 "client_id": "cid",
-                "client_secret": "csec",  # pragma: allowlist secret
+                "client_secret": SecretStr("csec"),  # pragma: allowlist secret
                 "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_url": "https://oauth2.googleapis.com/token",
             }

@@ -42,6 +42,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._claims import stated_boolean
@@ -714,7 +715,7 @@ class SlackRevocationHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -744,7 +745,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret.
+        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
         scopes: The bot scopes to request.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
@@ -799,7 +800,7 @@ def preset(
 
 def sign_in_preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,
@@ -819,7 +820,7 @@ def sign_in_preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret.
+        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
         scopes: The further scopes to request beside ``openid``, which are ``email`` and ``profile``.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.

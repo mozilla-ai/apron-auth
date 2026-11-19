@@ -15,6 +15,7 @@ from typing import NamedTuple
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
@@ -75,7 +76,7 @@ async def _fetch_identity_error(name: str) -> IdentityFetchError:
     case = HANDLERS[name]
     config = case.preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=case.scopes,
     )
     with pytest.raises(IdentityFetchError) as exc_info:

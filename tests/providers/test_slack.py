@@ -57,7 +57,7 @@ class TestSlackConsentPickerInvariant:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read", "chat:write"],
             user_scopes=["users:read"],
         )
@@ -68,7 +68,7 @@ class TestSlackConsentPickerInvariant:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read", "chat:write"],
             user_scopes=["users:read"],
         )
@@ -85,7 +85,7 @@ class TestSlackConsentPickerInvariant:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read"],
         )
@@ -96,7 +96,7 @@ class TestSlackConsentPickerInvariant:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read"],
         )
@@ -121,7 +121,7 @@ class TestSlackIdentityHandler:
             url=SLACK_USERINFO_URL,
             json={"ok": True, "sub": "U1", "email": "user@example.com", "email_verified": stated},
         )
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         identity = await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="t"), config)
 
@@ -144,7 +144,7 @@ class TestSlackIdentityHandler:
             "https://slack.com/team_domain": "example",
         }
         httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -172,7 +172,7 @@ class TestSlackIdentityHandler:
 
         payload = {"ok": True, "sub": "U12345"}
         httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -187,7 +187,7 @@ class TestSlackIdentityHandler:
 
         payload = {"ok": True, "https://slack.com/team_id": "T67890"}
         httpx_mock.add_response(url=SLACK_USERINFO_URL, json=payload)
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         identity = await handler.fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -202,7 +202,7 @@ class TestSlackIdentityHandler:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=500, json={"error": "internal"})
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Slack identity"):
@@ -212,7 +212,7 @@ class TestSlackIdentityHandler:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, content=b"not-json")
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Failed to parse Slack identity response"):
@@ -226,7 +226,7 @@ class TestSlackIdentityHandler:
             status_code=200,
             json={"ok": False, "error": "invalid_auth"},
         )
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
@@ -250,7 +250,7 @@ class TestSlackIdentityHandler:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json=body)
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as refusal:
@@ -276,7 +276,7 @@ class TestSlackIdentityHandler:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
         handler = SlackIdentityHandler()
 
         with pytest.raises(IdentityFetchError) as refusal:
@@ -301,7 +301,7 @@ class TestSlackIdentityHandler:
         from apron_auth.providers.slack import SlackIdentityHandler, sign_in_preset
 
         httpx_mock.add_response(url=SLACK_USERINFO_URL, status_code=200, json={"ok": False, "error": error})
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityFetchError, match="Slack identity request failed") as exc_info:
             await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -318,7 +318,7 @@ class TestSlackIdentityHandler:
             status_code=200,
             json={"ok": False, "error": "missing_scope"},
         )
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityScopeNotGrantedError, match="Slack identity request failed") as refusal:
             await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -334,7 +334,7 @@ class TestSlackIdentityHandler:
             status_code=200,
             json={"ok": False, "error": "invalid_auth"},
         )
-        config = sign_in_preset(client_id="sid", client_secret="ssecret")
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"))
 
         with pytest.raises(IdentityFetchError) as exc_info:
             await SlackIdentityHandler().fetch_identity(IdentityMaterial(access_token="user-token-abc"), config)
@@ -349,7 +349,7 @@ class TestSlackSignInFlowDetection:
 
         config = sign_in_preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["email"],
         )
         assert _is_sign_in_flow(config) is True
@@ -359,7 +359,7 @@ class TestSlackSignInFlowDetection:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
         )
         assert _is_sign_in_flow(config) is False
@@ -424,7 +424,7 @@ class TestSlackPreset:
         from apron_auth.providers.slack import preset
 
         with pytest.raises(ConfigurationError) as refusal:
-            preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+            preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=scopes)
 
         assert "at least one bot scope" in str(refusal.value)
         assert "sign_in_preset" in str(refusal.value)
@@ -432,14 +432,14 @@ class TestSlackPreset:
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         assert config.authorize_url == "https://slack.com/oauth/v2/authorize"
         assert config.token_url == "https://slack.com/api/oauth.v2.access"
         assert config.revocation_url == "https://slack.com/api/auth.revoke"
@@ -447,7 +447,7 @@ class TestSlackPreset:
     def test_scope_separator_is_comma(self):
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read", "chat:write"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read", "chat:write"])
         assert config.scope_separator == ","
 
     def test_user_scopes_added_to_extra_params(self):
@@ -455,7 +455,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
@@ -466,7 +466,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
         )
         assert "user_scope" not in config.extra_params
@@ -476,7 +476,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read"],
             extra_params={"team": "T123"},
@@ -489,7 +489,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read"],
             extra_params={"user_scope": "should_be_overridden", "team": "T123"},
@@ -502,7 +502,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read", "chat:write"],
         )
         assert config.required_scope_families == [["channels:read", "chat:write"]]
@@ -513,7 +513,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
@@ -533,7 +533,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=user_scopes,
         )
@@ -546,7 +546,7 @@ class TestSlackPreset:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read,chat:write"],
         )
 
@@ -563,7 +563,7 @@ class TestSlackInstallPresetNeedsABotScope:
         with pytest.raises(ConfigurationError, match="at least one bot scope"):
             preset(
                 client_id="cid",
-                client_secret="csecret",  # pragma: allowlist secret
+                client_secret=SecretStr("csecret"),  # pragma: allowlist secret
                 scopes=[],
                 user_scopes=["chat:write"],
             )
@@ -573,7 +573,7 @@ class TestSlackInstallPresetNeedsABotScope:
 
         config = preset(
             client_id="cid",
-            client_secret="csecret",  # pragma: allowlist secret
+            client_secret=SecretStr("csecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["chat:write"],
         )
@@ -587,7 +587,7 @@ class TestSlackSignInPreset:
     def test_config_has_the_openid_endpoints(self) -> None:
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email"])
         assert config.authorize_url == "https://slack.com/openid/connect/authorize"
         assert config.token_url == "https://slack.com/api/openid.connect.token"
         assert config.revocation_url == "https://slack.com/api/auth.revoke"
@@ -596,13 +596,13 @@ class TestSlackSignInPreset:
         """An ID token's issuer cannot be checked against an issuer the config does not name."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email"])
         assert config.issuer == "https://slack.com"
 
     def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(revocation_handler_for(config), RevocationHandler)
 
@@ -619,14 +619,14 @@ class TestSlackSignInPreset:
         """Slack returns an ID token only for a request that asks for openid."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=scopes)
         assert config.scopes == expected
 
     def test_a_scope_entry_holding_the_sign_in_scope_is_not_duplicated(self) -> None:
         """The scope parameter is read word by word, so a multi-word entry already asks for openid."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["openid email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["openid email"])
         assert config.scopes == ["openid", "email"]
 
     @pytest.mark.parametrize(
@@ -641,7 +641,7 @@ class TestSlackSignInPreset:
         """A value joining several scopes states each of them, so the configuration holds one per entry."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=scopes)
 
         assert config.scopes == ["openid", "email"]
 
@@ -649,7 +649,7 @@ class TestSlackSignInPreset:
         """A consent picker reads the metadata of every scope the preset injects."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email"])
         assert [meta.scope for meta in config.scope_metadata] == ["openid"]
         assert config.scope_metadata[0].required is True
 
@@ -657,7 +657,7 @@ class TestSlackSignInPreset:
         """A family is satisfied by one of its scopes, and only openid returns an ID token."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email", "profile"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email", "profile"])
         assert config.required_scope_families == [["openid"]]
 
     @pytest.mark.parametrize(
@@ -673,7 +673,7 @@ class TestSlackSignInPreset:
         from apron_auth.providers.slack import sign_in_preset
 
         with pytest.raises(ConfigurationError, match="cannot be requested here"):
-            sign_in_preset(client_id="sid", client_secret="ssecret", scopes=scopes)
+            sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=scopes)
 
     def test_extra_params_cannot_ask_for_a_user_scope(self) -> None:
         """This flow sends no user_scope, so one set here would reach Slack unchecked by the scope rules."""
@@ -682,7 +682,7 @@ class TestSlackSignInPreset:
         with pytest.raises(ConfigurationError, match="sends no user_scope parameter"):
             sign_in_preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 extra_params={"user_scope": "channels:read"},
             )
 
@@ -690,7 +690,7 @@ class TestSlackSignInPreset:
         """Slack splits bot and user scopes only on its install endpoint."""
         from apron_auth.providers.slack import sign_in_preset
 
-        config = sign_in_preset(client_id="sid", client_secret="ssecret", scopes=["email"])
+        config = sign_in_preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["email"])
         assert "user_scope" not in config.extra_params
 
     def test_extra_params_are_kept(self) -> None:
@@ -698,7 +698,7 @@ class TestSlackSignInPreset:
 
         config = sign_in_preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["email"],
             extra_params={"team": "T123"},
         )
@@ -711,7 +711,7 @@ class TestSlackSignInPreset:
         with pytest.raises(ConfigurationError, match="extra_params cannot set scope"):
             sign_in_preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=["email"],
                 extra_params={"scope": "email"},
             )
@@ -735,7 +735,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=scopes,
                 user_scopes=user_scopes,
             )
@@ -747,7 +747,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=["channels:read"],
                 extra_params={"user_scope": "openid,profile"},
             )
@@ -758,7 +758,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=["channels:read"],
                 extra_params={"user_scope": "profile openid"},
             )
@@ -777,7 +777,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             extra_params={"user_scope": stated},
         )
@@ -798,7 +798,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             extra_params={"user_scope": stated},
         )
@@ -812,7 +812,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         with pytest.raises(ConfigurationError, match="openid"):
             preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=["channels:read openid"],
             )
 
@@ -823,7 +823,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
         with pytest.raises(ConfigurationError, match="extra_params cannot set scope"):
             preset(
                 client_id="sid",
-                client_secret="ssecret",  # pragma: allowlist secret
+                client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
                 scopes=["channels:read"],
                 extra_params={"scope": "channels:read,openid"},
             )
@@ -834,7 +834,7 @@ class TestSlackInstallPresetRefusesTheSignInScope:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["openid:read"],
         )
         assert config.scopes == ["openid:read"]
@@ -1036,7 +1036,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": True})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         result = await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
 
         assert result is True
@@ -1053,7 +1053,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": "invalid_auth"})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         result = await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
         assert result is False
 
@@ -1074,7 +1074,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": error})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         with pytest.raises(RevocationError) as refusal:
             await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
@@ -1089,7 +1089,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": ["ratelimited"]})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is False
 
@@ -1101,7 +1101,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False, "error": error})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is True
 
@@ -1110,7 +1110,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": True, "revoked": False})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         assert await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config) is False
 
@@ -1129,7 +1129,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         with pytest.raises(RevocationError, match="states no outcome for the token") as exc_info:
             await SlackRevocationHandler().revoke(SecretToken("xoxb-access-abc"), config)
@@ -1139,7 +1139,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Failed to revoke Slack token: network error$") as exc_info:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
@@ -1151,7 +1151,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(status_code=200, content=b"not json")
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         with pytest.raises(RevocationError) as exc_info:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert str(exc_info.value) == "Failed to parse Slack revocation response"
@@ -1190,7 +1190,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json=body)
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         with pytest.raises(RevocationError, match="states no outcome") as refusal:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
@@ -1203,7 +1203,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json={"ok": False})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         assert await SlackRevocationHandler().revoke(SecretToken("access-abc"), config) is False
 
@@ -1212,7 +1212,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Failed to parse Slack revocation response$") as exc_info:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
@@ -1222,7 +1222,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, json=["ok"])
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
         with pytest.raises(RevocationError, match="^Slack revocation response was not a JSON object$") as exc_info:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None
@@ -1233,7 +1233,7 @@ class TestSlackRevocationHandler:
         httpx_mock.add_response(url=SLACK_REVOKE_URL, status_code=500, json={"ok": True})
         from apron_auth.providers.slack import preset
 
-        config = preset(client_id="sid", client_secret="ssecret", scopes=["channels:read"])
+        config = preset(client_id="sid", client_secret=SecretStr("ssecret"), scopes=["channels:read"])
 
         with pytest.raises(RevocationError) as refusal:
             await SlackRevocationHandler().revoke(SecretToken("access-abc"), config)
@@ -1257,7 +1257,7 @@ class TestSlackWorkspaceBotIdentity:
 
         config = preset(
             client_id="sid",
-            client_secret="ssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ssecret"),  # pragma: allowlist secret
             scopes=["channels:read", "chat:write"],
         )
         return config

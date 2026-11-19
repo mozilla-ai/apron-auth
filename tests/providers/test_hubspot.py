@@ -4,6 +4,7 @@ import traceback
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient
@@ -26,7 +27,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -60,7 +61,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -96,7 +97,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -115,7 +116,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -136,7 +137,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -156,7 +157,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -182,7 +183,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -201,7 +202,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -224,7 +225,7 @@ class TestHubSpotIdentityHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         handler = HubSpotIdentityHandler()
@@ -239,7 +240,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         assert isinstance(config, ProviderConfig)
@@ -250,7 +251,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         assert config.authorize_url == "https://app.hubspot.com/oauth/authorize"
@@ -262,7 +263,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         assert config.token_endpoint_auth_method == "client_secret_post"
@@ -272,7 +273,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
             extra_params={"optional_scope": "sales"},
         )
@@ -283,7 +284,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         for scope in BASE_SCOPES:
@@ -295,7 +296,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["oauth", "contacts"],
         )
         assert config.scopes.count("oauth") == 1
@@ -305,7 +306,7 @@ class TestHubSpotPreset:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         metadata_scopes = {meta.scope for meta in config.scope_metadata}
@@ -320,7 +321,7 @@ class TestHubSpotRevocationHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         result = await HubSpotRevocationHandler().revoke(SecretToken("refresh-abc"), config)
@@ -337,7 +338,7 @@ class TestHubSpotRevocationHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         result = await HubSpotRevocationHandler().revoke(SecretToken("refresh-missing"), config)
@@ -350,7 +351,7 @@ class TestHubSpotRevocationHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         with pytest.raises(RevocationError) as refusal:
@@ -364,7 +365,7 @@ class TestHubSpotRevocationHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         raw_token = "a/b+c=d e"
@@ -388,7 +389,7 @@ class TestHubSpotRevocationHandler:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         with pytest.raises(RevocationError) as exc_info:
@@ -404,7 +405,7 @@ class TestHubSpotRevocationHandler:
 
         config = ProviderConfig(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             authorize_url="https://app.hubspot.com/oauth/authorize",
             token_url="https://api.hubapi.com/oauth/v1/token",
             scopes=["contacts"],
@@ -421,7 +422,7 @@ class TestHubSpotRevocationViaOAuthClient:
 
         config = preset(
             client_id="hsid",
-            client_secret="hssecret",  # pragma: allowlist secret
+            client_secret=SecretStr("hssecret"),  # pragma: allowlist secret
             scopes=["contacts"],
         )
         client = OAuthClient(config=config)

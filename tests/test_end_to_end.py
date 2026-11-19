@@ -183,7 +183,7 @@ class TestSlackUserScopesInAuthorizationUrl:
 
         config = preset(
             client_id="slack-id",
-            client_secret="slack-secret",  # pragma: allowlist secret
+            client_secret=SecretStr("slack-secret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
@@ -206,7 +206,7 @@ class TestSlackSignInFlow:
 
         config = sign_in_preset(
             client_id="slack-id",
-            client_secret="slack-secret",  # pragma: allowlist secret
+            client_secret=SecretStr("slack-secret"),  # pragma: allowlist secret
             scopes=["email"],
         )
         return StoredStateClient(config=config, state_store=MemoryStateStore())

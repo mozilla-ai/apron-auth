@@ -35,11 +35,13 @@ Requires Python 3.11+.
 Presets bundle the endpoints, auth method, PKCE config and provider name for a given provider into a single call, and the client reads the revocation handler from the name.
 
 ```python
+from pydantic import SecretStr
+
 from apron_auth.providers import google
 
 config = google.preset(
     client_id="your-client-id",
-    client_secret="your-client-secret",  # pragma: allowlist secret
+    client_secret=SecretStr("your-client-secret"),  # pragma: allowlist secret
     scopes=["openid", "email", "profile"],
 )
 ```
@@ -48,10 +50,11 @@ If you use [apron-tools](https://github.com/mozilla-ai/apron-tools), scopes come
 
 ```python
 from apron_tools.providers.google.gmail.scopes import CAPABILITY_GROUP as GMAIL
+from pydantic import SecretStr
 
 config = google.preset(
     client_id="your-client-id",
-    client_secret="your-client-secret",  # pragma: allowlist secret
+    client_secret=SecretStr("your-client-secret"),  # pragma: allowlist secret
     scopes=GMAIL.scopes,
 )
 ```
@@ -64,6 +67,8 @@ This covers Keycloak, Okta, Auth0, Entra ID, Authentik, Zitadel, Dex, and Ping w
 a module per product.
 
 ```python
+from pydantic import SecretStr
+
 from apron_auth import OAuthClient
 from apron_auth.providers import oidc
 
@@ -71,7 +76,7 @@ metadata = await oidc.discover("https://sso.example.com/realms/acme")
 
 config = oidc.preset(
     client_id="your-client-id",
-    client_secret="your-client-secret",  # pragma: allowlist secret
+    client_secret=SecretStr("your-client-secret"),  # pragma: allowlist secret
     scopes=["email", "profile"],
     metadata=metadata,
     redirect_uri="https://yourapp.com/callback",
@@ -620,12 +625,14 @@ These limits were `TimeoutPolicy` before 0.25.0, and a configuration stated them
 Set it where you build the configuration, and every request for that provider runs under it. Each builder takes it as a keyword, and a configuration written by hand takes it as a field:
 
 ```python
+from pydantic import SecretStr
+
 from apron_auth import OAuthClient, RequestLimits
 from apron_auth.providers import google
 
 config = google.preset(
     client_id="...",
-    client_secret="...",
+    client_secret=SecretStr("..."),
     scopes=["openid", "email"],
     limits=RequestLimits(connect_seconds=2.0, request_seconds=30.0),
 )
@@ -695,6 +702,8 @@ print(tokens.extras)  # {"team_id": "T123", ...}
 When the provider is not a known preset but a remote MCP (Model Context Protocol) server, `apron_auth.mcp` discovers its OAuth configuration at runtime (RFC 9728 protected-resource metadata + RFC 8414 authorization-server metadata) and, where the server supports it, registers a client dynamically (RFC 7591). The result folds into the same `ProviderConfig`/`OAuthClient` used everywhere else.
 
 ```python
+from pydantic import SecretStr
+
 from apron_auth import ClientRegistration, OAuthClient, mcp
 
 # 1. Discover the server's OAuth endpoints.
@@ -704,7 +713,7 @@ meta = await mcp.discover("https://mcp.example.com", transport_factory=my_transp
 if my_pre_registered_client_id:  # an existing relationship with this server
     registration = ClientRegistration(
         client_id=my_pre_registered_client_id,
-        client_secret=my_pre_registered_secret,
+        client_secret=SecretStr(my_pre_registered_secret),
     )
 elif meta.supports_cimd:  # CIMD — the forward path; you host the metadata document
     registration = ClientRegistration(
@@ -857,9 +866,11 @@ Run the two flows separately. The install yields a bot token for workspace work,
 An install that asks for user scopes as well as bot scopes receives two tokens. The bot token is `token_set.access_token`, and the token for the person who installed the app is `token_set.user_token`. A response that nests a second token has it read onto that field whether or not the config names a provider, because `provider` is a field the caller chooses and the person's token is no less live without it.
 
 ```python
+from pydantic import SecretStr
+
 config = slack.preset(
     client_id="...",
-    client_secret="...",
+    client_secret=SecretStr("..."),
     scopes=["channels:read"],
     user_scopes=["chat:write"],
     redirect_uri="https://app.example.com/callback",

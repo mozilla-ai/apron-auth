@@ -17,8 +17,10 @@ from typing import Any, TypeAlias
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from apron_auth.errors import ConfigurationError
 from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
@@ -57,7 +59,7 @@ def _identity_case(module_name: str, handler_name: str, preset_name: str, scopes
     def build() -> tuple[Any, ProviderConfig]:
         module = import_module(f"apron_auth.providers.{module_name}")
         preset = getattr(module, preset_name)
-        config = preset(client_id="cid", client_secret=CLIENT_SECRET, scopes=scopes)
+        config = preset(client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes=scopes)
         return getattr(module, handler_name)(), config
 
     return build
@@ -79,13 +81,13 @@ IDENTITY_CASES: dict[Provider, IdentityCase] = {
 
 
 def _config(provider: Provider) -> ProviderConfig:
-    return PRESETS[provider](client_id="cid", client_secret=CLIENT_SECRET, scopes=["chat:write"])
+    return PRESETS[provider](client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes=["chat:write"])
 
 
 def _standard_config() -> ProviderConfig:
     return ProviderConfig(
         client_id="cid",
-        client_secret=CLIENT_SECRET,
+        client_secret=SecretStr(CLIENT_SECRET),
         authorize_url="https://auth.example.com/authorize",
         token_url="https://auth.example.com/token",
         revocation_url="https://auth.example.com/revoke",
@@ -144,6 +146,38 @@ def _frames_outside_the_library(exc: BaseException) -> list[str]:
     return outside
 
 
+def _locals_stating_anywhere(exc: BaseException, value: str) -> list[str]:
+    """Return one name per frame local on the traceback whose repr states ``value``, in any module.
+
+    A refusal raised while a model validates runs frames of the validation framework, which this
+    library cannot scrub. A credential that arrived wrapped states nothing in those frames either,
+    so the whole traceback is read rather than this library's part of it.
+
+    Args:
+        exc: The error whose traceback to walk.
+        value: The credential that must appear in no local.
+
+    Returns:
+        A description of each local that states it, empty when none does.
+    """
+    stated: list[str] = []
+    frames = exc.__traceback__
+    while frames is not None:
+        frame = frames.tb_frame
+        if frame.f_code.co_filename == __file__:
+            frames = frames.tb_next
+            continue
+        for name, held in frame.f_locals.items():
+            try:
+                shown = repr(held)
+            except Exception:  # noqa: BLE001
+                continue
+            if value in shown:
+                stated.append(f"{frame.f_code.co_name}.{name}")
+        frames = frames.tb_next
+    return stated
+
+
 def _locals_stating(exc: BaseException, value: str) -> list[str]:
     """Return one name per frame local of this library on the traceback whose repr states ``value``.
 
@@ -173,6 +207,57 @@ def _locals_stating(exc: BaseException, value: str) -> list[str]:
                 stated.append(f"{frame.f_code.co_name}.{name}")
         frames = frames.tb_next
     return stated
+
+
+class TestAConfigurationRefusal:
+    """Test that a configuration a caller supplied a credential to states it in no frame local.
+
+    Both halves of the rule hold here as they do for a request: the credential reached the
+    configuration, and no local on a refusal's traceback states it.
+    """
+
+    @pytest.mark.parametrize("provider", list(PRESETS), ids=lambda provider: provider.value)
+    def test_a_preset_states_no_client_secret(self, provider: Provider) -> None:
+        """A preset binds the secret to a parameter for the whole call, so its own frames hold the rule."""
+        carried = _config(provider).client_secret
+        assert carried is not None
+        assert carried.get_secret_value() == CLIENT_SECRET
+
+        with pytest.raises(ConfigurationError) as caught:
+            PRESETS[provider](client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes="chat:write")
+
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating(caught.value, CLIENT_SECRET) == []
+
+    def test_a_refused_configuration_states_no_client_secret(self) -> None:
+        """The validation framework's own frames hold what they were passed, so the whole walk is read."""
+        assert _standard_config().client_secret is not None
+
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr(CLIENT_SECRET),
+                authorize_url="https://auth.example.com/authorize",
+                token_url="https://operator:sesame@auth.example.com/token",  # pragma: allowlist secret
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
+
+    def test_a_refused_validation_states_no_client_secret(self) -> None:
+        """A mapping is the path a stored configuration reloads through, and it carries the secret too."""
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "cid",
+                    "client_secret": SecretStr(CLIENT_SECRET),
+                    "authorize_url": "https://auth.example.com/authorize",
+                    "token_url": "https://operator:sesame@auth.example.com/token",  # pragma: allowlist secret
+                }
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
 
 
 class TestARevocationFailure:

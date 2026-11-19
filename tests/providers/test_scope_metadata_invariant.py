@@ -16,6 +16,7 @@ from collections.abc import Callable
 from functools import partial
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.models import ProviderConfig, ServerMetadata
 from apron_auth.providers import (
@@ -62,7 +63,7 @@ PRESETS: list[tuple[str, Callable[..., ProviderConfig]]] = [
 def test_injected_scopes_have_matching_metadata(name: str, preset_fn: Callable[..., ProviderConfig]):
     config = preset_fn(
         client_id=f"{name}-id",
-        client_secret=f"{name}-secret",  # pragma: allowlist secret
+        client_secret=SecretStr(f"{name}-secret"),  # pragma: allowlist secret
         scopes=list(PROBE_CONSUMER_SCOPES),
     )
     injected = set(config.scopes) - set(PROBE_CONSUMER_SCOPES)
@@ -82,7 +83,7 @@ def test_scope_metadata_only_describes_injected_scopes(name: str, preset_fn: Cal
     """
     config = preset_fn(
         client_id=f"{name}-id",
-        client_secret=f"{name}-secret",  # pragma: allowlist secret
+        client_secret=SecretStr(f"{name}-secret"),  # pragma: allowlist secret
         scopes=list(PROBE_CONSUMER_SCOPES),
     )
     declared = {meta.scope for meta in config.scope_metadata}

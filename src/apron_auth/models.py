@@ -32,6 +32,7 @@ from pydantic import (
 
 from apron_auth._client_secrets import stated_client_secret
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
+from apron_auth._credentials import wrapped_credential
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -48,9 +49,15 @@ logger = logging.getLogger(__name__)
 
 AccessType = Literal["read", "write", "admin"]
 
-# A client secret, read for the string it holds rather than trusted for the wrapper around it. The rule
-# runs on the value as it arrives and again on the one the field settled on, because the field converts.
-ClientSecret = Annotated[SecretStr | None, BeforeValidator(stated_client_secret), AfterValidator(stated_client_secret)]
+# A client secret, which arrives wrapped and is read for the string it holds rather than trusted for the
+# wrapper around it. The presence rule runs on the value as it arrives and again on the one the field
+# settled on, because the field converts.
+ClientSecret = Annotated[
+    SecretStr | None,
+    BeforeValidator(wrapped_credential),
+    BeforeValidator(stated_client_secret),
+    AfterValidator(stated_client_secret),
+]
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 

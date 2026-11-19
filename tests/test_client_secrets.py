@@ -29,7 +29,8 @@ class TestStatedClientSecret:
     def test_a_wrapper_that_states_nothing_reads_as_absent(self, value: SecretStr) -> None:
         assert stated_client_secret(value) is None
 
-    def test_a_plain_string_is_handed_back_for_the_field_to_wrap(self) -> None:
+    def test_a_plain_string_is_handed_back_for_the_field_to_refuse(self) -> None:
+        """This rule decides presence. How a stated secret arrives is the field's own rule to decide."""
         assert stated_client_secret(SECRET) == SECRET
 
     @pytest.mark.parametrize("value", [7, ["s"], {"value": "s"}, b"s"])
