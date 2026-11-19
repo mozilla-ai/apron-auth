@@ -7,6 +7,7 @@ import pytest
 from joserfc import jwk, jws
 
 from apron_auth._jwt import jws_registry, unverified_claims
+from apron_auth.models import SecretToken
 
 RSA_KEY = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 
@@ -40,10 +41,10 @@ class TestUnverifiedClaims:
     """Test that a token's claims are read without the issuer's key set."""
 
     def test_returns_the_claims_of_a_signed_token(self) -> None:
-        assert unverified_claims(signed({"sub": "u-1", "nonce": "n-1"})) == {"sub": "u-1", "nonce": "n-1"}
+        assert unverified_claims(SecretToken(signed({"sub": "u-1", "nonce": "n-1"}))) == {"sub": "u-1", "nonce": "n-1"}
 
     def test_reads_a_token_whose_header_holds_a_certificate_chain(self) -> None:
-        assert unverified_claims(signed({"sub": "u-1"}, x5c=["A" * 4000])) == {"sub": "u-1"}
+        assert unverified_claims(SecretToken(signed({"sub": "u-1"}, x5c=["A" * 4000]))) == {"sub": "u-1"}
 
     @pytest.mark.parametrize(
         "token",
@@ -82,10 +83,10 @@ class TestUnverifiedClaims:
     )
     def test_refuses_a_token_it_cannot_read(self, token: str) -> None:
         with pytest.raises(ValueError, match="not a compact signed token|not a JSON object"):
-            unverified_claims(token)
+            unverified_claims(SecretToken(token))
 
     def test_a_claim_at_the_edge_of_a_float_is_still_read(self) -> None:
         """Only a value a float cannot hold is refused, so the largest one it can is read as it stands."""
-        claims = unverified_claims(compact(b'{"alg":"RS256"}', b'{"exp":1.7976931348623157e308}', b"sig"))
+        claims = unverified_claims(SecretToken(compact(b'{"alg":"RS256"}', b'{"exp":1.7976931348623157e308}', b"sig")))
 
         assert claims["exp"] == 1.7976931348623157e308

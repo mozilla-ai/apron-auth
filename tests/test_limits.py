@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from support import LazyBodyTransport, LazyByteStream
 
 from apron_auth._http_errors import http_failure
@@ -263,11 +264,13 @@ class TestEveryBuilderTakesTheLimits:
     def test_a_preset_carries_the_limits_onto_the_configuration(self) -> None:
         limits = RequestLimits(request_seconds=30.0)
 
-        config = google.preset("client", "secret", scopes=["openid"], limits=limits)  # pragma: allowlist secret
+        secret = SecretStr("secret")  # pragma: allowlist secret
+
+        config = google.preset("client", secret, scopes=["openid"], limits=limits)
 
         assert config.limits == limits
 
     def test_a_preset_defaults_to_the_standard_limits(self) -> None:
-        config = google.preset("client", "secret", scopes=["openid"])  # pragma: allowlist secret
+        config = google.preset("client", SecretStr("secret"), scopes=["openid"])  # pragma: allowlist secret
 
         assert config.limits == RequestLimits()

@@ -21,11 +21,16 @@ from apron_auth.models import (
     AuthorizationCallback,
     OAuthPendingState,
     ProviderConfig,
+    SecretToken,
     TokenEndpointAuthMethod,
 )
 
 CLIENT_ID = "test-client"
 CLIENT_SECRET = "test-secret"  # pragma: allowlist secret
+# The grant credentials an exchange and a refresh send, each named by the field that must carry it.
+CODE = "auth-code-123"  # pragma: allowlist secret
+CODE_VERIFIER = "code-verifier-for-these-tests"  # pragma: allowlist secret
+REFRESH_TOKEN = "refresh-token-for-these-tests"  # pragma: allowlist secret
 # A secret holding characters outside latin-1, which only a UTF-8 encoding of the credentials carries.
 NON_LATIN1_SECRET = "secret-中文-é"  # pragma: allowlist secret
 # A secret holding every character that form encoding escapes, which RFC 6749 section 2.3.1 requires
@@ -57,7 +62,7 @@ def _pending_state() -> OAuthPendingState:
     return OAuthPendingState(
         state="pending-state",
         redirect_uri="https://app.example.com/callback",
-        code_verifier="code-verifier-for-these-tests",
+        code_verifier=SecretToken(CODE_VERIFIER),
         created_at=time.time(),
         openid_requested=False,
     )
@@ -66,7 +71,7 @@ def _pending_state() -> OAuthPendingState:
 async def _exchange(config: ProviderConfig) -> None:
     client = OAuthClient(config)
     await client.exchange_code(
-        AuthorizationCallback(code="auth-code-123", state="pending-state"), pending_state=_pending_state()
+        AuthorizationCallback(code=SecretToken(CODE), state="pending-state"), pending_state=_pending_state()
     )
 
 
@@ -152,6 +157,21 @@ class TestTokenRequestClientAuthentication:
         form = _sent_form(token_endpoint)
         assert form["client_id"] == [CLIENT_ID]
         assert form["client_secret"] == [CLIENT_SECRET]
+
+    async def test_the_grant_credentials_reach_the_fields_that_carry_them(self, token_endpoint: HTTPXMock) -> None:
+        """A credential the request sends under the wrong name authenticates nothing and leaks under that name."""
+        await _exchange(_config())
+        form = _sent_form(token_endpoint)
+
+        assert form["code"] == [CODE]
+        assert form["code_verifier"] == [CODE_VERIFIER]
+
+    async def test_a_refresh_sends_its_token_under_the_field_that_carries_it(self, token_endpoint: HTTPXMock) -> None:
+        client = OAuthClient(_config())
+
+        await client.refresh_token(SecretToken(REFRESH_TOKEN))
+
+        assert _sent_form(token_endpoint)["refresh_token"] == [REFRESH_TOKEN]
 
     async def test_a_public_client_sends_its_identifier_and_no_secret(self, token_endpoint: HTTPXMock) -> None:
         await _exchange(

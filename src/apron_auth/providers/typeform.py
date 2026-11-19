@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from pydantic import SecretStr
+
 from apron_auth._limits import streamed
 from apron_auth.errors import FailureKind, IdentityFetchError, IdentityScopeNotGrantedError
 from apron_auth.models import IdentityMaterial, IdentityProfile, Provider, ProviderConfig, RequestLimits
@@ -121,7 +123,7 @@ class TypeformIdentityHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,

@@ -269,7 +269,7 @@ def _fields_needing_a_waiver(urls: Mapping[UrlField, str | None]) -> tuple[UrlFi
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -344,7 +344,7 @@ def preset(
 
     values: dict[str, Any] = {
         "client_id": client_id,
-        "client_secret": SecretStr(client_secret),
+        "client_secret": client_secret,
         "authorize_url": metadata.authorize_url,
         "token_url": metadata.token_url,
         "revocation_url": metadata.revocation_url,

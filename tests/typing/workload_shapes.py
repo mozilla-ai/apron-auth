@@ -1,4 +1,4 @@
-"""Type-level assertions that a workload verifier takes its issuers as typed values.
+"""Type-level assertions that a workload verifier takes its issuers and its tokens as typed values.
 
 Nothing here runs. ``ty`` checks the file, and every ``ty: ignore`` marks a call that must stay a type
 error. If a call below starts type-checking, its suppression becomes unused and the check fails, so these
@@ -7,7 +7,7 @@ are assertions rather than decoration.
 
 from __future__ import annotations
 
-from apron_auth import WorkloadIssuer
+from apron_auth import SecretToken, WorkloadIssuer
 from apron_auth.workload import WorkloadTokenVerifier
 
 issuer = WorkloadIssuer(issuer="https://token.actions.example.com")
@@ -35,15 +35,20 @@ def one_issuer_is_not_a_collection() -> None:
 
 async def an_audience_is_not_positional() -> None:
     await verifier.verify(  # ty: ignore[missing-argument]
-        "token",
+        SecretToken("token"),
         "https://gateway.example.com",  # ty: ignore[too-many-positional-arguments]
     )
 
 
 async def the_one_shot_cannot_skip_the_audience() -> None:
-    await verifier.verify("token")  # ty: ignore[missing-argument]
+    await verifier.verify(SecretToken("token"))  # ty: ignore[missing-argument]
 
 
 async def the_second_step_cannot_skip_the_audience() -> None:
-    checked = await verifier.check("token")
+    checked = await verifier.check(SecretToken("token"))
     checked.accept()  # ty: ignore[missing-argument]
+
+
+async def a_token_supplied_as_plain_text_is_not_a_token() -> None:
+    await verifier.verify("token", audience="https://gateway.example.com")  # ty: ignore[invalid-argument-type]
+    await verifier.check("token")  # ty: ignore[invalid-argument-type]

@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import FailureKind, RevocationError
@@ -17,14 +18,14 @@ class TestGitHubPreset:
     def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self) -> None:
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         assert config.authorize_url == "https://github.com/login/oauth/authorize"
         assert config.token_url == "https://github.com/login/oauth/access_token"
         assert config.revocation_url == "https://api.github.com/applications/ghid/grant"
@@ -34,7 +35,7 @@ class TestGitHubPreset:
 
         config = preset(
             client_id="ghid",
-            client_secret="ghsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ghsecret"),  # pragma: allowlist secret
             scopes=["repo"],
         )
         for scope in BASE_SCOPES:
@@ -46,7 +47,7 @@ class TestGitHubPreset:
 
         config = preset(
             client_id="ghid",
-            client_secret="ghsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ghsecret"),  # pragma: allowlist secret
             scopes=["read:user", "repo"],
         )
         assert config.scopes.count("read:user") == 1
@@ -56,7 +57,7 @@ class TestGitHubPreset:
 
         config = preset(
             client_id="ghid",
-            client_secret="ghsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("ghsecret"),  # pragma: allowlist secret
             scopes=["repo"],
         )
         metadata_scopes = {meta.scope for meta in config.scope_metadata}
@@ -68,7 +69,7 @@ class TestGitHubImplicitScopes:
     def test_preset_populates_implicit_scopes(self) -> None:
         from apron_auth.providers.github import IMPLICIT_SCOPES, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         assert config.implicit_scopes == IMPLICIT_SCOPES
 
     @pytest.mark.parametrize(
@@ -99,7 +100,7 @@ class TestGitHubImplicitScopes:
         from apron_auth.providers.github import preset
 
         # Requested scopes don't affect implicit_scopes; it is fixed per provider.
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=[])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=[])
         assert config.resolve_implicit_scopes(granted) == expected
 
 
@@ -119,10 +120,10 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         handler = GitHubIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.provider == "github"
         assert identity.subject == "12345"
@@ -147,9 +148,11 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email is None
         assert identity.email_verified is None
@@ -175,9 +178,11 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email == "other@example.com"
         assert identity.email_verified is True
@@ -194,9 +199,11 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email == "preferred@example.com"
         assert identity.email_verified is True
@@ -220,9 +227,11 @@ class TestGitHubIdentityHandler:
         )
         from apron_auth.providers.github import GitHubIdentityHandler, preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
 
-        identity = await GitHubIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await GitHubIdentityHandler().fetch_identity(
+            IdentityMaterial(access_token=SecretToken("access-abc")), config
+        )
 
         assert identity.email is None
         assert identity.email_verified is None
@@ -233,7 +242,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         result = await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
@@ -244,7 +253,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         request = httpx_mock.get_request()
         assert request.headers.get("accept") == "application/vnd.github+json"
@@ -254,7 +263,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=204)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         request = httpx_mock.get_request()
         payload = json.loads(request.content)
@@ -264,7 +273,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=404)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         result = await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert result is True
 
@@ -272,7 +281,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=422)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         result = await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert result is False
 
@@ -281,7 +290,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_response(status_code=500)
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         with pytest.raises(RevocationError) as refusal:
             await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
 
@@ -291,7 +300,7 @@ class TestGitHubRevocationHandler:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         from apron_auth.providers.github import preset
 
-        config = preset(client_id="ghid", client_secret="ghsecret", scopes=["repo"])
+        config = preset(client_id="ghid", client_secret=SecretStr("ghsecret"), scopes=["repo"])
         with pytest.raises(RevocationError, match="^Failed to revoke GitHub token: network error$") as exc_info:
             await GitHubRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert exc_info.value.__cause__ is None

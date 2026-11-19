@@ -9,7 +9,7 @@ import pytest
 
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth.errors import ConfigurationError
-from apron_auth.models import OAuthPendingState
+from apron_auth.models import OAuthPendingState, SecretToken
 from apron_auth.protocols import StateStore
 from apron_auth.stores import MemoryStateStore
 
@@ -26,7 +26,7 @@ def _make_pending(state: str = "test-state", age: float = 0.0) -> OAuthPendingSt
     return OAuthPendingState(
         state=state,
         redirect_uri="https://app.example.com/callback",
-        code_verifier="test-verifier",
+        code_verifier=SecretToken("test-verifier"),
         openid_requested=False,
         created_at=time.time() - age,
     )
@@ -152,7 +152,7 @@ class TestACreationTimeNoClockProduced:
         pending = OAuthPendingState.model_construct(
             state="test-state",
             redirect_uri="https://app.example.com/callback",
-            code_verifier="test-verifier",
+            code_verifier=SecretToken("test-verifier"),
             created_at=created_at,
         )
         await store.save(pending)
@@ -165,7 +165,7 @@ class TestACreationTimeNoClockProduced:
         unusable = OAuthPendingState.model_construct(
             state="unusable-state",
             redirect_uri="https://app.example.com/callback",
-            code_verifier="test-verifier",
+            code_verifier=SecretToken("test-verifier"),
             created_at=10**400,
         )
         await store.save(unusable)

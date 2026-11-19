@@ -14,8 +14,10 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
+from apron_auth.models import SecretToken
 from apron_auth.providers import microsoft
 
 pytestmark = pytest.mark.integration
@@ -36,9 +38,9 @@ class TestMicrosoftRefresh:
     async def test_refresh_returns_access_token(self, microsoft_env: dict[str, str]):
         config = microsoft.preset(
             client_id=microsoft_env["client_id"],
-            client_secret=microsoft_env["client_secret"],
+            client_secret=SecretStr(microsoft_env["client_secret"]),
             scopes=["offline_access"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(microsoft_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(microsoft_env["refresh_token"]))
         assert tokens.access_token

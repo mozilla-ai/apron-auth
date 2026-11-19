@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,22 +36,22 @@ class TestGoogleRefresh:
     async def test_refresh_returns_access_token(self, google_env: dict[str, str]):
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
         assert tokens.access_token
         assert tokens.token_type.lower() == "bearer"
 
     async def test_refresh_returns_expiry(self, google_env: dict[str, str]):
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
         assert tokens.expires_in is not None
         assert tokens.expires_in > 0
 
@@ -60,10 +61,10 @@ class TestGoogleRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(google_env["refresh_token"])
-        result = await client.revoke_token(SecretToken(tokens.access_token))
+        tokens = await client.refresh_token(SecretToken(google_env["refresh_token"]))
+        result = await client.revoke_token(tokens.access_token)
         assert result is True

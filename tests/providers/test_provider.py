@@ -9,6 +9,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pydantic import SecretStr
 from support import VaryFacts
 
 from apron_auth import providers as providers_pkg
@@ -200,7 +201,7 @@ def _named_provider_module_names() -> list[str]:
 def _preset_config(module: ModuleType) -> ProviderConfig:
     config = module.preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["dummy"],
     )
     return config
@@ -246,7 +247,7 @@ def test_every_preset_refuses_a_bare_string_of_scopes(name: str) -> None:
     kwargs["scopes"] = " ".join(kwargs["scopes"])
 
     with pytest.raises(ConfigurationError, match="scopes must be a sequence of scope strings"):
-        PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
+        PRESETS[name]("cid", SecretStr("csecret"), **kwargs)  # pragma: allowlist secret
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))
@@ -255,7 +256,7 @@ def test_every_preset_accepts_any_sequence_of_scopes(name: str) -> None:
     kwargs = _valid_kwargs(name)
     kwargs["scopes"] = tuple(kwargs["scopes"])
 
-    config = PRESETS[name]("cid", "csecret", **kwargs)  # pragma: allowlist secret
+    config = PRESETS[name]("cid", SecretStr("csecret"), **kwargs)  # pragma: allowlist secret
 
     assert isinstance(config, ProviderConfig)
 
@@ -283,21 +284,21 @@ _REFUSED_SPECIFIC_KWARGS: dict[str, dict[str, Any]] = {
 def test_a_fault_in_a_provider_specific_keyword_is_a_configuration_error(name: str) -> None:
     """A provider-specific keyword is still something a caller passed, so its fault is the same class."""
     with pytest.raises(ConfigurationError):
-        PRESETS[name]("cid", "csecret", **{**_valid_kwargs(name), **_REFUSED_SPECIFIC_KWARGS[name]})
+        PRESETS[name]("cid", SecretStr("csecret"), **{**_valid_kwargs(name), **_REFUSED_SPECIFIC_KWARGS[name]})
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))
 def test_every_preset_refuses_a_reserved_authorization_parameter_as_a_configuration_error(name: str) -> None:
     """A fault in what a caller passed is one class, so one except clause covers every preset."""
     with pytest.raises(ConfigurationError):
-        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+        PRESETS[name]("cid", SecretStr("csecret"), extra_params={"state": "forged"}, **_valid_kwargs(name))
 
 
 @pytest.mark.parametrize("name", sorted(PRESETS))
 def test_no_preset_raises_a_value_error_for_a_fault_in_what_it_was_passed(name: str) -> None:
     """ConfigurationError does not inherit from ValueError, so a caller catching one misses the other."""
     try:
-        PRESETS[name]("cid", "csecret", extra_params={"state": "forged"}, **_valid_kwargs(name))
+        PRESETS[name]("cid", SecretStr("csecret"), extra_params={"state": "forged"}, **_valid_kwargs(name))
     except ConfigurationError:
         return
     except ValueError as error:  # pragma: no cover - the assertion reports the class
@@ -388,12 +389,12 @@ def test_preset_config_carries_the_member_data(provider: Provider) -> None:
 def test_a_preset_config_may_name_a_member_its_host_suffixes_do_not_cover() -> None:
     on_suffix = salesforce.preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["dummy"],
     )
     off_suffix = salesforce.preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["dummy"],
         host="login.acme.example",
     )
@@ -423,7 +424,7 @@ def test_preset_follows_a_changed_member_fact(provider: Provider, vary_facts: Va
 def test_hand_built_config_has_no_provider() -> None:
     config = ProviderConfig(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         authorize_url="https://example.com/authorize",
         token_url="https://example.com/token",
     )
@@ -433,7 +434,7 @@ def test_hand_built_config_has_no_provider() -> None:
 def test_a_generic_openid_config_has_no_provider() -> None:
     config = oidc.preset(
         client_id="cid",
-        client_secret="csecret",  # pragma: allowlist secret
+        client_secret=SecretStr("csecret"),  # pragma: allowlist secret
         scopes=["openid"],
         metadata=_GENERIC_METADATA,
     )
@@ -441,5 +442,7 @@ def test_a_generic_openid_config_has_no_provider() -> None:
 
 
 def test_an_mcp_config_has_no_provider() -> None:
-    config = to_provider_config(_GENERIC_METADATA, ClientRegistration(client_id="cid", client_secret="csecret"))
+    config = to_provider_config(
+        _GENERIC_METADATA, ClientRegistration(client_id="cid", client_secret=SecretStr("csecret"))
+    )
     assert config.provider is None

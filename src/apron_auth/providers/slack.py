@@ -42,6 +42,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._claims import stated_boolean
@@ -714,7 +715,7 @@ class SlackRevocationHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,
@@ -799,7 +800,7 @@ def preset(
 
 def sign_in_preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,

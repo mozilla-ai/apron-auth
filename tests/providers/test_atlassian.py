@@ -4,10 +4,11 @@ import logging
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import IdentityFetchError
-from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, TenancyContext
+from apron_auth.models import IdentityMaterial, IdentityProfile, ProviderConfig, SecretToken, TenancyContext
 from apron_auth.protocols import RevocationHandler
 from apron_auth.providers import revocation_handler_for
 from apron_auth.providers.atlassian import (
@@ -22,25 +23,25 @@ ATLASSIAN_ACCESSIBLE_RESOURCES_URL = "https://api.atlassian.com/oauth/token/acce
 
 class TestAtlassianPreset:
     def test_returns_a_configuration_its_provider_handler_resolves_from(self) -> None:
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         assert isinstance(config, ProviderConfig)
         assert isinstance(revocation_handler_for(config), RevocationHandler)
 
     def test_config_has_correct_endpoints(self) -> None:
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         assert config.authorize_url == "https://auth.atlassian.com/authorize"
         assert config.token_url == "https://auth.atlassian.com/oauth/token"
         assert config.revocation_url == "https://auth.atlassian.com/oauth/revoke"
 
     def test_extra_params_include_audience(self) -> None:
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         assert config.extra_params["audience"] == "api.atlassian.com"
         assert config.extra_params["prompt"] == "consent"
 
     def test_base_scopes_merged_with_caller_scopes(self) -> None:
         config = preset(
             client_id="aid",
-            client_secret="asecret",  # pragma: allowlist secret
+            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
             scopes=["read:jira-work"],
         )
         for scope in BASE_SCOPES:
@@ -50,7 +51,7 @@ class TestAtlassianPreset:
     def test_duplicate_scopes_deduplicated(self) -> None:
         config = preset(
             client_id="aid",
-            client_secret="asecret",  # pragma: allowlist secret
+            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
             scopes=["offline_access", "read:jira-work"],
         )
         assert config.scopes.count("offline_access") == 1
@@ -58,7 +59,7 @@ class TestAtlassianPreset:
     def test_scope_metadata_covers_base_scopes(self) -> None:
         config = preset(
             client_id="aid",
-            client_secret="asecret",  # pragma: allowlist secret
+            client_secret=SecretStr("asecret"),  # pragma: allowlist secret
             scopes=["read:jira-work"],
         )
         metadata_scopes = {meta.scope for meta in config.scope_metadata}
@@ -68,7 +69,7 @@ class TestAtlassianPreset:
         """Identity is derivable from accessible-resources alone, so a
         consent picker may let the user decline ``read:me``; only the
         refresh-token scope is load-bearing for the flow itself."""
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         required = {meta.scope: meta.required for meta in config.scope_metadata}
         assert required == {"offline_access": True, "read:me": False}
 
@@ -98,10 +99,10 @@ class TestAtlassianIdentityHandler:
         ]
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -154,10 +155,10 @@ class TestAtlassianIdentityHandler:
         ]
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 2
         assert identity.tenancies[0].id == "cloud-1"
@@ -168,10 +169,10 @@ class TestAtlassianIdentityHandler:
         payload = {"account_id": "557058:abc-123"}
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=[])
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -186,10 +187,10 @@ class TestAtlassianIdentityHandler:
         ]
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-2"
@@ -199,10 +200,10 @@ class TestAtlassianIdentityHandler:
         resources = ["not-a-dict", None, {"id": "cloud-1", "name": "Acme"}]
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert len(identity.tenancies) == 1
         assert identity.tenancies[0].id == "cloud-1"
@@ -216,10 +217,10 @@ class TestAtlassianIdentityHandler:
             url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
             json={"unexpected": "object"},
         )
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -237,11 +238,11 @@ class TestAtlassianIdentityHandler:
             status_code=401,
             json={"error": "invalid_token"},
         )
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -262,11 +263,11 @@ class TestAtlassianIdentityHandler:
         resources = [{"id": "cloud-1"}]
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         httpx_mock.add_exception(httpx.ConnectError("connection refused"), url=ATLASSIAN_ME_URL)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -280,11 +281,11 @@ class TestAtlassianIdentityHandler:
         resources = [{"id": "cloud-1"}]
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, status_code=200, content=b"not-json")
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -298,11 +299,11 @@ class TestAtlassianIdentityHandler:
         resources = [{"id": "cloud-1"}]
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, status_code=200, content=b"[" * 100_000 + b"]" * 100_000)
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -318,9 +319,9 @@ class TestAtlassianIdentityHandler:
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=[{"id": "cloud-1"}])
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=payload)
         handler = AtlassianIdentityHandler()
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.email is None
@@ -335,11 +336,11 @@ class TestAtlassianIdentityHandler:
         resources = [{"id": "cloud-1"}]
         httpx_mock.add_response(url=ATLASSIAN_ACCESSIBLE_RESOURCES_URL, json=resources)
         httpx_mock.add_response(url=ATLASSIAN_ME_URL, json=["not", "an", "object"])
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:jira-work"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:jira-work"])
         handler = AtlassianIdentityHandler()
 
         with caplog.at_level(logging.WARNING):
-            identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.subject is None
         assert identity.raw == {}
@@ -352,13 +353,13 @@ class TestAtlassianIdentityHandler:
             status_code=500,
             json={"error": "internal"},
         )
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
         # Distinct message per sub-request so log triage can identify
         # which endpoint failed without reproducing the call.
         with pytest.raises(IdentityFetchError, match="Failed to fetch Atlassian accessible resources"):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
         # ``/me`` is never reached: the pytest-httpx teardown check would
         # fail if an unused ``/me`` response had been registered here.
         assert [str(r.url) for r in httpx_mock.get_requests()] == [ATLASSIAN_ACCESSIBLE_RESOURCES_URL]
@@ -369,14 +370,14 @@ class TestAtlassianIdentityHandler:
             status_code=200,
             content=b"not-json",
         )
-        config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
+        config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
         handler = AtlassianIdentityHandler()
 
         with pytest.raises(
             IdentityFetchError,
             match="Failed to parse Atlassian accessible resources response",
         ):
-            await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     async def test_a_transport_that_fails_in_its_own_way_degrades_to_a_tenancy_only_profile(
         self, caplog: pytest.LogCaptureFixture
@@ -404,8 +405,8 @@ class TestAtlassianIdentityHandler:
         handler = AtlassianIdentityHandler(transport_factory=factory)
 
         with caplog.at_level(logging.WARNING):
-            config = preset(client_id="aid", client_secret="asecret", scopes=["read:me"])
-            profile = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            config = preset(client_id="aid", client_secret=SecretStr("asecret"), scopes=["read:me"])
+            profile = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert profile.email is None
         assert len(profile.tenancies) == 1

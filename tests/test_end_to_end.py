@@ -88,11 +88,11 @@ class TestFullOAuthFlow:
             },
         )
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
-        assert tokens.access_token == "access-token-abc"
-        assert tokens.refresh_token == "refresh-token-xyz"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
+        assert tokens.refresh_token.get_secret_value() == "refresh-token-xyz"
         assert tokens.expires_at is not None
         assert authorization.state not in store._states
 
@@ -106,14 +106,14 @@ class TestFullOAuthFlow:
             },
         )
         refreshed = await client.refresh_token(refresh_token=tokens.refresh_token)
-        assert refreshed.access_token == "new-access-token"
+        assert refreshed.access_token.get_secret_value() == "new-access-token"
 
         # Step 4: Revoke token.
         httpx_mock.add_response(
             url="https://provider.example.com/revoke",
             status_code=200,
         )
-        result = await client.revoke_token(token=SecretToken(refreshed.access_token))
+        result = await client.revoke_token(token=refreshed.access_token)
         assert result is True
 
 
@@ -169,7 +169,7 @@ class TestContextFlowsThroughStateStore:
             },
         )
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
         assert tokens.context == meta
@@ -183,7 +183,7 @@ class TestSlackUserScopesInAuthorizationUrl:
 
         config = preset(
             client_id="slack-id",
-            client_secret="slack-secret",  # pragma: allowlist secret
+            client_secret=SecretStr("slack-secret"),  # pragma: allowlist secret
             scopes=["channels:read"],
             user_scopes=["users:read", "channels:history"],
         )
@@ -206,7 +206,7 @@ class TestSlackSignInFlow:
 
         config = sign_in_preset(
             client_id="slack-id",
-            client_secret="slack-secret",  # pragma: allowlist secret
+            client_secret=SecretStr("slack-secret"),  # pragma: allowlist secret
             scopes=["email"],
         )
         return StoredStateClient(config=config, state_store=MemoryStateStore())
@@ -238,7 +238,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(NonceValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 
@@ -258,11 +258,11 @@ class TestSlackSignInFlow:
         )
 
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
 
-        assert tokens.access_token == "xoxp-user-token"
+        assert tokens.access_token.get_secret_value() == "xoxp-user-token"
 
     async def test_an_id_token_from_another_issuer_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """The preset names Slack's issuer, so a token minted elsewhere cannot sign a person in."""
@@ -286,7 +286,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(IdTokenValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 
@@ -310,7 +310,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(NonceValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretToken("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 

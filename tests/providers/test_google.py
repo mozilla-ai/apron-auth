@@ -5,6 +5,7 @@ import traceback
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError, RevocationError
@@ -24,10 +25,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.provider == "google"
         assert identity.tenancies == (TenancyContext(domain="mozilla.ai", owns_email_domain=True),)
@@ -41,10 +42,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.owns_domain("mozilla.ai") is True
         assert identity.owns_domain("other.example") is False
@@ -59,10 +60,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
         assert identity.domain_owning_tenancies() == ()
@@ -75,10 +76,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -91,10 +92,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.tenancies == ()
 
@@ -121,10 +122,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.email_verified is expected
 
@@ -135,10 +136,10 @@ class TestGoogleIdentityHandler:
         )
         from apron_auth.providers.google import GoogleIdentityHandler, preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         handler = GoogleIdentityHandler()
 
-        identity = await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        identity = await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
         assert identity.email_verified is None
 
@@ -147,7 +148,7 @@ class TestGooglePreset:
     def test_returns_a_configuration_its_provider_handler_resolves_from(self):
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         assert isinstance(config, ProviderConfig)
         assert revocation_handler_for(config) is not None
         assert isinstance(revocation_handler_for(config), RevocationHandler)
@@ -155,13 +156,13 @@ class TestGooglePreset:
     def test_preset_declares_domain_ownership_capability(self):
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         assert config.can_assert_domain_ownership is True
 
     def test_config_has_correct_endpoints(self):
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         assert config.authorize_url == "https://accounts.google.com/o/oauth2/v2/auth"
         assert config.token_url == "https://oauth2.googleapis.com/token"
         assert config.revocation_url == "https://oauth2.googleapis.com/revoke"
@@ -169,7 +170,7 @@ class TestGooglePreset:
     def test_extra_params_include_offline_access(self):
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         assert config.extra_params["access_type"] == "offline"
         assert config.extra_params["prompt"] == "consent"
 
@@ -178,7 +179,7 @@ class TestGooglePreset:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["openid"],
             extra_params={"prompt": "select_account"},
         )
@@ -190,7 +191,7 @@ class TestGooglePreset:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["openid"],
             redirect_uri="https://custom.example.com/callback",
         )
@@ -201,7 +202,7 @@ class TestGooglePreset:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         for scope in BASE_SCOPES:
@@ -213,7 +214,7 @@ class TestGooglePreset:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["openid", "https://www.googleapis.com/auth/gmail.readonly"],
         )
         assert config.scopes.count("openid") == 1
@@ -223,7 +224,7 @@ class TestGooglePreset:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["https://www.googleapis.com/auth/gmail.readonly"],
         )
         metadata_scopes = {meta.scope for meta in config.scope_metadata}
@@ -236,7 +237,7 @@ class TestGoogleRevocationHandler:
         httpx_mock.add_response(status_code=200)
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         result = await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
         assert result is True
         request = httpx_mock.get_request()
@@ -255,7 +256,7 @@ class TestGoogleRevocationHandler:
         httpx_mock.add_response(status_code=status)
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
 
         with pytest.raises(RevocationError, match="states no outcome") as refusal:
             await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
@@ -272,7 +273,7 @@ class TestGoogleRevocationHandler:
         httpx_mock.add_callback(refuse)
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
         with pytest.raises(RevocationError) as exc_info:
             await GoogleRevocationHandler().revoke(SecretToken(secret), config)
         assert str(exc_info.value) == "Failed to revoke Google token: network error"
@@ -296,7 +297,7 @@ class TestGoogleRevocationHandler:
         httpx_mock.add_response(status_code=400, json=body)
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
 
         assert await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config) is True
 
@@ -307,7 +308,7 @@ class TestGoogleRevocationHandler:
         httpx_mock.add_response(status_code=status)
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
 
         with pytest.raises(RevocationError) as refusal:
             await GoogleRevocationHandler().revoke(SecretToken("access-abc"), config)
@@ -321,7 +322,7 @@ class TestGoogleRevocationHandler:
         """The error status states the token, which holds only for a request that named one."""
         from apron_auth.providers.google import preset
 
-        config = preset(client_id="gid", client_secret="gsecret", scopes=["openid"])
+        config = preset(client_id="gid", client_secret=SecretStr("gsecret"), scopes=["openid"])
 
         with pytest.raises(ConfigurationError) as refusal:
             await GoogleRevocationHandler().revoke(SecretToken(token), config)
@@ -343,12 +344,14 @@ class TestTheRequestLimitsBoundTheIdentityRequest:
 
         config = preset(
             client_id="gid",
-            client_secret="gsecret",  # pragma: allowlist secret
+            client_secret=SecretStr("gsecret"),  # pragma: allowlist secret
             scopes=["openid"],
             limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
         )
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await GoogleIdentityHandler().fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+            await GoogleIdentityHandler().fetch_identity(
+                IdentityMaterial(access_token=SecretToken("access-abc")), config
+            )
 
         assert refusal.value.kind is FailureKind.TIMEOUT

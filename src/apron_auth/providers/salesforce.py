@@ -13,6 +13,8 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from pydantic import SecretStr
+
 from apron_auth._claims import stated_boolean
 from apron_auth._limits import streamed
 from apron_auth._urls import matches_suffix, url_host
@@ -183,7 +185,7 @@ class SalesforceIdentityHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,

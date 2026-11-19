@@ -32,6 +32,7 @@ from pydantic import (
 
 from apron_auth._client_secrets import stated_client_secret
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
+from apron_auth._credentials import arrives_wrapped
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -48,9 +49,19 @@ logger = logging.getLogger(__name__)
 
 AccessType = Literal["read", "write", "admin"]
 
-# A client secret, read for the string it holds rather than trusted for the wrapper around it. The rule
-# runs on the value as it arrives and again on the one the field settled on, because the field converts.
-ClientSecret = Annotated[SecretStr | None, BeforeValidator(stated_client_secret), AfterValidator(stated_client_secret)]
+# The member a token-endpoint response and a token set's extras state the ID token in. It has no field
+# of its own, so the name is what both the parse and the narrowing find it by.
+ID_TOKEN_MEMBER = "id_token"
+
+# A client secret, which arrives wrapped and is read for the string it holds rather than trusted for the
+# wrapper around it. The presence rule runs on the value as it arrives and again on the one the field
+# settled on, because the field converts.
+ClientSecret = Annotated[
+    SecretStr | None,
+    BeforeValidator(arrives_wrapped(SecretStr)),
+    BeforeValidator(stated_client_secret),
+    AfterValidator(stated_client_secret),
+]
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -136,6 +147,14 @@ class SecretToken(SecretStr):
         """
         msg = "A token states nothing as text. Read it with get_secret_value()."
         raise TypeError(msg)
+
+
+# A token this library holds, which arrives wrapped so no frame local between here and the wire states it.
+# It is stated here rather than with the other constants, because it names the class above.
+Credential = Annotated[SecretToken, BeforeValidator(arrives_wrapped(SecretToken))]
+
+# The same, for a token a provider need not state.
+OptionalCredential = Annotated[SecretToken | None, BeforeValidator(arrives_wrapped(SecretToken))]
 
 
 @unique
@@ -686,6 +705,51 @@ def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
     if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray | memoryview):
         return list(value)
     return [value]
+
+
+# The callback parameters that carry a credential, which are read wrapped so no frame of the reader
+# binds one as a plain string.
+_CALLBACK_CREDENTIALS = frozenset({"code"})
+
+
+def _stated_callback_values(query: Mapping[str, Any], name: str) -> list[Any]:
+    """Return every value a callback query states for one parameter, wrapping a credential as it is read.
+
+    The wrapping happens here rather than where the values are checked, because a frame that can
+    refuse the query must hold no credential as a plain string.
+
+    Args:
+        query: The query to read, which must state ``name``.
+        name: The parameter to read.
+
+    Returns:
+        The values, in the order the query states them, with a credential wrapped.
+    """
+    values = _stated_values(query, name)
+    if name not in _CALLBACK_CREDENTIALS:
+        return values
+    return [SecretToken(value) if isinstance(value, str) else value for value in values]
+
+
+def _stated_extra_token(extras: Mapping[str, Any], name: str) -> SecretToken | None:
+    """Return a token an extras mapping states under one name, wrapped as it is read.
+
+    The wrapping happens here rather than where the token is used, because a frame that can refuse
+    what it was given must hold no credential as a plain string. This frame refuses nothing, so it
+    reaches no traceback.
+
+    Args:
+        extras: The extras to read.
+        name: The member to read.
+
+    Returns:
+        The token wrapped, or ``None`` where the mapping states none under that name or states one
+        that is no string.
+    """
+    stated = extras.get(name)
+    if isinstance(stated, SecretToken):
+        return stated
+    return SecretToken(stated) if isinstance(stated, str) else None
 
 
 class _RefusesWithoutRepeating(BaseModel):
@@ -1602,9 +1666,10 @@ class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     none and keeps the member in its extras.
 
     Attributes:
-        access_token: The access token issued for the person.
+        access_token: The access token issued for the person, wrapped so no frame local states it.
         token_type: Token type, as the provider states it.
         refresh_token: The refresh token for this token, where the provider rotates it.
+            It is wrapped so no frame local states it.
         expires_in: Token lifetime in seconds as reported by the provider.
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted for this token, delimited by the provider's scope separator.
@@ -1616,9 +1681,9 @@ class UserToken(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             field of the same name here, which states only what the provider sent.
     """
 
-    access_token: str
+    access_token: Credential
     token_type: str = "Bearer"
-    refresh_token: str | None = None
+    refresh_token: OptionalCredential = None
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
@@ -1636,9 +1701,10 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     one cannot be dropped silently and lose what the provider or the caller attached.
 
     Attributes:
-        access_token: The access token issued by the provider.
+        access_token: The access token issued by the provider, wrapped so no frame local states it.
         token_type: Token type, typically ``"Bearer"``.
         refresh_token: Optional refresh token for obtaining new access tokens.
+            It is wrapped so no frame local states it.
         expires_in: Token lifetime in seconds as reported by the provider.
         expires_at: Absolute expiry time as a Unix timestamp.
         scope: Scopes granted by the provider, delimited by the
@@ -1656,9 +1722,9 @@ class TokenSet(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             It is empty for a token set that does not come from a code exchange.
     """
 
-    access_token: str
+    access_token: Credential
     token_type: str = "Bearer"
-    refresh_token: str | None = None
+    refresh_token: OptionalCredential = None
     expires_in: int | None = None
     expires_at: float | None = None
     scope: str | None = None
@@ -1814,8 +1880,8 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             grant and must not infer one.
     """
 
-    access_token: SecretToken
-    id_token: SecretToken | None = None
+    access_token: Credential
+    id_token: OptionalCredential = None
     scope: str | None = None
 
     @model_validator(mode="after")
@@ -1850,10 +1916,12 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             The identity material: the access token, the granted scopes,
             and, when the response carried one, the OIDC ID token.
         """
-        id_token = tokens.extras.get("id_token")
+        # A token set this library built carries the ID token wrapped. One a caller built by hand
+        # carries whatever they put in the extras, which the reader below wraps as it arrives.
+        id_token = _stated_extra_token(tokens.extras, ID_TOKEN_MEMBER)
         return cls(
-            access_token=SecretToken(tokens.access_token),
-            id_token=SecretToken(id_token) if isinstance(id_token, str) and id_token else None,
+            access_token=tokens.access_token,
+            id_token=id_token if id_token is not None and id_token.get_secret_value() else None,
             scope=tokens.scope,
         )
 
@@ -2066,8 +2134,8 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
 
     Construction and validation refuse a field this model does not define, and a refusal repeats no
     value it was given, because a response carries the authorization code.
-    NOTE: That covers a refusal alone. This model holds the code as it arrived, so rendering one, or
-    dumping it, states the code as any other model holding a credential does.
+    NOTE: That covers a refusal alone. Dumping this model states the code as a mask, so a caller
+    recording one reads it with ``get_secret_value``.
 
     Every member is optional, because a response states a different subset depending on how it turned
     out. RFC 6749 section 4.1.2 states ``code`` where the request succeeded, section 4.1.2.1 states
@@ -2075,7 +2143,7 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
     what a given subset means.
 
     Attributes:
-        code: The authorization code to redeem.
+        code: The authorization code to redeem, wrapped so no frame local states it.
         state: The ``state`` the authorization request sent, returned unchanged.
         iss: The issuer that answered (RFC 9207).
         error: The error code a refused request is answered with (RFC 6749 section 4.1.2.1).
@@ -2084,7 +2152,7 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             server chose its text. It is here for a caller to show or record.
     """
 
-    code: str | None = None
+    code: OptionalCredential = None
     state: str | None = None
     iss: str | None = None
     error: str | None = None
@@ -2127,11 +2195,11 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
         if not isinstance(query, Mapping):
             msg = "the callback query must be a mapping of each parameter name to its value"
             raise ConfigurationError(msg)
-        stated: dict[str, str] = {}
+        stated: dict[str, str | SecretStr] = {}
         for name in cls.model_fields:
             if name not in query:
                 continue
-            values = _stated_values(query, name)
+            values = _stated_callback_values(query, name)
             if not values:
                 msg = f"the callback query states {name} with no value at all"
                 raise ConfigurationError(msg)
@@ -2139,11 +2207,12 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
                 msg = f"the callback query must state {name} exactly once"
                 raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
             value = values[0]
-            if not isinstance(value, str):
+            if not isinstance(value, str | SecretStr):
                 msg = f"the callback query must state {name} as a string"
                 raise ConfigurationError(msg)
             stated[name] = value
-        return cls(**stated)
+        # Validated as a mapping, because the values it holds are of more than one type.
+        return cls.model_validate(stated)
 
 
 class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
@@ -2155,7 +2224,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     Attributes:
         state: Unique token identifying this authorization request.
         redirect_uri: Redirect URI for this flow.
-        code_verifier: PKCE code verifier, if PKCE is enabled.
+        code_verifier: PKCE code verifier, if PKCE is enabled, wrapped so no frame local states it.
         nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
         openid_requested: Whether the request asked for the ``openid`` scope, which decides whether the
             exchange holds the response to the nonce rule. It is stated beside the nonce rather than read
@@ -2168,7 +2237,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
     state: str
     redirect_uri: str
-    code_verifier: str | None = None
+    code_verifier: OptionalCredential = None
     nonce: str | None = None
     openid_requested: bool
     created_at: float
@@ -2212,8 +2281,9 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     Construction and validation refuse a field this model does not define, and a refusal repeats no
     value it was given, because this model holds a secret.
-    NOTE: That covers a refusal alone. Rendering this model, or dumping it, states the browser token as
-    any other model holding a credential does, and it belongs in nothing the browser can read.
+    NOTE: That covers a refusal alone. Dumping this model states the browser token as a mask, so a
+    caller recording it reads it with ``get_secret_value`` and keeps it out of anything the browser
+    can read.
 
     Attributes:
         url: The authorization URL to send the browser to.
@@ -2221,7 +2291,7 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
             the browser token and reveals nothing the token can be recovered from, so it names this flow
             wherever the application records or looks one up.
         browser_token: The secret that binds the request to the browser it was built for, which the code
-            exchange needs back.
+            exchange needs back. It is wrapped so no frame local states it.
             NOTE: Callers must keep this where only that browser can present it, such as a ``Secure``,
             ``HttpOnly`` cookie, and must keep it out of the authorization URL and out of any page the
             browser renders. A token another browser can read binds the request to nothing.
@@ -2232,7 +2302,7 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     url: str
     state: str
-    browser_token: str
+    browser_token: Credential
 
     # No URL rule: UrlField names no field of this model, and the config the authorization URL is built
     # from states its transport under rules of its own.

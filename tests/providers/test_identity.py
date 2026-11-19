@@ -8,7 +8,7 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.errors import ConfigurationError, FailureKind, IdentityFetchError
-from apron_auth.models import IdentityMaterial, Provider, ProviderConfig
+from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
 from apron_auth.protocols import IdentityHandler
 from apron_auth.providers import identity_handler_for
 
@@ -130,7 +130,7 @@ async def test_every_resolved_handler_runs_on_the_callers_transport(provider: Pr
     assert handler is not None
 
     with pytest.raises(IdentityFetchError):
-        await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     assert asked, f"the {provider.display_name} handler asked for no transport"
     assert reached, f"the {provider.display_name} handler asked for a transport and sent its request elsewhere"
@@ -149,7 +149,7 @@ async def test_a_factory_that_refuses_stops_every_resolved_handler(provider: Pro
     assert handler is not None
 
     with pytest.raises(IdentityFetchError) as refusal:
-        await handler.fetch_identity(IdentityMaterial(access_token="access-abc"), config)
+        await handler.fetch_identity(IdentityMaterial(access_token=SecretToken("access-abc")), config)
 
     assert refusal.value.kind is FailureKind.UNEXPECTED
     assert refusal.value.retryable is False

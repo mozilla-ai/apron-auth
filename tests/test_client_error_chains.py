@@ -62,7 +62,7 @@ def _pending_state(nonce: str | None = None, code_verifier: str = VERIFIER) -> O
     return OAuthPendingState(
         state="pending-state",
         redirect_uri="https://app.example.com/callback",
-        code_verifier=code_verifier,
+        code_verifier=SecretToken(code_verifier),
         nonce=nonce,
         openid_requested=bool(nonce),
         created_at=time.time(),
@@ -131,14 +131,14 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code=CODE, state="pending-state"), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken(CODE), state="pending-state"), pending_state=_pending_state()
             )
         return exc_info.value
 
     async def _refresh_error(self) -> TokenRefreshError:
         client = OAuthClient(_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(REFRESH_TOKEN)
+            await client.refresh_token(SecretToken(REFRESH_TOKEN))
         return exc_info.value
 
     @pytest.mark.parametrize(("failure", "kind"), TRANSPORT_FAILURES)
@@ -257,7 +257,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config(client_secret=SecretStr(secret)))
 
         with pytest.raises(OAuthError) as exc_info:
-            await client.refresh_token(REFRESH_TOKEN)
+            await client.refresh_token(SecretToken(REFRESH_TOKEN))
 
         assert str(exc_info.value) == "HTTP 400"
         _assert_carries_no_secret(exc_info.value, secret, REFRESH_TOKEN)
@@ -315,7 +315,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config())
 
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token("grant")
+            await client.refresh_token(SecretToken("grant"))
 
         assert exc_info.value.error_code == "invalid_grant"
         assert exc_info.value.kind is FailureKind.REJECTED
@@ -335,7 +335,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config(client_secret=SecretStr(secret)))
 
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(REFRESH_TOKEN)
+            await client.refresh_token(SecretToken(REFRESH_TOKEN))
 
         assert exc_info.value.error_code == ""
         _assert_carries_no_secret(exc_info.value, secret, REFRESH_TOKEN)
@@ -355,7 +355,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config())
 
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(token)
+            await client.refresh_token(SecretToken(token))
 
         assert exc_info.value.error_code == ""
         _assert_carries_no_secret(exc_info.value, token)
@@ -376,7 +376,7 @@ class TestTokenRequestErrors:
 
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code=code, state="pending-state"),
+                AuthorizationCallback(code=SecretToken(code), state="pending-state"),
                 pending_state=_pending_state(code_verifier=verifier),
             )
 
@@ -399,7 +399,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config(client_secret=SecretStr(secret)))
 
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(REFRESH_TOKEN)
+            await client.refresh_token(SecretToken(REFRESH_TOKEN))
 
         assert exc_info.value.error_code == ""
         _assert_carries_no_secret(exc_info.value, secret, REFRESH_TOKEN)
@@ -449,7 +449,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=FailingHandler())
         with pytest.raises(IdentityFetchError) as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken(ACCESS_TOKEN)))
 
         assert str(exc_info.value) == f"Failed to fetch identity: {kind}"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -461,7 +461,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=BrokenHandler())
         with pytest.raises(IdentityFetchError) as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken(ACCESS_TOKEN)))
 
         assert str(exc_info.value) == "Failed to fetch identity"
         _assert_carries_no_secret(exc_info.value, ACCESS_TOKEN)
@@ -489,7 +489,7 @@ class TestHandlerErrors:
 
         client = OAuthClient(_config(), identity_handler=MisconfiguredHandler())
         with pytest.raises(ConfigurationError) as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken(ACCESS_TOKEN)))
 
         assert not isinstance(exc_info.value, IdentityFetchError)
         assert str(exc_info.value) == "config names a different issuer"
@@ -535,7 +535,7 @@ class TestHandlerDomainErrors:
 
         client = OAuthClient(_config(), identity_handler=ChainingHandler())
         with pytest.raises(CustomIdentityError) as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token=ACCESS_TOKEN))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken(ACCESS_TOKEN)))
 
         assert str(exc_info.value) == "Custom identity failed"
         assert not any(name.startswith("ChainingHandler") for name in _frame_names(exc_info.value))

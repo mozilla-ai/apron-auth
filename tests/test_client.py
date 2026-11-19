@@ -63,7 +63,7 @@ from apron_auth.pkce import generate_code_challenge
 from apron_auth.stores import MemoryStateStore
 
 # The browser token these tests present at a stored-state exchange.
-_BROWSER_TOKEN = "browser-token-for-these-tests"
+_BROWSER_TOKEN = SecretToken("browser-token-for-these-tests")
 
 # The fixed wall-clock reading, in epoch seconds, that the pending state age tests pin the client to.
 _NOW = 1_700_000_000.0
@@ -110,7 +110,7 @@ def _make_oauth_config(**overrides: object) -> ProviderConfig:
 
 
 def _callback(**overrides: object) -> AuthorizationCallback:
-    defaults = {"code": "auth-code-123", "state": _STATE}
+    defaults = {"code": SecretToken("auth-code-123"), "state": _STATE}
     defaults.update(overrides)
     return AuthorizationCallback(**defaults)  # ty: ignore[invalid-argument-type]
 
@@ -188,7 +188,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
-        derived = hashlib.sha256(authorization.browser_token.encode()).hexdigest()
+        derived = hashlib.sha256(authorization.browser_token.get_secret_value().encode()).hexdigest()
         assert authorization.state == derived
         assert parse_qs(urlparse(authorization.url).query)["state"] == [derived]
 
@@ -198,7 +198,20 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
-        assert authorization.browser_token not in authorization.url
+        assert authorization.browser_token.get_secret_value() not in authorization.url
+
+    async def test_the_minted_token_states_nothing_as_text(self):
+        """A caller setting the cookie without unwrapping would write a mask for every browser.
+
+        Nothing but this library reads that cookie, so the mistake would surface only as a callback
+        refused for its binding, which names neither the cookie nor the value in it.
+        """
+        client = StoredStateClient(_make_config(), MemoryStateStore())
+
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+
+        with pytest.raises(TypeError, match="states nothing as text"):
+            str(authorization.browser_token)
 
     async def test_each_request_is_bound_to_a_browser_of_its_own(self):
         client = StoredStateClient(_make_config(), MemoryStateStore())
@@ -230,7 +243,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
             _callback(state=started_elsewhere.state),
             browser_token=started_elsewhere.browser_token,
         )
-        assert tokens.access_token == "access-token-abc"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
 
     async def test_the_token_of_its_own_flow_completes_it(self, httpx_mock: HTTPXMock):
         client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
@@ -244,7 +257,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
             _callback(state=authorization.state), browser_token=authorization.browser_token
         )
 
-        assert tokens.access_token == "access-token-abc"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
 
     async def test_a_callback_presenting_no_browser_token_is_refused(self, httpx_mock: HTTPXMock):
         """A cookie that is not there is the usual way to reach the exchange with no token at all."""
@@ -266,7 +279,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
         tokens = await client.exchange_code(
             _callback(state=authorization.state), browser_token=authorization.browser_token
         )
-        assert tokens.access_token == "access-token-abc"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
 
     async def test_a_refused_response_is_reported_as_one_whatever_the_browser_presents(self, httpx_mock: HTTPXMock):
         """The response states no code to redeem, so that is the refusal, cookie or no cookie."""
@@ -310,13 +323,22 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         assert str(presented_none.value) == str(presented_another.value)
 
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_token_supplied_as_plain_text_is_refused(self, stated: str) -> None:
+        """A parameter converts nothing, so a blank string is a type error rather than an empty token."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            await client.exchange_code(_callback(state=authorization.state), browser_token=stated)  # ty: ignore[invalid-argument-type]
+
     async def test_an_empty_token_redeems_nothing(self, httpx_mock: HTTPXMock):
         """A cookie cleared rather than dropped reaches the exchange as an empty string, not as None."""
         client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
         with pytest.raises(StateError):
-            await client.exchange_code(_callback(state=authorization.state), browser_token="")
+            await client.exchange_code(_callback(state=authorization.state), browser_token=SecretToken(""))
 
         assert httpx_mock.get_requests() == []
         httpx_mock.add_response(
@@ -326,7 +348,19 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
         tokens = await client.exchange_code(
             _callback(state=authorization.state), browser_token=authorization.browser_token
         )
-        assert tokens.access_token == "access-token-abc"
+        assert tokens.access_token.get_secret_value() == "access-token-abc"
+
+    async def test_a_browser_token_supplied_as_plain_text_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A plain string is a frame local for the whole call, so it is refused before the store is read."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        presented = authorization.browser_token.get_secret_value()
+
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await client.exchange_code(_callback(state=authorization.state), browser_token=presented)  # ty: ignore[invalid-argument-type]
+
+        assert presented not in str(caught.value)
+        assert httpx_mock.get_requests() == []
 
     async def test_the_token_check_compares_in_constant_time(self, monkeypatch: pytest.MonkeyPatch):
         """An equality check returns as soon as two values differ, which states where they first differ."""
@@ -677,8 +711,8 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
         assert isinstance(tokens, TokenSet)
-        assert tokens.access_token == "access-abc"
-        assert tokens.refresh_token == "refresh-xyz"
+        assert tokens.access_token.get_secret_value() == "access-abc"
+        assert tokens.refresh_token.get_secret_value() == "refresh-xyz"
         assert tokens.expires_in == 3600
         assert tokens.expires_at is not None
         assert tokens.scope == "openid email"
@@ -692,7 +726,7 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             _callback(),
-            pending_state=_pending_state(code_verifier="test-verifier"),
+            pending_state=_pending_state(code_verifier=SecretToken("test-verifier")),
         )
         request = httpx_mock.get_request()
         assert b"code_verifier=test-verifier" in request.content
@@ -728,7 +762,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
-            code_verifier="stored-verifier",
+            code_verifier=SecretToken("stored-verifier"),
             openid_requested=False,
             created_at=time.time(),
         )
@@ -737,10 +771,10 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         store.consume.assert_awaited_once_with(_STATE)
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_auto_consume_preserves_context(self, httpx_mock):
         httpx_mock.add_response(
@@ -750,7 +784,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
-            code_verifier="stored-verifier",
+            code_verifier=SecretToken("stored-verifier"),
             openid_requested=False,
             created_at=time.time(),
             context={"user_id": "U123", "tenant_id": "T456"},
@@ -760,7 +794,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.context == {"user_id": "U123", "tenant_id": "T456"}
 
@@ -780,7 +814,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.context == {}
 
@@ -814,7 +848,9 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         await client.exchange_code(
             _callback(),
-            pending_state=_pending_state(redirect_uri="https://app.example.com/other", code_verifier="verifier"),
+            pending_state=_pending_state(
+                redirect_uri="https://app.example.com/other", code_verifier=SecretToken("verifier")
+            ),
         )
         body = parse_qs(httpx_mock.get_request().content.decode())
         assert body["redirect_uri"] == ["https://app.example.com/other"]
@@ -838,7 +874,7 @@ class TestExchangeCode:
             json={"access_token": "access-abc", "token_type": "Bearer"},
         )
         store = AsyncMock()
-        store.consume = AsyncMock(return_value=_pending_state(code_verifier="stored-verifier"))
+        store.consume = AsyncMock(return_value=_pending_state(code_verifier=SecretToken("stored-verifier")))
         client = StoredStateClient(config=_make_oauth_config(), state_store=store)
         await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
         body = parse_qs(httpx_mock.get_request().content.decode())
@@ -849,7 +885,8 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state="forged-state"), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state="forged-state"),
+                pending_state=_pending_state(),
             )
         assert httpx_mock.get_requests() == []
 
@@ -858,7 +895,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state=state), pending_state=_pending_state()
             )
         assert httpx_mock.get_requests() == []
 
@@ -877,7 +914,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state=state), pending_state=_pending_state()
             )  # type: ignore[arg-type]
         assert httpx_mock.get_requests() == []
 
@@ -890,7 +927,7 @@ class TestExchangeCode:
         client = StoredStateClient(config=_make_config(), state_store=store)
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), browser_token=_BROWSER_TOKEN
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state=state), browser_token=_BROWSER_TOKEN
             )  # type: ignore[arg-type]
         store.consume.assert_not_awaited()
         assert httpx_mock.get_requests() == []
@@ -932,7 +969,7 @@ class TestExchangeCode:
             _callback(),
             pending_state=_pending_state(created_at=_NOW - 600),
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_accepts_a_stored_pending_state_at_the_maximum_age(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
@@ -946,7 +983,7 @@ class TestExchangeCode:
         store.consume = AsyncMock(return_value=_pending_state(created_at=_NOW - 600))
         client = StoredStateClient(config=_make_oauth_config(), state_store=store)
         tokens = await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_accepts_a_pending_state_within_the_clock_difference_ahead(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
@@ -961,7 +998,7 @@ class TestExchangeCode:
             _callback(),
             pending_state=_pending_state(created_at=_NOW + CLOCK_SKEW_SECONDS),
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_refuses_a_pending_state_further_ahead_than_the_clock_difference(
         self, httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
@@ -1110,7 +1147,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.extras["user_id"] == "provider-U"
         assert tokens.context["user_id"] == "caller-U"
@@ -1122,7 +1159,7 @@ class TestExchangeCode:
         client = StoredStateClient(config=config, state_store=store)
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
             )
 
         # The state is the one the browser token mints, so the refusal is the store's own answer.
@@ -1138,7 +1175,7 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         with pytest.raises(TokenExchangeError):
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("bad-code"), state=_STATE), pending_state=_pending_state()
             )
 
     async def test_exchange_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -1150,7 +1187,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert exc_info.value.error_code == "invalid_grant"
 
@@ -1163,7 +1200,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert str(exc_info.value) == "HTTP 400"
 
@@ -1179,7 +1216,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretToken("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert exc_info.value.error_code == "invalid_grant"
         assert str(exc_info.value) == "HTTP 400"
@@ -1260,7 +1297,7 @@ class TestExchangeCode:
         config = _make_oauth_config(client_secret=None, token_endpoint_auth_method="none")
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
         request = httpx_mock.get_request()
         assert b"client_id=test-client" in request.content
         assert b"client_secret" not in request.content
@@ -1281,7 +1318,9 @@ class TestExchangeCode:
         )
         config = _make_oauth_config(client_secret=secret, token_endpoint_auth_method=auth_method)
         client = OAuthClient(config=config)
-        await client.exchange_code(AuthorizationCallback(code="code", state=_STATE), pending_state=_pending_state())
+        await client.exchange_code(
+            AuthorizationCallback(code=SecretToken("code"), state=_STATE), pending_state=_pending_state()
+        )
         request = httpx_mock.get_request()
         assert (b"client_secret=" in request.content) is expect_secret_sent
 
@@ -1299,7 +1338,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = OAuthClient(config=config, transport_factory=factory)
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
         assert calls == ["https://provider.example.com/token"]
 
     async def test_exchange_matching_iss_succeeds(self, httpx_mock: HTTPXMock) -> None:
@@ -1310,17 +1349,19 @@ class TestExchangeCode:
         config = _make_oauth_config(issuer="https://provider.example.com")
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://provider.example.com"),
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE, iss="https://provider.example.com"),
             pending_state=_pending_state(),
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_mismatched_iss_rejected_before_token_request(self, httpx_mock: HTTPXMock) -> None:
         config = _make_config(issuer="https://provider.example.com")
         client = OAuthClient(config=config)
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://attacker.example.com"),
+                AuthorizationCallback(
+                    code=SecretToken("auth-code-123"), state=_STATE, iss="https://attacker.example.com"
+                ),
                 pending_state=_pending_state(),
             )
         assert httpx_mock.get_requests() == []
@@ -1340,7 +1381,7 @@ class TestExchangeCode:
         config = _make_oauth_config(issuer="https://provider.example.com", require_iss=False)
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_without_configured_issuer_ignores_iss(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -1350,10 +1391,10 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://anything.example.com"),
+            AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE, iss="https://anything.example.com"),
             pending_state=_pending_state(),
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_exchange_bad_iss_does_not_consume_state(self) -> None:
         store = AsyncMock()
@@ -1362,7 +1403,9 @@ class TestExchangeCode:
         client = StoredStateClient(config=config, state_store=store)
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://attacker.example.com"),
+                AuthorizationCallback(
+                    code=SecretToken("auth-code-123"), state=_STATE, iss="https://attacker.example.com"
+                ),
                 browser_token=_BROWSER_TOKEN,
             )
         store.consume.assert_not_awaited()
@@ -1435,7 +1478,7 @@ class TestTheRequestLimitsBoundTheTokenRequest:
         client = OAuthClient(config=config, transport_factory=self._crawling_transport)
 
         with pytest.raises(TokenRefreshError) as refusal:
-            await client.refresh_token("refresh-xyz")
+            await client.refresh_token(SecretToken("refresh-xyz"))
 
         assert refusal.value.kind is FailureKind.TIMEOUT
 
@@ -1524,7 +1567,7 @@ class TestExchangeCodeAuthorizationResponse:
 
         tokens = await client.exchange_code(_callback(error=""), pending_state=_pending_state())
 
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_a_blank_error_alone_states_neither(self) -> None:
         """An empty error names no condition, so the response states neither a code nor an error."""
@@ -1541,7 +1584,7 @@ class TestExchangeCodeAuthorizationResponse:
 
         with pytest.raises(AuthorizationResponseError, match="both a code and an error") as refusal:
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, error="access_denied"),
+                AuthorizationCallback(code=SecretToken("auth-code-123"), state=_STATE, error="access_denied"),
                 pending_state=_pending_state(),
             )
 
@@ -1594,7 +1637,7 @@ class TestExchangeCodeNonce:
 
     async def test_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         tokens = await self._exchange(httpx_mock, {"id_token": _id_token(_openid_claims(nonce="sent-nonce"))})
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     @pytest.mark.parametrize("response", [{}, {"id_token": None}], ids=["absent", "null"])
     async def test_response_without_id_token_is_refused_when_a_nonce_was_sent(
@@ -1608,7 +1651,7 @@ class TestExchangeCodeNonce:
         tokens = await self._exchange(
             httpx_mock, {"id_token": _id_token(_openid_claims())}, nonce=None, scopes=("email",)
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     @pytest.mark.parametrize(
         "id_token",
@@ -1629,7 +1672,7 @@ class TestExchangeCodeNonce:
         tokens = await self._exchange(
             httpx_mock, {"id_token": _id_token(_openid_claims())}, nonce=None, scopes=("openid", "email")
         )
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     @pytest.mark.parametrize(
         ("overrides", "message"),
@@ -1708,7 +1751,7 @@ class TestExchangeCodeNonce:
 
         tokens = await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
 
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_stored_matching_nonce_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -1723,7 +1766,7 @@ class TestExchangeCodeNonce:
         store.consume = AsyncMock(return_value=_pending_state(nonce="sent-nonce"))
         client = StoredStateClient(config=_make_config(), state_store=store)
         tokens = await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_stored_nonce_is_checked(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -1745,8 +1788,8 @@ class TestExchangeCodeNonce:
             url="https://provider.example.com/token",
             json={"access_token": "access-new", "token_type": "Bearer", "id_token": _id_token(_openid_claims())},
         )
-        tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-xyz")
-        assert tokens.access_token == "access-new"
+        tokens = await OAuthClient(config=_make_config()).refresh_token(SecretToken("refresh-xyz"))
+        assert tokens.access_token.get_secret_value() == "access-new"
 
 
 class TestExchangeCodeIdTokenClaims:
@@ -1797,7 +1840,7 @@ class TestExchangeCodeIdTokenClaims:
         self, httpx_mock: HTTPXMock, extra: dict[str, object]
     ) -> None:
         tokens = await self._exchange(httpx_mock, self._claims(extra))
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     @pytest.mark.parametrize(
         ("extra", "message"),
@@ -1845,7 +1888,7 @@ class TestExchangeCodeIdTokenClaims:
     async def test_the_issuer_is_checked_when_the_config_names_one(self, httpx_mock: HTTPXMock) -> None:
         claims = _openid_claims(nonce="sent-nonce", iss="https://issuer.example.com")
         tokens = await self._exchange(httpx_mock, claims, issuer="https://issuer.example.com")
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     @pytest.mark.parametrize(
         "claims",
@@ -1864,7 +1907,7 @@ class TestExchangeCodeIdTokenClaims:
 
     async def test_the_issuer_is_not_checked_when_the_config_names_none(self, httpx_mock: HTTPXMock) -> None:
         tokens = await self._exchange(httpx_mock, _openid_claims(nonce="sent-nonce", iss="https://any.example.com"))
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
 
     async def test_the_audience_is_checked_before_the_nonce(self, httpx_mock: HTTPXMock) -> None:
         """A token for another client is refused as such, even when its nonce is wrong too."""
@@ -2286,7 +2329,55 @@ class TestExchangeCodeNonceRevocation:
         assert [record for record in caplog.records if record.name == "apron_auth.client"] == []
 
 
+class TestTheIdTokenAResponseCarries:
+    """The ID token is a credential this library names, so it is wrapped like the ones it has fields for."""
+
+    async def _exchanged(self, httpx_mock: HTTPXMock, id_token: str) -> TokenSet:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": id_token},
+        )
+        client = OAuthClient(config=_make_config())
+        return await client.exchange_code(_callback(), pending_state=_pending_state(nonce="sent-nonce"))
+
+    async def test_it_reaches_the_extras_wrapped(self, httpx_mock: HTTPXMock) -> None:
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+
+        assert tokens.extras["id_token"].get_secret_value() == stated
+
+    async def test_a_dump_states_it_as_a_mask(self, httpx_mock: HTTPXMock) -> None:
+        """A caller logging a dumped token set would otherwise write an identity assertion in clear."""
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+
+        assert stated not in tokens.model_dump_json()
+        assert stated not in repr(tokens)
+
+    async def test_identity_material_still_reads_it(self, httpx_mock: HTTPXMock) -> None:
+        """The narrowing reads the ID token out of the extras, so wrapping it must not lose it."""
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+        material = IdentityMaterial.from_token_set(tokens)
+
+        assert material.id_token is not None
+        assert material.id_token.get_secret_value() == stated
+
+
 class TestRefreshToken:
+    async def test_a_refresh_token_supplied_as_plain_text_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A plain string is a frame local for the whole call, so it is refused before any request."""
+        client = OAuthClient(config=_make_config())
+
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await client.refresh_token("plain-text-refresh")  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-refresh" not in str(caught.value)
+        assert httpx_mock.get_requests() == []
+
     async def test_successful_refresh(self, httpx_mock):
         httpx_mock.add_response(
             url="https://provider.example.com/token",
@@ -2299,9 +2390,9 @@ class TestRefreshToken:
         )
         config = _make_config()
         client = OAuthClient(config=config)
-        tokens = await client.refresh_token(refresh_token="old-refresh")
-        assert tokens.access_token == "new-access"
-        assert tokens.refresh_token == "new-refresh"
+        tokens = await client.refresh_token(refresh_token=SecretToken("old-refresh"))
+        assert tokens.access_token.get_secret_value() == "new-access"
+        assert tokens.refresh_token.get_secret_value() == "new-refresh"
 
     async def test_refresh_returns_a_fresh_token_set(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
@@ -2309,7 +2400,7 @@ class TestRefreshToken:
             json={"access_token": "new-access", "token_type": "Bearer"},
         )
         client = OAuthClient(config=_make_config())
-        tokens = await client.refresh_token(refresh_token="old-refresh")
+        tokens = await client.refresh_token(refresh_token=SecretToken("old-refresh"))
         assert isinstance(tokens, FreshTokenSet)
 
     async def test_refresh_sends_correct_grant_type(self, httpx_mock):
@@ -2319,7 +2410,7 @@ class TestRefreshToken:
         )
         config = _make_config()
         client = OAuthClient(config=config)
-        await client.refresh_token(refresh_token="old-refresh")
+        await client.refresh_token(refresh_token=SecretToken("old-refresh"))
         request = httpx_mock.get_request()
         assert b"grant_type=refresh_token" in request.content
         assert b"refresh_token=old-refresh" in request.content
@@ -2331,7 +2422,7 @@ class TestRefreshToken:
         )
         config = _make_config(resource="https://mcp.example.com/")
         client = OAuthClient(config=config)
-        await client.refresh_token(refresh_token="old-refresh")
+        await client.refresh_token(refresh_token=SecretToken("old-refresh"))
         request = httpx_mock.get_request()
         body = parse_qs(request.content.decode())
         assert body["resource"] == ["https://mcp.example.com/"]
@@ -2343,7 +2434,7 @@ class TestRefreshToken:
         )
         config = _make_config()
         client = OAuthClient(config=config)
-        await client.refresh_token(refresh_token="old-refresh")
+        await client.refresh_token(refresh_token=SecretToken("old-refresh"))
         request = httpx_mock.get_request()
         assert b"resource" not in request.content
 
@@ -2356,7 +2447,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="bad-refresh")
+            await client.refresh_token(refresh_token=SecretToken("bad-refresh"))
         assert exc_info.value.error_code == code
         assert exc_info.value.kind is FailureKind.REJECTED
         assert exc_info.value.retryable is False
@@ -2367,7 +2458,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
@@ -2379,7 +2470,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == code
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
@@ -2389,7 +2480,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
 
     @pytest.mark.parametrize(
@@ -2409,7 +2500,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         assert exc_info.value.retryable is True
 
@@ -2418,7 +2509,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.kind is FailureKind.UNREACHABLE
         assert exc_info.value.retryable is True
 
@@ -2427,7 +2518,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.kind is FailureKind.TIMEOUT
 
     async def test_refresh_custom_retryable_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -2439,7 +2530,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config, retryable_error_codes={"try_later"})
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.retryable is True
 
     async def test_refresh_custom_codes_preserve_defaults(self, httpx_mock: HTTPXMock) -> None:
@@ -2449,7 +2540,7 @@ class TestRefreshToken:
         config = _make_config()
         client = OAuthClient(config=config, retryable_error_codes={"try_later"})
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == "server_error"
         assert exc_info.value.retryable is True
 
@@ -2462,7 +2553,7 @@ class TestRefreshToken:
         _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="dead-code", state=pending.state), pending_state=pending
+                AuthorizationCallback(code=SecretToken("dead-code"), state=pending.state), pending_state=pending
             )
         assert exc_info.value.kind is FailureKind.REJECTED
         assert exc_info.value.error_code == "invalid_grant"
@@ -2475,7 +2566,7 @@ class TestRefreshToken:
         _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="some-code", state=pending.state), pending_state=pending
+                AuthorizationCallback(code=SecretToken("some-code"), state=pending.state), pending_state=pending
             )
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         # The code may have been consumed, so the same exchange is never repeated.
@@ -2489,7 +2580,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="revoked-refresh")
+            await client.refresh_token(refresh_token=SecretToken("revoked-refresh"))
         assert exc_info.value.error_code == "invalid_grant"
 
     async def test_refresh_invalid_client_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -2500,7 +2591,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="bad-refresh")
+            await client.refresh_token(refresh_token=SecretToken("bad-refresh"))
         assert exc_info.value.error_code == "invalid_client"
 
     async def test_refresh_unauthorized_client_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -2511,7 +2602,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="bad-refresh")
+            await client.refresh_token(refresh_token=SecretToken("bad-refresh"))
         assert exc_info.value.error_code == "unauthorized_client"
 
     async def test_refresh_transient_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -2522,14 +2613,14 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == "server_error"
 
     async def test_refresh_network_error_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_exception(httpx.ConnectError("Connection refused"))
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
 
     async def test_refresh_server_error_without_body_has_empty_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -2540,7 +2631,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
 
     @pytest.mark.parametrize(
@@ -2555,7 +2646,7 @@ class TestRefreshToken:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=503, content=content)
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
         assert str(exc_info.value) == "HTTP 503"
 
@@ -2569,7 +2660,7 @@ class TestRefreshToken:
         httpx_mock.add_response(url="https://provider.example.com/token", status_code=200, content=content)
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert str(exc_info.value) == "token response could not be read"
         assert exc_info.value.kind is FailureKind.REFUSED
         assert exc_info.value.__cause__ is None
@@ -2584,7 +2675,7 @@ class TestRefreshToken:
 
         client = OAuthClient(config=_make_config(), transport_factory=refusing)
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
 
         assert str(exc_info.value) == "request failed"
         assert exc_info.value.kind is FailureKind.UNEXPECTED
@@ -2600,7 +2691,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
 
     async def test_refresh_non_string_error_description_omitted_from_message(self, httpx_mock: HTTPXMock) -> None:
@@ -2611,7 +2702,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == "server_error"
         assert str(exc_info.value) == "HTTP 500"
 
@@ -2623,7 +2714,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
         assert str(exc_info.value) == "HTTP 500"
 
@@ -2640,7 +2731,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="revoked-refresh")
+            await client.refresh_token(refresh_token=SecretToken("revoked-refresh"))
         assert exc_info.value.error_code == "invalid_grant"
         assert str(exc_info.value) == "HTTP 400"
         assert "SECRET-ISH-DATA" not in str(exc_info.value)
@@ -2655,7 +2746,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
         assert "SECRET-ISH-DATA" not in str(exc_info.value)
         assert str(exc_info.value) == "HTTP 400"
@@ -2668,7 +2759,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
         assert str(exc_info.value) == "HTTP 400"
 
@@ -2680,7 +2771,7 @@ class TestRefreshToken:
         )
         client = OAuthClient(config=_make_config())
         with pytest.raises(TokenRefreshError) as exc_info:
-            await client.refresh_token(refresh_token="some-refresh")
+            await client.refresh_token(refresh_token=SecretToken("some-refresh"))
         assert exc_info.value.error_code == ""
         assert str(exc_info.value) == "HTTP 400"
 
@@ -2704,7 +2795,7 @@ class TestARefreshResponseIdToken:
             is_optional=True,
         )
         client = OAuthClient(config=_make_config(issuer=issuer, revocation_url=revocation_url))
-        return await client.refresh_token("refresh-old")
+        return await client.refresh_token(SecretToken("refresh-old"))
 
     def _revoked(self, httpx_mock: HTTPXMock) -> list[str]:
         return [
@@ -2713,7 +2804,7 @@ class TestARefreshResponseIdToken:
 
     async def test_a_token_issued_to_this_client_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         tokens = await self._refresh(httpx_mock, _openid_claims())
-        assert tokens.access_token == "access-new"
+        assert tokens.access_token.get_secret_value() == "access-new"
 
     @pytest.mark.parametrize(
         ("claims", "message"),
@@ -2746,7 +2837,7 @@ class TestARefreshResponseIdToken:
             json={"access_token": "access-new", "token_type": "Bearer", "id_token": "not-a-token"},
         )
         with pytest.raises(TokenRefreshError, match="ID token could not be read"):
-            await OAuthClient(config=_make_config()).refresh_token("refresh-old")
+            await OAuthClient(config=_make_config()).refresh_token(SecretToken("refresh-old"))
 
     @pytest.mark.parametrize("response", [{}, {"id_token": None}], ids=["absent", "null"])
     async def test_a_response_carrying_no_id_token_is_accepted(
@@ -2757,8 +2848,8 @@ class TestARefreshResponseIdToken:
             url="https://provider.example.com/token",
             json={"access_token": "access-new", "token_type": "Bearer", **response},
         )
-        tokens = await OAuthClient(config=_make_config()).refresh_token("refresh-old")
-        assert tokens.access_token == "access-new"
+        tokens = await OAuthClient(config=_make_config()).refresh_token(SecretToken("refresh-old"))
+        assert tokens.access_token.get_secret_value() == "access-new"
 
     async def test_a_refused_response_revokes_what_it_issued(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=self.REVOKE_URL, is_reusable=True)
@@ -2783,12 +2874,22 @@ class TestARefreshResponseIdToken:
         client = OAuthClient(config=_make_config(revocation_url=self.REVOKE_URL))
 
         with pytest.raises(TokenRefreshError):
-            await client.refresh_token("refresh-old")
+            await client.refresh_token(SecretToken("refresh-old"))
 
         assert self._revoked(httpx_mock) == ["access-new"]
 
 
 class TestRevokeToken:
+    async def test_a_token_supplied_as_plain_text_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A plain string is a frame local for the whole call, so it is refused before any request."""
+        client = OAuthClient(config=_make_config(revocation_url="https://provider.example.com/revoke"))
+
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await client.revoke_token("plain-text-token")  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-token" not in str(caught.value)
+        assert httpx_mock.get_requests() == []
+
     async def test_successful_revocation(self, httpx_mock):
         from apron_auth.providers._revocation import StandardRevocationHandler
 
@@ -2960,7 +3061,7 @@ class TestFetchIdentity:
             token_url="https://oauth2.googleapis.com/token",
         )
         client = OAuthClient(config=config)
-        stored = TokenSet.model_validate({"access_token": "access-abc", "extras": {"id_token": "id-jwt"}})
+        stored = TokenSet.model_validate({"access_token": SecretToken("access-abc"), "extras": {"id_token": "id-jwt"}})
 
         with pytest.raises(ConfigurationError, match="reloaded from storage"):
             await client.fetch_identity(stored)
@@ -2985,7 +3086,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="google",
@@ -3028,7 +3129,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.provider == "github"
         assert identity.subject == "42"
@@ -3049,7 +3150,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
     async def test_a_config_on_a_provider_host_that_names_no_provider_gets_no_handler(
         self, httpx_mock: HTTPXMock
@@ -3062,7 +3163,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert httpx_mock.get_requests() == []
 
@@ -3076,7 +3177,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(ConfigurationError, match="Google") as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert not isinstance(exc_info.value, IdentityNotSupportedError)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
@@ -3093,7 +3194,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityNotSupportedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert httpx_mock.get_requests() == []
 
@@ -3112,7 +3213,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.email == "custom@example.com"
 
@@ -3130,7 +3231,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.email == "custom@example.com"
 
@@ -3151,7 +3252,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=EmptyIdentityHandler())
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.email == "falsy@example.com"
 
@@ -3168,7 +3269,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config, identity_handler=DummyIdentityHandler())
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.email == "custom@example.com"
 
@@ -3192,8 +3293,8 @@ class TestFetchIdentity:
             )
         )
 
-        await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
-        await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
+        await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert len(built) == 1
 
@@ -3211,7 +3312,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityFetchError, match="Failed to fetch Google identity"):
-            await client.fetch_identity(FreshTokenSet(access_token="bad-token"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("bad-token")))
 
     async def test_microsoft_identity_resolved_from_the_provider(self, httpx_mock):
         httpx_mock.add_response(
@@ -3230,7 +3331,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="microsoft",
@@ -3269,7 +3370,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="atlassian",
@@ -3298,7 +3399,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="typeform",
@@ -3322,7 +3423,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config)
 
         with pytest.raises(IdentityScopeNotGrantedError):
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc", scope="forms:read"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc"), scope="forms:read"))
 
     async def test_notion_identity_resolved_from_the_provider(self, httpx_mock):
         payload = {
@@ -3353,7 +3454,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="notion",
@@ -3392,7 +3493,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="salesforce",
@@ -3423,7 +3524,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity.provider == "salesforce"
         assert identity.email == "user@acme.com"
@@ -3447,7 +3548,7 @@ class TestFetchIdentity:
         )
         client = OAuthClient(config=config)
 
-        identity = await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+        identity = await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert identity == IdentityProfile(
             provider="linear",
@@ -3475,7 +3576,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config, identity_handler=RefusingHandler())
 
         with pytest.raises(ConfigurationError, match="not this provider's") as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
 
         assert not isinstance(exc_info.value, IdentityFetchError)
         assert exc_info.value.kind is FailureKind.CONFIGURATION
@@ -3494,7 +3595,7 @@ class TestFetchIdentity:
         client = OAuthClient(config=config, identity_handler=BoomHandler())
 
         with pytest.raises(IdentityFetchError, match="^Failed to fetch identity$") as exc_info:
-            await client.fetch_identity(FreshTokenSet(access_token="access-abc"))
+            await client.fetch_identity(FreshTokenSet(access_token=SecretToken("access-abc")))
         assert exc_info.value.__cause__ is None
         assert exc_info.value.__context__ is None
 
@@ -3617,7 +3718,7 @@ class TestAResponseThatStatesNoAccessToken:
         client = OAuthClient(config=_make_oauth_config())
 
         with pytest.raises(TokenRefreshError):
-            await client.refresh_token("refresh-xyz")
+            await client.refresh_token(SecretToken("refresh-xyz"))
 
     async def test_a_refused_refresh_keeps_the_grant_the_caller_still_holds(self, httpx_mock: HTTPXMock) -> None:
         """A refresh response can repeat the token it was sent, so revoking it would end a usable grant."""
@@ -3628,7 +3729,7 @@ class TestAResponseThatStatesNoAccessToken:
         client = OAuthClient(config=_make_oauth_config(revocation_url=revoke_url))
 
         with pytest.raises(TokenRefreshError):
-            await client.refresh_token("callers-own-refresh")
+            await client.refresh_token(SecretToken("callers-own-refresh"))
 
         assert httpx_mock.get_requests(url=revoke_url) == []
 
@@ -3703,7 +3804,7 @@ class TestATopLevelFieldOfTheWrongType:
         """The exchange redeemed the code, so a refusal here would strand the access token it issued."""
         tokens = await self._exchanged(httpx_mock, {"access_token": "LIVE-TOKEN", field: value})
 
-        assert tokens.access_token == "LIVE-TOKEN"
+        assert tokens.access_token.get_secret_value() == "LIVE-TOKEN"
 
     @pytest.mark.parametrize(("field", "value"), WRONG, ids=[f"{f}={v!r}" for f, v in WRONG])
     async def test_it_is_carried_into_the_extras(self, httpx_mock: HTTPXMock, field: str, value: object) -> None:
@@ -3785,9 +3886,9 @@ class TestTheUserTokenAProviderNests:
     async def test_it_is_read_into_a_typed_field(self, httpx_mock: HTTPXMock) -> None:
         tokens = await self._exchanged(httpx_mock, self.BOT_AND_USER)
 
-        assert tokens.access_token == "xoxb-BOT"
+        assert tokens.access_token.get_secret_value() == "xoxb-BOT"
         assert tokens.user_token == UserToken(
-            access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
+            access_token=SecretToken("xoxp-USER"), token_type="user", scope="chat:write", user_id="U1"
         )
 
     async def test_it_is_kept_out_of_the_extras(self, httpx_mock: HTTPXMock) -> None:
@@ -3815,7 +3916,7 @@ class TestTheUserTokenAProviderNests:
         tokens = await self._exchanged(httpx_mock, response, created_at=_NOW)
 
         assert tokens.user_token is not None
-        assert tokens.user_token.refresh_token == "xoxe-1-REFRESH"
+        assert tokens.user_token.refresh_token.get_secret_value() == "xoxe-1-REFRESH"
         assert tokens.user_token.expires_in == 43200
         assert tokens.user_token.expires_at == _NOW + 43200
 
@@ -3846,9 +3947,9 @@ class TestTheUserTokenAProviderNests:
 
         tokens = await self._exchanged(httpx_mock, response)
 
-        assert tokens.access_token == "xoxb-BOT"
+        assert tokens.access_token.get_secret_value() == "xoxb-BOT"
         assert tokens.user_token is not None
-        assert tokens.user_token.access_token == "xoxp-USER"
+        assert tokens.user_token.access_token.get_secret_value() == "xoxp-USER"
         assert tokens.user_token.extras == member
 
     async def test_a_top_level_field_named_user_token_does_not_refuse_the_promotion(
@@ -3860,7 +3961,7 @@ class TestTheUserTokenAProviderNests:
         tokens = await self._exchanged(httpx_mock, response)
 
         assert tokens.user_token is not None
-        assert tokens.user_token.access_token == "xoxp-USER"
+        assert tokens.user_token.access_token.get_secret_value() == "xoxp-USER"
         assert tokens.extras["user_token"] == {"sent": "by the provider"}
         assert "authed_user" not in tokens.extras
 
@@ -3885,7 +3986,7 @@ class TestTheUserTokenAProviderNests:
         tokens = await client.exchange_code(_callback(), pending_state=_pending_state())
 
         assert tokens.user_token == UserToken(
-            access_token="xoxp-USER", token_type="user", scope="chat:write", user_id="U1"
+            access_token=SecretToken("xoxp-USER"), token_type="user", scope="chat:write", user_id="U1"
         )
         assert "authed_user" not in tokens.extras
 
@@ -4006,7 +4107,7 @@ class TestARefusedResponseLeavesNoTokenValid:
         client = OAuthClient(config=config)
 
         with pytest.raises(TokenRefreshError):
-            await client.refresh_token("callers-own-refresh")
+            await client.refresh_token(SecretToken("callers-own-refresh"))
 
         assert self._revoked(httpx_mock) == ["rotated-refresh"]
 
@@ -4025,7 +4126,7 @@ class TestARefusedResponseLeavesNoTokenValid:
         client = OAuthClient(config=config)
 
         with pytest.raises(TokenRefreshError):
-            await client.refresh_token("callers-own-refresh")
+            await client.refresh_token(SecretToken("callers-own-refresh"))
 
         assert self._revoked(httpx_mock) == ["xoxp-NEW"]
 

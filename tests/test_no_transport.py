@@ -73,7 +73,7 @@ class TestEveryOutboundPathFailsClosed:
     async def test_the_token_request_refuses(self) -> None:
         client = OAuthClient(config=_config(), transport_factory=_forgetful_factory)
         with pytest.raises(TokenRefreshError) as refusal:
-            await client.refresh_token("refresh-abc")
+            await client.refresh_token(SecretToken("refresh-abc"))
         assert refusal.value.retryable is False
 
     async def test_revocation_refuses(self) -> None:

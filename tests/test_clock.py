@@ -14,7 +14,7 @@ from apron_auth._clock import (
 )
 from apron_auth.client import _check_pending_age
 from apron_auth.errors import StateError
-from apron_auth.models import OAuthPendingState, ProviderConfig
+from apron_auth.models import OAuthPendingState, ProviderConfig, SecretToken
 from apron_auth.stores import MemoryStateStore
 
 _LIMIT = 300.0
@@ -31,7 +31,7 @@ def _pending(created_at: object) -> OAuthPendingState:
     return OAuthPendingState.model_construct(
         state="state-key",
         redirect_uri="https://app.example.com/callback",
-        code_verifier="test-verifier",
+        code_verifier=SecretToken("test-verifier"),
         created_at=created_at,
     )
 

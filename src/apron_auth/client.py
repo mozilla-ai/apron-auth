@@ -16,9 +16,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 from urllib.parse import urlencode, urlparse, urlunparse
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._clock import CLOCK_SKEW_SECONDS, PendingAgeRefusalReason, pending_age_refusal
+from apron_auth._credentials import refuse_plain_text
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._error_codes import recognized_error_code
 from apron_auth._http_errors import http_failure, response_failure, status_failure
@@ -44,6 +46,7 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    ID_TOKEN_MEMBER,
     AuthorizationCallback,
     BrowserBoundAuthorization,
     FreshTokenSet,
@@ -84,6 +87,10 @@ _TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
 
 # The string fields a token-endpoint response states, beside the access token.
 _TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
+
+# The fields above that name a credential, which is what decides whether one is wrapped as it is read.
+# The access token is not here, because it has a read of its own that always wraps.
+_TOKEN_SET_CREDENTIALS = frozenset({"refresh_token"})
 
 # The string members of a nested user token, each mapped to the UserToken field that states it.
 # NOTE: It decides which member of a response becomes a named credential, so it is read-only.
@@ -209,6 +216,23 @@ def _check_claims(claims: Mapping[str, Any], *, client_id: str, issuer: str | No
         raise IdTokenValidationError(msg)
 
 
+def _stated_id_token(response: Mapping[str, Any]) -> Any:
+    """Return the ID token a token-endpoint response states, wrapped as it is read.
+
+    The wrapping happens here rather than where the token is checked, because a frame that can
+    refuse the response must hold no credential as a plain string. This frame refuses nothing, so it
+    reaches no traceback.
+
+    Args:
+        response: The token-endpoint response to read.
+
+    Returns:
+        The ID token wrapped, or what the response stated where that is no string.
+    """
+    stated = response.get(ID_TOKEN_MEMBER)
+    return SecretToken(stated) if isinstance(stated, str) else stated
+
+
 def _check_id_token(id_token: object, nonce: str | None, *, client_id: str, issuer: str | None) -> None:
     """Refuse a token response whose ID token was not issued to this client for the request it answers.
 
@@ -219,7 +243,7 @@ def _check_id_token(id_token: object, nonce: str | None, *, client_id: str, issu
     only for a token received from the token endpoint over TLS, so the configured token endpoint must use it.
 
     Args:
-        id_token: The ``id_token`` value from the token response, or ``None`` when it has none.
+        id_token: The token response's ID token, wrapped, or ``None`` when it states none.
         nonce: The nonce the authorization request sent, or ``None`` when it sent none.
         client_id: This client's identifier.
         issuer: The issuer the token must name, or ``None`` when no issuer is known.
@@ -358,16 +382,16 @@ def _id_token_claims(id_token: object) -> dict[str, Any]:
     """Return the claims of an ID token from a token response, without checking its signature.
 
     Args:
-        id_token: The ``id_token`` value from a token-endpoint response.
+        id_token: The token response's ID token, wrapped so this frame states it to no error reporter.
 
     Returns:
         The token's claims.
 
     Raises:
-        IdTokenValidationError: If the ID token is not a string, or cannot be read.
+        IdTokenValidationError: If the ID token is not a wrapped string, or cannot be read.
     """
     msg = "ID token could not be read"
-    if not isinstance(id_token, str):
+    if not isinstance(id_token, SecretToken):
         raise IdTokenValidationError(msg)
     try:
         return unverified_claims(id_token)
@@ -442,8 +466,10 @@ def _read_task_exception(task: asyncio.Task[None]) -> None:
         task.exception()
 
 
-def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, str]]:
+def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> list[tuple[str, SecretToken]]:
     """Return the tokens a token-endpoint response or one of its members carries.
+
+    Each token is wrapped as it is read, so no frame it is carried through states it.
 
     Args:
         token: A token-endpoint response, or a member of one that carries a token of its own.
@@ -453,10 +479,45 @@ def _revocable_tokens(token: Mapping[str, Any], *, label_prefix: str = "") -> li
         Each token with the kind a log line names it by, the refresh token first.
     """
     return [
-        (f"{label_prefix}{label}", value)
+        (f"{label_prefix}{label}", SecretToken(value))
         for field, label in (("refresh_token", "refresh token"), ("access_token", "access token"))
         if isinstance(value := token.get(field), str) and value
     ]
+
+
+def _sent_form(*fields: Mapping[str, str | SecretStr]) -> dict[str, str]:
+    """Return the form a token request sends, with every credential unwrapped for the wire.
+
+    NOTE: The result states every credential the request carries, so it belongs only in a frame
+    that raises nothing. A frame that can raise must hold the fields wrapped instead.
+
+    Args:
+        *fields: The field mappings to merge, each later one taking precedence.
+
+    Returns:
+        The merged form, as the wire states it.
+    """
+    return {
+        name: value.get_secret_value() if isinstance(value, SecretStr) else value
+        for part in fields
+        for name, value in part.items()
+    }
+
+
+def _stated_token_field(field: str, value: str) -> str | SecretToken:
+    """Return a string field of a token response, wrapped where that field names a credential.
+
+    Which fields name one is stated once, so a field added to the model and to the parse cannot
+    travel plain because one of the two reads of it was missed.
+
+    Args:
+        field: The model field the value was read onto.
+        value: The value the response stated.
+
+    Returns:
+        The value, wrapped where the field names a credential.
+    """
+    return SecretToken(value) if field in _TOKEN_SET_CREDENTIALS else value
 
 
 def _same_secret(given: str, expected: str) -> bool:
@@ -474,19 +535,20 @@ def _same_secret(given: str, expected: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
 
 
-def _state_for_browser_token(browser_token: str) -> str:
+def _state_for_browser_token(browser_token: SecretToken) -> str:
     """Return the ``state`` an authorization request sends for a browser token.
 
     The digest reveals nothing the token can be recovered from, so a request may send it to the
     authorization server while the token stays with the browser the request was built for.
 
     Args:
-        browser_token: The token minted for the browser the authorization request is built for.
+        browser_token: The token minted for the browser the authorization request is built for,
+            wrapped so this frame states it to no error reporter.
 
     Returns:
         The state, as hexadecimal digits.
     """
-    return hashlib.sha256(browser_token.encode("utf-8", "surrogatepass")).hexdigest()
+    return hashlib.sha256(browser_token.get_secret_value().encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _stated_error_member(answer: BoundedResponse | None) -> object:
@@ -547,7 +609,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
     # A member is read onto its field only where it holds what that field states. One of any other
     # type is carried as it arrived, because the token beside it is usable either way and a refusal
     # here would lose a token the response issued.
-    named: dict[str, Any] = {"access_token": access_token}
+    named: dict[str, Any] = {"access_token": SecretToken(access_token)}
     extras: dict[str, Any] = {}
     for member, value in nested.items():
         if member == "access_token":
@@ -555,7 +617,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
         field = _USER_TOKEN_STRINGS.get(member)
         lifetime = finite_number(value) if member in {"expires_at", "expires_in"} else None
         if field is not None and isinstance(value, str):
-            named[field] = value
+            named[field] = _stated_token_field(field, value)
         elif member == "expires_in" and lifetime is not None:
             named["expires_in"] = int(lifetime)
         elif member == "expires_at" and lifetime is not None:
@@ -696,14 +758,14 @@ class _OAuthClientBase:
 
         return url, pending_state
 
-    def _code_to_redeem(self, callback: AuthorizationCallback) -> str:
+    def _code_to_redeem(self, callback: AuthorizationCallback) -> SecretToken:
         """Return the authorization code to redeem, refusing a response that states none.
 
         Args:
             callback: The authorization response returned to the redirect URI.
 
         Returns:
-            The code.
+            The code, wrapped so this frame states it to no error reporter.
 
         Raises:
             AuthorizationResponseError: If the response states no code, or states both a code and an
@@ -713,13 +775,14 @@ class _OAuthClientBase:
                 response. Whoever reaches the redirect URI chooses the kind and the error code, and
                 neither is evidence that the condition it names happened.
         """
-        if callback.code and callback.error:
+        code = callback.code if callback.code else None
+        if code is not None and callback.error:
             # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says
             # two things at once and nothing here may choose between them.
             msg = "the authorization response states both a code and an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
-        if callback.code:
-            return callback.code
+        if code is not None:
+            return code
         if not callback.error:
             msg = "the authorization response states neither a code nor an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
@@ -755,11 +818,11 @@ class _OAuthClientBase:
         pending = await pending_state_for(_usable_state(callback.state))
         return await self._redeem_against(code, pending)
 
-    async def _redeem_against(self, code: str, pending: OAuthPendingState) -> FreshTokenSet:
+    async def _redeem_against(self, code: SecretToken, pending: OAuthPendingState) -> FreshTokenSet:
         """Redeem an authorization code against the pending state of the request it answers.
 
         Args:
-            code: The authorization code to redeem.
+            code: The authorization code to redeem, wrapped so this frame states it to no error reporter.
             pending: The pending state the authorization request was built with.
 
         Returns:
@@ -777,7 +840,7 @@ class _OAuthClientBase:
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
         _check_pending_openid(pending)
 
-        data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
+        data: dict[str, str | SecretStr] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
             data["redirect_uri"] = pending.redirect_uri
         if pending.code_verifier:
@@ -801,7 +864,7 @@ class _OAuthClientBase:
             raise TokenExchangeError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
-                response.get("id_token"), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
+                _stated_id_token(response), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
             )
         except IdTokenValidationError:
             # NOTE: A response whose ID token fails a check may answer a request the client never made.
@@ -813,7 +876,7 @@ class _OAuthClientBase:
             raise TokenExchangeError(_NO_ACCESS_TOKEN_REFUSAL, kind=FailureKind.REFUSED)
         return self._parse_token_response(response, context=pending.context)
 
-    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: str | None = None) -> None:
+    async def _revoke_refused_tokens(self, response: dict[str, Any], *, keep: SecretToken | None = None) -> None:
         """Revoke the tokens of a refused token response, where the provider supports revocation.
 
         Revocation is best effort, and a revocation unfinished at a fixed time limit is canceled.
@@ -843,7 +906,11 @@ class _OAuthClientBase:
             if isinstance(value, dict):
                 tokens += _revocable_tokens(value, label_prefix="nested ")
         if keep is not None:
-            tokens = [(label, token) for label, token in tokens if not _same_secret(token, keep)]
+            tokens = [
+                (label, token)
+                for label, token in tokens
+                if not _same_secret(token.get_secret_value(), keep.get_secret_value())
+            ]
         if not tokens:
             return
         revocation_url = self._config.revocation_url
@@ -854,7 +921,7 @@ class _OAuthClientBase:
             return
         await self._revoke_all(tokens, host=urlparse(revocation_url).hostname)
 
-    async def _revoke_all(self, tokens: Sequence[tuple[str, str]], *, host: str | None) -> None:
+    async def _revoke_all(self, tokens: Sequence[tuple[str, SecretToken]], *, host: str | None) -> None:
         """Revoke every given token at once, under one time limit bound to this call.
 
         A revocation unfinished at the limit is canceled, as is every revocation still running when
@@ -901,7 +968,7 @@ class _OAuthClientBase:
         if error is not None:
             raise error
 
-    async def _revoke_one_refused_token(self, label: str, token: str, host: str | None) -> None:
+    async def _revoke_one_refused_token(self, label: str, token: SecretToken, host: str | None) -> None:
         """Revoke one token of a refused token response, and log a failure instead of raising it.
 
         A configuration that cannot revoke is logged like any other failure, because the refusal
@@ -913,17 +980,17 @@ class _OAuthClientBase:
             host: The revocation endpoint's host, for the log line.
         """
         try:
-            await self.revoke_token(SecretToken(token))
+            await self.revoke_token(token)
         except (ConfigurationError, RevocationError):
             # NOTE: A handler's error text can repeat the token, so the log line must not include it.
             logger.warning("the %s of a refused token response could not be revoked at %s", label, host)
 
-    async def refresh_token(self, refresh_token: str) -> FreshTokenSet:
+    async def refresh_token(self, refresh_token: SecretToken) -> FreshTokenSet:
         """Refresh an access token using a refresh token.
 
         Args:
-            refresh_token: The refresh token to exchange for a new access
-                token.
+            refresh_token: The refresh token to exchange for a new access token, wrapped so this
+                frame states it to no error reporter.
 
         Returns:
             The refreshed token set, which identity can be established from.
@@ -933,6 +1000,7 @@ class _OAuthClientBase:
             original, which this client does not keep, so comparing ``sub`` is the caller's.
 
         Raises:
+            ConfigurationError: If the refresh token is supplied as plain text.
             TokenRefreshError: If the token endpoint refuses the refresh or cannot be reached, if its
                 response carries an ID token that was not issued to this client or has expired, or if its
                 response states no access token, which RFC 6749 section 5.1 requires. A response refused for
@@ -941,7 +1009,8 @@ class _OAuthClientBase:
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
-        data = {
+        refuse_plain_text(refresh_token, "refresh_token", SecretToken)
+        data: dict[str, str | SecretStr] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
         }
@@ -962,7 +1031,7 @@ class _OAuthClientBase:
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
-                response.get("id_token"), None, client_id=self._config.client_id, issuer=self._config.issuer
+                _stated_id_token(response), None, client_id=self._config.client_id, issuer=self._config.issuer
             )
         except IdTokenValidationError as exc:
             refusal = str(exc)
@@ -994,13 +1063,15 @@ class _OAuthClientBase:
             ``True`` when the provider confirms revocation.
 
         Raises:
-            ConfigurationError: If the provider has no revocation endpoint configured, or if the
+            ConfigurationError: If the token is supplied as plain text, if the provider has no
+                revocation endpoint configured, or if the
                 handler refuses the configuration or the token it is given.
                 It chains nothing from the handler.
             RevocationError: If the revocation request fails or the
                 provider does not confirm it.
                 It chains nothing from the handler.
         """
+        refuse_plain_text(token, "token", SecretToken)
         if not self._config.revocation_url:
             msg = "revocation_url is not configured for this provider"
             raise ConfigurationError(msg)
@@ -1166,7 +1237,7 @@ class _OAuthClientBase:
         """
         return "openid" in sent_scope_words(query, "scope", self._config.scope_separator)
 
-    def _sent_secrets(self, sent: dict[str, str]) -> frozenset[str]:
+    def _sent_secrets(self, sent: Mapping[str, str | SecretStr]) -> frozenset[str]:
         """Return the secret values a token request sends, which are the client secret and the grant's own.
 
         Args:
@@ -1175,12 +1246,14 @@ class _OAuthClientBase:
         Returns:
             The values, without any the request left empty.
         """
-        values = {sent[field] for field in _SENT_SECRET_FIELDS if field in sent}
+        # This frame raises nothing, so the unwrapped values it binds reach no traceback.
+        form = _sent_form(sent)
+        values = {form[field] for field in _SENT_SECRET_FIELDS if field in sent}
         if self._config.client_secret is not None:
             values.add(self._config.client_secret.get_secret_value())
         return frozenset(value for value in values if value)
 
-    def _stated_error_code(self, answer: BoundedResponse | None, sent: dict[str, str]) -> str:
+    def _stated_error_code(self, answer: BoundedResponse | None, sent: Mapping[str, str | SecretStr]) -> str:
         """Return the error code a token response states, or an empty string when it states none to report.
 
         A value the request sent as a secret is not reported.
@@ -1196,7 +1269,7 @@ class _OAuthClientBase:
         code = recognized_error_code(_stated_error_member(answer))
         return "" if code in self._sent_secrets(sent) else code
 
-    async def _token_request(self, data: dict[str, str]) -> dict[str, Any]:
+    async def _token_request(self, data: Mapping[str, str | SecretStr]) -> dict[str, Any]:
         """Send a token request to the configured token endpoint.
 
         An OAuth error the body states names the failure, whatever status carries it. Otherwise an
@@ -1233,7 +1306,7 @@ class _OAuthClientBase:
                         client,
                         "POST",
                         self._config.token_url,
-                        data=data | authentication.form,
+                        data=_sent_form(data, authentication.form),
                         headers={**_TOKEN_REQUEST_HEADERS, **authentication.headers},
                     ),
                     self._config.limits,
@@ -1322,7 +1395,13 @@ class _OAuthClientBase:
             the extras. A response nesting more than one states no single person, so it states none.
         """
         known_fields = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
-        extras = {k: v for k, v in data.items() if k not in known_fields}
+        # The ID token has no field of its own but is a credential this library names and reads, so it
+        # is wrapped where the response is parsed rather than left for whoever dumps the extras.
+        extras = {
+            name: SecretToken(value) if name == ID_TOKEN_MEMBER and isinstance(value, str) else value
+            for name, value in data.items()
+            if name not in known_fields
+        }
 
         # A field is read onto its attribute only where it holds what that attribute states. One of any
         # other type is carried into the extras, because the access token is usable either way and a
@@ -1333,7 +1412,7 @@ class _OAuthClientBase:
             if value is None:
                 continue
             if isinstance(value, str):
-                named[field] = value
+                named[field] = _stated_token_field(field, value)
             else:
                 extras[field] = value
         for field in _TOKEN_SET_NUMBERS:
@@ -1357,7 +1436,7 @@ class _OAuthClientBase:
         named["expires_at"] = _expires_at(named)
 
         return FreshTokenSet(
-            access_token=data["access_token"],
+            access_token=SecretToken(data["access_token"]),
             user_token=user_token,
             extras=extras,
             context=context or {},
@@ -1518,7 +1597,9 @@ class StoredStateClient(_OAuthClientBase):
         )
         self._state_store = state_store
 
-    async def exchange_code(self, callback: AuthorizationCallback, *, browser_token: str | None) -> FreshTokenSet:
+    async def exchange_code(
+        self, callback: AuthorizationCallback, *, browser_token: SecretToken | None
+    ) -> FreshTokenSet:
         """Exchange an authorization response for tokens, against the pending state the store holds.
 
         The pending state for the response's ``state`` is consumed from the store, so a ``state``
@@ -1560,6 +1641,7 @@ class StoredStateClient(_OAuthClientBase):
                 server refused the request and said why, or because it stated neither a code nor an
                 error. Its ``error_code`` carries the code the server named, where it named one in the
                 shape a code takes.
+            ConfigurationError: If the browser token is supplied as plain text.
             IdTokenValidationError: If the response carries an ID token that cannot be read, names another
                 audience or authorized party, has expired, or names another issuer when the config has one.
                 Every ID token the response carries is checked, whether or not the request sent a nonce.
@@ -1585,6 +1667,7 @@ class StoredStateClient(_OAuthClientBase):
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
+        refuse_plain_text(browser_token, "browser_token", SecretToken)
         return await self._redeem(callback, partial(self._bound_pending_state, browser_token))
 
     async def get_authorization_url(
@@ -1612,16 +1695,17 @@ class StoredStateClient(_OAuthClientBase):
                 It is also raised when the URI states no ``https`` and names no loopback host, unless
                 the config accepts plain HTTP for its redirect URI.
         """
-        browser_token = secrets.token_urlsafe(32)
+        browser_token = SecretToken(secrets.token_urlsafe(32))
         url, pending_state = self._authorization_request(_state_for_browser_token(browser_token), redirect_uri, context)
         await self._state_store.save(pending_state)
         return BrowserBoundAuthorization(url=url, state=pending_state.state, browser_token=browser_token)
 
-    async def _bound_pending_state(self, browser_token: str | None, state: str) -> OAuthPendingState:
+    async def _bound_pending_state(self, browser_token: SecretToken | None, state: str) -> OAuthPendingState:
         """Consume the stored pending state of a callback whose state the given browser token mints.
 
         Args:
-            browser_token: The token minted for the browser the authorization request was built for.
+            browser_token: The token minted for the browser the authorization request was built for,
+                wrapped so this frame states it to no error reporter.
             state: The ``state`` the callback carried.
 
         Returns:
@@ -1634,9 +1718,11 @@ class StoredStateClient(_OAuthClientBase):
         # A callback presenting no token is refused with the same message as a wrong one, because both
         # mean the callback cannot be bound to a browser. An empty token is refused before it is hashed,
         # so no state this client mints is ever compared against the digest of nothing.
+        # NOTE: Any secret wrapper is read here. The parameter states the narrower one, so a caller
+        # passing the wider one answers to a type checker rather than to a refusal about its browser.
         if (
-            not isinstance(browser_token, str)
-            or not browser_token
+            not isinstance(browser_token, SecretStr)
+            or not browser_token.get_secret_value()
             or not _same_secret(state, _state_for_browser_token(browser_token))
         ):
             msg = "OAuth callback was not returned to the browser that started the authorization request"

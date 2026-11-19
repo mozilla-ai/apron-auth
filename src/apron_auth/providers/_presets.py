@@ -77,7 +77,7 @@ class Preset:
     def config(
         self,
         client_id: str,
-        client_secret: str,
+        client_secret: SecretStr,
         *,
         scopes: Sequence[str],
         redirect_uri: str | None = None,
@@ -105,7 +105,7 @@ class Preset:
         return ProviderConfig(
             provider=self.provider,
             client_id=client_id,
-            client_secret=SecretStr(client_secret),
+            client_secret=client_secret,
             authorize_url=self.authorize_url,
             token_url=self.token_url,
             revocation_url=self.revocation_url,

@@ -19,7 +19,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import RequestLimits, UrlField, WorkloadIssuer
+from apron_auth.models import RequestLimits, SecretToken, UrlField, WorkloadIssuer
 from apron_auth.workload import WorkloadTokenVerifier
 
 ISSUER = "https://token.actions.example.com"
@@ -87,6 +87,82 @@ def other_discoverable(httpx_mock: HTTPXMock, *keys: Any) -> None:
     httpx_mock.add_response(url=OTHER_JWKS_URL, json=published(*(keys or (OTHER_RSA_KEY,))))
 
 
+def _locals_stating(exc: BaseException, value: str) -> list[str]:
+    """Return one name per frame local on the traceback, and on any error it chains, that states ``value``.
+
+    Args:
+        exc: The error whose traceback to walk.
+        value: The token that must appear in no local.
+
+    Returns:
+        A description of each local that states it, empty when none does.
+    """
+    stated: list[str] = []
+    for error in (exc, exc.__cause__, exc.__context__):
+        if error is None:
+            continue
+        frames = error.__traceback__
+        while frames is not None:
+            frame = frames.tb_frame
+            if frame.f_code.co_filename != __file__:
+                stated.extend(
+                    f"{frame.f_code.co_name}.{name}" for name, held in frame.f_locals.items() if value in repr(held)
+                )
+            frames = frames.tb_next
+    return stated
+
+
+class TestATokenSuppliedAsPlainText:
+    """A token is a parameter of the call that fails, so no rule about the raise site reaches it."""
+
+    @pytest.fixture
+    def verifier(self) -> WorkloadTokenVerifier:
+        return WorkloadTokenVerifier([WorkloadIssuer(issuer=ISSUER, jwks_url=JWKS_URL)])
+
+    async def test_verify_refuses_it(self, verifier: WorkloadTokenVerifier) -> None:
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await verifier.verify("plain-text-token", audience=AUDIENCE)  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-token" not in str(caught.value)
+
+    async def test_check_refuses_it(self, verifier: WorkloadTokenVerifier) -> None:
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await verifier.check("plain-text-token")  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-token" not in str(caught.value)
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_plain_string_is_refused_as_plain_text(
+        self, verifier: WorkloadTokenVerifier, stated: str
+    ) -> None:
+        """A parameter states no credential to read, so a blank one is a type error and not an empty token.
+
+        A caller stripping a prefix off a header that is absent reaches this, and the refusal has to
+        name what is wrong rather than fail where the value is read.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            await verifier.check(stated)  # ty: ignore[invalid-argument-type]
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_wrapped_token_is_refused_as_malformed(
+        self, verifier: WorkloadTokenVerifier, stated: str
+    ) -> None:
+        """Wrapped, a blank token is a token this verifier cannot read, which is the caller's 401."""
+        with pytest.raises(TokenValidationError) as caught:
+            await verifier.check(SecretToken(stated))
+
+        assert caught.value.reason is TokenValidationReason.MALFORMED
+
+    async def test_a_refused_token_states_itself_in_no_frame_local(self, verifier: WorkloadTokenVerifier) -> None:
+        """A malformed token is refused from this library's own frames, which must state nothing."""
+        token = "s3cr3t-workload-token"  # pragma: allowlist secret
+
+        with pytest.raises(TokenValidationError) as caught:
+            await verifier.check(SecretToken(token))
+
+        assert _locals_stating(caught.value, token) == []
+
+
 class TestVerify:
     """Test that a workload token is trusted only when its signature and claims verify."""
 
@@ -95,7 +171,7 @@ class TestVerify:
         discoverable(httpx_mock)
         payload = claims()
 
-        identity = await trusting().verify(signed(payload), audience=AUDIENCE)
+        identity = await trusting().verify(SecretToken(signed(payload)), audience=AUDIENCE)
 
         assert identity.issuer == ISSUER
         assert identity.subject == "repo:acme/app"
@@ -109,7 +185,7 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
 
         identity = await trusting(WorkloadIssuer(issuer=ISSUER, jwks_url=JWKS_URL)).verify(
-            signed(claims()), audience=AUDIENCE
+            SecretToken(signed(claims())), audience=AUDIENCE
         )
 
         assert identity.subject == "repo:acme/app"
@@ -125,7 +201,7 @@ class TestVerify:
         discoverable(httpx_mock)
         token = signed(claims(email="bot@acme.iam.example.com", email_verified=email_verified))
 
-        identity = await trusting().verify(token, audience=AUDIENCE)
+        identity = await trusting().verify(SecretToken(token), audience=AUDIENCE)
 
         assert identity.email == expected
 
@@ -134,7 +210,7 @@ class TestVerify:
         discoverable(httpx_mock)
         token = signed(claims(aud=["https://other.example.com", AUDIENCE]))
 
-        identity = await trusting().verify(token, audience=["https://third.example.com", AUDIENCE])
+        identity = await trusting().verify(SecretToken(token), audience=["https://third.example.com", AUDIENCE])
 
         assert identity.audiences == ("https://other.example.com", AUDIENCE)
 
@@ -144,7 +220,7 @@ class TestVerify:
         verifier = trusting()
         token = signed(claims())
 
-        identities = await asyncio.gather(*(verifier.verify(token, audience=AUDIENCE) for _ in range(5)))
+        identities = await asyncio.gather(*(verifier.verify(SecretToken(token), audience=AUDIENCE) for _ in range(5)))
 
         assert len(identities) == 5
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 1
@@ -157,7 +233,9 @@ class TestTheTwoSteps:
     async def test_a_checked_token_states_its_issuer_and_audiences(self, httpx_mock: HTTPXMock) -> None:
         discoverable(httpx_mock)
 
-        checked = await trusting().check(signed(claims(aud=["https://a.example.com", "https://b.example.com"])))
+        checked = await trusting().check(
+            SecretToken(signed(claims(aud=["https://a.example.com", "https://b.example.com"])))
+        )
 
         assert checked.issuer == ISSUER
         assert checked.audiences == ("https://a.example.com", "https://b.example.com")
@@ -166,7 +244,7 @@ class TestTheTwoSteps:
         """The identity exists only after the audience is accepted, so a caller cannot read it before."""
         discoverable(httpx_mock)
 
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
 
         assert not hasattr(checked, "subject")
         assert not hasattr(checked, "claims")
@@ -174,7 +252,7 @@ class TestTheTwoSteps:
 
     async def test_accepting_an_audience_the_token_names_states_the_identity(self, httpx_mock: HTTPXMock) -> None:
         discoverable(httpx_mock)
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
 
         identity = checked.accept(AUDIENCE)
 
@@ -182,7 +260,7 @@ class TestTheTwoSteps:
 
     async def test_accepting_one_of_several_audiences_is_enough(self, httpx_mock: HTTPXMock) -> None:
         discoverable(httpx_mock)
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
 
         identity = checked.accept(["https://other.example.com", AUDIENCE])
 
@@ -190,7 +268,7 @@ class TestTheTwoSteps:
 
     async def test_accepting_an_audience_the_token_does_not_name_states_nothing(self, httpx_mock: HTTPXMock) -> None:
         discoverable(httpx_mock)
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
 
         with pytest.raises(TokenValidationError, match="names none of the audiences") as exc_info:
             checked.accept("https://other.example.com")
@@ -207,7 +285,7 @@ class TestTheTwoSteps:
             reads.append(audiences)
             return [AUDIENCE]
 
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
         identity = checked.accept(stored_audiences(checked.audiences))
 
         assert reads == [(AUDIENCE,)]
@@ -227,7 +305,7 @@ class TestTheTwoSteps:
         discoverable(httpx_mock)
 
         with pytest.raises(TokenValidationError, match="names none of the audiences") as exc_info:
-            await trusting().verify(signed(claims()), audience=accepted)
+            await trusting().verify(SecretToken(signed(claims())), audience=accepted)
         assert exc_info.value.reason is TokenValidationReason.AUDIENCE
 
     async def test_verify_is_the_two_steps_together(self, httpx_mock: HTTPXMock) -> None:
@@ -235,8 +313,8 @@ class TestTheTwoSteps:
         token = signed(claims())
         verifier = trusting()
 
-        in_one_call = await verifier.verify(token, audience=AUDIENCE)
-        in_two_steps = (await verifier.check(token)).accept(AUDIENCE)
+        in_one_call = await verifier.verify(SecretToken(token), audience=AUDIENCE)
+        in_two_steps = (await verifier.check(SecretToken(token))).accept(AUDIENCE)
 
         assert in_one_call == in_two_steps
 
@@ -250,8 +328,10 @@ class TestIssuerRouting:
         other_discoverable(httpx_mock)
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
-        first = await trusting_both.verify(signed(claims()), audience=AUDIENCE)
-        second = await trusting_both.verify(signed(claims(iss=OTHER_ISSUER), OTHER_RSA_KEY), audience=AUDIENCE)
+        first = await trusting_both.verify(SecretToken(signed(claims())), audience=AUDIENCE)
+        second = await trusting_both.verify(
+            SecretToken(signed(claims(iss=OTHER_ISSUER), OTHER_RSA_KEY)), audience=AUDIENCE
+        )
 
         assert first.issuer == ISSUER
         assert second.issuer == OTHER_ISSUER
@@ -264,7 +344,7 @@ class TestIssuerRouting:
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
         with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
-            await trusting_both.verify(signed(claims(iss=OTHER_ISSUER), RSA_KEY), audience=AUDIENCE)
+            await trusting_both.verify(SecretToken(signed(claims(iss=OTHER_ISSUER), RSA_KEY)), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
         assert not httpx_mock.get_requests(url=DOCUMENT_URL)
@@ -276,7 +356,7 @@ class TestIssuerRouting:
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
         with pytest.raises(TokenValidationError, match="signature did not verify") as exc_info:
-            await trusting_both.verify(signed(claims(iss=OTHER_ISSUER), impostor), audience=AUDIENCE)
+            await trusting_both.verify(SecretToken(signed(claims(iss=OTHER_ISSUER), impostor)), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.SIGNATURE
 
@@ -294,7 +374,7 @@ class TestIssuerRouting:
     ) -> None:
         """Selecting the key set on the unverified claim means an issuer named by no entry is refused first."""
         with pytest.raises(TokenValidationError, match="names an issuer") as exc_info:
-            await trusting().verify(signed(claims(iss=issuer_claim)), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims(iss=issuer_claim))), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_ISSUER
         assert not httpx_mock.get_requests()
@@ -306,8 +386,10 @@ class TestIssuerRouting:
         trusting_both = trusting(WorkloadIssuer(issuer=ISSUER), WorkloadIssuer(issuer=OTHER_ISSUER))
 
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
-            await trusting_both.verify(signed(claims()), audience=AUDIENCE)
-        identity = await trusting_both.verify(signed(claims(iss=OTHER_ISSUER), OTHER_RSA_KEY), audience=AUDIENCE)
+            await trusting_both.verify(SecretToken(signed(claims())), audience=AUDIENCE)
+        identity = await trusting_both.verify(
+            SecretToken(signed(claims(iss=OTHER_ISSUER), OTHER_RSA_KEY)), audience=AUDIENCE
+        )
 
         assert identity.issuer == OTHER_ISSUER
 
@@ -348,7 +430,7 @@ class TestRefusals:
         discoverable(httpx_mock)
 
         with pytest.raises(TokenValidationError, match="claims did not validate") as exc_info:
-            await trusting().verify(signed(payload), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(payload)), audience=AUDIENCE)
         assert exc_info.value.reason is reason
 
     @pytest.mark.parametrize(
@@ -369,7 +451,7 @@ class TestRefusals:
         token = signed_text(b'{"iss":"' + ISSUER.encode() + b'","sub":"s","aud":"a","iat":1,"exp":' + value + b"}")
 
         with pytest.raises(TokenValidationError, match="claims are not a JSON object") as exc_info:
-            await trusting().verify(token, audience="a")
+            await trusting().verify(SecretToken(token), audience="a")
 
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
         assert not httpx_mock.get_requests()
@@ -382,7 +464,7 @@ class TestRefusals:
         )
 
         with pytest.raises(TokenValidationError, match="claims are not a JSON object"):
-            await trusting().verify(token, audience="a")
+            await trusting().verify(SecretToken(token), audience="a")
 
         assert not httpx_mock.get_requests()
 
@@ -392,7 +474,7 @@ class TestRefusals:
         now = int(time.time())
 
         with pytest.raises(TokenExpiredError) as exc_info:
-            await trusting().verify(signed(claims(iat=now - 900, exp=now - 600)), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims(iat=now - 900, exp=now - 600))), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.EXPIRED
 
     async def test_a_token_signed_by_another_key(self, httpx_mock: HTTPXMock) -> None:
@@ -401,7 +483,7 @@ class TestRefusals:
         stranger = jwk.RSAKey.generate_key(2048, parameters={"kid": "rsa-1"})
 
         with pytest.raises(TokenValidationError, match="signature did not verify") as exc_info:
-            await trusting().verify(signed(claims(), stranger), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims(), stranger)), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.SIGNATURE
 
     @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
@@ -415,19 +497,19 @@ class TestRefusals:
         with pytest.raises(
             TokenValidationError, match="^The token is signed with a key the issuer does not"
         ) as exc_info:
-            await trusting().verify(signed(claims(), short_key), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims(), short_key)), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
 
     async def test_an_oversized_token_is_refused_before_any_fetch(self) -> None:
         """A token longer than any issuer signs is refused without contacting the issuer."""
         with pytest.raises(TokenValidationError, match="longer than") as exc_info:
-            await trusting().verify("a" * 20000, audience=AUDIENCE)
+            await trusting().verify(SecretToken("a" * 20000), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
     async def test_a_token_that_is_not_signed(self, httpx_mock: HTTPXMock) -> None:
         """Text that is not a compact signed token is refused before discovery, so not as an outage."""
         with pytest.raises(TokenValidationError, match="^Workload token is not a compact signed token") as exc_info:
-            await trusting().verify("not-a-token", audience=AUDIENCE)
+            await trusting().verify(SecretToken("not-a-token"), audience=AUDIENCE)
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
         assert not httpx_mock.get_requests()
@@ -438,10 +520,10 @@ class TestRefusals:
         verifier = trusting(clock=clock)
         httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
-            await verifier.verify(signed(claims()), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         with pytest.raises(TokenValidationError, match="not a compact signed token"):
-            await verifier.verify("not-a-token", audience=AUDIENCE)
+            await verifier.verify(SecretToken("not-a-token"), audience=AUDIENCE)
 
 
 class TestOutages:
@@ -452,7 +534,7 @@ class TestOutages:
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": "https://other.example.com", "jwks_uri": JWKS_URL})
 
         with pytest.raises(IdentityFetchError, match="declares a different issuer") as caught:
-            await trusting().verify(signed(claims()), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)
         assert caught.value.kind is FailureKind.REFUSED
@@ -462,7 +544,7 @@ class TestOutages:
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER})
 
         with pytest.raises(IdentityFetchError, match="names no signing key set"):
-            await trusting().verify(signed(claims()), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
     async def test_a_failed_discovery_is_retried_after_a_minute(self, httpx_mock: HTTPXMock) -> None:
         """A failed discovery is reported again for a minute without a new fetch, then tried again."""
@@ -473,11 +555,11 @@ class TestOutages:
 
         for _ in range(2):
             with pytest.raises(IdentityFetchError, match="HTTP 503"):
-                await verifier.verify(token, audience=AUDIENCE)
+                await verifier.verify(SecretToken(token), audience=AUDIENCE)
         clock.now += 61
         discoverable(httpx_mock)
 
-        identity = await verifier.verify(token, audience=AUDIENCE)
+        identity = await verifier.verify(SecretToken(token), audience=AUDIENCE)
 
         assert identity.subject == "repo:acme/app"
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
@@ -488,7 +570,7 @@ class TestOutages:
         httpx_mock.add_response(url=DOCUMENT_URL, status_code=503)
 
         with pytest.raises(IdentityFetchError):
-            await verifier.verify(signed(claims()), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert not isinstance(verifier._issuers[ISSUER]._discovery_failure, BaseException)
 
@@ -498,7 +580,7 @@ class TestOutages:
         httpx_mock.add_response(url=JWKS_URL, status_code=500)
 
         with pytest.raises(IdentityFetchError) as caught:
-            await trusting().verify(signed(claims()), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert not isinstance(caught.value, TokenValidationError)
 
@@ -510,14 +592,14 @@ class TestAMovedKeySet:
         clock = FakeClock()
         discoverable(httpx_mock)
         verifier = trusting(clock=clock)
-        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        assert (await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)).issuer == ISSUER
         # The issuer moves its key set and signs with a key only the new one holds.
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
         httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(ROTATED_RSA_KEY))
         clock.now += 61
 
-        identity = await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+        identity = await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
         assert identity.subject == "repo:acme/app"
 
@@ -531,7 +613,7 @@ class TestAMovedKeySet:
 
         for _ in range(3):
             with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
-                await verifier.verify(token, audience=AUDIENCE)
+                await verifier.verify(SecretToken(token), audience=AUDIENCE)
 
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
 
@@ -542,7 +624,7 @@ class TestAMovedKeySet:
         verifier = trusting(clock=FakeClock())
 
         with pytest.raises(TokenValidationError) as exc_info:
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
         assert len(httpx_mock.get_requests(url=JWKS_URL)) == 1
@@ -555,7 +637,7 @@ class TestAMovedKeySet:
         verifier = trusting(clock=FakeClock())
 
         with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
@@ -564,13 +646,13 @@ class TestAMovedKeySet:
         """An unknown key is unauthenticated input, so it must not be able to unseat a working key set."""
         discoverable(httpx_mock)
         verifier = trusting(clock=FakeClock())
-        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        assert (await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)).issuer == ISSUER
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
         httpx_mock.add_response(url=MOVED_JWKS_URL, status_code=500)
         with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
-        identity = await verifier.verify(signed(claims()), audience=AUDIENCE)
+        identity = await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert identity.issuer == ISSUER
 
@@ -578,13 +660,13 @@ class TestAMovedKeySet:
         """An issuer part-way through a migration still signs with the key its old set publishes."""
         discoverable(httpx_mock)
         verifier = trusting(clock=FakeClock())
-        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        assert (await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)).issuer == ISSUER
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
         httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(OTHER_RSA_KEY))
         with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
-        identity = await verifier.verify(signed(claims()), audience=AUDIENCE)
+        identity = await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert identity.issuer == ISSUER
 
@@ -593,15 +675,15 @@ class TestAMovedKeySet:
         clock = FakeClock()
         discoverable(httpx_mock)
         verifier = trusting(clock=clock)
-        assert (await verifier.verify(signed(claims()), audience=AUDIENCE)).issuer == ISSUER
+        assert (await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)).issuer == ISSUER
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": MOVED_JWKS_URL})
         httpx_mock.add_response(url=MOVED_JWKS_URL, json=published(ROTATED_RSA_KEY))
         clock.now += 61
         token = signed(claims(), ROTATED_RSA_KEY)
 
-        first = await verifier.verify(token, audience=AUDIENCE)
-        second = await verifier.verify(token, audience=AUDIENCE)
+        first = await verifier.verify(SecretToken(token), audience=AUDIENCE)
+        second = await verifier.verify(SecretToken(token), audience=AUDIENCE)
 
         assert first == second
         assert len(httpx_mock.get_requests(url=DOCUMENT_URL)) == 2
@@ -613,7 +695,7 @@ class TestAMovedKeySet:
         verifier = trusting(clock=FakeClock())
 
         with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
         assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
 
@@ -623,7 +705,7 @@ class TestAMovedKeySet:
         verifier = trusting(WorkloadIssuer(issuer=ISSUER, jwks_url=JWKS_URL), clock=FakeClock())
 
         with pytest.raises(TokenValidationError, match="key the issuer does not publish"):
-            await verifier.verify(signed(claims(), ROTATED_RSA_KEY), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims(), ROTATED_RSA_KEY)), audience=AUDIENCE)
 
         assert not httpx_mock.get_requests(url=DOCUMENT_URL)
 
@@ -645,7 +727,7 @@ class TestConfiguration:
     async def test_an_audience_that_names_nothing(self, httpx_mock: HTTPXMock, audience: Any) -> None:
         """An audience that names nothing would accept a token minted for any service."""
         with pytest.raises(ConfigurationError, match="one or more audiences"):
-            await trusting().verify(signed(claims()), audience=audience)
+            await trusting().verify(SecretToken(signed(claims())), audience=audience)
 
         assert not httpx_mock.get_requests()
 
@@ -656,7 +738,7 @@ class TestConfiguration:
     async def test_accepting_an_audience_that_names_nothing(self, httpx_mock: HTTPXMock, audience: Any) -> None:
         """The second step holds the same rule, so neither entry point can be told to accept anything."""
         discoverable(httpx_mock)
-        checked = await trusting().check(signed(claims()))
+        checked = await trusting().check(SecretToken(signed(claims())))
 
         with pytest.raises(ConfigurationError, match="one or more audiences"):
             checked.accept(audience)
@@ -723,7 +805,7 @@ class TestConfiguration:
         )
         httpx_mock.add_response(url=f"{issuer.issuer}/jwks", json=published(RSA_KEY))
 
-        identity = await trusting(issuer).verify(signed(claims(iss=issuer.issuer)), audience=AUDIENCE)
+        identity = await trusting(issuer).verify(SecretToken(signed(claims(iss=issuer.issuer))), audience=AUDIENCE)
 
         assert identity.issuer == issuer.issuer
 
@@ -732,7 +814,7 @@ class TestConfiguration:
         httpx_mock.add_response(url=DOCUMENT_URL, json={"issuer": ISSUER, "jwks_uri": "http://keys.example.com/jwks"})
 
         with pytest.raises(IdentityFetchError, match="signing key set must use https"):
-            await trusting().verify(signed(claims()), audience=AUDIENCE)
+            await trusting().verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
     @pytest.mark.parametrize("field", ["issuer", "jwks_url"])
     def test_a_copy_that_rewrote_a_url_past_validation_is_refused(self, field: str) -> None:
@@ -755,6 +837,6 @@ class TestTheRequestLimitsBoundDiscovery:
         )
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await verifier.verify(signed(claims()), audience=AUDIENCE)
+            await verifier.verify(SecretToken(signed(claims())), audience=AUDIENCE)
 
         assert refusal.value.kind is FailureKind.TIMEOUT

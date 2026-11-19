@@ -10,6 +10,7 @@ import traceback
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
+from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
@@ -122,13 +123,68 @@ class _MultiValueQuery(Mapping[str, str]):
         return [value for stated, value in self._pairs if stated == name]
 
 
+def _frame_locals_stating(exc: BaseException, value: str) -> list[str]:
+    """Return one name per frame local on the traceback, outside this module, whose repr states ``value``.
+
+    Args:
+        exc: The error whose traceback to walk.
+        value: The credential that must appear in no local.
+
+    Returns:
+        A description of each local that states it, empty when none does.
+    """
+    stated: list[str] = []
+    frames = exc.__traceback__
+    while frames is not None:
+        frame = frames.tb_frame
+        if frame.f_code.co_filename != __file__:
+            stated.extend(
+                f"{frame.f_code.co_name}.{name}" for name, held in frame.f_locals.items() if value in repr(held)
+            )
+        frames = frames.tb_next
+    return stated
+
+
 class TestAuthorizationCallback:
+    def test_an_authorization_code_supplied_as_plain_text_is_refused(self) -> None:
+        """The code is redeemable for tokens, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            AuthorizationCallback(code="plain-text-code", state="st")  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-code" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_query_states_its_code_as_plain_text_and_is_read_wrapped(self) -> None:
+        """A web framework hands over a plain mapping, so the reader wraps the code rather than refusing it."""
+        callback = AuthorizationCallback.from_query({"code": "code-from-the-query", "state": "st"})
+
+        assert callback.code is not None
+        assert callback.code.get_secret_value() == "code-from-the-query"
+        assert "code-from-the-query" not in repr(callback)
+        assert callback.state == "st"
+
+    def test_a_query_that_refuses_binds_its_code_to_no_local_of_its_own(self) -> None:
+        """The reader refuses from its own frames, so it wraps the code before any of them can raise.
+
+        The query mapping the caller passed is the caller's own object, and a parameter holding it is
+        what any function taking an argument holds. The rule here is that the reader binds nothing out
+        of it as a plain string.
+        """
+        code = "s3cr3t-authorization-code"  # pragma: allowlist secret
+
+        with pytest.raises(AuthorizationResponseError) as caught:
+            AuthorizationCallback.from_query({"code": [code, code], "state": "st"})
+
+        rendered = "".join(traceback.format_exception(caught.value))
+        assert code not in rendered
+        assert _frame_locals_stating(caught.value, code) == ["from_query.query"]
+
     """The authorization response, read once by this library instead of in pieces by the caller."""
 
     def test_reads_the_parameters_a_response_states(self) -> None:
         callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example.com"))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "xyz"
         assert callback.iss == "https://issuer.example.com"
         assert callback.error is None
@@ -148,7 +204,7 @@ class TestAuthorizationCallback:
         """An authorization server may return parameters of its own, which are no business of this model."""
         callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&session_state=s&scope=openid"))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "xyz"
 
     @pytest.mark.parametrize("name", ["code", "state", "iss", "error", "error_description"])
@@ -191,7 +247,7 @@ class TestAuthorizationCallback:
     def test_a_mapping_with_a_reader_and_no_repeat_is_read(self) -> None:
         callback = AuthorizationCallback.from_query(_MultiValueQuery([("code", "abc"), ("state", "s")]))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "s"
 
     def test_a_refusal_does_not_repeat_the_code_it_was_given(self) -> None:
@@ -204,7 +260,7 @@ class TestAuthorizationCallback:
 
     def test_a_sequence_holding_one_value_states_that_value(self) -> None:
         """A parser that preserves repeats returns every value in a sequence, including a single one."""
-        assert AuthorizationCallback.from_query({"code": ["abc"]}).code == "abc"
+        assert AuthorizationCallback.from_query({"code": ["abc"]}).code.get_secret_value() == "abc"
 
     @pytest.mark.parametrize(
         "value",
@@ -233,7 +289,7 @@ class TestAuthorizationCallback:
         assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
 
     def test_it_is_frozen(self) -> None:
-        callback = AuthorizationCallback(code="abc", state="xyz")
+        callback = AuthorizationCallback(code=SecretToken("abc"), state="xyz")
 
         with pytest.raises(ConfigurationError):
             callback.code = "other"  # ty: ignore[invalid-assignment]
@@ -337,6 +393,78 @@ class TestProviderConfig:
                 token_url="https://provider.example.com/token",
                 resource=bad_resource,
             )
+
+    def test_a_client_secret_supplied_as_plain_text_is_refused(self) -> None:
+        """A plain string is a frame local for the whole call, so it is refused rather than wrapped."""
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig(
+                client_id="test-client",
+                client_secret="plain-text-secret",  # ty: ignore[invalid-argument-type]
+                authorize_url="https://provider.example.com/authorize",
+                token_url="https://provider.example.com/token",
+            )
+
+        assert "plain-text-secret" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_client_secret_supplied_as_plain_text_is_refused_through_validation(self) -> None:
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "test-client",
+                    "client_secret": "plain-text-secret",  # pragma: allowlist secret
+                    "authorize_url": "https://provider.example.com/authorize",
+                    "token_url": "https://provider.example.com/token",
+                }
+            )
+
+        assert "plain-text-secret" not in str(caught.value)
+
+    @pytest.mark.parametrize("stated", [b"bytes-secret", 7])
+    def test_a_client_secret_that_is_no_wrapper_is_refused(self, stated: object) -> None:
+        """The field reads bytes as text, so handing them on would wrap a credential rather than refuse it."""
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "test-client",
+                    "client_secret": stated,
+                    "authorize_url": "https://provider.example.com/authorize",
+                    "token_url": "https://provider.example.com/token",
+                }
+            )
+
+        assert "bytes-secret" not in str(caught.value)
+
+    def test_a_dumped_client_secret_cannot_be_reloaded(self) -> None:
+        """A dump states a secret as a mask, so reloading one is refused rather than loading the mask.
+
+        A configuration carrying the mask as its secret authenticates nothing and fails at the token
+        endpoint, which is the failure a refusal here replaces.
+        """
+        config = ProviderConfig(
+            client_id="test-client",
+            client_secret=SecretStr("real-secret"),
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+        )
+
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            ProviderConfig.model_validate_json(config.model_dump_json())
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    def test_a_client_secret_stating_nothing_is_no_credential_to_refuse(self, stated: str) -> None:
+        """A string holding no non-blank character states no secret, so it yields a public client."""
+        config = ProviderConfig.model_validate(
+            {
+                "client_id": "public-client",
+                "client_secret": stated,
+                "authorize_url": "https://provider.example.com/authorize",
+                "token_url": "https://provider.example.com/token",
+                "token_endpoint_auth_method": "none",
+            }
+        )
+
+        assert config.client_secret is None
 
     def test_public_client_omits_client_secret(self) -> None:
         config = ProviderConfig(
@@ -789,15 +917,19 @@ class TestUrlFieldTransport:
 class TestUnsafeAllowPlainHttp:
     """The one way to accept plain http where it would cross a network."""
 
-    def _values(self, **overrides: str) -> dict[str, str]:
-        values = {
+    def _values(self, **overrides: Any) -> dict[str, Any]:
+        values: dict[str, Any] = {
             "client_id": "cid",
-            "client_secret": "csec",  # pragma: allowlist secret
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
             "authorize_url": "https://provider.example.com/authorize",
             "token_url": "https://provider.example.com/token",
         }
         values.update(overrides)
         return values
+
+    def _public_values(self, **overrides: Any) -> dict[str, Any]:
+        """The same values for a public client, whose dump masks no secret a reload would then refuse."""
+        return self._values(client_secret=None, token_endpoint_auth_method="none", **overrides)
 
     def test_it_accepts_plain_http_for_the_field_it_names(self) -> None:
         config = ProviderConfig.unsafe.allow_plain_http(
@@ -862,7 +994,7 @@ class TestUnsafeAllowPlainHttp:
     def test_a_waiver_read_back_out_of_storage_is_refused(self) -> None:
         """A waiver is a statement about one machine, and storage carries it to another."""
         config = ProviderConfig.unsafe.allow_plain_http(
-            "token_url", **self._values(token_url="http://keycloak:8080/token")
+            "token_url", **self._public_values(token_url="http://keycloak:8080/token")
         )
 
         with pytest.raises(ConfigurationError, match="stated through unsafe.allow_plain_http"):
@@ -875,7 +1007,7 @@ class TestUnsafeAllowPlainHttp:
                 ProviderConfig,
                 {
                     "client_id": "cid",
-                    "client_secret": "csec",  # pragma: allowlist secret
+                    "token_endpoint_auth_method": "none",
                     "authorize_url": "https://provider.example.com/authorize",
                     "token_url": "http://keycloak:8080/token",
                     "allow_insecure_http_for": ["token_url"],
@@ -1018,7 +1150,7 @@ class TestUnsafeAllowPlainHttp:
 
     def test_a_config_with_no_waiver_round_trips(self) -> None:
         """Only a waiver blocks a reload, so an ordinary stored config still loads."""
-        config = ProviderConfig(**self._values())
+        config = ProviderConfig(**self._public_values())
 
         reloaded = ProviderConfig.model_validate_json(config.model_dump_json())
 
@@ -1271,7 +1403,7 @@ class TestARefusalRepeatsNoValue:
         secret = "THE_" + "REAL_SECRET"  # pragma: allowlist secret
         payload = {
             "client_id": "cid",
-            "client_secret": secret,
+            "client_secret": SecretStr(secret),
             "authorize_url": "https://provider.example.com/authorize",
             "token_url": "https://operator:" + "sesame@provider.example.com/token",
         }
@@ -1422,7 +1554,7 @@ class TestARefusalRepeatsNoValue:
         ("model", "payload", "field"),
         [
             pytest.param(ClientRegistration, {"client_id": "cid"}, "client_id", id="a registration"),
-            pytest.param(IdentityMaterial, {"access_token": "at"}, "id_token", id="identity material"),
+            pytest.param(IdentityMaterial, {"access_token": SecretToken("at")}, "id_token", id="identity material"),
             pytest.param(
                 OAuthPendingState,
                 {
@@ -1434,7 +1566,7 @@ class TestARefusalRepeatsNoValue:
                 "code_verifier",
                 id="a pending state",
             ),
-            pytest.param(TokenSet, {"access_token": "at"}, "refresh_token", id="a token set"),
+            pytest.param(TokenSet, {"access_token": SecretToken("at")}, "refresh_token", id="a token set"),
         ],
     )
     def test_a_refused_change_repeats_no_value(
@@ -1576,21 +1708,23 @@ class TestAValidatedChange:
         """A config naming no provider permits every host, so a label dropped here would drop that rule."""
         from apron_auth.providers import google
 
-        config = google.preset(client_id="cid", client_secret="csec", scopes=["openid"])  # pragma: allowlist secret
+        config = google.preset(
+            client_id="cid", client_secret=SecretStr("csec"), scopes=["openid"]
+        )  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="preset"):
             config.with_changes(provider=None, revocation_url="https://attacker.example/revoke")
 
     def test_a_fresh_token_set_refuses_a_change(self) -> None:
         """Freshness states the response the tokens came from, which a changed copy does not answer for."""
-        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"), token_type="Bearer")  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="freshness"):
             fresh.with_changes(scope="read")
 
     def test_a_fresh_token_set_refuses_a_copy_stating_other_values(self) -> None:
         """Freshness is the one rule no guard anywhere else can state, so the unvalidated copy forges it."""
-        fresh = FreshTokenSet(access_token="access-abc", token_type="Bearer")  # pragma: allowlist secret
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"), token_type="Bearer")  # pragma: allowlist secret
 
         with pytest.raises(ConfigurationError, match="freshness"):
             fresh.model_copy(update={"access_token": "other-token"})  # pragma: allowlist secret
@@ -1628,7 +1762,7 @@ class TestProviderConfigKeepsTheCallersMapping:
         raw = {
             "provider": "google",
             "client_id": "cid",
-            "client_secret": "csec",  # pragma: allowlist secret
+            "client_secret": SecretStr("csec"),  # pragma: allowlist secret
             "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
             "token_url": "https://oauth2.googleapis.com/token",
         }
@@ -1647,7 +1781,7 @@ class TestProviderConfigTakesFactsFromAnyMapping:
             {
                 "provider": "google",
                 "client_id": "cid",
-                "client_secret": "csec",  # pragma: allowlist secret
+                "client_secret": SecretStr("csec"),  # pragma: allowlist secret
                 "authorize_url": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_url": "https://oauth2.googleapis.com/token",
             }
@@ -1770,9 +1904,41 @@ class TestScopeMetadata:
 
 
 class TestTokenSet:
+    @pytest.mark.parametrize("field", ["access_token", "refresh_token"])
+    def test_a_token_supplied_as_plain_text_is_refused(self, field: str) -> None:
+        """A plain string is a frame local for the whole call, so it is refused rather than wrapped."""
+        values: dict[str, Any] = {"access_token": SecretToken("access-abc")}
+        values[field] = "plain-text-token"  # pragma: allowlist secret
+
+        with pytest.raises(ConfigurationError) as caught:
+            TokenSet.model_validate(values)
+
+        assert "plain-text-token" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    @pytest.mark.parametrize("stated", [b"bytes-token", bytearray(b"bytes-token"), 7])
+    def test_a_token_that_is_no_wrapper_is_refused(self, stated: object) -> None:
+        """The field reads bytes as text, so handing them on would wrap a credential rather than refuse it.
+
+        A token field states a different wrapper from a client secret and reaches it by a rule of its
+        own, so the refusal is held here as well as there.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            TokenSet.model_validate({"access_token": stated})
+
+        assert "bytes-token" not in str(caught.value)
+
+    def test_a_wrapped_token_reaches_the_token_set(self) -> None:
+        token = TokenSet(access_token=SecretToken("access-abc"), refresh_token=SecretToken("refresh-xyz"))
+
+        assert token.access_token.get_secret_value() == "access-abc"
+        assert token.refresh_token is not None
+        assert token.refresh_token.get_secret_value() == "refresh-xyz"
+        assert "access-abc" not in repr(token)
+
     def test_minimal_token(self) -> None:
-        token = TokenSet(access_token="access-abc")
-        assert token.access_token == "access-abc"
+        token = TokenSet(access_token=SecretToken("access-abc"))
+        assert token.access_token.get_secret_value() == "access-abc"
         assert token.token_type == "Bearer"
         assert token.refresh_token is None
         assert token.expires_in is None
@@ -1782,37 +1948,37 @@ class TestTokenSet:
 
     def test_full_token(self) -> None:
         token = TokenSet(
-            access_token="access-abc",
+            access_token=SecretToken("access-abc"),
             token_type="Bearer",
-            refresh_token="refresh-xyz",
+            refresh_token=SecretToken("refresh-xyz"),
             expires_in=3600,
             expires_at=1700000000.0,
             scope="read write",
             extras={"team_id": "T123"},
         )
-        assert token.refresh_token == "refresh-xyz"
+        assert token.refresh_token.get_secret_value() == "refresh-xyz"
         assert token.expires_in == 3600
         assert token.extras == {"team_id": "T123"}
 
     def test_context_defaults_to_empty_dict(self) -> None:
-        token = TokenSet(access_token="access-abc")
+        token = TokenSet(access_token=SecretToken("access-abc"))
         assert token.context == {}
 
     def test_context_round_trips(self) -> None:
         ctx = {"user_id": "U123", "tenant_id": "T456"}
-        token = TokenSet(access_token="access-abc", context=ctx)
+        token = TokenSet(access_token=SecretToken("access-abc"), context=ctx)
         assert token.context == ctx
         assert token.context["user_id"] == "U123"
 
     def test_extras_isolated_from_caller_mutation(self) -> None:
         original = {"team_id": "T123"}
-        token = TokenSet(access_token="access-abc", extras=original)
+        token = TokenSet(access_token=SecretToken("access-abc"), extras=original)
         original["team_id"] = "mutated"
         assert token.extras["team_id"] == "T123"
 
     def test_context_isolated_from_caller_mutation(self) -> None:
         original = {"user_id": "U123"}
-        token = TokenSet(access_token="access-abc", context=original)
+        token = TokenSet(access_token=SecretToken("access-abc"), context=original)
         original["user_id"] = "mutated"
         assert token.context["user_id"] == "U123"
 
@@ -1833,7 +1999,7 @@ class TestTokenSet:
             TokenSet.model_validate(stored)
 
     def test_frozen(self) -> None:
-        token = TokenSet(access_token="access-abc")
+        token = TokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             token.access_token = "other"
 
@@ -1849,13 +2015,13 @@ class _Sessions(BaseModel):
 
 class TestFreshTokenSet:
     def test_keyword_construction_builds_a_token_set(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": "id-jwt"})
         assert isinstance(tokens, TokenSet)
-        assert tokens.access_token == "access-abc"
+        assert tokens.access_token.get_secret_value() == "access-abc"
         assert tokens.extras == {"id_token": "id-jwt"}
 
     def test_frozen(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             tokens.access_token = "other"
 
@@ -1872,7 +2038,11 @@ class TestFreshTokenSet:
             FreshTokenSet.model_validate_strings({"access_token": "access-abc"})
 
     def test_the_fields_reload_as_a_plain_token_set(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc", refresh_token="refresh-xyz", extras={"id_token": "id-jwt"})
+        fresh = FreshTokenSet(
+            access_token=SecretToken("access-abc"),
+            refresh_token=SecretToken("refresh-xyz"),
+            extras={"id_token": "id-jwt"},
+        )
         stored = TokenSet.model_validate(fresh.model_dump())
         assert not isinstance(stored, FreshTokenSet)
         assert stored.model_dump() == fresh.model_dump()
@@ -1882,7 +2052,7 @@ class TestFreshTokenSet:
             _Session.model_validate({"user": "U123", "tokens": {"access_token": "access-abc"}})
 
     def test_a_model_holding_one_cannot_reload_it_from_json(self) -> None:
-        session = _Session(user="U123", tokens=FreshTokenSet(access_token="access-abc"))
+        session = _Session(user="U123", tokens=FreshTokenSet(access_token=SecretToken("access-abc")))
         with pytest.raises(ConfigurationError, match="stored data"):
             _Session.model_validate_json(session.model_dump_json())
 
@@ -1891,21 +2061,21 @@ class TestFreshTokenSet:
             _Sessions.model_validate({"tokens": [{"access_token": "access-abc"}]})
 
     def test_a_model_can_hold_an_existing_one(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         assert _Session(user="U123", tokens=fresh).tokens is fresh
         assert _Session.model_validate({"user": "U123", "tokens": fresh}).tokens is fresh
 
     def test_pickling_is_refused(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError, match="cannot be stored"):
             pickle.dumps(fresh)
 
     def test_a_plain_token_set_still_pickles(self) -> None:
-        stored = pickle.loads(pickle.dumps(TokenSet(access_token="access-abc")))
-        assert stored == TokenSet(access_token="access-abc")
+        stored = pickle.loads(pickle.dumps(TokenSet(access_token=SecretToken("access-abc"))))
+        assert stored == TokenSet(access_token=SecretToken("access-abc"))
 
     def test_copying_keeps_the_type(self) -> None:
-        fresh = FreshTokenSet(access_token="access-abc")
+        fresh = FreshTokenSet(access_token=SecretToken("access-abc"))
         assert isinstance(copy.deepcopy(fresh), FreshTokenSet)
         assert isinstance(fresh.model_copy(), FreshTokenSet)
 
@@ -1939,17 +2109,17 @@ class TestSecretToken:
 
 class TestIdentityMaterial:
     def test_minimal_defaults_id_token_to_none(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is None
 
     def test_frozen(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         with pytest.raises(ConfigurationError):
             material.access_token = "other"
 
     def test_from_token_set_extracts_id_token_from_extras(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": "id-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": "id-jwt"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.access_token.get_secret_value() == "access-abc"
         assert material.id_token is not None
@@ -1957,25 +2127,52 @@ class TestIdentityMaterial:
 
     def test_an_id_token_the_response_states_as_nothing_is_absent(self) -> None:
         """A token stating nothing carries nothing to verify, so the narrowing reports it as absent."""
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": ""})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": ""})
 
         assert IdentityMaterial.from_token_set(tokens).id_token is None
 
     @pytest.mark.parametrize(
         "payload",
         [
-            pytest.param({"access_token": ""}, id="an access token stating nothing"),
-            pytest.param({"access_token": "access-abc", "id_token": ""}, id="an ID token stating nothing"),
+            pytest.param({"access_token": SecretToken("")}, id="an access token stating nothing"),
+            pytest.param(
+                {"access_token": SecretToken("access-abc"), "id_token": SecretToken("")},
+                id="an ID token stating nothing",
+            ),
         ],
     )
-    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, str]) -> None:
+    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, SecretToken]) -> None:
         """No request can carry a token stating nothing, so the material states the rule itself."""
         with pytest.raises(ConfigurationError, match="must state a value"):
             IdentityMaterial(**payload)
 
+    @pytest.mark.parametrize("stated", ["", "   "])
+    def test_a_blank_token_supplied_as_plain_text_is_refused_as_plain_text(self, stated: str) -> None:
+        """One rule decides how a credential arrives, so a blank string is refused for arriving unwrapped.
+
+        The rule that a token must state a value answers a wrapper holding nothing, which is a
+        different mistake and names itself differently.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            IdentityMaterial(access_token=stated)  # ty: ignore[invalid-argument-type]
+
+    def test_a_refused_narrowing_states_the_id_token_in_no_local_of_its_own(self) -> None:
+        """The narrowing can refuse what it builds, so it wraps the ID token before it can.
+
+        The token set the caller passed is the caller's own object, and a parameter holding it holds
+        what any function holds. The rule here is that the narrowing binds nothing out of it plain.
+        """
+        stated = "s3cr3t-id-token"  # pragma: allowlist secret
+        tokens = FreshTokenSet(access_token=SecretToken(""), extras={"id_token": stated})
+
+        with pytest.raises(ConfigurationError) as caught:
+            IdentityMaterial.from_token_set(tokens)
+
+        assert _frame_locals_stating(caught.value, stated) == ["from_token_set.tokens"]
+
     def test_neither_token_is_stated_in_a_repr(self) -> None:
         """An error reporter records the repr of each frame local, so this material must state neither."""
-        tokens = FreshTokenSet(access_token="s3cr3t-access", extras={"id_token": "s3cr3t-jwt"})
+        tokens = FreshTokenSet(access_token=SecretToken("s3cr3t-access"), extras={"id_token": "s3cr3t-jwt"})
 
         material = IdentityMaterial.from_token_set(tokens)
 
@@ -1984,12 +2181,12 @@ class TestIdentityMaterial:
         assert material.access_token.get_secret_value() == "s3cr3t-access"
 
     def test_from_token_set_id_token_absent_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"team_id": "T123"})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"team_id": "T123"})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
     def test_from_token_set_non_string_id_token_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", extras={"id_token": 12345})
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), extras={"id_token": 12345})
         material = IdentityMaterial.from_token_set(tokens)
         assert material.id_token is None
 
@@ -1997,8 +2194,8 @@ class TestIdentityMaterial:
         """The narrowing must not surface the refresh token or caller
         context — those fields are structurally absent from the type."""
         tokens = FreshTokenSet(
-            access_token="access-abc",
-            refresh_token="refresh-xyz",
+            access_token=SecretToken("access-abc"),
+            refresh_token=SecretToken("refresh-xyz"),
             extras={"id_token": "id-jwt"},
             context={"user_id": "U123"},
         )
@@ -2008,16 +2205,16 @@ class TestIdentityMaterial:
         assert set(material.model_dump()) == {"access_token", "id_token", "scope"}
 
     def test_minimal_defaults_scope_to_none(self) -> None:
-        material = IdentityMaterial(access_token="access-abc")
+        material = IdentityMaterial(access_token=SecretToken("access-abc"))
         assert material.scope is None
 
     def test_from_token_set_carries_granted_scope(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc", scope="accounts:read forms:read")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"), scope="accounts:read forms:read")
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope == "accounts:read forms:read"
 
     def test_from_token_set_absent_scope_is_none(self) -> None:
-        tokens = FreshTokenSet(access_token="access-abc")
+        tokens = FreshTokenSet(access_token=SecretToken("access-abc"))
         material = IdentityMaterial.from_token_set(tokens)
         assert material.scope is None
 
@@ -2663,6 +2860,20 @@ class TestIdentityProfile:
 
 
 class TestOAuthPendingState:
+    def test_a_code_verifier_supplied_as_plain_text_is_refused(self) -> None:
+        """The verifier proves possession at the token endpoint, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            OAuthPendingState(
+                state="st",
+                redirect_uri="https://app.example.com/cb",
+                code_verifier="plain-text-verifier",  # ty: ignore[invalid-argument-type]
+                openid_requested=False,
+                created_at=0.0,
+            )
+
+        assert "plain-text-verifier" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
     def test_a_redirect_uri_carrying_a_credential_is_refused(self) -> None:
         """A pending state is persisted and replayed, so a credential in its URI outlives the request."""
         with pytest.raises(ConfigurationError, match="redirect_uri must not carry userinfo"):
@@ -2678,12 +2889,12 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
-            code_verifier="verifier-abc",
+            code_verifier=SecretToken("verifier-abc"),
             openid_requested=False,
             created_at=now,
         )
         assert state.state == "random-state-token"
-        assert state.code_verifier == "verifier-abc"
+        assert state.code_verifier.get_secret_value() == "verifier-abc"
         assert state.created_at == now
 
     def test_without_pkce(self) -> None:
@@ -2831,15 +3042,35 @@ class TestOAuthPendingState:
 
 
 class TestBrowserBoundAuthorization:
+    def test_a_browser_token_supplied_as_plain_text_is_refused(self) -> None:
+        """Possession of the token is the whole binding check, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            BrowserBoundAuthorization(
+                url="https://p.example.com/a",
+                state="st",
+                browser_token="plain-text-token",  # ty: ignore[invalid-argument-type]
+            )
+
+        assert "plain-text-token" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_wrapped_browser_token_reaches_the_model(self) -> None:
+        authorization = BrowserBoundAuthorization(
+            url="https://p.example.com/a", state="st", browser_token=SecretToken("bound-token")
+        )
+
+        assert authorization.browser_token.get_secret_value() == "bound-token"
+        assert "bound-token" not in repr(authorization)
+
     def test_it_carries_the_url_the_state_and_the_browser_token(self) -> None:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize?state=state-for-this-browser",
             state="state-for-this-browser",
-            browser_token="browser-token-abc",
+            browser_token=SecretToken("browser-token-abc"),
         )
         assert authorization.url == "https://provider.example.com/authorize?state=state-for-this-browser"
         assert authorization.state == "state-for-this-browser"
-        assert authorization.browser_token == "browser-token-abc"
+        assert authorization.browser_token.get_secret_value() == "browser-token-abc"
 
     def test_it_states_no_pending_state(self) -> None:
         """The store holds the pending state, so the PKCE verifier never travels beside the browser token."""
@@ -2861,10 +3092,10 @@ class TestBrowserBoundAuthorization:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize",
             state="state-for-this-browser",
-            browser_token="browser-token-abc",
+            browser_token=SecretToken("browser-token-abc"),
         )
         with pytest.raises(ConfigurationError):
-            authorization.browser_token = "another-browsers-token"
+            authorization.browser_token = SecretStr("another-browsers-token")
 
 
 class TestWorkloadIssuer:
@@ -3132,11 +3363,10 @@ class TestAClientSecretStatesAString:
         registration = ClientRegistration(client_id="c", client_secret=b"   ")  # ty: ignore[invalid-argument-type]
         assert registration.client_secret is None
 
-    def test_a_secret_the_field_converts_to_text_is_kept(self) -> None:
-        """Converting bytes states a secret, so only a blank one reads as absent."""
-        config = self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
-        assert config.client_secret is not None
-        assert config.client_secret.get_secret_value() == "kept-secret"
+    def test_a_secret_stated_as_bytes_is_refused_for_arriving_unwrapped(self) -> None:
+        """Bytes state a secret the field would read as text, so they arrive unwrapped like a string."""
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
 
     def test_a_wrapper_holding_a_value_that_is_no_string_is_refused(self) -> None:
         with pytest.raises(ConfigurationError):

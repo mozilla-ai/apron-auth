@@ -31,6 +31,6 @@ def stated_client_secret(value: Any) -> Any:
         What the value states, or ``None`` where it states no secret.
     """
     held = value.get_secret_value() if isinstance(value, SecretStr) else value
-    if held is None or (isinstance(held, str) and not held.strip()):
+    if held is None or (isinstance(held, str | bytes) and not held.strip()):
         return None
     return value if isinstance(held, str) else held

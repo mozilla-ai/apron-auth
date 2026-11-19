@@ -16,6 +16,7 @@ from dataclasses import replace
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 
 from apron_auth._claims import stated_boolean, stated_string
 from apron_auth._limits import streamed
@@ -309,7 +310,7 @@ class GitHubRevocationHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,

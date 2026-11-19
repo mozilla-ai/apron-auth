@@ -17,6 +17,7 @@ from apron_auth import (
     ProviderConfig,
     StoredStateClient,
 )
+from apron_auth.models import SecretToken
 
 config = ProviderConfig(
     client_id="client",
@@ -26,7 +27,7 @@ config = ProviderConfig(
     redirect_uri="https://app.example.com/callback",
 )
 store = MemoryStateStore()
-callback = AuthorizationCallback(code="code", state="state")
+callback = AuthorizationCallback(code=SecretToken("code"), state="state")
 pending_state = OAuthPendingState(
     state="state", redirect_uri="https://app.example.com/callback", openid_requested=False, created_at=0.0
 )
@@ -37,7 +38,7 @@ stored = StoredStateClient(config, store)
 
 async def each_client_accepts_its_own_shape() -> None:
     await caller_kept.exchange_code(callback, pending_state=pending_state)
-    await stored.exchange_code(callback, browser_token="browser-token")
+    await stored.exchange_code(callback, browser_token=SecretToken("browser-token"))
 
 
 async def a_caller_kept_client_needs_the_pending_state() -> None:
@@ -48,12 +49,20 @@ async def a_stored_state_client_takes_no_pending_state() -> None:
     await stored.exchange_code(
         callback,
         pending_state=pending_state,  # ty: ignore[unknown-argument]
-        browser_token="browser-token",
+        browser_token=SecretToken("browser-token"),
     )
 
 
 async def a_stored_state_client_needs_the_browser_token() -> None:
     await stored.exchange_code(callback)  # ty: ignore[missing-argument]
+
+
+async def a_browser_token_supplied_as_plain_text_is_not_a_browser_token() -> None:
+    await stored.exchange_code(callback, browser_token="browser-token")  # ty: ignore[invalid-argument-type]
+
+
+async def the_wider_secret_wrapper_is_not_the_one_the_parameter_states() -> None:
+    await stored.exchange_code(callback, browser_token=SecretStr("browser-token"))  # ty: ignore[invalid-argument-type]
 
 
 def a_caller_kept_client_takes_no_store() -> None:

@@ -11,6 +11,7 @@ from joserfc.errors import JoseError
 from joserfc.jws import CompactSignature, JWSRegistry
 
 from apron_auth.errors import TokenValidationReason
+from apron_auth.models import SecretToken
 
 # A certificate chain (``x5c``) in the header and an 8192-bit RSA signature both exceed the library's default limits.
 _MAX_HEADER_LENGTH = 16384
@@ -89,11 +90,11 @@ def jws_registry(algorithms: list[str] | None = None) -> JWSRegistry:
     return registry
 
 
-def parse_compact(token: str) -> CompactSignature:
+def parse_compact(token: SecretToken) -> CompactSignature:
     """Return the parsed form of a compact signed token, without checking its signature.
 
     Args:
-        token: A compact signed token.
+        token: A compact signed token, wrapped so this frame states it to no error reporter.
 
     Returns:
         The parsed token.
@@ -103,7 +104,7 @@ def parse_compact(token: str) -> CompactSignature:
     """
     msg = "The token is not a compact signed token"
     try:
-        compact = jws.extract_compact(token.encode(), registry=jws_registry())
+        compact = jws.extract_compact(token.get_secret_value().encode(), registry=jws_registry())
     except (JoseError, RecursionError, TypeError, ValueError):
         # NOTE: The caught error's frames hold the token, so this raise stays outside the except
         # block, where Python would set __context__ to it.
@@ -119,13 +120,13 @@ def parse_compact(token: str) -> CompactSignature:
     return compact
 
 
-def unverified_claims(token: str) -> dict[str, Any]:
+def unverified_claims(token: SecretToken) -> dict[str, Any]:
     """Return the claims of a compact signed token without checking its signature.
 
     NOTE: Callers must trust the channel the token came from, because nothing here proves who signed it.
 
     Args:
-        token: A compact signed token.
+        token: A compact signed token, wrapped so this frame states it to no error reporter.
 
     Returns:
         The token's claims.

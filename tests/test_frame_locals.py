@@ -10,18 +10,37 @@ A credential that never reaches the request would satisfy the second half on its
 
 from __future__ import annotations
 
+import hashlib
 import os
+import time
 from collections.abc import Callable
 from importlib import import_module
 from typing import Any, TypeAlias
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
+from apron_auth.client import OAuthClient, StoredStateClient
+from apron_auth.errors import (
+    ConfigurationError,
+    IdTokenValidationError,
+    StateError,
+    TokenExchangeError,
+    TokenRefreshError,
+)
+from apron_auth.models import (
+    AuthorizationCallback,
+    IdentityMaterial,
+    OAuthPendingState,
+    Provider,
+    ProviderConfig,
+    SecretToken,
+)
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
+from apron_auth.stores import MemoryStateStore
 
 # One identity handler with the configuration it accepts, built on demand so no import runs at collection.
 IdentityCase: TypeAlias = Callable[[], "tuple[Any, ProviderConfig]"]
@@ -57,7 +76,7 @@ def _identity_case(module_name: str, handler_name: str, preset_name: str, scopes
     def build() -> tuple[Any, ProviderConfig]:
         module = import_module(f"apron_auth.providers.{module_name}")
         preset = getattr(module, preset_name)
-        config = preset(client_id="cid", client_secret=CLIENT_SECRET, scopes=scopes)
+        config = preset(client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes=scopes)
         return getattr(module, handler_name)(), config
 
     return build
@@ -79,13 +98,13 @@ IDENTITY_CASES: dict[Provider, IdentityCase] = {
 
 
 def _config(provider: Provider) -> ProviderConfig:
-    return PRESETS[provider](client_id="cid", client_secret=CLIENT_SECRET, scopes=["chat:write"])
+    return PRESETS[provider](client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes=["chat:write"])
 
 
 def _standard_config() -> ProviderConfig:
     return ProviderConfig(
         client_id="cid",
-        client_secret=CLIENT_SECRET,
+        client_secret=SecretStr(CLIENT_SECRET),
         authorize_url="https://auth.example.com/authorize",
         token_url="https://auth.example.com/token",
         revocation_url="https://auth.example.com/revoke",
@@ -144,6 +163,38 @@ def _frames_outside_the_library(exc: BaseException) -> list[str]:
     return outside
 
 
+def _locals_stating_anywhere(exc: BaseException, value: str) -> list[str]:
+    """Return one name per frame local on the traceback whose repr states ``value``, in any module.
+
+    A refusal raised while a model validates runs frames of the validation framework, which this
+    library cannot scrub. A credential that arrived wrapped states nothing in those frames either,
+    so the whole traceback is read rather than this library's part of it.
+
+    Args:
+        exc: The error whose traceback to walk.
+        value: The credential that must appear in no local.
+
+    Returns:
+        A description of each local that states it, empty when none does.
+    """
+    stated: list[str] = []
+    frames = exc.__traceback__
+    while frames is not None:
+        frame = frames.tb_frame
+        if frame.f_code.co_filename == __file__:
+            frames = frames.tb_next
+            continue
+        for name, held in frame.f_locals.items():
+            try:
+                shown = repr(held)
+            except Exception:  # noqa: BLE001
+                continue
+            if value in shown:
+                stated.append(f"{frame.f_code.co_name}.{name}")
+        frames = frames.tb_next
+    return stated
+
+
 def _locals_stating(exc: BaseException, value: str) -> list[str]:
     """Return one name per frame local of this library on the traceback whose repr states ``value``.
 
@@ -173,6 +224,219 @@ def _locals_stating(exc: BaseException, value: str) -> list[str]:
                 stated.append(f"{frame.f_code.co_name}.{name}")
         frames = frames.tb_next
     return stated
+
+
+def _answering_transport(sent: list[httpx.Request], id_token: str) -> Callable[[str], httpx.AsyncBaseTransport]:
+    """Answer every request with a token response whose ID token no check can read."""
+
+    def factory(_url: str) -> httpx.AsyncBaseTransport:
+        async def handle(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"access_token": "an-access-token", "id_token": id_token})
+
+        return httpx.MockTransport(handle)
+
+    return factory
+
+
+def _pending_state(verifier: str) -> OAuthPendingState:
+    return OAuthPendingState(
+        state="pending-state",
+        redirect_uri="https://app.example.com/cb",
+        code_verifier=SecretToken(verifier),
+        openid_requested=False,
+        created_at=time.time(),
+    )
+
+
+class TestAConfigurationRefusal:
+    """Test that a configuration a caller supplied a credential to states it in no frame local.
+
+    Both halves of the rule hold here as they do for a request: the credential reached the
+    configuration, and no local on a refusal's traceback states it.
+    """
+
+    @pytest.mark.parametrize("provider", list(PRESETS), ids=lambda provider: provider.value)
+    def test_a_preset_states_no_client_secret(self, provider: Provider) -> None:
+        """A preset binds the secret to a parameter for the whole call, so its own frames hold the rule."""
+        carried = _config(provider).client_secret
+        assert carried is not None
+        assert carried.get_secret_value() == CLIENT_SECRET
+
+        with pytest.raises(ConfigurationError) as caught:
+            PRESETS[provider](client_id="cid", client_secret=SecretStr(CLIENT_SECRET), scopes="chat:write")
+
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating(caught.value, CLIENT_SECRET) == []
+
+    def test_a_refused_configuration_states_no_client_secret(self) -> None:
+        """The validation framework's own frames hold what they were passed, so the whole walk is read."""
+        assert _standard_config().client_secret is not None
+
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig(
+                client_id="cid",
+                client_secret=SecretStr(CLIENT_SECRET),
+                authorize_url="https://auth.example.com/authorize",
+                token_url="https://operator:sesame@auth.example.com/token",  # pragma: allowlist secret
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
+
+    def test_a_refused_validation_states_no_client_secret(self) -> None:
+        """A mapping is the path a stored configuration reloads through, and it carries the secret too."""
+        with pytest.raises(ConfigurationError) as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "cid",
+                    "client_secret": SecretStr(CLIENT_SECRET),
+                    "authorize_url": "https://auth.example.com/authorize",
+                    "token_url": "https://operator:sesame@auth.example.com/token",  # pragma: allowlist secret
+                }
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
+
+
+class TestACodeExchangeFailure:
+    """Test that a refused exchange leaves the code and the PKCE verifier in no frame local.
+
+    Both are parameters of the call that fails, so no rule about the raise site reaches either.
+    """
+
+    def _pending(self, verifier: str) -> OAuthPendingState:
+        return OAuthPendingState(
+            state="pending-state",
+            redirect_uri="https://app.example.com/cb",
+            code_verifier=SecretToken(verifier),
+            openid_requested=False,
+            created_at=time.time(),
+        )
+
+    async def test_a_refused_exchange_states_no_authorization_code(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenExchangeError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretToken(TOKEN), state="pending-state"),
+                pending_state=self._pending("a-verifier"),
+            )
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+    async def test_a_refused_exchange_states_no_code_verifier(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenExchangeError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretToken("the-code"), state="pending-state"),
+                pending_state=self._pending(TOKEN),
+            )
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+
+class TestARefusedIdToken:
+    """Test that an ID token a token response carries states itself in no frame local of the check.
+
+    The response is read before it is parsed, so the check runs on a value no model has wrapped yet.
+
+    NOTE: The decoded response mapping is the one local that still states it. That mapping is read off
+    the wire rather than supplied by a caller, and it carries every token the response issued rather
+    than the ID token alone, so it is a defect of its own and not this one. It is named here so that
+    it cannot grow quietly.
+    """
+
+    async def test_a_refused_exchange_states_no_id_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_answering_transport(sent, ID_TOKEN))
+
+        with pytest.raises(IdTokenValidationError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretToken("the-code"), state="pending-state"),
+                pending_state=_pending_state("a-verifier"),
+            )
+
+        assert _locals_stating_anywhere(caught.value, ID_TOKEN) == ["_redeem_against.response"]
+
+    async def test_a_refused_refresh_states_no_id_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_answering_transport(sent, ID_TOKEN))
+
+        with pytest.raises(Exception) as caught:  # noqa: B017, PT011
+            await client.refresh_token(SecretToken("a-refresh-token"))
+
+        assert _locals_stating_anywhere(caught.value, ID_TOKEN) == ["refresh_token.response"]
+
+
+class TestABrowserBindingRefusal:
+    """Test that a callback refused for its browser binding states the browser token in no frame local.
+
+    Possession of the token is the whole check, so an attacker reading one out of an error report can
+    mint a state a client accepts.
+    """
+
+    async def test_a_minted_token_binds_the_callback_it_was_minted_for(self) -> None:
+        client = StoredStateClient(_standard_config(), MemoryStateStore())
+
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+
+        minted = authorization.browser_token.get_secret_value()
+        assert authorization.state == hashlib.sha256(minted.encode()).hexdigest()
+
+    async def test_a_callback_from_another_browser_states_no_browser_token(self) -> None:
+        client = StoredStateClient(_standard_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+        presented = authorization.browser_token.get_secret_value()
+
+        with pytest.raises(StateError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretToken("the-code"), state="another-browsers-state"),
+                browser_token=authorization.browser_token,
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, presented) == []
+
+
+class TestATokenRefreshFailure:
+    """Test that a refused refresh leaves the refresh token in no frame local.
+
+    The token is a parameter of the call that fails, so no rule about the raise site reaches it.
+    """
+
+    async def test_a_refused_refresh_states_no_refresh_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenRefreshError) as caught:
+            await client.refresh_token(SecretToken(TOKEN))
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+    async def test_a_refused_refresh_states_no_client_secret(self) -> None:
+        """The request presents the secret to the token endpoint, so what builds the request holds it too."""
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenRefreshError) as caught:
+            await client.refresh_token(SecretToken(TOKEN))
+
+        assert CLIENT_SECRET in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
 
 
 class TestARevocationFailure:
@@ -232,7 +496,9 @@ class TestAnIdTokenFailure:
         handler, config = IDENTITY_CASES[Provider.MICROSOFT]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN, id_token=ID_TOKEN), config)
+            await handler.fetch_identity(
+                IdentityMaterial(access_token=SecretToken(TOKEN), id_token=SecretToken(ID_TOKEN)), config
+            )
 
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []
@@ -255,7 +521,7 @@ class TestAnIdentityFailure:
         handler, config = IDENTITY_CASES[provider]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken(TOKEN)), config)
 
         assert TOKEN in "".join(_request_text(request) for request in httpx_mock.get_requests())
         _assert_chains_nothing(caught.value)
@@ -276,7 +542,7 @@ class TestAnIdentityFailure:
         handler, config = IDENTITY_CASES[provider]()
 
         with pytest.raises(Exception) as caught:  # noqa: B017, PT011
-            await handler.fetch_identity(IdentityMaterial(access_token=TOKEN), config)
+            await handler.fetch_identity(IdentityMaterial(access_token=SecretToken(TOKEN)), config)
 
         _assert_chains_nothing(caught.value)
         assert _frames_outside_the_library(caught.value) == []

@@ -32,6 +32,8 @@ from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
+from pydantic import SecretStr
+
 from apron_auth._limits import streamed
 from apron_auth.models import (
     IdentityMaterial,
@@ -268,7 +270,7 @@ class HubSpotRevocationHandler:
 
 def preset(
     client_id: str,
-    client_secret: str,
+    client_secret: SecretStr,
     *,
     scopes: Sequence[str],
     redirect_uri: str | None = None,

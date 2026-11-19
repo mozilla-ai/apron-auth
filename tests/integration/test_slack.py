@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,11 +36,11 @@ class TestSlackRefresh:
     async def test_refresh_returns_access_token(self, slack_env: dict[str, str]):
         config = slack.preset(
             client_id=slack_env["client_id"],
-            client_secret=slack_env["client_secret"],
+            client_secret=SecretStr(slack_env["client_secret"]),
             scopes=["channels:read"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(slack_env["refresh_token"])
+        tokens = await client.refresh_token(SecretToken(slack_env["refresh_token"]))
         assert tokens.access_token
 
 
@@ -48,10 +49,10 @@ class TestSlackRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = slack.preset(
             client_id=slack_env["client_id"],
-            client_secret=slack_env["client_secret"],
+            client_secret=SecretStr(slack_env["client_secret"]),
             scopes=["channels:read"],
         )
         client = OAuthClient(config)
-        tokens = await client.refresh_token(slack_env["refresh_token"])
-        result = await client.revoke_token(SecretToken(tokens.access_token))
+        tokens = await client.refresh_token(SecretToken(slack_env["refresh_token"]))
+        result = await client.revoke_token(tokens.access_token)
         assert result is True

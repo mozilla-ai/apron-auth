@@ -20,13 +20,16 @@ repos:
 
   - repo: local
     hooks:
+      # The integration tests are checked here because nothing else reads them: they are skipped
+      # unless provider credentials are present, so a signature change breaks them silently until
+      # someone runs them against a real provider.
       - id: ty-check
         name: ty
-        entry: uvx ty check src/apron_auth --python .venv
+        entry: uvx ty check src/apron_auth tests/integration --python .venv
         language: system
         pass_filenames: false
         types: [python]
-        files: ^src/
+        files: ^(src/|tests/integration/)
 
       # The typing fixtures assert that a wrong call stays a type error, which they state as a
       # suppression. An unused suppression has to fail, so this check promotes every warning.
