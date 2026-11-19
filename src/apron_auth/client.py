@@ -372,7 +372,7 @@ def _id_token_claims(id_token: object) -> dict[str, Any]:
     if not isinstance(id_token, str):
         raise IdTokenValidationError(msg)
     try:
-        return unverified_claims(id_token)
+        return unverified_claims(SecretToken(id_token))
     except ValueError:
         pass
     # NOTE: This raise stays outside the except block, so the error does not chain the decoder's error.

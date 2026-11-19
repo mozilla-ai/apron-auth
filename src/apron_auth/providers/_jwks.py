@@ -174,7 +174,7 @@ class IssuerSigningKeys:
             IdentityFetchError: If the key set cannot be fetched or read.
         """
         try:
-            compact = parse_compact(token.get_secret_value())
+            compact = parse_compact(token)
         except ValueError:
             # NOTE: The caught error's frames hold the token, so this raise stays outside the except
             # block, where Python would set __context__ to it.

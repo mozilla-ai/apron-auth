@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from apron_auth._claims import stated_boolean
 from apron_auth._clock import CLOCK_SKEW_SECONDS
+from apron_auth._credentials import refuse_plain_text
 from apron_auth._jwt import claim_refusal_reason, compact_claims, parse_compact
 from apron_auth._loop_lock import LoopLock
 from apron_auth._numbers import finite_number
@@ -221,7 +222,7 @@ class _TrustedIssuer:
             self._signing_keys = self._key_set(jwks_url)
             return self._signing_keys
 
-    async def verified_against_a_moved_key_set(self, token: str) -> VerifiedToken | None:
+    async def verified_against_a_moved_key_set(self, token: SecretToken) -> VerifiedToken | None:
         """Return what a key set this issuer has moved to says about a token, putting that key set in use.
 
         This answers a token naming a key the published set lacks, which is the one signal an issuer gives
@@ -231,7 +232,8 @@ class _TrustedIssuer:
         do unseats keys that still verify what the issuer has not moved.
 
         Args:
-            token: A compact signed token no published key verified.
+            token: A compact signed token no published key verified, wrapped so this frame states it
+                to no error reporter.
 
         Returns:
             The token's protected header and claims, and the key that verified it, or ``None`` when this
@@ -245,7 +247,7 @@ class _TrustedIssuer:
         if moved is None:
             return None
         try:
-            verified = await moved.keys.verify(SecretToken(token), self._limits)
+            verified = await moved.keys.verify(token, self._limits)
         except (IdentityFetchError, TokenValidationError):
             # NOTE: The failure is not logged with its value, because a failed request can render itself.
             logger.warning(
@@ -364,31 +366,33 @@ class WorkloadTokenVerifier:
         """
         return tuple(sorted(self._issuers))
 
-    async def verify(self, token: str, *, audience: str | Collection[str]) -> WorkloadIdentity:
+    async def verify(self, token: SecretToken, *, audience: str | Collection[str]) -> WorkloadIdentity:
         """Return what a token says about its workload, once it verifies and names an accepted audience.
 
         This is :meth:`check` followed by :meth:`VerifiedWorkloadToken.accept`, for a server whose accepted
         audiences are fixed. A server that has to look its accepted audiences up calls the two steps itself.
 
         Args:
-            token: A compact signed token.
+            token: A compact signed token, wrapped so this frame states it to no error reporter.
             audience: The audience the token must name, or a non-empty collection of which it must name one.
 
         Returns:
             The verified identity.
 
         Raises:
-            ConfigurationError: If ``audience`` names no audience, or anything but non-empty names.
+            ConfigurationError: If the token is supplied as plain text, if ``audience`` names no
+                audience, or if it names anything but non-empty names.
             TokenExpiredError: If the token verifies but has expired.
             TokenValidationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
-        # The caller's own argument is checked before any request is sent for the token.
+        # The caller's own arguments are checked before any request is sent for the token.
+        refuse_plain_text(token, "token")
         accepted = _accepted_audiences(audience)
         return (await self.check(token)).accept(accepted)
 
-    async def check(self, token: str) -> VerifiedWorkloadToken:
+    async def check(self, token: SecretToken) -> VerifiedWorkloadToken:
         """Return a verified token, once its signature and every claim but the audience match verify.
 
         The token's unverified ``iss`` selects the issuer, which is all that claim decides, and the
@@ -400,18 +404,20 @@ class WorkloadTokenVerifier:
         depend on it reads the verified value and matches it in the second step.
 
         Args:
-            token: A compact signed token.
+            token: A compact signed token, wrapped so this frame states it to no error reporter.
 
         Returns:
             The verified token, which states its issuer and its audiences.
 
         Raises:
+            ConfigurationError: If the token is supplied as plain text.
             TokenExpiredError: If the token verifies but has expired.
             TokenValidationError: If the token is refused for any other reason.
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
-        if len(token) > _MAX_TOKEN_LENGTH:
+        refuse_plain_text(token, "token")
+        if len(token.get_secret_value()) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)
         # A token that is not one is refused before discovery, so it is never reported as an outage.
@@ -448,7 +454,7 @@ class WorkloadTokenVerifier:
             raise TokenValidationError(msg, reason=TokenValidationReason.UNKNOWN_ISSUER)
         return VerifiedWorkloadToken(_identity(trusted.issuer, claims))
 
-    async def _verified(self, token: str, trusted: _TrustedIssuer) -> VerifiedToken:
+    async def _verified(self, token: SecretToken, trusted: _TrustedIssuer) -> VerifiedToken:
         """Return the token's header and claims, once a key the issuer publishes verifies its signature.
 
         A token naming a key the published set lacks is offered to the issuer once more, in case the issuer
@@ -467,7 +473,7 @@ class WorkloadTokenVerifier:
         """
         signing_keys = await trusted.keys()
         try:
-            return await signing_keys.verify(SecretToken(token), self._limits)
+            return await signing_keys.verify(token, self._limits)
         except TokenValidationError as refusal:
             if refusal.reason is not TokenValidationReason.UNKNOWN_KEY:
                 raise

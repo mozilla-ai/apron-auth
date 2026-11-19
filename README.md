@@ -782,7 +782,7 @@ A workload on Google Cloud, GitHub Actions or Kubernetes can fetch a token its p
 apron-auth verifies a credential as the protocol defines it: the signature against the issuer's published keys, then `iss`, `aud`, `exp`, `iat` and `nbf`, then the identity the token names. It decides nothing about what a workload may do, finds no credentials for you, and holds no trust list of its own. The issuers you accept and the audiences you answer to are your configuration, passed in as typed values.
 
 ```python
-from apron_auth import WorkloadIssuer
+from apron_auth import SecretToken, WorkloadIssuer
 from apron_auth.errors import IdentityFetchError, TokenExpiredError, TokenValidationError
 from apron_auth.workload import WorkloadTokenVerifier
 
@@ -792,7 +792,7 @@ verifier = WorkloadTokenVerifier(
 )
 
 try:
-    identity = await verifier.verify(token, audience="https://gateway.example.com")
+    identity = await verifier.verify(SecretToken(token), audience="https://gateway.example.com")
 except TokenExpiredError:
     ...  # tell the workload to fetch a fresh token
 except TokenValidationError:
@@ -806,13 +806,15 @@ identity.email  # set only when the token marks it verified, as Google does for 
 
 `verify` is the one-shot for a server whose accepted audience is fixed. It is the two steps below, called one after the other.
 
+Both steps take the token as a `SecretToken`. The token you read off the request's `Authorization` header is a plain string, and wrapping it is what keeps it out of every frame local this library would otherwise bind it to. A token supplied as a plain string is refused with `ConfigurationError` before any request is sent.
+
 ### When the accepted audiences come from a lookup
 
 A server that decides its accepted audiences per tenant calls the two steps itself, so the signature is checked before the lookup runs:
 
 ```python
 # Step one checks the signature and every claim but the audience match.
-checked = await verifier.check(token)
+checked = await verifier.check(SecretToken(token))
 
 # `checked` states only `issuer` and `audiences` — enough to narrow a lookup by a verified value.
 accepted = await my_store.audiences_for(checked.issuer, checked.audiences)
