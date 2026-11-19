@@ -420,6 +420,21 @@ class TestProviderConfig:
 
         assert "plain-text-secret" not in str(caught.value)
 
+    @pytest.mark.parametrize("stated", [b"bytes-secret", 7])
+    def test_a_client_secret_that_is_no_wrapper_is_refused(self, stated: object) -> None:
+        """The field reads bytes as text, so handing them on would wrap a credential rather than refuse it."""
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            ProviderConfig.model_validate(
+                {
+                    "client_id": "test-client",
+                    "client_secret": stated,
+                    "authorize_url": "https://provider.example.com/authorize",
+                    "token_url": "https://provider.example.com/token",
+                }
+            )
+
+        assert "bytes-secret" not in str(caught.value)
+
     def test_a_dumped_client_secret_cannot_be_reloaded(self) -> None:
         """A dump states a secret as a mask, so reloading one is refused rather than loading the mask.
 
@@ -3336,11 +3351,10 @@ class TestAClientSecretStatesAString:
         registration = ClientRegistration(client_id="c", client_secret=b"   ")  # ty: ignore[invalid-argument-type]
         assert registration.client_secret is None
 
-    def test_a_secret_the_field_converts_to_text_is_kept(self) -> None:
-        """Converting bytes states a secret, so only a blank one reads as absent."""
-        config = self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
-        assert config.client_secret is not None
-        assert config.client_secret.get_secret_value() == "kept-secret"
+    def test_a_secret_stated_as_bytes_is_refused_for_arriving_unwrapped(self) -> None:
+        """Bytes state a secret the field would read as text, so they arrive unwrapped like a string."""
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
 
     def test_a_wrapper_holding_a_value_that_is_no_string_is_refused(self) -> None:
         with pytest.raises(ConfigurationError):

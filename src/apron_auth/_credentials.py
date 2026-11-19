@@ -44,12 +44,10 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
     may be absent reads what a value states before this rule runs, so a client secret stating nothing
     arrives here as absence rather than as a blank string.
 
-    A secret wrapper the field does not state is refused in the same words, because a caller who
-    reads the refusal and reaches for the other of the two wrappers would otherwise be answered by
-    the validation framework in terms of its own.
-
-    Anything else is handed on, because what a stated credential may be is the field's own type to
-    decide.
+    Anything present that is not that wrapper is refused, including a secret wrapper the field does
+    not state. A field converts what it is given, so handing a value on is accepting it: bytes are
+    the case that matters, because the field's own type reads them as text and would wrap a
+    credential stated that way rather than refuse it.
 
     Args:
         wrapper: The type the field's credential has to arrive in.
@@ -59,9 +57,9 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
     """
 
     def rule(value: Any) -> Any:
-        if isinstance(value, str) or (isinstance(value, SecretStr) and not isinstance(value, wrapper)):
-            raise ValueError(_supplied_as_plain_text(wrapper))
-        return value
+        if value is None or isinstance(value, wrapper):
+            return value
+        raise ValueError(_supplied_as_plain_text(wrapper))
 
     return rule
 
@@ -75,8 +73,8 @@ def refuse_plain_text(value: Any, field: str, wrapper: type[SecretStr]) -> None:
         wrapper: The type the parameter's credential has to arrive in.
 
     Raises:
-        ConfigurationError: If the value is a plain string.
+        ConfigurationError: If the value is a plain string or a sequence of bytes.
     """
-    if isinstance(value, str):
+    if isinstance(value, str | bytes):
         msg = f"{field} {_supplied_as_plain_text(wrapper)}"
         raise ConfigurationError(msg)

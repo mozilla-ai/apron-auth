@@ -67,6 +67,11 @@ class TestWrappedCredential:
         assert arrives_wrapped(SecretStr)(credential) is credential
 
     @pytest.mark.parametrize("value", [7, ["s"], {"value": "s"}, b"s"])
-    def test_a_value_that_is_no_string_is_handed_on_for_its_type_to_refuse(self, value: object) -> None:
-        """This rule decides how a credential arrives. What one may be is the field's own type to decide."""
-        assert arrives_wrapped(SecretToken)(value) is value
+    def test_a_value_that_is_no_wrapper_is_refused(self, value: object) -> None:
+        """A field converts what it is given, so handing a value on is accepting it.
+
+        Bytes are the case that matters: the field's own type reads them as text, so a credential
+        stated as bytes would have been wrapped rather than refused.
+        """
+        with pytest.raises(ValueError, match="wrapped"):
+            arrives_wrapped(SecretToken)(value)
