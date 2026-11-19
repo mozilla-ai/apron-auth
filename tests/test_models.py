@@ -2107,14 +2107,27 @@ class TestIdentityMaterial:
     @pytest.mark.parametrize(
         "payload",
         [
-            pytest.param({"access_token": ""}, id="an access token stating nothing"),
-            pytest.param({"access_token": SecretToken("access-abc"), "id_token": ""}, id="an ID token stating nothing"),
+            pytest.param({"access_token": SecretToken("")}, id="an access token stating nothing"),
+            pytest.param(
+                {"access_token": SecretToken("access-abc"), "id_token": SecretToken("")},
+                id="an ID token stating nothing",
+            ),
         ],
     )
-    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, str]) -> None:
+    def test_a_token_stating_nothing_is_refused(self, payload: dict[str, SecretToken]) -> None:
         """No request can carry a token stating nothing, so the material states the rule itself."""
         with pytest.raises(ConfigurationError, match="must state a value"):
             IdentityMaterial(**payload)
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    def test_a_blank_token_supplied_as_plain_text_is_refused_as_plain_text(self, stated: str) -> None:
+        """One rule decides how a credential arrives, so a blank string is refused for arriving unwrapped.
+
+        The rule that a token must state a value answers a wrapper holding nothing, which is a
+        different mistake and names itself differently.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            IdentityMaterial(access_token=stated)  # ty: ignore[invalid-argument-type]
 
     def test_neither_token_is_stated_in_a_repr(self) -> None:
         """An error reporter records the repr of each frame local, so this material must state neither."""

@@ -1007,7 +1007,7 @@ What you wrap, and in what:
 | `OAuthPendingState` | `code_verifier=SecretToken(...)`, which this library mints wrapped |
 | `StoredStateClient.exchange_code` | `browser_token=SecretToken(...)` |
 
-A token or secret this library hands back is already wrapped, so passing one straight back needs no wrapping of its own. A blank string states no credential and is not refused: an empty client secret still yields a public client.
+A token or secret this library hands back is already wrapped, so passing one straight back needs no wrapping of its own. Every plain string is refused, a blank one included, so there is one answer to remember rather than an exception to look up. An empty client secret still yields a public client, because the rule that decides what a secret states runs first and reads it as absence rather than as a string.
 
 Inside, every credential this library passes between its own frames stays in a wrapper whose `repr` states a row of asterisks, and a token handed to handler code is a `SecretToken`, which also refuses to state itself as text. The one value that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each path raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. `make test` holds the rule by walking a failed call's traceback and asserting both halves: the credential reached the request or the configuration, and no frame local states it. The configuration, exchange, refresh, revocation, identity and workload paths each have a case.
 

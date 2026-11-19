@@ -40,10 +40,18 @@ class TestWrappedCredential:
 
         assert wrapper.__name__ in str(caught.value)
 
-    @pytest.mark.parametrize("value", [None, "", "   ", "\t\n"])
-    def test_a_value_that_states_no_credential_is_handed_back(self, value: str | None) -> None:
-        """A string holding no non-blank character authenticates nothing, so it is no credential."""
-        assert arrives_wrapped(SecretToken)(value) is value
+    @pytest.mark.parametrize("value", ["", "   ", "\t\n"])
+    def test_a_blank_string_is_refused_like_any_other(self, value: str) -> None:
+        """One rule, so a field refuses every string and a reader has one answer to remember.
+
+        A client secret stating nothing still reads as absent, because the rule that decides what a
+        secret states runs before this one and hands it on as absence rather than as a string.
+        """
+        with pytest.raises(ValueError, match="wrapped"):
+            arrives_wrapped(SecretToken)(value)
+
+    def test_absence_is_handed_back(self) -> None:
+        assert arrives_wrapped(SecretToken)(None) is None
 
     @pytest.mark.parametrize("value", [7, ["s"], {"value": "s"}, b"s"])
     def test_a_value_that_is_no_string_is_handed_on_for_its_type_to_refuse(self, value: object) -> None:

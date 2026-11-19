@@ -12,21 +12,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-def _states_a_credential_as_plain_text(value: Any) -> bool:
-    """Report whether a value states a credential and arrived unwrapped.
-
-    A string holding no non-blank character authenticates nothing, so it states no credential.
-    Whether a stated credential is a value it may be is left to the type that holds it.
-
-    Args:
-        value: The value to read.
-
-    Returns:
-        Whether the value is a plain string stating a credential.
-    """
-    return isinstance(value, str) and bool(value.strip())
-
-
 def _supplied_as_plain_text(wrapper: type[SecretStr]) -> str:
     """Return what a refusal tells the caller to do, which no value of theirs appears in.
 
@@ -55,6 +40,10 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
     The rule refuses the value rather than wrapping it, because wrapping it at this point leaves the
     plain string bound in every frame it already passed through.
 
+    Every string is refused, including one holding no non-blank character. A field whose credential
+    may be absent reads what a value states before this rule runs, so a client secret stating nothing
+    arrives here as absence rather than as a blank string.
+
     Args:
         wrapper: The type the field's credential has to arrive in.
 
@@ -64,7 +53,7 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
     """
 
     def rule(value: Any) -> Any:
-        if _states_a_credential_as_plain_text(value):
+        if isinstance(value, str):
             raise ValueError(_supplied_as_plain_text(wrapper))
         return value
 
@@ -73,12 +62,6 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
 
 def refuse_plain_text(value: Any, field: str, wrapper: type[SecretStr]) -> None:
     """Refuse a credential supplied as plain text to a parameter no model validates.
-
-    Every string is refused here, including one holding no non-blank character. A field reads what a
-    value states, because a blank one converts to a wrapper holding nothing, and a client secret
-    stating nothing is a public client. A parameter converts nothing, so a blank string is a value of
-    the wrong type rather than a credential stating nothing, and the code that reads it would fail
-    where the value is used instead of where it was passed.
 
     Args:
         value: The value a caller passed.
