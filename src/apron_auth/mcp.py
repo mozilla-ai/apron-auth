@@ -647,7 +647,6 @@ def _select_auth_method(
     Otherwise the method is derived.
     A secretless client is public and uses ``none``, unless the server publishes an explicit method list that
     omits ``none``, which accepts no public client and raises.
-    A secret is the string it holds, so one holding nothing leaves the client secretless.
     A confidential client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server advertises.
     A server advertising only methods this library cannot perform is unusable, so this raises rather than
     yielding a config doomed to fail at token exchange.

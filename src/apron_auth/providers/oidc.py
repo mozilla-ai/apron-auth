@@ -281,7 +281,7 @@ def preset(
     """Create a provider configuration from a discovered OpenID provider.
 
     It takes ``metadata`` as a parameter, so it stays synchronous and the caller can cache, validate or stub the fetch.
-    Every parameter is keyword-only, so ``client_secret`` can later become optional without breaking callers.
+    Every parameter after ``client_secret`` is keyword-only, so one added later breaks no caller.
 
     NOTE: Callers must always pair the returned config with :func:`identity_handler`.
     The module docstring explains why.
