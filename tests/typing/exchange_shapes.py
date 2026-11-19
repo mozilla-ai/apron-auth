@@ -61,6 +61,10 @@ async def a_browser_token_supplied_as_plain_text_is_not_a_browser_token() -> Non
     await stored.exchange_code(callback, browser_token="browser-token")  # ty: ignore[invalid-argument-type]
 
 
+async def the_wider_secret_wrapper_is_not_the_one_the_parameter_states() -> None:
+    await stored.exchange_code(callback, browser_token=SecretStr("browser-token"))  # ty: ignore[invalid-argument-type]
+
+
 def a_caller_kept_client_takes_no_store() -> None:
     OAuthClient(config, state_store=store)  # ty: ignore[unknown-argument]
 

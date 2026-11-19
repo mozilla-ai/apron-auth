@@ -497,7 +497,7 @@ def _same_secret(given: str, expected: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
 
 
-def _state_for_browser_token(browser_token: SecretStr) -> str:
+def _state_for_browser_token(browser_token: SecretToken) -> str:
     """Return the ``state`` an authorization request sends for a browser token.
 
     The digest reveals nothing the token can be recovered from, so a request may send it to the
@@ -1554,7 +1554,9 @@ class StoredStateClient(_OAuthClientBase):
         )
         self._state_store = state_store
 
-    async def exchange_code(self, callback: AuthorizationCallback, *, browser_token: SecretStr | None) -> FreshTokenSet:
+    async def exchange_code(
+        self, callback: AuthorizationCallback, *, browser_token: SecretToken | None
+    ) -> FreshTokenSet:
         """Exchange an authorization response for tokens, against the pending state the store holds.
 
         The pending state for the response's ``state`` is consumed from the store, so a ``state``
@@ -1655,7 +1657,7 @@ class StoredStateClient(_OAuthClientBase):
         await self._state_store.save(pending_state)
         return BrowserBoundAuthorization(url=url, state=pending_state.state, browser_token=browser_token)
 
-    async def _bound_pending_state(self, browser_token: SecretStr | None, state: str) -> OAuthPendingState:
+    async def _bound_pending_state(self, browser_token: SecretToken | None, state: str) -> OAuthPendingState:
         """Consume the stored pending state of a callback whose state the given browser token mints.
 
         Args:
@@ -1673,6 +1675,8 @@ class StoredStateClient(_OAuthClientBase):
         # A callback presenting no token is refused with the same message as a wrong one, because both
         # mean the callback cannot be bound to a browser. An empty token is refused before it is hashed,
         # so no state this client mints is ever compared against the digest of nothing.
+        # NOTE: Any secret wrapper is read here. The parameter states the narrower one, so a caller
+        # passing the wider one answers to a type checker rather than to a refusal about its browser.
         if (
             not isinstance(browser_token, SecretStr)
             or not browser_token.get_secret_value()
