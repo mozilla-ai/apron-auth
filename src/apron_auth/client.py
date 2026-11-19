@@ -46,6 +46,7 @@ from apron_auth.errors import (
     TokenRefreshError,
 )
 from apron_auth.models import (
+    ID_TOKEN_MEMBER,
     AuthorizationCallback,
     BrowserBoundAuthorization,
     FreshTokenSet,
@@ -83,9 +84,6 @@ _TOKEN_REQUEST_HEADERS = MappingProxyType({"Accept": "application/json"})
 
 # The number fields a token-endpoint response states: a Unix timestamp and a lifetime in seconds.
 _TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
-
-# The member a token-endpoint response states its ID token in, which has no field of its own.
-_ID_TOKEN_MEMBER = "id_token"
 
 # The string fields a token-endpoint response states, beside the access token.
 _TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
@@ -231,7 +229,7 @@ def _stated_id_token(response: Mapping[str, Any]) -> Any:
     Returns:
         The ID token wrapped, or what the response stated where that is no string.
     """
-    stated = response.get("id_token")
+    stated = response.get(ID_TOKEN_MEMBER)
     return SecretToken(stated) if isinstance(stated, str) else stated
 
 
@@ -1400,7 +1398,7 @@ class _OAuthClientBase:
         # The ID token has no field of its own but is a credential this library names and reads, so it
         # is wrapped where the response is parsed rather than left for whoever dumps the extras.
         extras = {
-            name: SecretToken(value) if name == _ID_TOKEN_MEMBER and isinstance(value, str) else value
+            name: SecretToken(value) if name == ID_TOKEN_MEMBER and isinstance(value, str) else value
             for name, value in data.items()
             if name not in known_fields
         }

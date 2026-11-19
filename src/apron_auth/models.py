@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 AccessType = Literal["read", "write", "admin"]
 
+# The member a token-endpoint response and a token set's extras state the ID token in. It has no field
+# of its own, so the name is what both the parse and the narrowing find it by.
+ID_TOKEN_MEMBER = "id_token"
+
 # A client secret, which arrives wrapped and is read for the string it holds rather than trusted for the
 # wrapper around it. The presence rule runs on the value as it arrives and again on the one the field
 # settled on, because the field converts.
@@ -1914,7 +1918,7 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
         """
         # A token set this library built carries the ID token wrapped. One a caller built by hand
         # carries whatever they put in the extras, which the reader below wraps as it arrives.
-        id_token = _stated_extra_token(tokens.extras, "id_token")
+        id_token = _stated_extra_token(tokens.extras, ID_TOKEN_MEMBER)
         return cls(
             access_token=tokens.access_token,
             id_token=id_token if id_token is not None and id_token.get_secret_value() else None,
