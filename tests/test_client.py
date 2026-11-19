@@ -63,7 +63,7 @@ from apron_auth.pkce import generate_code_challenge
 from apron_auth.stores import MemoryStateStore
 
 # The browser token these tests present at a stored-state exchange.
-_BROWSER_TOKEN = "browser-token-for-these-tests"
+_BROWSER_TOKEN = SecretStr("browser-token-for-these-tests")
 
 # The fixed wall-clock reading, in epoch seconds, that the pending state age tests pin the client to.
 _NOW = 1_700_000_000.0
@@ -188,7 +188,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
-        derived = hashlib.sha256(authorization.browser_token.encode()).hexdigest()
+        derived = hashlib.sha256(authorization.browser_token.get_secret_value().encode()).hexdigest()
         assert authorization.state == derived
         assert parse_qs(urlparse(authorization.url).query)["state"] == [derived]
 
@@ -198,7 +198,7 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
-        assert authorization.browser_token not in authorization.url
+        assert authorization.browser_token.get_secret_value() not in authorization.url
 
     async def test_each_request_is_bound_to_a_browser_of_its_own(self):
         client = StoredStateClient(_make_config(), MemoryStateStore())
@@ -327,6 +327,18 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
             _callback(state=authorization.state), browser_token=authorization.browser_token
         )
         assert tokens.access_token.get_secret_value() == "access-token-abc"
+
+    async def test_a_browser_token_supplied_as_plain_text_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A plain string is a frame local for the whole call, so it is refused before the store is read."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+        presented = authorization.browser_token.get_secret_value()
+
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            await client.exchange_code(_callback(state=authorization.state), browser_token=presented)  # ty: ignore[invalid-argument-type]
+
+        assert presented not in str(caught.value)
+        assert httpx_mock.get_requests() == []
 
     async def test_the_token_check_compares_in_constant_time(self, monkeypatch: pytest.MonkeyPatch):
         """An equality check returns as soon as two values differ, which states where they first differ."""

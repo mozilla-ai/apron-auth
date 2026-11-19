@@ -2919,15 +2919,35 @@ class TestOAuthPendingState:
 
 
 class TestBrowserBoundAuthorization:
+    def test_a_browser_token_supplied_as_plain_text_is_refused(self) -> None:
+        """Possession of the token is the whole binding check, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            BrowserBoundAuthorization(
+                url="https://p.example.com/a",
+                state="st",
+                browser_token="plain-text-token",  # ty: ignore[invalid-argument-type]
+            )
+
+        assert "plain-text-token" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_wrapped_browser_token_reaches_the_model(self) -> None:
+        authorization = BrowserBoundAuthorization(
+            url="https://p.example.com/a", state="st", browser_token=SecretStr("bound-token")
+        )
+
+        assert authorization.browser_token.get_secret_value() == "bound-token"
+        assert "bound-token" not in repr(authorization)
+
     def test_it_carries_the_url_the_state_and_the_browser_token(self) -> None:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize?state=state-for-this-browser",
             state="state-for-this-browser",
-            browser_token="browser-token-abc",
+            browser_token=SecretStr("browser-token-abc"),
         )
         assert authorization.url == "https://provider.example.com/authorize?state=state-for-this-browser"
         assert authorization.state == "state-for-this-browser"
-        assert authorization.browser_token == "browser-token-abc"
+        assert authorization.browser_token.get_secret_value() == "browser-token-abc"
 
     def test_it_states_no_pending_state(self) -> None:
         """The store holds the pending state, so the PKCE verifier never travels beside the browser token."""
@@ -2949,10 +2969,10 @@ class TestBrowserBoundAuthorization:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize",
             state="state-for-this-browser",
-            browser_token="browser-token-abc",
+            browser_token=SecretStr("browser-token-abc"),
         )
         with pytest.raises(ConfigurationError):
-            authorization.browser_token = "another-browsers-token"
+            authorization.browser_token = SecretStr("another-browsers-token")
 
 
 class TestWorkloadIssuer:

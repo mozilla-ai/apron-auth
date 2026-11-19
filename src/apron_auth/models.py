@@ -2229,8 +2229,9 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     Construction and validation refuse a field this model does not define, and a refusal repeats no
     value it was given, because this model holds a secret.
-    NOTE: That covers a refusal alone. Rendering this model, or dumping it, states the browser token as
-    any other model holding a credential does, and it belongs in nothing the browser can read.
+    NOTE: That covers a refusal alone. Dumping this model states the browser token as a mask, so a
+    caller recording it reads it with ``get_secret_value`` and keeps it out of anything the browser
+    can read.
 
     Attributes:
         url: The authorization URL to send the browser to.
@@ -2238,7 +2239,7 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
             the browser token and reveals nothing the token can be recovered from, so it names this flow
             wherever the application records or looks one up.
         browser_token: The secret that binds the request to the browser it was built for, which the code
-            exchange needs back.
+            exchange needs back. It is wrapped so no frame local states it.
             NOTE: Callers must keep this where only that browser can present it, such as a ``Secure``,
             ``HttpOnly`` cookie, and must keep it out of the authorization URL and out of any page the
             browser renders. A token another browser can read binds the request to nothing.
@@ -2249,7 +2250,7 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     url: str
     state: str
-    browser_token: str
+    browser_token: Annotated[SecretStr, BeforeValidator(wrapped_credential)]
 
     # No URL rule: UrlField names no field of this model, and the config the authorization URL is built
     # from states its transport under rules of its own.

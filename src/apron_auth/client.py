@@ -497,19 +497,20 @@ def _same_secret(given: str, expected: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8", "surrogatepass"), expected.encode("utf-8", "surrogatepass"))
 
 
-def _state_for_browser_token(browser_token: str) -> str:
+def _state_for_browser_token(browser_token: SecretStr) -> str:
     """Return the ``state`` an authorization request sends for a browser token.
 
     The digest reveals nothing the token can be recovered from, so a request may send it to the
     authorization server while the token stays with the browser the request was built for.
 
     Args:
-        browser_token: The token minted for the browser the authorization request is built for.
+        browser_token: The token minted for the browser the authorization request is built for,
+            wrapped so this frame states it to no error reporter.
 
     Returns:
         The state, as hexadecimal digits.
     """
-    return hashlib.sha256(browser_token.encode("utf-8", "surrogatepass")).hexdigest()
+    return hashlib.sha256(browser_token.get_secret_value().encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def _stated_error_member(answer: BoundedResponse | None) -> object:
@@ -1549,7 +1550,7 @@ class StoredStateClient(_OAuthClientBase):
         )
         self._state_store = state_store
 
-    async def exchange_code(self, callback: AuthorizationCallback, *, browser_token: str | None) -> FreshTokenSet:
+    async def exchange_code(self, callback: AuthorizationCallback, *, browser_token: SecretStr | None) -> FreshTokenSet:
         """Exchange an authorization response for tokens, against the pending state the store holds.
 
         The pending state for the response's ``state`` is consumed from the store, so a ``state``
@@ -1591,6 +1592,7 @@ class StoredStateClient(_OAuthClientBase):
                 server refused the request and said why, or because it stated neither a code nor an
                 error. Its ``error_code`` carries the code the server named, where it named one in the
                 shape a code takes.
+            ConfigurationError: If the browser token is supplied as plain text.
             IdTokenValidationError: If the response carries an ID token that cannot be read, names another
                 audience or authorized party, has expired, or names another issuer when the config has one.
                 Every ID token the response carries is checked, whether or not the request sent a nonce.
@@ -1616,6 +1618,7 @@ class StoredStateClient(_OAuthClientBase):
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
+        refuse_plain_text(browser_token, "browser_token")
         return await self._redeem(callback, partial(self._bound_pending_state, browser_token))
 
     async def get_authorization_url(
@@ -1643,16 +1646,17 @@ class StoredStateClient(_OAuthClientBase):
                 It is also raised when the URI states no ``https`` and names no loopback host, unless
                 the config accepts plain HTTP for its redirect URI.
         """
-        browser_token = secrets.token_urlsafe(32)
+        browser_token = SecretStr(secrets.token_urlsafe(32))
         url, pending_state = self._authorization_request(_state_for_browser_token(browser_token), redirect_uri, context)
         await self._state_store.save(pending_state)
         return BrowserBoundAuthorization(url=url, state=pending_state.state, browser_token=browser_token)
 
-    async def _bound_pending_state(self, browser_token: str | None, state: str) -> OAuthPendingState:
+    async def _bound_pending_state(self, browser_token: SecretStr | None, state: str) -> OAuthPendingState:
         """Consume the stored pending state of a callback whose state the given browser token mints.
 
         Args:
-            browser_token: The token minted for the browser the authorization request was built for.
+            browser_token: The token minted for the browser the authorization request was built for,
+                wrapped so this frame states it to no error reporter.
             state: The ``state`` the callback carried.
 
         Returns:
@@ -1666,8 +1670,8 @@ class StoredStateClient(_OAuthClientBase):
         # mean the callback cannot be bound to a browser. An empty token is refused before it is hashed,
         # so no state this client mints is ever compared against the digest of nothing.
         if (
-            not isinstance(browser_token, str)
-            or not browser_token
+            not isinstance(browser_token, SecretStr)
+            or not browser_token.get_secret_value()
             or not _same_secret(state, _state_for_browser_token(browser_token))
         ):
             msg = "OAuth callback was not returned to the browser that started the authorization request"

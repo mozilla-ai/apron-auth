@@ -203,9 +203,13 @@ The store settles that the `state` was minted by this application, has not expir
 
 `get_authorization_url` returns a `BrowserBoundAuthorization`, carrying the URL, the `state` the request sends, and the `browser_token`. The token itself never travels to the provider: the request sends its SHA-256 as the `state`, which reveals nothing the token can be recovered from. The pending state stays in the store, so the model carries no PKCE verifier beside the token. Keep the token where only the browser it was minted for can present it, out of the authorization URL and out of any page the browser renders, and drop it once the exchange returns.
 
+The token is a `SecretStr`, because possession of it is the whole binding check: an attacker who reads one out of an error report can mint a `state` your client accepts. Read it with `get_secret_value()` to set the cookie, and wrap the value you read back out of the cookie in `SecretStr` before you pass it. One supplied as a plain string is refused with `ConfigurationError`.
+
 A `Secure`, `HttpOnly`, `SameSite=Lax` cookie is the usual place. Name it with the `__Host-` prefix so no other host on the same site can write it, and set `Secure`, `Path=/`, and no `Domain`, because a browser honors that prefix on nothing else and drops such a cookie without a word. Clear it with those same attributes. The `__Host-` rules in RFC 6265bis section 4.1.3.2 apply to every `Set-Cookie` that carries the name, a deletion included, so a clearing header without `Secure`, or with a `Path` other than `/`, is ignored and the cookie stays until its `Max-Age` runs out. A framework's cookie-clearing helper commonly leaves `Secure` off by default, and a test client's cookie jar applies no prefix rules at all, so a route test can honor a deletion a browser discards. Assert on the clearing header itself. Give it a `Max-Age` no longer than `max_pending_age_seconds`, since the exchange refuses an older pending state anyway. One fixed name per callback route is enough while a browser runs one flow at a time to that route: a second flow started in the same browser overwrites the name, so the first callback is refused and that user starts again. To let two run at once, put the `state` in the cookie name, `__Host-flow-{authorization.state}` where you set it and `__Host-flow-{callback.state}` where you read it, because the callback carries the `state` and nothing else of yours. `SameSite=Lax` suits the authorization-code redirect, which reaches you as a top-level GET. A provider answering with a POST to your redirect URI, as `response_mode=form_post` asks for, sends no `Lax` cookie at all, so a flow configured that way needs `SameSite=None` with `Secure`.
 
 ```python
+from pydantic import SecretStr
+
 from apron_auth import AuthorizationCallback, StoredStateClient
 
 store = MyStateStore()
@@ -213,12 +217,13 @@ client = StoredStateClient(config, store)
 
 authorization = await client.get_authorization_url(redirect_uri="https://yourapp.com/callback")
 # Redirect the user to `authorization.url`. The store holds the pending state.
-# Set `authorization.browser_token` in the cookie, and read it back as `cookie_browser_token`.
+# Set `authorization.browser_token.get_secret_value()` in the cookie, and read it back
+# as `cookie_browser_token`, wrapped again as `SecretStr(cookie_browser_token)`.
 
 # `query` is the callback's query parameters: your framework's own query
 # mapping, or any mapping of the names to their values.
 callback = AuthorizationCallback.from_query(query)
-tokens = await client.exchange_code(callback, browser_token=cookie_browser_token)
+tokens = await client.exchange_code(callback, browser_token=SecretStr(cookie_browser_token))
 print(tokens.access_token.get_secret_value())
 if tokens.refresh_token is not None:
     print(tokens.refresh_token.get_secret_value())
@@ -674,7 +679,7 @@ authorization = await client.get_authorization_url(
 # presenting it. The store is consumed automatically, because the response
 # carries the state it was sent.
 tokens = await client.exchange_code(
-    AuthorizationCallback.from_query(query), browser_token=cookie_browser_token
+    AuthorizationCallback.from_query(query), browser_token=SecretStr(cookie_browser_token)
 )
 ```
 
@@ -690,7 +695,7 @@ authorization = await client.get_authorization_url(
 
 # On callback, context comes back on the TokenSet.
 tokens = await client.exchange_code(
-    AuthorizationCallback.from_query(query), browser_token=cookie_browser_token
+    AuthorizationCallback.from_query(query), browser_token=SecretStr(cookie_browser_token)
 )
 print(tokens.context["user_id"])    # "U123"
 print(tokens.context["tenant_id"])  # "T456"

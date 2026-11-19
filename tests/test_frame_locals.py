@@ -10,6 +10,7 @@ A credential that never reaches the request would satisfy the second half on its
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Callable
 from importlib import import_module
@@ -20,11 +21,12 @@ import pytest
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
-from apron_auth.client import OAuthClient
-from apron_auth.errors import ConfigurationError, TokenRefreshError
-from apron_auth.models import IdentityMaterial, Provider, ProviderConfig, SecretToken
+from apron_auth.client import OAuthClient, StoredStateClient
+from apron_auth.errors import ConfigurationError, StateError, TokenRefreshError
+from apron_auth.models import AuthorizationCallback, IdentityMaterial, Provider, ProviderConfig, SecretToken
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
+from apron_auth.stores import MemoryStateStore
 
 # One identity handler with the configuration it accepts, built on demand so no import runs at collection.
 IdentityCase: TypeAlias = Callable[[], "tuple[Any, ProviderConfig]"]
@@ -259,6 +261,36 @@ class TestAConfigurationRefusal:
 
         _assert_chains_nothing(caught.value)
         assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
+
+
+class TestABrowserBindingRefusal:
+    """Test that a callback refused for its browser binding states the browser token in no frame local.
+
+    Possession of the token is the whole check, so an attacker reading one out of an error report can
+    mint a state a client accepts.
+    """
+
+    async def test_a_minted_token_binds_the_callback_it_was_minted_for(self) -> None:
+        client = StoredStateClient(_standard_config(), MemoryStateStore())
+
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+
+        minted = authorization.browser_token.get_secret_value()
+        assert authorization.state == hashlib.sha256(minted.encode()).hexdigest()
+
+    async def test_a_callback_from_another_browser_states_no_browser_token(self) -> None:
+        client = StoredStateClient(_standard_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
+        presented = authorization.browser_token.get_secret_value()
+
+        with pytest.raises(StateError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code="the-code", state="another-browsers-state"),
+                browser_token=authorization.browser_token,
+            )
+
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, presented) == []
 
 
 class TestATokenRefreshFailure:
