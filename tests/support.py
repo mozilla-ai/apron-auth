@@ -90,7 +90,13 @@ class LazyByteStream(httpx.AsyncByteStream):
 
 
 class LazyBodyTransport(httpx.AsyncBaseTransport):
-    """A transport answering every request with one lazily yielded body."""
+    """A transport answering every request with one lazily yielded body, holding what it answered with.
+
+    A reader that fails states no response of its own, so a test about what became of one reads it here.
+
+    Attributes:
+        answered: Each response this answered with, in order.
+    """
 
     def __init__(self, stream: LazyByteStream, *, headers: Mapping[str, str] | None = None) -> None:
         """Create the transport.
@@ -101,6 +107,7 @@ class LazyBodyTransport(httpx.AsyncBaseTransport):
         """
         self._stream = stream
         self._headers = dict(headers or {"content-type": "application/json"})
+        self.answered: list[httpx.Response] = []
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         """Answer ``request`` with the lazily yielded body.
@@ -111,4 +118,6 @@ class LazyBodyTransport(httpx.AsyncBaseTransport):
         Returns:
             The response, whose body has not been read.
         """
-        return httpx.Response(200, headers=self._headers, stream=self._stream)
+        response = httpx.Response(200, headers=self._headers, stream=self._stream)
+        self.answered.append(response)
+        return response

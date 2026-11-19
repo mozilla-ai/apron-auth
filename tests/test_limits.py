@@ -156,14 +156,19 @@ class TestWithinRequestLimit:
         assert answer.body == b"x" * cap
         assert peak < cap * _CHUNK_OVERHEAD_ALLOWED
 
-    async def test_the_body_is_released_when_the_limit_interrupts_the_read(self) -> None:
-        """A body still arriving when the limit passes is abandoned part way for the same reason."""
-        stream = LazyByteStream([b"y" * 16] * 100, chunk_seconds=0.05)
+    async def test_the_response_is_closed_when_the_limit_interrupts_the_read(self) -> None:
+        """A body still arriving when the limit passes is abandoned part way for the same reason.
 
-        async with self._client(LazyBodyTransport(stream)) as client:
+        The refusal states no response, so the response is read from the transport that answered with it.
+        """
+        stream = LazyByteStream([b"y" * 16] * 100, chunk_seconds=0.05)
+        transport = LazyBodyTransport(stream)
+
+        async with self._client(transport) as client:
             with pytest.raises(httpx.TimeoutException):
                 await self._answer(client, RequestLimits(connect_seconds=0.1, request_seconds=0.2))
 
+            assert transport.answered[0].is_closed
             assert stream.closed
 
 
