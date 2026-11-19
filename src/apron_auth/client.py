@@ -972,7 +972,7 @@ class _OAuthClientBase:
                 tells a dead grant (``invalid_grant``) from a client or configuration problem.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
-        refuse_plain_text(refresh_token, "refresh_token")
+        refuse_plain_text(refresh_token, "refresh_token", SecretToken)
         data: dict[str, str | SecretStr] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
@@ -1034,7 +1034,7 @@ class _OAuthClientBase:
                 provider does not confirm it.
                 It chains nothing from the handler.
         """
-        refuse_plain_text(token, "token")
+        refuse_plain_text(token, "token", SecretToken)
         if not self._config.revocation_url:
             msg = "revocation_url is not configured for this provider"
             raise ConfigurationError(msg)
@@ -1620,7 +1620,7 @@ class StoredStateClient(_OAuthClientBase):
                 its remaining tokens revoked first, under the same time limit as a refused ID token.
                 It does not chain the failed request's error, and its message states nothing the endpoint sent.
         """
-        refuse_plain_text(browser_token, "browser_token")
+        refuse_plain_text(browser_token, "browser_token", SecretToken)
         return await self._redeem(callback, partial(self._bound_pending_state, browser_token))
 
     async def get_authorization_url(

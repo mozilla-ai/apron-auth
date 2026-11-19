@@ -388,7 +388,7 @@ class WorkloadTokenVerifier:
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
         # The caller's own arguments are checked before any request is sent for the token.
-        refuse_plain_text(token, "token")
+        refuse_plain_text(token, "token", SecretToken)
         accepted = _accepted_audiences(audience)
         return (await self.check(token)).accept(accepted)
 
@@ -416,7 +416,7 @@ class WorkloadTokenVerifier:
             IdentityFetchError: If the issuer's configuration or signing keys cannot be fetched or read,
                 so no token from it can be verified now. A failed discovery is reported again for a minute.
         """
-        refuse_plain_text(token, "token")
+        refuse_plain_text(token, "token", SecretToken)
         if len(token.get_secret_value()) > _MAX_TOKEN_LENGTH:
             msg = "Workload token is longer than any issuer signs"
             raise TokenValidationError(msg, reason=TokenValidationReason.MALFORMED)

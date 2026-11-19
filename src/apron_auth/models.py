@@ -32,7 +32,7 @@ from pydantic import (
 
 from apron_auth._client_secrets import stated_client_secret
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
-from apron_auth._credentials import wrapped_credential
+from apron_auth._credentials import arrives_wrapped
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -54,7 +54,7 @@ AccessType = Literal["read", "write", "admin"]
 # settled on, because the field converts.
 ClientSecret = Annotated[
     SecretStr | None,
-    BeforeValidator(wrapped_credential),
+    BeforeValidator(arrives_wrapped(SecretStr)),
     BeforeValidator(stated_client_secret),
     AfterValidator(stated_client_secret),
 ]
@@ -147,10 +147,10 @@ class SecretToken(SecretStr):
 
 # A token this library holds, which arrives wrapped so no frame local between here and the wire states it.
 # It is stated here rather than with the other constants, because it names the class above.
-Credential = Annotated[SecretToken, BeforeValidator(wrapped_credential)]
+Credential = Annotated[SecretToken, BeforeValidator(arrives_wrapped(SecretToken))]
 
 # The same, for a token a provider need not state.
-OptionalCredential = Annotated[SecretToken | None, BeforeValidator(wrapped_credential)]
+OptionalCredential = Annotated[SecretToken | None, BeforeValidator(arrives_wrapped(SecretToken))]
 
 
 @unique
