@@ -2280,6 +2280,23 @@ class TestRegisterClient:
     @pytest.mark.parametrize(
         "method",
         [
+            pytest.param("private_key_jwt", id="a method this library cannot perform"),
+            pytest.param("", id="a name no method carries"),
+            pytest.param("CLIENT_SECRET_POST", id="a member name rather than its wire name"),
+        ],
+    )
+    async def test_an_auth_method_this_library_cannot_perform_is_refused_before_any_request(
+        self, httpx_mock: HTTPXMock, method: str
+    ) -> None:
+        """The argument is the caller's own, so it is refused rather than asked for and then discarded."""
+        with pytest.raises(ConfigurationError, match="cannot perform") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI, token_endpoint_auth_method=method)  # ty: ignore
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize(
+        "method",
+        [
             TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
             TokenEndpointAuthMethod.CLIENT_SECRET_POST,
             TokenEndpointAuthMethod.NONE,

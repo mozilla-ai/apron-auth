@@ -435,6 +435,9 @@ async def register_client(
             When omitted, a ``native`` application type asks for ``none`` and
             every other type asks for ``client_secret_post``. The method the
             response states is authoritative either way.
+            NOTE: A stated method pre-empts the application type and is asked
+            for as stated, so a caller pairing ``native`` with a method that
+            requires a secret asks for a native client that keeps one.
         url_validator: Optional policy invoked on the URL before the request.
         limits: The limits on the registration request. Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
         transport_factory: Optional factory controlling the outbound connection.
@@ -446,8 +449,9 @@ async def register_client(
         persistence obligation.
 
     Raises:
-        ConfigurationError: If ``registration_url`` is rejected, or ``redirect_uri`` carries
-            a credential in its authority.
+        ConfigurationError: If ``registration_url`` is rejected, ``redirect_uri`` carries
+            a credential in its authority, or ``token_endpoint_auth_method`` names a method
+            this library cannot perform.
             It is also raised when ``redirect_uri`` states no ``https`` and names no loopback host,
             because a configuration built from the issued registration would refuse that URI.
         McpRegistrationError: If the request fails in transit, the endpoint returns
@@ -466,14 +470,13 @@ async def register_client(
     _require_secure_transport(redirect_uri, subject="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
-    if token_endpoint_auth_method is None:
-        token_endpoint_auth_method = _requested_auth_method(application_type)
+    requested_method = _requested_auth_method(token_endpoint_auth_method, application_type)
     payload = {
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": token_endpoint_auth_method,
+        "token_endpoint_auth_method": requested_method,
     }
     if application_type is not None:
         payload["application_type"] = application_type
@@ -875,22 +878,39 @@ def _malformed_url_message(subject: str) -> str:
     return f"MCP OAuth received a malformed URL ({subject})"
 
 
-def _requested_auth_method(application_type: ApplicationType | None) -> TokenEndpointAuthMethod:
+def _requested_auth_method(
+    stated: TokenEndpointAuthMethod | None, application_type: ApplicationType | None
+) -> TokenEndpointAuthMethod:
     """Return the token-endpoint authentication method to ask a registration for.
 
-    A native client cannot keep a client secret (RFC 8252 section 8.4), so it asks to be registered
-    as a public client.
-    Every other type asks for ``client_secret_post``, the confidential method this library prefers.
+    A method the caller stated is asked for as stated, so a caller who knows what their server
+    registers is not held to the derivation.
+    Absent one, a native client cannot keep a client secret (RFC 8252 section 8.4), so it asks to be
+    registered as a public client, and every other application type asks for ``client_secret_post``,
+    the confidential method this library prefers.
+
+    A stated method is refused here rather than sent, because a server that honored an unperformable
+    one would issue credentials this library would then discard, leaving a registration standing.
 
     Args:
+        stated: The method the caller asked for, or None to derive one.
         application_type: The application type the registration declares, or None when it declares none.
 
     Returns:
         The method to request.
+
+    Raises:
+        ConfigurationError: If the caller stated a method this library cannot perform.
     """
-    if application_type == ApplicationType.NATIVE:
-        return TokenEndpointAuthMethod.NONE
-    return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    if stated is None:
+        if application_type == ApplicationType.NATIVE:
+            return TokenEndpointAuthMethod.NONE
+        return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    performable = _stated_auth_method(stated)
+    if performable is None:
+        msg = "token_endpoint_auth_method names a client authentication method this library cannot perform"
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+    return performable
 
 
 def _require_no_authority_credential(url: str, *, subject: str, caller_supplied: bool) -> None:
