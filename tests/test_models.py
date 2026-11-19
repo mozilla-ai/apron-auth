@@ -289,7 +289,7 @@ class TestAuthorizationCallback:
         assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
 
     def test_it_is_frozen(self) -> None:
-        callback = AuthorizationCallback(code=SecretStr("abc"), state="xyz")
+        callback = AuthorizationCallback(code=SecretToken("abc"), state="xyz")
 
         with pytest.raises(ConfigurationError):
             callback.code = "other"  # ty: ignore[invalid-assignment]
@@ -2835,7 +2835,7 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
-            code_verifier=SecretStr("verifier-abc"),
+            code_verifier=SecretToken("verifier-abc"),
             openid_requested=False,
             created_at=now,
         )
@@ -3002,7 +3002,7 @@ class TestBrowserBoundAuthorization:
 
     def test_a_wrapped_browser_token_reaches_the_model(self) -> None:
         authorization = BrowserBoundAuthorization(
-            url="https://p.example.com/a", state="st", browser_token=SecretStr("bound-token")
+            url="https://p.example.com/a", state="st", browser_token=SecretToken("bound-token")
         )
 
         assert authorization.browser_token.get_secret_value() == "bound-token"
@@ -3012,7 +3012,7 @@ class TestBrowserBoundAuthorization:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize?state=state-for-this-browser",
             state="state-for-this-browser",
-            browser_token=SecretStr("browser-token-abc"),
+            browser_token=SecretToken("browser-token-abc"),
         )
         assert authorization.url == "https://provider.example.com/authorize?state=state-for-this-browser"
         assert authorization.state == "state-for-this-browser"
@@ -3038,7 +3038,7 @@ class TestBrowserBoundAuthorization:
         authorization = BrowserBoundAuthorization(
             url="https://provider.example.com/authorize",
             state="state-for-this-browser",
-            browser_token=SecretStr("browser-token-abc"),
+            browser_token=SecretToken("browser-token-abc"),
         )
         with pytest.raises(ConfigurationError):
             authorization.browser_token = SecretStr("another-browsers-token")

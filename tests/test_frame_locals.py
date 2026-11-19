@@ -281,7 +281,7 @@ class TestACodeExchangeFailure:
         return OAuthPendingState(
             state="pending-state",
             redirect_uri="https://app.example.com/cb",
-            code_verifier=SecretStr(verifier),
+            code_verifier=SecretToken(verifier),
             openid_requested=False,
             created_at=time.time(),
         )
@@ -292,7 +292,7 @@ class TestACodeExchangeFailure:
 
         with pytest.raises(TokenExchangeError) as caught:
             await client.exchange_code(
-                AuthorizationCallback(code=SecretStr(TOKEN), state="pending-state"),
+                AuthorizationCallback(code=SecretToken(TOKEN), state="pending-state"),
                 pending_state=self._pending("a-verifier"),
             )
 
@@ -307,7 +307,7 @@ class TestACodeExchangeFailure:
 
         with pytest.raises(TokenExchangeError) as caught:
             await client.exchange_code(
-                AuthorizationCallback(code=SecretStr("the-code"), state="pending-state"),
+                AuthorizationCallback(code=SecretToken("the-code"), state="pending-state"),
                 pending_state=self._pending(TOKEN),
             )
 
@@ -338,7 +338,7 @@ class TestABrowserBindingRefusal:
 
         with pytest.raises(StateError) as caught:
             await client.exchange_code(
-                AuthorizationCallback(code=SecretStr("the-code"), state="another-browsers-state"),
+                AuthorizationCallback(code=SecretToken("the-code"), state="another-browsers-state"),
                 browser_token=authorization.browser_token,
             )
 

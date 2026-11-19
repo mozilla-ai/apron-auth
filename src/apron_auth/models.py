@@ -724,7 +724,7 @@ def _stated_callback_values(query: Mapping[str, Any], name: str) -> list[Any]:
     values = _stated_values(query, name)
     if name not in _CALLBACK_CREDENTIALS:
         return values
-    return [SecretStr(value) if isinstance(value, str) else value for value in values]
+    return [SecretToken(value) if isinstance(value, str) else value for value in values]
 
 
 class _RefusesWithoutRepeating(BaseModel):
@@ -2125,7 +2125,7 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             server chose its text. It is here for a caller to show or record.
     """
 
-    code: Annotated[SecretStr | None, BeforeValidator(wrapped_credential)] = None
+    code: OptionalCredential = None
     state: str | None = None
     iss: str | None = None
     error: str | None = None
@@ -2210,7 +2210,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
     state: str
     redirect_uri: str
-    code_verifier: Annotated[SecretStr | None, BeforeValidator(wrapped_credential)] = None
+    code_verifier: OptionalCredential = None
     nonce: str | None = None
     openid_requested: bool
     created_at: float
@@ -2275,7 +2275,7 @@ class BrowserBoundAuthorization(_RefusesWithoutRepeating, frozen=True, extra="fo
 
     url: str
     state: str
-    browser_token: Annotated[SecretStr, BeforeValidator(wrapped_credential)]
+    browser_token: Credential
 
     # No URL rule: UrlField names no field of this model, and the config the authorization URL is built
     # from states its transport under rules of its own.

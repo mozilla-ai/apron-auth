@@ -8,14 +8,16 @@ import secrets
 
 from pydantic import SecretStr
 
+from apron_auth.models import SecretToken
 
-def generate_code_verifier() -> SecretStr:
+
+def generate_code_verifier() -> SecretToken:
     """Generate a cryptographically random code verifier.
 
     Returns:
         A 43-character URL-safe string with 256 bits of entropy, wrapped so no frame local states it.
     """
-    return SecretStr(secrets.token_urlsafe(32))
+    return SecretToken(secrets.token_urlsafe(32))
 
 
 def generate_code_challenge(code_verifier: SecretStr) -> str:

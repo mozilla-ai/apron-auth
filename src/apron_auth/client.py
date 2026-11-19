@@ -1648,7 +1648,7 @@ class StoredStateClient(_OAuthClientBase):
                 It is also raised when the URI states no ``https`` and names no loopback host, unless
                 the config accepts plain HTTP for its redirect URI.
         """
-        browser_token = SecretStr(secrets.token_urlsafe(32))
+        browser_token = SecretToken(secrets.token_urlsafe(32))
         url, pending_state = self._authorization_request(_state_for_browser_token(browser_token), redirect_uri, context)
         await self._state_store.save(pending_state)
         return BrowserBoundAuthorization(url=url, state=pending_state.state, browser_token=browser_token)
