@@ -43,7 +43,7 @@ from apron_auth._discovery import (
 )
 from apron_auth._http_errors import http_failure, response_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import within_request_limit
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import (
     AuthorityCredential,
     authority_credential,
@@ -59,8 +59,8 @@ from apron_auth.models import (
     ApplicationType,
     ClientRegistration,
     ProviderConfig,
+    RequestLimits,
     ServerMetadata,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
@@ -142,7 +142,7 @@ async def discover(
     resource_metadata_url: str | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ServerMetadata:
     """Discover a remote MCP server's OAuth metadata.
 
@@ -173,8 +173,8 @@ async def discover(
         transport_factory: Optional factory returning an httpx transport for a
             URL, letting the caller control the outbound connection (e.g. pin
             DNS to validated public IPs to prevent SSRF via rebinding).
-        timeouts: The limits on every request this makes.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request this makes.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The discovered metadata.
@@ -199,7 +199,7 @@ async def discover(
     """
     _validate_url(server_url, url_validator, subject="server_url", caller_supplied=True)
 
-    limits = timeouts or TimeoutPolicy()
+    limits = limits or RequestLimits()
     prm_document = "protected resource metadata"
     fetched = await _fetch_first_metadata(
         _prm_candidates(resource_metadata_url, server_url),
@@ -307,7 +307,7 @@ def to_provider_config(
     scopes: Sequence[str] = (),
     redirect_uri: str | None = None,
     resource: str | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Fold discovered metadata and client credentials into a ProviderConfig with no identity handler of its own.
 
@@ -346,8 +346,8 @@ def to_provider_config(
             it — a discovered resource cannot be suppressed here. The resulting
             config carries no resource indicator only when ``resource`` is
             ``None`` and none was discovered.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         A provider configuration for :class:`~apron_auth.client.OAuthClient`.
@@ -387,7 +387,7 @@ def to_provider_config(
         require_iss=metadata.iss_parameter_supported,
         resource=resource if resource is not None else metadata.resource,
         use_builtin_identity_handler=False,
-        timeouts=timeouts or TimeoutPolicy(),
+        limits=limits or RequestLimits(),
     )
 
 
@@ -399,7 +399,7 @@ async def register_client(
     application_type: ApplicationType | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ClientRegistration:
     """Dynamically register an OAuth client (RFC 7591) and return its credentials.
 
@@ -421,7 +421,7 @@ async def register_client(
             otherwise left unset. Registering ``native`` lets servers that gate
             ``localhost`` redirects on it accept the registration.
         url_validator: Optional policy invoked on the URL before the request.
-        timeouts: The limits on the registration request. Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on the registration request. Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
         transport_factory: Optional factory controlling the outbound connection.
 
     Returns:
@@ -460,7 +460,7 @@ async def register_client(
     }
     if application_type is not None:
         payload["application_type"] = application_type
-    limits = timeouts or TimeoutPolicy()
+    limits = limits or RequestLimits()
     client = _opened_client(
         registration_url,
         transport_factory,
@@ -470,7 +470,7 @@ async def register_client(
     )
     async with client:
         try:
-            response = await within_request_limit(client.post(registration_url, json=payload), limits)
+            answer = await within_request_limit(streamed(client, "POST", registration_url, json=payload), limits)
         except httpx.InvalidURL as exc:
             # The client refuses a URL it cannot send, so no request was made and the argument is at fault.
             error_cls, error_kind = _url_fault(caller_supplied=True)
@@ -479,15 +479,15 @@ async def register_client(
             transport = http_failure(exc)
             msg = f"client registration request failed: {transport.description}"
             raise McpRegistrationError(msg, kind=transport.kind) from exc
-        if response.status_code not in (200, 201):
-            status = response_failure(response)
+        if answer.response.status_code not in (200, 201):
+            status = response_failure(answer.response)
             msg = f"client registration failed: {status.description}"
             raise McpRegistrationError(msg, kind=status.kind)
         try:
-            data = decode_json_body(response)
+            data = decode_json_body(answer.body)
         except ValueError:
             data = None
-            failure = "client registration returned a non-JSON response"
+            failure = "client registration returned a response that could not be read"
         else:
             failure = None
     # NOTE: This raise stays outside the except block, so the error carries no context.
@@ -771,7 +771,7 @@ def _infer_application_type(redirect_uri: str) -> ApplicationType | None:
 def _opened_client(
     url: str,
     transport_factory: TransportFactory | None,
-    timeouts: TimeoutPolicy,
+    limits: RequestLimits,
     *,
     subject: str,
     error_cls: type[OAuthError],
@@ -781,7 +781,7 @@ def _opened_client(
     Args:
         url: The URL the client will fetch, which selects the transport.
         transport_factory: Optional factory returning the transport for ``url``.
-        timeouts: The limits in force for the fetch.
+        limits: The limits in force for the fetch.
         subject: What the URL is, for a refusal.
         error_cls: The error this phase refuses with.
 
@@ -793,7 +793,7 @@ def _opened_client(
             when that is one of this library's errors, so a caller's own class reaches the caller.
     """
     try:
-        return discovery_client(url, transport_factory, timeouts)
+        return discovery_client(url, transport_factory, limits)
     except OAuthError:
         raise
     except NoTransportError:
@@ -1110,7 +1110,7 @@ async def _fetch_first_metadata(
     candidates: Sequence[_Candidate],
     url_validator: UrlValidator | None,
     transport_factory: TransportFactory | None,
-    timeouts: TimeoutPolicy,
+    limits: RequestLimits,
     what: str,
 ) -> dict[str, Any] | _MetadataOutcome:
     """Fetch the first candidate URL that yields a JSON object, or state why none did.
@@ -1125,7 +1125,7 @@ async def _fetch_first_metadata(
         candidates: The URLs to try, in order, each with its source.
         url_validator: Optional policy invoked on each URL before it is requested.
         transport_factory: Optional factory controlling the outbound connection.
-        timeouts: The limits in force for each candidate's fetch.
+        limits: The limits in force for each candidate's fetch.
         what: The document this fetches, for the error and the debug lines.
 
     Returns:
@@ -1144,7 +1144,7 @@ async def _fetch_first_metadata(
         subject = f"{what} URL"
         try:
             _validate_url(url, url_validator, subject=subject, caller_supplied=caller_supplied)
-            client = _opened_client(url, transport_factory, timeouts, subject=subject, error_cls=McpDiscoveryError)
+            client = _opened_client(url, transport_factory, limits, subject=subject, error_cls=McpDiscoveryError)
         except OAuthError:
             if not candidate.is_hint:
                 raise
@@ -1152,7 +1152,7 @@ async def _fetch_first_metadata(
             continue
         async with client:
             try:
-                response = await within_request_limit(client.get(url), timeouts)
+                answer = await within_request_limit(streamed(client, "GET", url), limits)
             except httpx.InvalidURL as exc:
                 # A URL the client refuses is malformed input rather than a dead candidate, so it ends the
                 # fetch, unless it is the hint, which cannot decide the fetch however it proves unusable.
@@ -1166,6 +1166,7 @@ async def _fetch_first_metadata(
                 logger.debug("MCP discovery: %s request failed (%s)", what, transport.description)
                 observed.append(_MetadataOutcome(_MetadataFault.UNAVAILABLE, transport.kind))
                 continue
+            response = answer.response
             if response.status_code != 200:
                 status = response_failure(response)
                 logger.debug("MCP discovery: %s returned HTTP %d", what, response.status_code)
@@ -1176,9 +1177,9 @@ async def _fetch_first_metadata(
                 observed.append(_MetadataOutcome(fault, status.kind))
                 continue
             try:
-                payload = decode_json_body(response)
+                payload = decode_json_body(answer.body)
             except ValueError:
-                logger.debug("MCP discovery: %s returned a non-JSON body", what)
+                logger.debug("MCP discovery: %s returned a body that could not be read", what)
                 observed.append(unreadable)
                 continue
             if isinstance(payload, dict):

@@ -11,7 +11,7 @@ import httpx
 
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure, response_failure
-from apron_auth._timeouts import httpx_timeout, within_request_limit
+from apron_auth._limits import BoundedResponse, httpx_timeout, streamed, within_request_limit
 from apron_auth._urls import AuthorityCredential, authority_credential, url_host, uses_allowed_transport
 from apron_auth.errors import ConfigurationError, FailureKind, RevocationError
 from apron_auth.models import BasicAuthCredential, SecretToken, UrlField
@@ -133,7 +133,8 @@ class StandardRevocationHandler:
             # body, presenting no client authentication.
             else {"token": token.get_secret_value(), "client_id": config.client_id},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in _REVOKED_STATUSES:
             return True
         refuse_an_unexpected_status(response, label=request.label)
@@ -270,7 +271,7 @@ async def send_revocation(
     config: ProviderConfig,
     *,
     transport_factory: TransportFactory | None = None,
-) -> httpx.Response:
+) -> BoundedResponse:
     """Send one revocation request and return the answer it gets.
 
     A provider reads success its own way, so this states no success rule and leaves the response to its caller.
@@ -290,7 +291,7 @@ async def send_revocation(
             return one it intends to reuse.
 
     Returns:
-        The endpoint's response, which states an outcome for its caller to read.
+        The endpoint's response and the body it stated, which state an outcome for its caller to read.
 
     Raises:
         ConfigurationError: If a URL the request names must not be sent the token, because it reaches
@@ -309,10 +310,11 @@ async def send_revocation(
         transport = chosen_transport(transport_factory, request.endpoint or request.url)
         # A redirect would carry the token to a host the gate never read, so none is followed.
         async with httpx.AsyncClient(
-            transport=transport, timeout=httpx_timeout(config.timeouts), follow_redirects=False
+            transport=transport, timeout=httpx_timeout(config.limits), follow_redirects=False
         ) as client:
-            response = await within_request_limit(
-                client.request(
+            answer = await within_request_limit(
+                streamed(
+                    client,
                     request.method,
                     request.url,
                     auth=_presented_auth(request.auth),
@@ -321,7 +323,7 @@ async def send_revocation(
                     json=request.json_body,
                     params=request.params,
                 ),
-                config.timeouts,
+                config.limits,
             )
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except NoTransportError:
@@ -341,9 +343,10 @@ async def send_revocation(
         # A failure outside the clauses above can still hold the token-bearing request.
         failure_message, kind = f"Failed to revoke {subject}: request failed", FailureKind.UNEXPECTED
     else:
+        response = answer.response
         if httpx.codes.is_error(response.status_code) and response_failure(response).kind.retryable:
             refuse_an_unexpected_status(response, label=request.label)
-        return response
+        return answer
     # NOTE: The caught error holds the token-bearing request, so this error must not chain it.
     # This raise stays outside the except blocks, where Python would set __context__ to the caught error.
     raise RevocationError(failure_message, kind=kind)

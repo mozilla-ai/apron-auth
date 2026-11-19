@@ -13,16 +13,17 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from apron_auth._claims import stated_boolean
+from apron_auth._limits import streamed
 from apron_auth.errors import ConfigurationError
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
@@ -107,14 +108,16 @@ class GoogleIdentityHandler:
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _GOOGLE_USERINFO_URL, "Google identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
+        async with identity_client(config.limits, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
+                streamed(
+                    client,
+                    "GET",
                     _GOOGLE_USERINFO_URL,
                     headers={"Authorization": f"Bearer {material.access_token.get_secret_value()}"},
                 ),
                 "Google identity",
-                config.timeouts,
+                config.limits,
             )
         email_verified = stated_boolean(payload.get("email_verified"))
 
@@ -199,7 +202,8 @@ class GoogleRevocationHandler:
             label="Google",
             params={"token": token.get_secret_value()},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in (_TOKEN_REVOKED, _TOKEN_NOT_VALID):
             return True
         refuse_an_unexpected_status(response, label=request.label)
@@ -212,7 +216,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Google OAuth provider configuration.
 
@@ -227,13 +231,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``access_type=offline`` and ``prompt=consent`` defaults.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

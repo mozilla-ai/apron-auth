@@ -15,14 +15,15 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from apron_auth._limits import streamed
 from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
 )
 from apron_auth.protocols import TransportFactory
@@ -95,9 +96,11 @@ class NotionIdentityHandler:
                 A refusal by the caller's transport factory is reported here too, and chains the factory's own error.
         """
         transport = identity_transport(self._transport_factory, _NOTION_USERINFO_URL, "Notion identity")
-        async with identity_client(config.timeouts, transport=transport) as client:
+        async with identity_client(config.limits, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
+                streamed(
+                    client,
+                    "GET",
                     _NOTION_USERINFO_URL,
                     headers={
                         "Authorization": f"Bearer {material.access_token.get_secret_value()}",
@@ -105,7 +108,7 @@ class NotionIdentityHandler:
                     },
                 ),
                 "Notion identity",
-                config.timeouts,
+                config.limits,
             )
 
         bot = payload.get("bot") if isinstance(payload, dict) else None
@@ -213,7 +216,8 @@ class NotionRevocationHandler:
             auth=config.basic_auth(),
             json_body={"token": token.get_secret_value()},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if response.status_code in (200, 400):
             return True
         refuse_an_unexpected_status(response, label=request.label)
@@ -226,7 +230,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Notion OAuth provider configuration.
 
@@ -242,13 +246,13 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``owner=user`` default.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
         from it.
     """
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

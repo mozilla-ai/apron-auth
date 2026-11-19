@@ -605,32 +605,36 @@ GitHub's 422 is read less precisely than you may expect. GitHub answers it both 
 
 A config whose provider exposes no revocation endpoint, such as Microsoft's or Typeform's, declares no `revocation_url`, and `revoke_token` refuses it with `ConfigurationError`. A config that names a provider must name that provider's host for revocation, or the host its token endpoint names, because a revocation request carries the token there. Construction refuses one that names another host, and the request refuses the host it is about to reach, so a handler that builds its URL per token, and a copy that rewrites the revocation endpoint past validation, are both held to the rule. A copy that rewrites the token endpoint as well states a different issuer, and the rule then holds it to that issuer rather than to the provider it is labeled with. A config that names no provider states no hosts to hold it to, and the caller passing one owns where its token is sent. The request also refuses a URL that does not state `https`, whatever provider the config names, unless the URL names a loopback host or the config waived plain HTTP for `revocation_url` through `ProviderConfig.unsafe.allow_plain_http`, and it refuses a URL carrying a credential in its authority, because an HTTP client presents that credential in place of the token.
 
-### Timeouts
+### Request limits
 
-One policy bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, and MCP registration. `TimeoutPolicy` states two limits in seconds. `connect_seconds` bounds establishing a connection, and `request_seconds` bounds a whole request however many steps it takes. Each must be a positive finite number, so no limit can be turned off, and a connect limit longer than the request limit is refused rather than accepted and ignored. The defaults are 5 and 10.
+One set of limits bounds every request this library sends: the code exchange and the refresh, revocation, identity, discovery, the OpenID provider document, the signing key set, and MCP registration. `RequestLimits` states what a request may spend. `connect_seconds` bounds establishing a connection, `request_seconds` bounds a whole request however many steps it takes, and `max_body_bytes` bounds the decoded body a response may state. Each must be positive and finite, so no limit can be turned off, and a connect limit longer than the request limit is refused rather than accepted and ignored. The defaults are 5 seconds, 10 seconds and 1 MiB.
 
-A whole-request limit is not a per-step one. An HTTP client's own limits bound a single read or write, so a response arriving slowly in many steps outlives all of them. `request_seconds` bounds the request itself, and a request that passes it fails with the `TIMEOUT` failure kind.
+A whole-request limit is not a per-step one. An HTTP client's own limits bound a single read or write, so a response arriving slowly in many steps outlives all of them. `request_seconds` bounds the request itself, including reading the body it answers with, and a request that passes it fails with the `TIMEOUT` failure kind.
+
+`max_body_bytes` bounds memory as well as time. Every body is counted as it decodes and the read stops at the byte that passes the limit, so no more than the limit is retained however far a compressed body would expand. The limit bounds what is retained rather than what a single decode step allocates: a chunk is decompressed whole before it is counted, so a compressed body can allocate several times the limit for the step it is refused on. A refused body is reported as the unreadable body it is, which is the same failure a body that is not JSON gets, and where that failure reaches you it carries the `REFUSED` failure kind. In the MCP flow the host whose body is read is named by a fetched document rather than by you, which is why the limit applies by default rather than being left to a transport of your own.
 
 The token, revocation and identity requests had no whole-request limit before 0.21.0, so a provider that takes longer than ten seconds in total now fails where it used to be waited on. Raise `request_seconds` for a provider known to be slow: a cold-starting self-hosted OpenID provider, an Atlassian identity lookup that fans out across a user's sites, or a HubSpot introspection call.
+
+These limits were `TimeoutPolicy` before 0.25.0, and a configuration stated them as `ProviderConfig.timeouts`. Neither name is kept as an alias, because a name that says only time does not describe a limit on memory, and two names for one type leave a reader to work out which is current. Import `RequestLimits` in place of `TimeoutPolicy`, read `config.limits` in place of `config.timeouts`, and pass `limits=` in place of `timeouts=` to every preset, to `mcp.discover`, `mcp.register_client` and `oidc.discover`, and to `WorkloadTokenVerifier`. Nothing else about them changed.
 
 Set it where you build the configuration, and every request for that provider runs under it. Each builder takes it as a keyword, and a configuration written by hand takes it as a field:
 
 ```python
-from apron_auth import OAuthClient, TimeoutPolicy
+from apron_auth import OAuthClient, RequestLimits
 from apron_auth.providers import google
 
 config = google.preset(
     client_id="...",
     client_secret="...",
     scopes=["openid", "email"],
-    timeouts=TimeoutPolicy(connect_seconds=2.0, request_seconds=30.0),
+    limits=RequestLimits(connect_seconds=2.0, request_seconds=30.0),
 )
 client = OAuthClient(config)
 ```
 
 The functions that run before a configuration exists take the same keyword, because they have none to read it from: `mcp.discover`, `mcp.register_client`, `oidc.discover` and `WorkloadTokenVerifier`.
 
-A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.timeouts` is the policy in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and nothing in this library bounds them for it.
+A `RevocationHandler` or `IdentityHandler` of your own needs nothing new. It receives the configuration, so `config.limits` is the set of limits in force for the request it is about to send. A handler that ignores it bounds its own requests by nothing, and nothing in this library bounds them for it.
 
 `ProviderConfig.revocation_cleanup_seconds` is a separate limit, because it bounds this library's own work rather than one request: when a token response is refused, the tokens it carried are revoked, and each revocation is canceled past that limit so the refusal is reported rather than waited on. It defaults to ten seconds. A revocation handler that does not stop when it is canceled can still delay the refusal, because this library waits for the cancellation it asked for.
 

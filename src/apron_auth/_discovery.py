@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from apron_auth._timeouts import httpx_timeout
+from apron_auth._limits import httpx_timeout
 from apron_auth.models import TokenEndpointAuthMethod
 
 if TYPE_CHECKING:
-    from apron_auth.models import TimeoutPolicy
+    from apron_auth.models import RequestLimits
     from apron_auth.protocols import TransportFactory
 
 # Token-endpoint auth methods this library can perform for a confidential client, in preference order.
@@ -116,9 +116,7 @@ def chosen_transport(transport_factory: TransportFactory | None, url: str) -> ht
     return transport
 
 
-def discovery_client(
-    url: str, transport_factory: TransportFactory | None, timeouts: TimeoutPolicy
-) -> httpx.AsyncClient:
+def discovery_client(url: str, transport_factory: TransportFactory | None, limits: RequestLimits) -> httpx.AsyncClient:
     """Build the HTTP client for a metadata or registration fetch.
 
     The client follows no redirects, so a validated URL cannot be bounced to an unvalidated host.
@@ -129,13 +127,13 @@ def discovery_client(
     Args:
         url: The URL the client will fetch, which selects the transport.
         transport_factory: Optional factory returning the transport for ``url``.
-        timeouts: The limits in force for the fetch.
+        limits: The limits in force for the fetch.
 
     Returns:
         A client that routes through the factory's transport when one is given.
     """
     transport = chosen_transport(transport_factory, url)
-    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
+    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(limits), follow_redirects=False)
 
 
 def str_list(value: object) -> list[str]:

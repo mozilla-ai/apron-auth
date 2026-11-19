@@ -67,6 +67,9 @@ RESERVED_AUTHORIZATION_PARAMS = frozenset(
     }
 )
 
+# The default limit, in bytes, on the decoded body one outbound request may read.
+_DEFAULT_BODY_BYTES = 1_048_576
+
 # The default wall clock, in seconds, allowed for revoking the tokens of a refused response.
 _DEFAULT_REVOCATION_CLEANUP_SECONDS = 10.0
 
@@ -818,27 +821,31 @@ class _RefusesWithoutRepeating(BaseModel):
         return type(self).model_validate({**values, **updates}, context=context)
 
 
-class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
-    """How long this library waits for one outbound request.
+class RequestLimits(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
+    """What this library spends on one outbound request, in time and in memory.
 
-    One policy governs every request this library sends. Each limit is a positive finite number of
-    seconds, so no limit can be turned off.
+    One set of limits governs every request this library sends. Each limit is positive and finite, so no
+    limit can be turned off.
 
     Attributes:
         connect_seconds: The limit on establishing a connection, which counts toward the whole-request
             limit and so cannot exceed it.
-        request_seconds: The limit on a whole request, however many steps it takes.
+        max_body_bytes: The limit on the decoded body a response may state. It is counted as the body
+            arrives, so no more than this is retained however far a compressed body would expand.
+        request_seconds: The limit on a whole request, however many steps it takes, including reading
+            the body it answers with.
     """
 
     connect_seconds: float = _DEFAULT_CONNECT_SECONDS
+    max_body_bytes: int = _DEFAULT_BODY_BYTES
     request_seconds: float = _DEFAULT_REQUEST_SECONDS
 
     @model_validator(mode="after")
-    def _every_limit_is_positive_and_finite(self) -> TimeoutPolicy:
-        """Reject a limit that waits forever or refuses every request.
+    def _every_limit_is_positive_and_finite(self) -> RequestLimits:
+        """Reject a limit that bounds nothing or refuses every request.
 
         Returns:
-            The validated policy, unchanged.
+            The validated limits, unchanged.
 
         Raises:
             ValueError: If a limit is zero, negative, infinite, or not a number.
@@ -851,11 +858,11 @@ class TimeoutPolicy(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         return self
 
     @model_validator(mode="after")
-    def _connecting_fits_inside_the_request(self) -> TimeoutPolicy:
+    def _connecting_fits_inside_the_request(self) -> RequestLimits:
         """Reject a connect limit the whole-request limit would cancel before it could ever elapse.
 
         Returns:
-            The validated policy, unchanged.
+            The validated limits, unchanged.
 
         Raises:
             ValueError: If ``connect_seconds`` is longer than ``request_seconds``.
@@ -1019,10 +1026,10 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             NOTE: A revocation handler that does not stop when it is canceled can still delay the
             refusal, because this library waits for the cancellation it asked for.
             Must be a positive finite number. Defaults to 10.
-        timeouts: The time limits on every request sent for this provider.
+        limits: The limits on every request sent for this provider.
             This library reads them wherever it sends one.
             An identity or revocation handler of a caller's own reads them from the config it is given.
-            Defaults to :class:`TimeoutPolicy`'s own limits.
+            Defaults to :class:`RequestLimits`'s own limits.
         provider: The built-in provider this config is labeled with, which every preset sets to its own.
             ``None`` for a hand-built config, and for a generic OpenID or MCP config.
             When set, each fact :data:`FACTS_TAKEN_FROM_PROVIDER` names must equal the member's, and a
@@ -1062,7 +1069,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     use_builtin_identity_handler: bool = True
     max_pending_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
     revocation_cleanup_seconds: float = _DEFAULT_REVOCATION_CLEANUP_SECONDS
-    timeouts: TimeoutPolicy = TimeoutPolicy()
+    limits: RequestLimits = RequestLimits()
     provider: Provider | None = None
     allow_insecure_http_for: frozenset[UrlField] = Field(default=frozenset(), json_schema_extra={"readOnly": True})
 

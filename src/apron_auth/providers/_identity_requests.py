@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -10,26 +9,28 @@ import httpx
 from apron_auth._discovery import NoTransportError, chosen_transport
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
-from apron_auth._timeouts import httpx_timeout, within_request_limit
+from apron_auth._limits import httpx_timeout, within_request_limit
 from apron_auth.errors import FailureKind, IdentityFetchError
 
 if TYPE_CHECKING:
-    from apron_auth.models import TimeoutPolicy
+    from collections.abc import Awaitable
+
+    from apron_auth.models import RequestLimits
     from apron_auth.protocols import TransportFactory
 
 
-def identity_client(timeouts: TimeoutPolicy, *, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+def identity_client(limits: RequestLimits, *, transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
     """Build the HTTP client an identity request runs through.
 
     Args:
-        timeouts: The limits in force for the request.
+        limits: The limits in force for the request.
         transport: Optional transport controlling the outbound connection.
 
     Returns:
         A client whose every step is bounded by the policy, and which follows no redirect, so the
         token goes to the request's own host and nowhere else.
     """
-    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(timeouts), follow_redirects=False)
+    return httpx.AsyncClient(transport=transport, timeout=httpx_timeout(limits), follow_redirects=False)
 
 
 def identity_transport(
@@ -69,25 +70,27 @@ def identity_transport(
         raise IdentityFetchError(msg, kind=FailureKind.UNEXPECTED) from exc
 
 
-async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, timeouts: TimeoutPolicy) -> Any:
+async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, limits: RequestLimits) -> Any:
     """Await an identity request and return its decoded JSON body.
+
+    NOTE: The request must be sent with ``stream=True``, so the limit on the body it answers with applies.
 
     Args:
         request: The pending request, which carries the access token.
         label: What the request fetches, such as ``"Google identity"``, for the error message.
-        timeouts: The limits in force, which bound the request as a whole.
+        limits: The limits in force, which bound the request as a whole.
 
     Returns:
         The decoded JSON body.
 
     Raises:
         IdentityFetchError: If the URL is invalid, the request cannot be sent or fails,
-            the endpoint answers with an error status, or the body is not JSON.
+            the endpoint answers with an error status, or the body is not JSON or passes the limit on one.
             The caught error is not attached as its cause or context.
     """
     try:
-        response = await within_request_limit(request, timeouts)
-        response.raise_for_status()
+        answer = await within_request_limit(request, limits)
+        answer.response.raise_for_status()
     # NOTE: httpx.InvalidURL is not an httpx.HTTPError, so it needs its own clause.
     except httpx.InvalidURL:
         failure_message, kind = f"Failed to fetch {label}: invalid URL", FailureKind.REFUSED
@@ -99,7 +102,7 @@ async def fetch_identity_json(request: Awaitable[httpx.Response], label: str, ti
         failure_message, kind = f"Failed to fetch {label}: request failed", FailureKind.UNEXPECTED
     else:
         try:
-            return decode_json_body(response)
+            return decode_json_body(answer.body)
         except ValueError:
             failure_message, kind = f"Failed to parse {label} response", FailureKind.REFUSED
     # NOTE: The caught error holds the token-bearing request or the response, so this error must not chain it.

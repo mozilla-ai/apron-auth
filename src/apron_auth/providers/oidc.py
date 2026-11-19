@@ -56,7 +56,7 @@ from apron_auth._discovery import (
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
-from apron_auth._timeouts import within_request_limit
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import uses_secure_transport
 from apron_auth.errors import (
     ConfigurationError,
@@ -72,10 +72,10 @@ from apron_auth.models import (
     IdentityMaterial,
     IdentityProfile,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     ServerMetadata,
-    TimeoutPolicy,
     TokenEndpointAuthMethod,
     UrlField,
 )
@@ -147,7 +147,7 @@ async def discover(
     *,
     document_url: str | None = None,
     transport_factory: TransportFactory | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
     allow_insecure_http: bool = False,
 ) -> ServerMetadata:
     """Read an OpenID provider's configuration document.
@@ -162,7 +162,7 @@ async def discover(
             The issuer check still applies, so an override moves the document without loosening what it may claim.
         transport_factory: Optional factory returning an httpx transport for the document URL.
             Host policy belongs here, because a check on the URL string cannot see where a hostname resolves.
-        timeouts: The limits on the document fetch. Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on the document fetch. Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
         allow_insecure_http: Accept ``http`` for the issuer, the document URL and the endpoints the document names.
             It is off by default, because the client secret and every token travel over these URLs,
             and the signing key set authenticates every ID token.
@@ -181,7 +181,7 @@ async def discover(
     if document_url is not None:
         require_url(document_url, field="document URL", allow_insecure_http=allow_insecure_http, caller_supplied=True)
         url = document_url
-    document = await fetch_document(url, transport_factory, timeouts or TimeoutPolicy())
+    document = await fetch_document(url, transport_factory, limits or RequestLimits())
 
     require_openid_issuer(document, issuer)
 
@@ -275,7 +275,7 @@ def preset(
     extra_params: dict[str, str] | None = None,
     metadata: ServerMetadata,
     allow_insecure_http: bool = False,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a provider configuration from a discovered OpenID provider.
 
@@ -301,8 +301,8 @@ def preset(
             No defaults are merged under them, because a generic connection has no product-specific behavior to fix.
         metadata: The provider's discovered metadata, from :func:`discover`.
         allow_insecure_http: Accept ``http`` URLs in ``metadata`` for local development, logging a WARNING for each one.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. It declares a revocation endpoint where the server
@@ -358,7 +358,7 @@ def preset(
         # OpenID Connect standardizes no claim for an organization owning an email domain.
         "can_assert_domain_ownership": False,
         "use_builtin_identity_handler": False,
-        "timeouts": timeouts or TimeoutPolicy(),
+        "limits": limits or RequestLimits(),
     }
     waived = (
         _fields_needing_a_waiver(
@@ -547,7 +547,7 @@ class OidcIdentityHandler:
         userinfo_fetched = False
         if self._userinfo_url:
             try:
-                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token, config.timeouts)
+                userinfo = await self._fetch_userinfo(self._userinfo_url, material.access_token, config.limits)
                 userinfo_fetched = True
             except IdentityFetchError as exc:
                 if claims is None:
@@ -621,7 +621,7 @@ class OidcIdentityHandler:
                 or the issuer's signing keys cannot be fetched or read.
         """
         issuer, client_id = self._issuer, config.client_id
-        verified = await self._signing_keys.verify(id_token, config.timeouts)
+        verified = await self._signing_keys.verify(id_token, config.limits)
         header, claims = verified.header, verified.claims
         token = CodeIDToken(
             claims,
@@ -651,14 +651,14 @@ class OidcIdentityHandler:
         return claims
 
     async def _fetch_userinfo(
-        self, userinfo_url: str, access_token: SecretToken, timeouts: TimeoutPolicy
+        self, userinfo_url: str, access_token: SecretToken, limits: RequestLimits
     ) -> dict[str, Any]:
         """Fetch the userinfo payload for display fields.
 
         Args:
             userinfo_url: The userinfo endpoint.
             access_token: The bearer access token for the userinfo request.
-            timeouts: The limits in force for the request.
+            limits: The limits in force for the request.
 
         Returns:
             The userinfo payload as a JSON object.
@@ -673,12 +673,17 @@ class OidcIdentityHandler:
         transport = identity_transport(self._transport_factory, userinfo_url, "OpenID identity")
         failure: IdentityFetchError | None = None
         try:
-            async with identity_client(timeouts, transport=transport) as client:
-                response = await within_request_limit(
-                    client.get(userinfo_url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
-                    timeouts,
+            async with identity_client(limits, transport=transport) as client:
+                answer = await within_request_limit(
+                    streamed(
+                        client,
+                        "GET",
+                        userinfo_url,
+                        headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
+                    ),
+                    limits,
                 )
-                response.raise_for_status()
+                answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             if (
                 exc.response.status_code == 403
@@ -704,13 +709,13 @@ class OidcIdentityHandler:
             # A token that is not ASCII cannot go in a header, and the encoding error repeats it.
             failure = IdentityFetchError("Failed to fetch OpenID identity: request failed", kind=FailureKind.UNEXPECTED)
         else:
-            media_type = response.headers.get("content-type", "").split(";")[0].strip().lower()
+            media_type = answer.response.headers.get("content-type", "").split(";")[0].strip().lower()
             if media_type == "application/jwt":
                 # Its signing algorithm is agreed at client registration, which this handler does not know.
                 msg = "OpenID provider returned a signed userinfo response, which is not supported"
                 raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
             try:
-                payload = decode_json_body(response)
+                payload = decode_json_body(answer.body)
             except ValueError:
                 failure = IdentityFetchError("Failed to parse OpenID identity response", kind=FailureKind.REFUSED)
         if failure is not None:

@@ -19,7 +19,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import TimeoutPolicy, UrlField, WorkloadIssuer
+from apron_auth.models import RequestLimits, UrlField, WorkloadIssuer
 from apron_auth.workload import WorkloadTokenVerifier
 
 ISSUER = "https://token.actions.example.com"
@@ -743,7 +743,7 @@ class TestConfiguration:
             trusting(forged)
 
 
-class TestTheTimeoutPolicyBoundsDiscovery:
+class TestTheRequestLimitsBoundDiscovery:
     async def test_a_document_that_never_lands_is_refused_as_a_timeout(self) -> None:
         async def crawl(request: httpx.Request) -> httpx.Response:
             await asyncio.sleep(5)
@@ -751,7 +751,7 @@ class TestTheTimeoutPolicyBoundsDiscovery:
 
         verifier = trusting(
             transport_factory=lambda url: httpx.MockTransport(crawl),
-            timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05),
+            limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05),
         )
 
         with pytest.raises(IdentityFetchError) as refusal:

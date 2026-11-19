@@ -24,7 +24,7 @@ from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._http_errors import http_failure
 from apron_auth._json_body import decode_json_body
 from apron_auth._jwt import claim_refusal_reason
-from apron_auth._timeouts import within_request_limit
+from apron_auth._limits import streamed, within_request_limit
 from apron_auth.errors import (
     FailureKind,
     IdentityFetchError,
@@ -37,10 +37,10 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
 )
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
@@ -303,9 +303,9 @@ class MicrosoftIdentityHandler:
         """
         id_token = None
         if material.id_token:
-            verified = await self._signing_keys.verify(material.id_token, config.timeouts)
+            verified = await self._signing_keys.verify(material.id_token, config.limits)
             id_token = _checked_id_token(verified.claims, config.client_id, verified.key.get("issuer"))
-        payload = await self._fetch_userinfo(material.access_token, config.timeouts)
+        payload = await self._fetch_userinfo(material.access_token, config.limits)
         if id_token is not None:
             _require_matching_subject(id_token, payload)
 
@@ -313,7 +313,7 @@ class MicrosoftIdentityHandler:
 
         tenancies: tuple[TenancyContext, ...] = ()
         if tenant_id is not None:
-            tenancies = await self._fetch_verified_tenancies(material.access_token, tenant_id, config.timeouts)
+            tenancies = await self._fetch_verified_tenancies(material.access_token, tenant_id, config.limits)
 
         email = payload.get("email")
         return IdentityProfile(
@@ -327,12 +327,12 @@ class MicrosoftIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_userinfo(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> dict[str, Any]:
+    async def _fetch_userinfo(self, access_token: SecretToken, limits: RequestLimits) -> dict[str, Any]:
         """Fetch the OIDC userinfo payload for display fields.
 
         Args:
             access_token: The bearer access token for the userinfo request.
-            timeouts: The limits in force for the userinfo request.
+            limits: The limits in force for the userinfo request.
 
         Returns:
             The userinfo payload as a JSON object.
@@ -343,21 +343,23 @@ class MicrosoftIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         transport = identity_transport(self._transport_factory, _MICROSOFT_USERINFO_URL, "Microsoft identity")
-        async with identity_client(timeouts, transport=transport) as client:
+        async with identity_client(limits, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.get(
+                streamed(
+                    client,
+                    "GET",
                     _MICROSOFT_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Microsoft identity",
-                timeouts,
+                limits,
             )
         if not isinstance(payload, dict):
             msg = "Microsoft identity response was not a JSON object"
             raise IdentityFetchError(msg, kind=FailureKind.REFUSED)
         return payload
 
-    async def _fetch_organization(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> dict[str, Any] | None:
+    async def _fetch_organization(self, access_token: SecretToken, limits: RequestLimits) -> dict[str, Any] | None:
         """Fetch the signed-in user's organization from the directory, or ``None``.
 
         ``None`` means the directory yielded no usable organization: it
@@ -370,7 +372,7 @@ class MicrosoftIdentityHandler:
 
         Args:
             access_token: The bearer access token for the directory request.
-            timeouts: The limits in force for the directory request.
+            limits: The limits in force for the directory request.
 
         Returns:
             The signed-in user's organization, or ``None`` when the
@@ -388,15 +390,17 @@ class MicrosoftIdentityHandler:
             )
             return None
         try:
-            async with identity_client(timeouts, transport=transport) as client:
-                response = await within_request_limit(
-                    client.get(
+            async with identity_client(limits, transport=transport) as client:
+                answer = await within_request_limit(
+                    streamed(
+                        client,
+                        "GET",
                         _MICROSOFT_ORGANIZATION_URL,
                         headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                     ),
-                    timeouts,
+                    limits,
                 )
-                response.raise_for_status()
+                answer.response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             # The status is the whole diagnostic here — it separates a
             # permanent consent or permission problem from a transient
@@ -422,7 +426,7 @@ class MicrosoftIdentityHandler:
             return None
 
         try:
-            body = decode_json_body(response)
+            body = decode_json_body(answer.body)
         except ValueError:
             logger.warning(
                 "microsoft directory lookup could not parse the tenant's verified domains; "
@@ -438,7 +442,7 @@ class MicrosoftIdentityHandler:
         return organization
 
     async def _fetch_verified_tenancies(
-        self, access_token: SecretToken, tenant_id: str, timeouts: TimeoutPolicy
+        self, access_token: SecretToken, tenant_id: str, limits: RequestLimits
     ) -> tuple[TenancyContext, ...]:
         """Resolve the validated tenant's admin-verified domains into tenancies.
 
@@ -461,13 +465,13 @@ class MicrosoftIdentityHandler:
             access_token: The bearer access token for the directory request.
             tenant_id: The validated ID-token tenant GUID the directory
                 response must bind back to.
-            timeouts: The limits in force for the directory request.
+            limits: The limits in force for the directory request.
 
         Returns:
             One domain-owning tenancy per admin-verified domain, or an empty
             tuple when no such tenancy can be established.
         """
-        organization = await self._fetch_organization(access_token, timeouts)
+        organization = await self._fetch_organization(access_token, limits)
         if organization is None:
             return ()
 
@@ -575,7 +579,7 @@ def preset(
     scopes: Sequence[str],
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Microsoft OAuth provider configuration.
 
@@ -591,8 +595,8 @@ def preset(
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters; merged over
             the ``prompt=consent`` default.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. It declares no revocation endpoint, because Microsoft
@@ -603,5 +607,5 @@ def preset(
         client_id = client_id.lower()
 
     return _PRESET.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=extra_params, limits=limits
     )

@@ -53,9 +53,9 @@ from apron_auth.models import (
     OAuthPendingState,
     Provider,
     ProviderConfig,
+    RequestLimits,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
     TokenSet,
     UserToken,
 )
@@ -1387,7 +1387,7 @@ class TestExchangeCode:
         assert refusal.value.kind is FailureKind.REFUSED
 
 
-class TestTheTimeoutPolicyBoundsTheTokenRequest:
+class TestTheRequestLimitsBoundTheTokenRequest:
     @staticmethod
     def _crawling_transport(url: str) -> httpx.MockTransport:
         async def crawl(request: httpx.Request) -> httpx.Response:
@@ -1398,7 +1398,7 @@ class TestTheTimeoutPolicyBoundsTheTokenRequest:
 
     async def test_a_token_endpoint_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
         """A step limit bounds one read, so only the whole-request limit refuses a response that never lands."""
-        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
+        config = _make_oauth_config(limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05))
         client = OAuthClient(config=config, transport_factory=self._crawling_transport)
 
         with pytest.raises(TokenExchangeError) as refusal:
@@ -1422,7 +1422,7 @@ class TestTheTimeoutPolicyBoundsTheTokenRequest:
 
     async def test_a_response_that_trickles_in_is_refused_by_the_whole_request_limit(self) -> None:
         """Every step lands inside the step limit, so only a limit on the request itself refuses this."""
-        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
+        config = _make_oauth_config(limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05))
         client = OAuthClient(config=config, transport_factory=self._trickling_transport)
 
         with pytest.raises(TokenExchangeError) as refusal:
@@ -1431,7 +1431,7 @@ class TestTheTimeoutPolicyBoundsTheTokenRequest:
         assert refusal.value.kind is FailureKind.TIMEOUT
 
     async def test_a_refresh_that_answers_too_slowly_is_refused_as_a_timeout(self) -> None:
-        config = _make_oauth_config(timeouts=TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
+        config = _make_oauth_config(limits=RequestLimits(connect_seconds=0.05, request_seconds=0.05))
         client = OAuthClient(config=config, transport_factory=self._crawling_transport)
 
         with pytest.raises(TokenRefreshError) as refusal:

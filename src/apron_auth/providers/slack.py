@@ -46,6 +46,7 @@ import httpx
 from apron_auth._authorization_params import authorization_query, scope_param, sent_scope_words
 from apron_auth._claims import stated_boolean
 from apron_auth._json_body import decode_json_body
+from apron_auth._limits import streamed
 from apron_auth.errors import (
     ConfigurationError,
     FailureKind,
@@ -58,10 +59,10 @@ from apron_auth.models import (
     IdentityProfile,
     Provider,
     ProviderConfig,
+    RequestLimits,
     ScopeMetadata,
     SecretToken,
     TenancyContext,
-    TimeoutPolicy,
 )
 from apron_auth.protocols import TransportFactory
 from apron_auth.providers._identity_requests import fetch_identity_json, identity_client, identity_transport
@@ -384,15 +385,15 @@ class SlackIdentityHandler:
             )
             raise ConfigurationError(msg)
         if sign_in_endpoint:
-            return await self._fetch_via_oidc(access_token, config.timeouts)
-        return await self._fetch_workspace_only(access_token, config.timeouts)
+            return await self._fetch_via_oidc(access_token, config.limits)
+        return await self._fetch_workspace_only(access_token, config.limits)
 
-    async def _fetch_via_oidc(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_via_oidc(self, access_token: SecretToken, limits: RequestLimits) -> IdentityProfile:
         """Fetch identity using the Sign-in-with-Slack OIDC userInfo endpoint.
 
         Args:
             access_token: The bearer access token for the userInfo request.
-            timeouts: The limits in force for each request this makes.
+            limits: The limits in force for each request this makes.
 
         Returns:
             The person identity profile with a single-workspace tenancy.
@@ -404,14 +405,16 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         transport = identity_transport(self._transport_factory, _SLACK_USERINFO_URL, "Slack identity")
-        async with identity_client(timeouts, transport=transport) as client:
+        async with identity_client(limits, transport=transport) as client:
             payload = await fetch_identity_json(
-                client.post(
+                streamed(
+                    client,
+                    "POST",
                     _SLACK_USERINFO_URL,
                     headers={"Authorization": f"Bearer {access_token.get_secret_value()}"},
                 ),
                 "Slack identity",
-                timeouts,
+                limits,
             )
 
         if not isinstance(payload, dict):
@@ -456,7 +459,7 @@ class SlackIdentityHandler:
             raw=payload,
         )
 
-    async def _fetch_workspace_only(self, access_token: SecretToken, timeouts: TimeoutPolicy) -> IdentityProfile:
+    async def _fetch_workspace_only(self, access_token: SecretToken, limits: RequestLimits) -> IdentityProfile:
         """Fetch workspace tenancy for a non-OIDC (workspace-bot) token.
 
         Endpoint priority is fixed and intentional:
@@ -487,7 +490,7 @@ class SlackIdentityHandler:
 
         Args:
             access_token: The bearer access token for the workspace lookup.
-            timeouts: The limits in force for each request this makes.
+            limits: The limits in force for each request this makes.
 
         Returns:
             A workspace-only identity profile; person-identity fields are
@@ -501,10 +504,8 @@ class SlackIdentityHandler:
         # Reuse one client for the optional fallback to keep the
         # connection pool warm across both calls.
         transport = identity_transport(self._transport_factory, _SLACK_TEAM_INFO_URL, "Slack identity")
-        async with identity_client(timeouts, transport=transport) as client:
-            team_info_payload = await self._slack_post(
-                client, _SLACK_TEAM_INFO_URL, access_token, "team.info", timeouts
-            )
+        async with identity_client(limits, transport=transport) as client:
+            team_info_payload = await self._slack_post(client, _SLACK_TEAM_INFO_URL, access_token, "team.info", limits)
             if team_info_payload.get("ok"):
                 return _build_workspace_profile_from_team_info(team_info_payload)
 
@@ -515,9 +516,7 @@ class SlackIdentityHandler:
                     "Slack workspace lookup failed", kind=_slack_failure_kind(error), error_code=error
                 )
 
-            auth_test_payload = await self._slack_post(
-                client, _SLACK_AUTH_TEST_URL, access_token, "auth.test", timeouts
-            )
+            auth_test_payload = await self._slack_post(client, _SLACK_AUTH_TEST_URL, access_token, "auth.test", limits)
 
         if not auth_test_payload.get("ok"):
             error = _slack_error_code(auth_test_payload)
@@ -533,7 +532,7 @@ class SlackIdentityHandler:
         url: str,
         access_token: SecretToken,
         endpoint_label: str,
-        timeouts: TimeoutPolicy,
+        limits: RequestLimits,
     ) -> dict[str, Any]:
         """POST to a Slack Web API method and return the JSON object payload.
 
@@ -542,7 +541,7 @@ class SlackIdentityHandler:
             url: The Slack Web API method URL to POST to.
             access_token: The bearer access token for the request.
             endpoint_label: A short method label used in error messages.
-            timeouts: The limits in force for the request.
+            limits: The limits in force for the request.
 
         Returns:
             The response payload as a JSON object.
@@ -553,9 +552,9 @@ class SlackIdentityHandler:
                 The failed request's error is not attached as its cause or context.
         """
         payload = await fetch_identity_json(
-            client.post(url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
+            streamed(client, "POST", url, headers={"Authorization": f"Bearer {access_token.get_secret_value()}"}),
             f"Slack {endpoint_label}",
-            timeouts,
+            limits,
         )
 
         if not isinstance(payload, dict):
@@ -678,11 +677,12 @@ class SlackRevocationHandler:
             label="Slack",
             headers={"Authorization": f"Bearer {token.get_secret_value()}"},
         )
-        response = await send_revocation(request, config, transport_factory=self._transport_factory)
+        answer = await send_revocation(request, config, transport_factory=self._transport_factory)
+        response = answer.response
         if not response.is_success:
             refuse_an_unexpected_status(response, label=request.label)
         try:
-            data = decode_json_body(response)
+            data = decode_json_body(answer.body)
         except ValueError:
             unparsed = "Failed to parse Slack revocation response"
         else:
@@ -720,7 +720,7 @@ def preset(
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
     user_scopes: Sequence[str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for installing an app in a workspace.
 
@@ -750,8 +750,8 @@ def preset(
         extra_params: Extra authorization-request parameters.
         user_scopes: The user scopes to request via Slack's ``user_scope``
             parameter, if any.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -792,7 +792,7 @@ def preset(
 
     declared = replace(_INSTALL_PRESET, required_scope_families=required_scope_families)
     config = declared.config(
-        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra, timeouts=timeouts
+        client_id, client_secret, scopes=scopes, redirect_uri=redirect_uri, extra_params=merged_extra, limits=limits
     )
     return config
 
@@ -804,7 +804,7 @@ def sign_in_preset(
     scopes: Sequence[str] | None = None,
     redirect_uri: str | None = None,
     extra_params: dict[str, str] | None = None,
-    timeouts: TimeoutPolicy | None = None,
+    limits: RequestLimits | None = None,
 ) -> ProviderConfig:
     """Create a Slack OAuth provider configuration for Sign in with Slack.
 
@@ -823,8 +823,8 @@ def sign_in_preset(
         scopes: The further scopes to request beside ``openid``, which are ``email`` and ``profile``.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
-        timeouts: The limits on every request sent for this provider.
-            Defaults to :class:`~apron_auth.models.TimeoutPolicy`'s own.
+        limits: The limits on every request sent for this provider.
+            Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
 
     Returns:
         The provider configuration. The client resolves this provider's revocation handler
@@ -860,5 +860,5 @@ def sign_in_preset(
         scopes=requested,
         redirect_uri=redirect_uri,
         extra_params=merged_extra,
-        timeouts=timeouts,
+        limits=limits,
     )

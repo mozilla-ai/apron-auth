@@ -24,7 +24,7 @@ from apron_auth.errors import (
     TokenValidationError,
     TokenValidationReason,
 )
-from apron_auth.models import SecretToken, TimeoutPolicy
+from apron_auth.models import RequestLimits, SecretToken
 from apron_auth.providers import _jwks
 from apron_auth.providers._jwks import IssuerSigningKeys, SigningAlgorithm
 
@@ -55,7 +55,7 @@ def _b64(raw: bytes) -> str:
 
 
 # The limits every key set fetch in these tests runs under.
-_TIMEOUTS = TimeoutPolicy()
+_LIMITS = RequestLimits()
 
 
 def _crawling_transport(url: str) -> httpx.MockTransport:
@@ -85,7 +85,7 @@ class TestVerify:
         """A token signed by a published key verifies."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.header["kid"] == "rsa-1"
         assert verified.claims == {"sub": "u-1"}
@@ -95,7 +95,7 @@ class TestVerify:
         """An Edwards-curve key verifies as well as RSA and EC keys."""
         httpx_mock.add_response(url=JWKS_URL, json=published(OKP_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(OKP_KEY, alg="EdDSA")), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(OKP_KEY, alg="EdDSA")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -104,9 +104,7 @@ class TestVerify:
         p384_key = jwk.ECKey.generate_key("P-384", parameters={"kid": "ec-384"})
         httpx_mock.add_response(url=JWKS_URL, json=published(EC_KEY, p384_key))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(
-            SecretToken(signed(EC_KEY, alg="ES256", kid=None)), _TIMEOUTS
-        )
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(EC_KEY, alg="ES256", kid=None)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -117,7 +115,7 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(OKP_KEY, exchange_key))
 
         verified = await IssuerSigningKeys(JWKS_URL).verify(
-            SecretToken(signed(OKP_KEY, alg="EdDSA", kid=None)), _TIMEOUTS
+            SecretToken(signed(OKP_KEY, alg="EdDSA", kid=None)), _LIMITS
         )
 
         assert verified.claims == {"sub": "u-1"}
@@ -128,7 +126,7 @@ class TestVerify:
         del document["keys"][0]["kid"]
         httpx_mock.add_response(url=JWKS_URL, json=document)
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid="k1")), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid="k1")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -141,10 +139,10 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=before)
         httpx_mock.add_response(url=JWKS_URL, json=after)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY, kid="a")), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY, kid="a")), _LIMITS)
         clock.now += 120
 
-        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="b")), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="b")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -154,10 +152,10 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, json=published(OTHER_RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY, kid=None)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY, kid=None)), _LIMITS)
         clock.now += 120
 
-        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid=None)), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid=None)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -170,7 +168,7 @@ class TestVerify:
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
 
         for _ in range(5):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
             clock.now += 61
 
         assert len(httpx_mock.get_requests()) == 1
@@ -182,13 +180,13 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=document, is_reusable=True)
 
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
     async def test_accepts_a_private_header_parameter(self, httpx_mock: HTTPXMock) -> None:
         """Some providers add their own header parameters, which do not affect the signature check."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, **{"pi.atm": "x"})), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, **{"pi.atm": "x"})), _LIMITS)
 
         assert verified.header["pi.atm"] == "x"
 
@@ -199,7 +197,7 @@ class TestVerify:
         signature = _b64(JWSRegistry.algorithms["RS256"].sign(f"{header}.{payload}".encode(), RSA_KEY))
 
         with pytest.raises(IdentityFetchError, match="critical header parameter"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(f"{header}.{payload}.{signature}"), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(f"{header}.{payload}.{signature}"), _LIMITS)
 
     @pytest.mark.parametrize("header", [["alg"], "alg", ["alg", "b64"], "b64alg"])
     async def test_refuses_a_header_that_is_not_a_json_object(self, header: object) -> None:
@@ -207,14 +205,14 @@ class TestVerify:
         token = f"{_b64(json.dumps(header).encode())}.{_b64(b'{}')}.sig"
 
         with pytest.raises(IdentityFetchError, match="not a compact signed token"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
     async def test_accepts_a_large_protected_header(self, httpx_mock: HTTPXMock) -> None:
         """A certificate chain in the header makes it large, and a size limit for smaller headers must not refuse it."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
 
         verified = await IssuerSigningKeys(JWKS_URL).verify(
-            SecretToken(signed(RSA_KEY, x5c=[_b64(bytes(1500))])), _TIMEOUTS
+            SecretToken(signed(RSA_KEY, x5c=[_b64(bytes(1500))])), _LIMITS
         )
 
         assert verified.claims == {"sub": "u-1"}
@@ -224,7 +222,7 @@ class TestVerify:
         token = f"{_b64(b'[' * 12000)}.{_b64(b'{}')}.sig"
 
         with pytest.raises(IdentityFetchError, match="not a compact signed token"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
     async def test_refuses_a_deeply_nested_payload(self, httpx_mock: HTTPXMock) -> None:
         """A signed payload that nests too deeply to decode is not a claims object."""
@@ -233,18 +231,18 @@ class TestVerify:
         token = jws.serialize_compact({"alg": "RS256", "kid": "rsa-1"}, payload, RSA_KEY)
 
         with pytest.raises(IdentityFetchError, match="claims are not a JSON object"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
     async def test_refuses_a_token_that_cannot_be_encoded(self) -> None:
         """A token holding a lone surrogate is refused, not raised as an encoding error."""
         with pytest.raises(IdentityFetchError, match="not a compact signed token"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken("\ud800.a.b"), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken("\ud800.a.b"), _LIMITS)
 
     async def test_accepts_an_elliptic_curve_key(self, httpx_mock: HTTPXMock) -> None:
         """Every public-key family on the list verifies, not only RSA."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY, EC_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(EC_KEY, alg="ES256")), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(EC_KEY, alg="ES256")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -254,7 +252,7 @@ class TestVerify:
         forged = signed(OTHER_RSA_KEY, kid="rsa-1")
 
         with pytest.raises(TokenValidationError, match="signature did not verify"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(forged), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(forged), _LIMITS)
 
     @pytest.mark.parametrize("alg", ["none", "HS256", "Ed25519", ["RS256"], {"alg": "RS256"}, 5])
     async def test_refuses_an_algorithm_outside_the_public_key_list(self, alg: object) -> None:
@@ -262,7 +260,7 @@ class TestVerify:
         token = f"{_b64(json.dumps({'alg': alg, 'kid': 'rsa-1'}).encode())}.{_b64(b'{}')}.sig"
 
         with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
     @pytest.mark.parametrize(
         "algorithms",
@@ -285,7 +283,7 @@ class TestVerify:
         """The caller can apply its own rules to the published key, such as the issuer it names."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.key.kid == "rsa-1"
 
@@ -295,7 +293,7 @@ class TestVerify:
         keys = IssuerSigningKeys(JWKS_URL, algorithms=(SigningAlgorithm.RS256,))
 
         with pytest.raises(IdentityFetchError, match="signing algorithm that is not accepted"):
-            await keys.verify(SecretToken(signed(RSA_KEY, alg="PS256")), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY, alg="PS256")), _LIMITS)
 
         assert httpx_mock.get_requests() == []
 
@@ -303,7 +301,7 @@ class TestVerify:
     async def test_refuses_a_token_that_is_not_a_signed_token(self, token: str) -> None:
         """Anything that does not parse as a compact signed token is refused."""
         with pytest.raises(IdentityFetchError, match="not a compact signed token"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
     async def test_ignores_a_key_carried_in_the_token_header(self, httpx_mock: HTTPXMock) -> None:
         """Only published keys verify, so a token cannot vouch for itself with ``jwk`` or ``jku``."""
@@ -318,7 +316,7 @@ class TestVerify:
         )
 
         with pytest.raises(TokenValidationError, match="signature did not verify"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(forged), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(forged), _LIMITS)
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
 
@@ -327,14 +325,14 @@ class TestVerify:
         clock = FakeClock()
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 120
         header = _b64(json.dumps({"alg": "RS256", "kid": 5}).encode())
         payload = _b64(b'{"sub": "u-1"}')
         signature = _b64(JWSRegistry.algorithms["RS256"].sign(f"{header}.{payload}".encode(), RSA_KEY))
 
         with pytest.raises(IdentityFetchError, match="header is not valid") as excinfo:
-            await keys.verify(SecretToken(f"{header}.{payload}.{signature}"), _TIMEOUTS)
+            await keys.verify(SecretToken(f"{header}.{payload}.{signature}"), _LIMITS)
 
         # The caught error's frames hold the token, so the refusal attaches it as neither.
         assert excinfo.value.__cause__ is None
@@ -346,12 +344,12 @@ class TestVerify:
         clock = FakeClock()
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY), is_reusable=True)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 120
 
         for _ in range(2):
             with pytest.raises(TokenValidationError, match="signature did not verify"):
-                await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="rsa-1")), _TIMEOUTS)
+                await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="rsa-1")), _LIMITS)
             clock.now += 10
 
         assert len(httpx_mock.get_requests()) == 2
@@ -364,10 +362,10 @@ class TestVerify:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, json=replaced)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 120
 
-        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="rsa-1")), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY, kid="rsa-1")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -377,7 +375,7 @@ class TestVerify:
         token = jws.serialize_compact({"alg": "RS256", "kid": "rsa-1"}, b"[1, 2]", RSA_KEY)
 
         with pytest.raises(IdentityFetchError, match="claims"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(token), _LIMITS)
 
 
 class TestKeySelection:
@@ -387,7 +385,7 @@ class TestKeySelection:
         """With one key of the token's type, no key ID is needed."""
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY, EC_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid=None)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid=None)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -395,7 +393,7 @@ class TestKeySelection:
         """With two keys of the token's type, the one whose signature checks out is used."""
         httpx_mock.add_response(url=JWKS_URL, json=published(OTHER_RSA_KEY, RSA_KEY))
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid=None)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid=None)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -405,7 +403,7 @@ class TestKeySelection:
         del document["keys"][0]["kid"]
         httpx_mock.add_response(url=JWKS_URL, json=document)
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid="rsa-a")), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY, kid="rsa-a")), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -421,7 +419,7 @@ class TestKeySelection:
         ]
         httpx_mock.add_response(url=JWKS_URL, json=document)
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -432,7 +430,7 @@ class TestKeySelection:
         document["keys"][0][member] = None
         httpx_mock.add_response(url=JWKS_URL, json=document)
 
-        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -449,7 +447,7 @@ class TestKeySelection:
         httpx_mock.add_response(url=JWKS_URL, json=document, is_reusable=True)
 
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
     @pytest.mark.filterwarnings("ignore:Key size should be:joserfc.errors.SecurityWarning")
     async def test_skips_an_rsa_key_shorter_than_2048_bits(
@@ -462,9 +460,9 @@ class TestKeySelection:
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"):
             with pytest.raises(TokenValidationError, match="key the issuer does not publish") as exc_info:
-                await keys.verify(SecretToken(signed(short_key)), _TIMEOUTS)
+                await keys.verify(SecretToken(signed(short_key)), _LIMITS)
             assert exc_info.value.reason is TokenValidationReason.UNKNOWN_KEY
-            verified = await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            verified = await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
         assert "RSA key shorter than 2048 bits: kid='rsa-short'" in caplog.text
@@ -477,7 +475,7 @@ class TestKeySelection:
         httpx_mock.add_response(url=JWKS_URL, json={"keys": entries}, is_reusable=True)
 
         with caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"), pytest.raises(IdentityFetchError):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert "no key that can verify a signature" in caplog.text
 
@@ -491,9 +489,9 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
 
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 3599
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert len(httpx_mock.get_requests()) == 1
 
@@ -503,11 +501,11 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, json=published(OTHER_RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 3600
 
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
     async def test_an_unknown_kid_triggers_one_refetch(self, httpx_mock: HTTPXMock) -> None:
         """A rotated-in key is picked up without waiting for the hour."""
@@ -515,10 +513,10 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY, OTHER_RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 61
 
-        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
 
@@ -534,10 +532,10 @@ class TestCaching:
             return httpx.Response(200, json=documents[min(len(fetches), len(documents)) - 1])
 
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 61
 
-        results = await asyncio.gather(*(keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS) for _ in range(3)))
+        results = await asyncio.gather(*(keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS) for _ in range(3)))
 
         assert len(results) == 3
         assert len(fetches) == 2
@@ -550,15 +548,15 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, status_code=503)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 61
 
         with (
             caplog.at_level(logging.WARNING, logger="apron_auth.providers._jwks"),
             pytest.raises(IdentityFetchError, match="key the issuer does not publish"),
         ):
-            await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS)
-        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS)
+        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
         assert [record.getMessage() for record in caplog.records if record.name == "apron_auth.providers._jwks"] == [
@@ -572,13 +570,13 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, status_code=503)
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now = 1000 + 3590
         with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
-            await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS)
         clock.now = 1000 + 3601
 
-        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
         assert len(httpx_mock.get_requests()) == 3
@@ -589,13 +587,13 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         httpx_mock.add_response(url=JWKS_URL, status_code=503, is_reusable=True)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 61
 
         for _ in range(5):
             clock.now += 10
             with pytest.raises(IdentityFetchError):
-                await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS)
+                await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS)
 
         assert len(httpx_mock.get_requests()) == 2
 
@@ -604,12 +602,12 @@ class TestCaching:
         clock = FakeClock()
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY), is_reusable=True)
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
-        await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         for _ in range(5):
             clock.now += 10
             with pytest.raises(IdentityFetchError, match="key the issuer does not publish"):
-                await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _TIMEOUTS)
+                await keys.verify(SecretToken(signed(OTHER_RSA_KEY)), _LIMITS)
 
         assert len(httpx_mock.get_requests()) == 1
 
@@ -618,7 +616,7 @@ class TestCaching:
         httpx_mock.add_response(url=JWKS_URL, json=published(RSA_KEY))
         keys = IssuerSigningKeys(JWKS_URL)
 
-        results = await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS) for _ in range(5)))
+        results = await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS) for _ in range(5)))
 
         assert len(results) == 5
         assert len(httpx_mock.get_requests()) == 1
@@ -634,7 +632,7 @@ class TestFetchFailures:
         with pytest.raises(
             IdentityFetchError, match="Failed to fetch the issuer's signing keys: network error"
         ) as caught:
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         # An outage is not a refusal, so a caller can tell a bad token from an unreachable issuer.
         assert not isinstance(caught.value, TokenValidationError)
@@ -647,12 +645,12 @@ class TestFetchFailures:
         keys = IssuerSigningKeys(JWKS_URL, clock=clock)
 
         with pytest.raises(IdentityFetchError, match="HTTP 503"):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 30
         with pytest.raises(IdentityFetchError, match="HTTP 503") as repeated:
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         clock.now += 30
-        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+        verified = await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert verified.claims == {"sub": "u-1"}
         assert repeated.value.kind is FailureKind.SERVER_ERROR
@@ -663,7 +661,7 @@ class TestFetchFailures:
         keys = IssuerSigningKeys(JWKS_URL, clock=FakeClock())
 
         with pytest.raises(IdentityFetchError):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert not isinstance(keys._last_failure, BaseException)
 
@@ -673,7 +671,7 @@ class TestFetchFailures:
         httpx_mock.add_response(url=JWKS_URL, content=body)
 
         with pytest.raises(IdentityFetchError, match="signing keys could not be read"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
     async def test_reports_a_deeply_nested_key_set(self, httpx_mock: HTTPXMock) -> None:
         """A key set that nests too deeply to decode is reported as unreadable, and the failure is rate limited."""
@@ -681,9 +679,9 @@ class TestFetchFailures:
         keys = IssuerSigningKeys(JWKS_URL)
 
         with pytest.raises(IdentityFetchError, match="signing keys could not be read"):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         with pytest.raises(IdentityFetchError, match="signing keys could not be read"):
-            await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert len(httpx_mock.get_requests()) == 1
 
@@ -692,14 +690,14 @@ class TestFetchFailures:
         httpx_mock.add_response(url=JWKS_URL, status_code=302, headers={"Location": "https://attacker.example/keys"})
 
         with pytest.raises(IdentityFetchError, match="HTTP 302; redirects are not followed"):
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert [str(request.url) for request in httpx_mock.get_requests()] == [JWKS_URL]
 
     async def test_reports_a_key_set_url_the_client_cannot_use(self) -> None:
         """A URL that passes the URL rule but not the HTTP client is reported in domain terms."""
         with pytest.raises(IdentityFetchError, match="invalid key set URL"):
-            await IssuerSigningKeys("https://sso.example.com/\x00").verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys("https://sso.example.com/\x00").verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
     async def test_reports_a_transport_that_fails_unexpectedly(self, caplog: pytest.LogCaptureFixture) -> None:
         """A caller transport that raises its own error is a failed fetch, rate limited like any other.
@@ -717,7 +715,7 @@ class TestFetchFailures:
         with caplog.at_level(logging.DEBUG, logger="apron_auth.providers._jwks"):
             for _ in range(2):
                 with pytest.raises(IdentityFetchError, match="Failed to fetch the issuer's signing keys"):
-                    await keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+                    await keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS)
 
         assert calls == [JWKS_URL]
         assert [record for record in caplog.records if record.name == "apron_auth.providers._jwks"] == []
@@ -729,7 +727,7 @@ class TestFetchFailures:
             raise PermissionError(url)
 
         with pytest.raises(IdentityFetchError, match="outbound connection refused") as exc_info:
-            await IssuerSigningKeys(JWKS_URL, transport_factory=refuse).verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL, transport_factory=refuse).verify(SecretToken(signed(RSA_KEY)), _LIMITS)
         # A fault in the caller's factory is neither the issuer's doing nor an outage.
         assert exc_info.value.kind is FailureKind.UNEXPECTED
 
@@ -750,7 +748,7 @@ class TestEventLoops:
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=lambda url: httpx.MockTransport(respond), clock=clock)
 
         async def verifications() -> int:
-            return len(await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS) for _ in range(3))))
+            return len(await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS) for _ in range(3))))
 
         assert asyncio.run(verifications()) == 3
         clock.now += 3600
@@ -770,7 +768,7 @@ class TestEventLoops:
 
         async def verifications() -> None:
             finished.append(weakref.ref(asyncio.get_running_loop()))
-            await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _TIMEOUTS) for _ in range(3)))
+            await asyncio.gather(*(keys.verify(SecretToken(signed(RSA_KEY)), _LIMITS) for _ in range(3)))
 
         for _ in range(3):
             clock.now += 3600
@@ -789,7 +787,7 @@ class TestNeutralWording:
     async def test_a_refusal_names_the_token_without_a_kind(self) -> None:
         """A refused token is reported with the typed reason and a message that names no kind."""
         with pytest.raises(TokenValidationError, match="^The token is not a compact signed token") as exc_info:
-            await IssuerSigningKeys(JWKS_URL).verify(SecretToken("not-a-token"), _TIMEOUTS)
+            await IssuerSigningKeys(JWKS_URL).verify(SecretToken("not-a-token"), _LIMITS)
         assert exc_info.value.reason is TokenValidationReason.MALFORMED
 
     def test_no_runtime_string_names_a_kind(self) -> None:
@@ -820,11 +818,11 @@ class TestNeutralWording:
         assert named == []
 
 
-class TestTheTimeoutPolicyBoundsTheKeySetFetch:
+class TestTheRequestLimitsBoundTheKeySetFetch:
     async def test_a_key_set_that_never_lands_is_refused_as_a_timeout(self) -> None:
         keys = IssuerSigningKeys(JWKS_URL, transport_factory=_crawling_transport)
 
         with pytest.raises(IdentityFetchError) as refusal:
-            await keys.verify(SecretToken(signed(RSA_KEY)), TimeoutPolicy(connect_seconds=0.05, request_seconds=0.05))
+            await keys.verify(SecretToken(signed(RSA_KEY)), RequestLimits(connect_seconds=0.05, request_seconds=0.05))
 
         assert refusal.value.kind is FailureKind.TIMEOUT
