@@ -1018,7 +1018,7 @@ The guarantee is about what a value states, so a reporter that walks object attr
 
 Your own frames are yours. A token you read with `get_secret_value()` is a plain string in your code, as is the value you pass to `SecretToken(...)`, the callback query mapping you hand to `from_query`, and anything you unwrap in a handler of your own.
 
-**A credential you pass as plain text is recorded by the refusal itself.** The validation framework's own frames hold whatever they were passed, and this library cannot scrub another library's frames. The refusal tells you to wrap the value; it does not undo the exposure of having passed it. Wrap at the point you read the credential, not at the call.
+**A credential you pass as plain text is recorded by the refusal itself.** The value is already bound to the parameter you passed it to, and to every frame between that one and the refusal, which includes this library's own and the validation framework's. Measured for a preset given a plain client secret, the refusal's traceback holds it in three frames. The refusal tells you to wrap the value; it does not undo the exposure of having passed it. Wrap at the point you read the credential, not at the call.
 
 So for code that handles tokens, turn local-variable capture off or scrub it, with Sentry's `include_local_variables=False` or a `before_send` hook. The wrapping above reduces what a capture reveals; it does not make the capture safe.
 
