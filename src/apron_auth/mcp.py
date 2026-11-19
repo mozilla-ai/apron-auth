@@ -888,7 +888,7 @@ def _requested_auth_method(application_type: ApplicationType | None) -> TokenEnd
     Returns:
         The method to request.
     """
-    if application_type is ApplicationType.NATIVE:
+    if application_type == ApplicationType.NATIVE:
         return TokenEndpointAuthMethod.NONE
     return TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
