@@ -745,7 +745,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
+        client_secret: The OAuth client secret.
         scopes: The bot scopes to request.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
@@ -820,7 +820,7 @@ def sign_in_preset(
 
     Args:
         client_id: The OAuth client identifier.
-        client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
+        client_secret: The OAuth client secret.
         scopes: The further scopes to request beside ``openid``, which are ``email`` and ``profile``.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.

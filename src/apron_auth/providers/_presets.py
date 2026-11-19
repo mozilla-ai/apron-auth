@@ -88,7 +88,7 @@ class Preset:
 
         Args:
             client_id: The OAuth client identifier.
-            client_secret: The OAuth client secret, wrapped so this frame states it to no error reporter.
+            client_secret: The OAuth client secret.
             scopes: Scopes to request beside the ones this preset states.
             redirect_uri: The redirect URI for the authorization flow.
             extra_params: Authorization-request parameters, which take precedence over the ones

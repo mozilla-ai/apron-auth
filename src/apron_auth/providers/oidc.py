@@ -295,7 +295,7 @@ def preset(
 
     Args:
         client_id: The OAuth client identifier registered at the provider.
-        client_secret: The OAuth client secret paired with it, wrapped so this frame states it to no error reporter.
+        client_secret: The OAuth client secret paired with it.
         scopes: Scopes to request, merged with the required ``openid`` scope.
         redirect_uri: The redirect URI for the authorization flow.
         extra_params: Extra authorization-request parameters.
