@@ -21,6 +21,17 @@ class AuthorityCredential(Enum):
     PRESENT = auto()
 
 
+class ResourceIndicatorFault(Enum):
+    """Each member is one reason a value cannot serve as an RFC 8707 resource indicator."""
+
+    # The value carries a fragment.
+    FRAGMENT = auto()
+    # The value cannot be read as a URI at all.
+    MALFORMED = auto()
+    # The value states no scheme, so it is relative rather than absolute.
+    RELATIVE = auto()
+
+
 def _scheme_and_host(url: str) -> tuple[str, str] | None:
     """Return the scheme and host of ``url``, or None when a request cannot be sent to it as written.
 
@@ -203,6 +214,30 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
         name: values[0] if len(values) == 1 else values
         for name, values in parse_qs(query, keep_blank_values=True).items()
     }
+
+
+def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
+    """Report why a value cannot serve as an RFC 8707 resource indicator, if it cannot.
+
+    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it states a scheme and
+    carries no fragment. A value that states neither fault binds a token's audience to the service
+    it names.
+
+    Args:
+        resource: The value to read.
+
+    Returns:
+        The fault that disqualifies the value, or None when it qualifies.
+    """
+    if "#" in resource:
+        return ResourceIndicatorFault.FRAGMENT
+    try:
+        scheme = urlparse(resource).scheme
+    except ValueError:
+        return ResourceIndicatorFault.MALFORMED
+    if not scheme:
+        return ResourceIndicatorFault.RELATIVE
+    return None
 
 
 def url_host(url: str) -> str:

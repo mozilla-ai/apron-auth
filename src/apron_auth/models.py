@@ -16,7 +16,6 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto, unique
 from typing import Annotated, Any, Literal, NamedTuple, NoReturn, Self, TypeVar, assert_never
-from urllib.parse import urlparse
 
 from pydantic import (
     AfterValidator,
@@ -35,10 +34,12 @@ from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
 from apron_auth._credentials import arrives_wrapped
 from apron_auth._urls import (
     AuthorityCredential,
+    ResourceIndicatorFault,
     authority_credential,
     host_name,
     matches_suffix,
     query_parameters,
+    resource_indicator_fault,
     url_host,
     uses_allowed_transport,
 )
@@ -1290,18 +1291,19 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         """
         if self.resource is None:
             return self
-        if "#" in self.resource:
-            msg = "resource must not contain a fragment"
-            raise ValueError(msg)
-        try:
-            scheme = urlparse(self.resource).scheme
-        except ValueError as exc:
-            msg = "resource is malformed"
-            raise ValueError(msg) from exc
-        if not scheme:
-            msg = "resource must be an absolute URI when set"
-            raise ValueError(msg)
-        return self
+        fault = resource_indicator_fault(self.resource)
+        if fault is None:
+            return self
+        match fault:
+            case ResourceIndicatorFault.FRAGMENT:
+                msg = "resource must not contain a fragment"
+            case ResourceIndicatorFault.MALFORMED:
+                msg = "resource is malformed"
+            case ResourceIndicatorFault.RELATIVE:
+                msg = "resource must be an absolute URI when set"
+            case _:
+                assert_never(fault)
+        raise ValueError(msg)
 
     @model_validator(mode="after")
     def _scope_separator_is_not_empty(self) -> ProviderConfig:
@@ -1556,7 +1558,8 @@ class ServerMetadata(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
             metadata omits the flag.
         resource: The protected resource's RFC 8707 resource identifier, taken
             from the RFC 9728 protected-resource metadata ``resource`` field;
-            ``None`` when the metadata omits it or its value is not a string.
+            ``None`` when this metadata was built by hand, or discovered from a
+            server that publishes no protected-resource document.
             This is the canonical URI to which a token's audience is bound.
         userinfo_url: The OpenID Connect userinfo endpoint, or ``None`` when the metadata omits it.
             An OpenID provider need not advertise one.

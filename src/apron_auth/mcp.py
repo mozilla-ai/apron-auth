@@ -47,11 +47,13 @@ from apron_auth._json_body import decode_json_body
 from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import (
     AuthorityCredential,
+    ResourceIndicatorFault,
     authority_credential,
     host_name,
     is_localhost_name,
     is_loopback_host,
     parse_ip,
+    resource_indicator_fault,
     url_host,
     uses_secure_transport,
 )
@@ -150,6 +152,8 @@ async def discover(
     Fetches the RFC 9728 protected-resource metadata (trying the ``resource_metadata_url`` hint, then
     well-known locations), reads its resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback).
+    A protected-resource document must declare the resource identifier RFC 9728 requires of it, so a token
+    issued through the returned metadata names the audience it is for.
     A server that states it publishes no protected-resource metadata, and for which the caller named no
     such document, is read as its own authorization server: its RFC 8414 metadata is fetched at its
     origin, and is accepted only where the document declares that origin as its issuer, however it spells
@@ -186,9 +190,10 @@ async def discover(
             read as the authorization server, that origin and the metadata URLs
             derived from it.
         McpDiscoveryError: If a URL a fetched document declares is rejected, no
-            metadata document can be fetched, a required field is absent, or the
-            authorization server metadata does not declare the server it was
-            fetched from as its issuer. The first document fetched is
+            metadata document can be fetched, a required field is absent, the
+            protected-resource metadata declares a resource identifier that is no
+            absolute URI without a fragment, or the authorization server metadata
+            does not declare the server it was fetched from as its issuer. The first document fetched is
             authoritative, so a mismatched issuer ends discovery rather than
             trying the next candidate URL. A ``transport_factory`` that fails is
             reported here too, as a fault that is never retried.
@@ -209,8 +214,10 @@ async def discover(
         limits,
         prm_document,
     )
-    # No protected-resource metadata means the server's own origin was read as its authorization server.
+    # No protected-resource metadata means the server's own origin was read as its authorization server,
+    # which declares no resource identifier and leaves none to invent.
     resource_meta: dict[str, Any] | None = None
+    resource: str | None = None
     if isinstance(fetched, _MetadataOutcome):
         if not _falls_back_to_origin(fetched, hinted=bool(resource_metadata_url)):
             raise _no_document_error(prm_document, fetched)
@@ -231,6 +238,7 @@ async def discover(
         if "?" in auth_server or "#" in auth_server:
             msg = "protected resource metadata declares an authorization server with a query or a fragment"
             raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+        resource = _declared_resource(resource_meta)
 
     asm_document = "authorization server metadata"
     server_meta = await _fetch_first_metadata(
@@ -276,9 +284,6 @@ async def discover(
         if url is not None:
             _validate_url(url, url_validator, subject=subject, caller_supplied=False)
 
-    resource = resource_meta.get("resource") if resource_meta is not None else None
-    if isinstance(resource, str):
-        _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
     try:
         code_challenge_methods = strict_str_list(server_meta, "code_challenge_methods_supported")
         auth_methods = strict_str_list(server_meta, "token_endpoint_auth_methods_supported")
@@ -297,7 +302,7 @@ async def discover(
         issuer=auth_server,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
-        resource=resource if isinstance(resource, str) else None,
+        resource=resource,
     )
 
 
@@ -563,6 +568,44 @@ def cimd_client_id(url: str) -> str:
         msg = "CIMD client_id must not contain a . or .. path segment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
+
+
+def _declared_resource(document: dict[str, Any]) -> str:
+    """Return the resource identifier a protected-resource document declares.
+
+    RFC 9728 section 2 makes ``resource`` required, and RFC 8707 section 2 makes it an absolute URI
+    without a fragment, because it is what a token's audience is bound to.
+    A document stating none, or stating one no audience could name, is refused rather than carried
+    onward as an absent indicator, which would silently drop the binding.
+
+    Args:
+        document: The decoded protected-resource metadata.
+
+    Returns:
+        The resource identifier the document declares.
+
+    Raises:
+        McpDiscoveryError: If the document declares no resource identifier, declares one that is no
+            absolute URI without a fragment, or declares one carrying a credential in its authority.
+    """
+    resource = document.get("resource")
+    if not isinstance(resource, str) or not resource:
+        msg = "protected resource metadata declares no resource identifier"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    fault = resource_indicator_fault(resource)
+    if fault is not None:
+        match fault:
+            case ResourceIndicatorFault.FRAGMENT:
+                msg = "protected resource metadata declares a resource identifier with a fragment"
+            case ResourceIndicatorFault.MALFORMED:
+                msg = "protected resource metadata declares a malformed resource identifier"
+            case ResourceIndicatorFault.RELATIVE:
+                msg = "protected resource metadata declares a resource identifier that is no absolute URI"
+            case _:
+                assert_never(fault)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
+    return resource
 
 
 def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
