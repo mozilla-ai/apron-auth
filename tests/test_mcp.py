@@ -943,6 +943,23 @@ class TestDiscover:
         # The document is refused where it is read, so the authorization server is never fetched.
         assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_ROOT]
 
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            pytest.param("urn:example:mcp-service", id="urn"),
+            pytest.param("https://mcp.example.com", id="https"),
+        ],
+    )
+    async def test_a_resource_identifier_naming_no_host_is_still_an_absolute_uri(
+        self, httpx_mock: HTTPXMock, resource: str
+    ) -> None:
+        """RFC 8707 asks for an absolute URI, which a URN is, so one is carried rather than refused."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=resource))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com")
+        assert meta.resource == resource
+        assert to_provider_config(meta, ClientRegistration(client_id="c")).resource == resource
+
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         payload = _asm_payload()
