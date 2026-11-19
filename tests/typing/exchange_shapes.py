@@ -26,7 +26,7 @@ config = ProviderConfig(
     redirect_uri="https://app.example.com/callback",
 )
 store = MemoryStateStore()
-callback = AuthorizationCallback(code="code", state="state")
+callback = AuthorizationCallback(code=SecretStr("code"), state="state")
 pending_state = OAuthPendingState(
     state="state", redirect_uri="https://app.example.com/callback", openid_requested=False, created_at=0.0
 )

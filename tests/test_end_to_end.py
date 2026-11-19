@@ -87,7 +87,7 @@ class TestFullOAuthFlow:
             },
         )
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
         assert tokens.access_token.get_secret_value() == "access-token-abc"
@@ -168,7 +168,7 @@ class TestContextFlowsThroughStateStore:
             },
         )
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
         assert tokens.context == meta
@@ -237,7 +237,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(NonceValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 
@@ -257,7 +257,7 @@ class TestSlackSignInFlow:
         )
 
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="authorization-code", state=authorization.state),
+            AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
             browser_token=authorization.browser_token,
         )
 
@@ -285,7 +285,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(IdTokenValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 
@@ -309,7 +309,7 @@ class TestSlackSignInFlow:
 
         with pytest.raises(NonceValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="authorization-code", state=authorization.state),
+                AuthorizationCallback(code=SecretStr("authorization-code"), state=authorization.state),
                 browser_token=authorization.browser_token,
             )
 

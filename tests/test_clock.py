@@ -5,6 +5,7 @@ import math
 from types import SimpleNamespace
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth._clock import (
     CLOCK_SKEW_SECONDS,
@@ -31,7 +32,7 @@ def _pending(created_at: object) -> OAuthPendingState:
     return OAuthPendingState.model_construct(
         state="state-key",
         redirect_uri="https://app.example.com/callback",
-        code_verifier="test-verifier",
+        code_verifier=SecretStr("test-verifier"),
         created_at=created_at,
     )
 

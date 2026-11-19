@@ -221,7 +221,8 @@ authorization = await client.get_authorization_url(redirect_uri="https://yourapp
 # as `cookie_browser_token`, wrapped again as `SecretStr(cookie_browser_token)`.
 
 # `query` is the callback's query parameters: your framework's own query
-# mapping, or any mapping of the names to their values.
+# mapping, or any mapping of the names to their values. The reader wraps the
+# authorization code as it reads it, so you pass the mapping as it arrived.
 callback = AuthorizationCallback.from_query(query)
 tokens = await client.exchange_code(callback, browser_token=SecretStr(cookie_browser_token))
 print(tokens.access_token.get_secret_value())
@@ -231,7 +232,7 @@ if tokens.refresh_token is not None:
 
 A callback that reaches your redirect URI with no such cookie is refused with `StateError`, the same refusal as a callback whose `state` the token does not mint. Both mean the callback cannot be bound to a browser, and neither consumes the store nor redeems the code.
 
-A flow that one process spans, such as a native or command-line sign-in, can hold the pending state itself and use `OAuthClient`. Keep it where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A server-side session is already keyed to one browser, so holding the pending state there binds the flow to that browser as well, which is what the browser token gives the store-backed flow above. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt, because only a `StateStore` refuses a pending state that is reused.
+A flow that one process spans, such as a native or command-line sign-in, can hold the pending state itself and use `OAuthClient`. Keep it where the user cannot change it, such as in a server-side session: every check in the exchange trusts it, so a pending state the user can replace defeats them all. A server-side session is already keyed to one browser, so holding the pending state there binds the flow to that browser as well, which is what the browser token gives the store-backed flow above. A pending state saved as JSON comes back as a dict, so restore it with `OAuthPendingState.model_validate` before you pass it, wrapping the `code_verifier` in `SecretStr` as you do: it proves possession at the token endpoint, so one supplied as a plain string is refused. A dump states it as a mask, which is why the record you persist holds the value you read off the model with `get_secret_value()`. The dict must hold the model's own fields and nothing else, because a field the model does not define is refused rather than ignored. A store that adds bookkeeping of its own, such as a document identifier or an expiry attribute, therefore needs those keys dropped first: select the model's fields out of the stored record instead of passing the whole record. Discard it after one exchange attempt, because only a `StateStore` refuses a pending state that is reused.
 
 ```python
 from apron_auth import AuthorizationCallback, OAuthClient
@@ -987,15 +988,31 @@ A failure stating several reasons, as a Linear response does, reports how many r
 
 An error reporter such as Sentry records the local variables of every frame a traceback holds, and Sentry does so by default (`include_local_variables=True`). A credential held in one of those is recorded, which no rule about an error's message or its exception chain reaches.
 
-On the revocation and identity paths, including ID token verification, this library holds every credential it passes between its own frames in a wrapper whose `repr` states a row of asterisks, and every token it hands to handler code in a `SecretToken`, which also refuses to state itself as text. The one value there that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each of those paths also raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. A reporter that captures a frame of either path therefore records no token and no client secret. `make test` holds that rule for every bundled handler by walking a failed request's traceback and asserting all of it: the credential reached the request, the error attaches nothing, every frame but the test's own belongs to this library, and none of them states the credential.
+One rule answers this, and it decides what you may hand this library: **no public entry point takes a credential as plain text.** A credential you pass as a plain string is bound to a frame local for the whole call, and nothing about where an error is raised reaches that, so the value arrives wrapped instead. A plain string that states a credential is refused rather than wrapped for you, because wrapping it at the boundary leaves it bound in every frame it already passed through.
+
+What you wrap, and in what:
+
+| Where | What you pass |
+| --- | --- |
+| Every `preset(...)`, `ProviderConfig` and `ClientRegistration` | `client_secret=SecretStr(...)` |
+| `TokenSet`, `UserToken`, `IdentityMaterial` | `access_token=SecretToken(...)`, `refresh_token=SecretToken(...)`, `id_token=SecretToken(...)` |
+| `OAuthClient.refresh_token`, `revoke_token` | a `SecretToken` |
+| `WorkloadTokenVerifier.verify`, `check` | a `SecretToken` |
+| `AuthorizationCallback` | `code=SecretStr(...)`, which `from_query` does for you |
+| `OAuthPendingState` | `code_verifier=SecretStr(...)`, which this library mints wrapped |
+| `StoredStateClient.exchange_code` | `browser_token=SecretStr(...)` |
+
+A token or secret this library hands back is already wrapped, so passing one straight back needs no wrapping of its own. A blank string states no credential and is not refused: an empty client secret still yields a public client.
+
+Inside, every credential this library passes between its own frames stays in a wrapper whose `repr` states a row of asterisks, and a token handed to handler code is a `SecretToken`, which also refuses to state itself as text. The one value that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each path raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. `make test` holds the rule by walking a failed call's traceback and asserting both halves: the credential reached the request or the configuration, and no frame local states it. The configuration, exchange, refresh, revocation, identity and workload paths each have a case.
 
 Three limits are worth knowing, and the third is the one to act on.
 
 The guarantee is about what a value states, so a reporter that walks object attributes recursively rather than reading a `repr` can still reach the string inside a wrapper.
 
-Your own frames are yours. A token you read off a `TokenSet` is a plain string in your code, as is the value you pass to `SecretToken(...)` and anything you unwrap in a handler of your own.
+Your own frames are yours. A token you read with `get_secret_value()` is a plain string in your code, as is the value you pass to `SecretToken(...)`, the callback query mapping you hand to `from_query`, and anything you unwrap in a handler of your own.
 
-**The code exchange is not covered yet.** `exchange_code` takes the authorization code and the PKCE verifier as plain strings, and raises from its own frames, so a captured traceback of a failed exchange states them. Measured against a refused exchange, the code appears in four frame locals and the verifier in five. A refused refresh states neither its refresh token nor the client secret, because both reach the request wrapped.
+**A credential you pass as plain text is recorded by the refusal itself.** The validation framework's own frames hold whatever they were passed, and this library cannot scrub another library's frames. The refusal tells you to wrap the value; it does not undo the exposure of having passed it. Wrap at the point you read the credential, not at the call.
 
 So for code that handles tokens, turn local-variable capture off or scrub it, with Sentry's `include_local_variables=False` or a `before_send` hook. The wrapping above reduces what a capture reveals; it does not make the capture safe.
 

@@ -703,6 +703,30 @@ def _stated_values(query: Mapping[str, Any], name: str) -> list[Any]:
     return [value]
 
 
+# The callback parameters that carry a credential, which are read wrapped so no frame of the reader
+# binds one as a plain string.
+_CALLBACK_CREDENTIALS = frozenset({"code"})
+
+
+def _stated_callback_values(query: Mapping[str, Any], name: str) -> list[Any]:
+    """Return every value a callback query states for one parameter, wrapping a credential as it is read.
+
+    The wrapping happens here rather than where the values are checked, because a frame that can
+    refuse the query must hold no credential as a plain string.
+
+    Args:
+        query: The query to read, which must state ``name``.
+        name: The parameter to read.
+
+    Returns:
+        The values, in the order the query states them, with a credential wrapped.
+    """
+    values = _stated_values(query, name)
+    if name not in _CALLBACK_CREDENTIALS:
+        return values
+    return [SecretStr(value) if isinstance(value, str) else value for value in values]
+
+
 class _RefusesWithoutRepeating(BaseModel):
     """A model that refuses without repeating the value it was given, at each entry point of its own.
 
@@ -2083,8 +2107,8 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
 
     Construction and validation refuse a field this model does not define, and a refusal repeats no
     value it was given, because a response carries the authorization code.
-    NOTE: That covers a refusal alone. This model holds the code as it arrived, so rendering one, or
-    dumping it, states the code as any other model holding a credential does.
+    NOTE: That covers a refusal alone. Dumping this model states the code as a mask, so a caller
+    recording one reads it with ``get_secret_value``.
 
     Every member is optional, because a response states a different subset depending on how it turned
     out. RFC 6749 section 4.1.2 states ``code`` where the request succeeded, section 4.1.2.1 states
@@ -2092,7 +2116,7 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
     what a given subset means.
 
     Attributes:
-        code: The authorization code to redeem.
+        code: The authorization code to redeem, wrapped so no frame local states it.
         state: The ``state`` the authorization request sent, returned unchanged.
         iss: The issuer that answered (RFC 9207).
         error: The error code a refused request is answered with (RFC 6749 section 4.1.2.1).
@@ -2101,7 +2125,7 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
             server chose its text. It is here for a caller to show or record.
     """
 
-    code: str | None = None
+    code: Annotated[SecretStr | None, BeforeValidator(wrapped_credential)] = None
     state: str | None = None
     iss: str | None = None
     error: str | None = None
@@ -2144,11 +2168,11 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
         if not isinstance(query, Mapping):
             msg = "the callback query must be a mapping of each parameter name to its value"
             raise ConfigurationError(msg)
-        stated: dict[str, str] = {}
+        stated: dict[str, str | SecretStr] = {}
         for name in cls.model_fields:
             if name not in query:
                 continue
-            values = _stated_values(query, name)
+            values = _stated_callback_values(query, name)
             if not values:
                 msg = f"the callback query states {name} with no value at all"
                 raise ConfigurationError(msg)
@@ -2156,11 +2180,12 @@ class AuthorizationCallback(_RefusesWithoutRepeating, frozen=True, extra="forbid
                 msg = f"the callback query must state {name} exactly once"
                 raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
             value = values[0]
-            if not isinstance(value, str):
+            if not isinstance(value, str | SecretStr):
                 msg = f"the callback query must state {name} as a string"
                 raise ConfigurationError(msg)
             stated[name] = value
-        return cls(**stated)
+        # Validated as a mapping, because the values it holds are of more than one type.
+        return cls.model_validate(stated)
 
 
 class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
@@ -2172,7 +2197,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     Attributes:
         state: Unique token identifying this authorization request.
         redirect_uri: Redirect URI for this flow.
-        code_verifier: PKCE code verifier, if PKCE is enabled.
+        code_verifier: PKCE code verifier, if PKCE is enabled, wrapped so no frame local states it.
         nonce: OpenID Connect nonce sent with the request, if the request asks for the ``openid`` scope.
         openid_requested: Whether the request asked for the ``openid`` scope, which decides whether the
             exchange holds the response to the nonce rule. It is stated beside the nonce rather than read
@@ -2185,7 +2210,7 @@ class OAuthPendingState(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
     state: str
     redirect_uri: str
-    code_verifier: str | None = None
+    code_verifier: Annotated[SecretStr | None, BeforeValidator(wrapped_credential)] = None
     nonce: str | None = None
     openid_requested: bool
     created_at: float

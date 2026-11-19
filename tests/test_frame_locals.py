@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import time
 from collections.abc import Callable
 from importlib import import_module
 from typing import Any, TypeAlias
@@ -22,8 +23,15 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient, StoredStateClient
-from apron_auth.errors import ConfigurationError, StateError, TokenRefreshError
-from apron_auth.models import AuthorizationCallback, IdentityMaterial, Provider, ProviderConfig, SecretToken
+from apron_auth.errors import ConfigurationError, StateError, TokenExchangeError, TokenRefreshError
+from apron_auth.models import (
+    AuthorizationCallback,
+    IdentityMaterial,
+    OAuthPendingState,
+    Provider,
+    ProviderConfig,
+    SecretToken,
+)
 from apron_auth.providers import github, google, hubspot, notion, revocation_handler_for, slack
 from apron_auth.providers._revocation import StandardRevocationHandler
 from apron_auth.stores import MemoryStateStore
@@ -263,6 +271,51 @@ class TestAConfigurationRefusal:
         assert _locals_stating_anywhere(caught.value, CLIENT_SECRET) == []
 
 
+class TestACodeExchangeFailure:
+    """Test that a refused exchange leaves the code and the PKCE verifier in no frame local.
+
+    Both are parameters of the call that fails, so no rule about the raise site reaches either.
+    """
+
+    def _pending(self, verifier: str) -> OAuthPendingState:
+        return OAuthPendingState(
+            state="pending-state",
+            redirect_uri="https://app.example.com/cb",
+            code_verifier=SecretStr(verifier),
+            openid_requested=False,
+            created_at=time.time(),
+        )
+
+    async def test_a_refused_exchange_states_no_authorization_code(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenExchangeError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretStr(TOKEN), state="pending-state"),
+                pending_state=self._pending("a-verifier"),
+            )
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _frames_outside_the_library(caught.value) == []
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+    async def test_a_refused_exchange_states_no_code_verifier(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_recording_transport(sent))
+
+        with pytest.raises(TokenExchangeError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretStr("the-code"), state="pending-state"),
+                pending_state=self._pending(TOKEN),
+            )
+
+        assert TOKEN in _request_text(sent[0])
+        _assert_chains_nothing(caught.value)
+        assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+
 class TestABrowserBindingRefusal:
     """Test that a callback refused for its browser binding states the browser token in no frame local.
 
@@ -285,7 +338,7 @@ class TestABrowserBindingRefusal:
 
         with pytest.raises(StateError) as caught:
             await client.exchange_code(
-                AuthorizationCallback(code="the-code", state="another-browsers-state"),
+                AuthorizationCallback(code=SecretStr("the-code"), state="another-browsers-state"),
                 browser_token=authorization.browser_token,
             )
 

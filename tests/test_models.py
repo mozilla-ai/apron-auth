@@ -123,13 +123,68 @@ class _MultiValueQuery(Mapping[str, str]):
         return [value for stated, value in self._pairs if stated == name]
 
 
+def _frame_locals_stating(exc: BaseException, value: str) -> list[str]:
+    """Return one name per frame local on the traceback, outside this module, whose repr states ``value``.
+
+    Args:
+        exc: The error whose traceback to walk.
+        value: The credential that must appear in no local.
+
+    Returns:
+        A description of each local that states it, empty when none does.
+    """
+    stated: list[str] = []
+    frames = exc.__traceback__
+    while frames is not None:
+        frame = frames.tb_frame
+        if frame.f_code.co_filename != __file__:
+            stated.extend(
+                f"{frame.f_code.co_name}.{name}" for name, held in frame.f_locals.items() if value in repr(held)
+            )
+        frames = frames.tb_next
+    return stated
+
+
 class TestAuthorizationCallback:
+    def test_an_authorization_code_supplied_as_plain_text_is_refused(self) -> None:
+        """The code is redeemable for tokens, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            AuthorizationCallback(code="plain-text-code", state="st")  # ty: ignore[invalid-argument-type]
+
+        assert "plain-text-code" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
+    def test_a_query_states_its_code_as_plain_text_and_is_read_wrapped(self) -> None:
+        """A web framework hands over a plain mapping, so the reader wraps the code rather than refusing it."""
+        callback = AuthorizationCallback.from_query({"code": "code-from-the-query", "state": "st"})
+
+        assert callback.code is not None
+        assert callback.code.get_secret_value() == "code-from-the-query"
+        assert "code-from-the-query" not in repr(callback)
+        assert callback.state == "st"
+
+    def test_a_query_that_refuses_binds_its_code_to_no_local_of_its_own(self) -> None:
+        """The reader refuses from its own frames, so it wraps the code before any of them can raise.
+
+        The query mapping the caller passed is the caller's own object, and a parameter holding it is
+        what any function taking an argument holds. The rule here is that the reader binds nothing out
+        of it as a plain string.
+        """
+        code = "s3cr3t-authorization-code"  # pragma: allowlist secret
+
+        with pytest.raises(AuthorizationResponseError) as caught:
+            AuthorizationCallback.from_query({"code": [code, code], "state": "st"})
+
+        rendered = "".join(traceback.format_exception(caught.value))
+        assert code not in rendered
+        assert _frame_locals_stating(caught.value, code) == ["from_query.query"]
+
     """The authorization response, read once by this library instead of in pieces by the caller."""
 
     def test_reads_the_parameters_a_response_states(self) -> None:
         callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&iss=https%3A%2F%2Fissuer.example.com"))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "xyz"
         assert callback.iss == "https://issuer.example.com"
         assert callback.error is None
@@ -149,7 +204,7 @@ class TestAuthorizationCallback:
         """An authorization server may return parameters of its own, which are no business of this model."""
         callback = AuthorizationCallback.from_query(parse_qs("code=abc&state=xyz&session_state=s&scope=openid"))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "xyz"
 
     @pytest.mark.parametrize("name", ["code", "state", "iss", "error", "error_description"])
@@ -192,7 +247,7 @@ class TestAuthorizationCallback:
     def test_a_mapping_with_a_reader_and_no_repeat_is_read(self) -> None:
         callback = AuthorizationCallback.from_query(_MultiValueQuery([("code", "abc"), ("state", "s")]))
 
-        assert callback.code == "abc"
+        assert callback.code.get_secret_value() == "abc"
         assert callback.state == "s"
 
     def test_a_refusal_does_not_repeat_the_code_it_was_given(self) -> None:
@@ -205,7 +260,7 @@ class TestAuthorizationCallback:
 
     def test_a_sequence_holding_one_value_states_that_value(self) -> None:
         """A parser that preserves repeats returns every value in a sequence, including a single one."""
-        assert AuthorizationCallback.from_query({"code": ["abc"]}).code == "abc"
+        assert AuthorizationCallback.from_query({"code": ["abc"]}).code.get_secret_value() == "abc"
 
     @pytest.mark.parametrize(
         "value",
@@ -234,7 +289,7 @@ class TestAuthorizationCallback:
         assert AuthorizationCallback.from_query({}) == AuthorizationCallback()
 
     def test_it_is_frozen(self) -> None:
-        callback = AuthorizationCallback(code="abc", state="xyz")
+        callback = AuthorizationCallback(code=SecretStr("abc"), state="xyz")
 
         with pytest.raises(ConfigurationError):
             callback.code = "other"  # ty: ignore[invalid-assignment]
@@ -2751,6 +2806,20 @@ class TestIdentityProfile:
 
 
 class TestOAuthPendingState:
+    def test_a_code_verifier_supplied_as_plain_text_is_refused(self) -> None:
+        """The verifier proves possession at the token endpoint, so it is a credential under the rule."""
+        with pytest.raises(ConfigurationError) as caught:
+            OAuthPendingState(
+                state="st",
+                redirect_uri="https://app.example.com/cb",
+                code_verifier="plain-text-verifier",  # ty: ignore[invalid-argument-type]
+                openid_requested=False,
+                created_at=0.0,
+            )
+
+        assert "plain-text-verifier" not in str(caught.value)
+        assert "wrapped" in str(caught.value)
+
     def test_a_redirect_uri_carrying_a_credential_is_refused(self) -> None:
         """A pending state is persisted and replayed, so a credential in its URI outlives the request."""
         with pytest.raises(ConfigurationError, match="redirect_uri must not carry userinfo"):
@@ -2766,12 +2835,12 @@ class TestOAuthPendingState:
         state = OAuthPendingState(
             state="random-state-token",
             redirect_uri="https://app.example.com/callback",
-            code_verifier="verifier-abc",
+            code_verifier=SecretStr("verifier-abc"),
             openid_requested=False,
             created_at=now,
         )
         assert state.state == "random-state-token"
-        assert state.code_verifier == "verifier-abc"
+        assert state.code_verifier.get_secret_value() == "verifier-abc"
         assert state.created_at == now
 
     def test_without_pkce(self) -> None:

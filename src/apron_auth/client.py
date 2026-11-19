@@ -720,14 +720,14 @@ class _OAuthClientBase:
 
         return url, pending_state
 
-    def _code_to_redeem(self, callback: AuthorizationCallback) -> str:
+    def _code_to_redeem(self, callback: AuthorizationCallback) -> SecretStr:
         """Return the authorization code to redeem, refusing a response that states none.
 
         Args:
             callback: The authorization response returned to the redirect URI.
 
         Returns:
-            The code.
+            The code, wrapped so this frame states it to no error reporter.
 
         Raises:
             AuthorizationResponseError: If the response states no code, or states both a code and an
@@ -737,13 +737,15 @@ class _OAuthClientBase:
                 response. Whoever reaches the redirect URI chooses the kind and the error code, and
                 neither is evidence that the condition it names happened.
         """
-        if callback.code and callback.error:
+        # A wrapper holding nothing is still a wrapper, so presence is read off the value it holds.
+        code = callback.code if callback.code is not None and callback.code.get_secret_value() else None
+        if code is not None and callback.error:
             # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says
             # two things at once and nothing here may choose between them.
             msg = "the authorization response states both a code and an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
-        if callback.code:
-            return callback.code
+        if code is not None:
+            return code
         if not callback.error:
             msg = "the authorization response states neither a code nor an error"
             raise AuthorizationResponseError(msg, kind=FailureKind.REFUSED)
@@ -779,11 +781,11 @@ class _OAuthClientBase:
         pending = await pending_state_for(_usable_state(callback.state))
         return await self._redeem_against(code, pending)
 
-    async def _redeem_against(self, code: str, pending: OAuthPendingState) -> FreshTokenSet:
+    async def _redeem_against(self, code: SecretStr, pending: OAuthPendingState) -> FreshTokenSet:
         """Redeem an authorization code against the pending state of the request it answers.
 
         Args:
-            code: The authorization code to redeem.
+            code: The authorization code to redeem, wrapped so this frame states it to no error reporter.
             pending: The pending state the authorization request was built with.
 
         Returns:
@@ -801,7 +803,7 @@ class _OAuthClientBase:
         _check_pending_age(pending, max_age=self._config.max_pending_age_seconds)
         _check_pending_openid(pending)
 
-        data: dict[str, str] = {"grant_type": "authorization_code", "code": code}
+        data: dict[str, str | SecretStr] = {"grant_type": "authorization_code", "code": code}
         if pending.redirect_uri:
             data["redirect_uri"] = pending.redirect_uri
         if pending.code_verifier:

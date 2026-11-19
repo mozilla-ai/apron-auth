@@ -57,7 +57,7 @@ def _pending_state() -> OAuthPendingState:
     return OAuthPendingState(
         state="pending-state",
         redirect_uri="https://app.example.com/callback",
-        code_verifier="code-verifier-for-these-tests",
+        code_verifier=SecretStr("code-verifier-for-these-tests"),
         created_at=time.time(),
         openid_requested=False,
     )
@@ -66,7 +66,7 @@ def _pending_state() -> OAuthPendingState:
 async def _exchange(config: ProviderConfig) -> None:
     client = OAuthClient(config)
     await client.exchange_code(
-        AuthorizationCallback(code="auth-code-123", state="pending-state"), pending_state=_pending_state()
+        AuthorizationCallback(code=SecretStr("auth-code-123"), state="pending-state"), pending_state=_pending_state()
     )
 
 

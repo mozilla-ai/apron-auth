@@ -110,7 +110,7 @@ def _make_oauth_config(**overrides: object) -> ProviderConfig:
 
 
 def _callback(**overrides: object) -> AuthorizationCallback:
-    defaults = {"code": "auth-code-123", "state": _STATE}
+    defaults = {"code": SecretStr("auth-code-123"), "state": _STATE}
     defaults.update(overrides)
     return AuthorizationCallback(**defaults)  # ty: ignore[invalid-argument-type]
 
@@ -704,7 +704,7 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         await client.exchange_code(
             _callback(),
-            pending_state=_pending_state(code_verifier="test-verifier"),
+            pending_state=_pending_state(code_verifier=SecretStr("test-verifier")),
         )
         request = httpx_mock.get_request()
         assert b"code_verifier=test-verifier" in request.content
@@ -740,7 +740,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
-            code_verifier="stored-verifier",
+            code_verifier=SecretStr("stored-verifier"),
             openid_requested=False,
             created_at=time.time(),
         )
@@ -749,7 +749,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         store.consume.assert_awaited_once_with(_STATE)
         assert tokens.access_token.get_secret_value() == "access-abc"
@@ -762,7 +762,7 @@ class TestExchangeCode:
         pending = OAuthPendingState(
             state=_STATE,
             redirect_uri="https://app.example.com/callback",
-            code_verifier="stored-verifier",
+            code_verifier=SecretStr("stored-verifier"),
             openid_requested=False,
             created_at=time.time(),
             context={"user_id": "U123", "tenant_id": "T456"},
@@ -772,7 +772,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.context == {"user_id": "U123", "tenant_id": "T456"}
 
@@ -792,7 +792,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.context == {}
 
@@ -826,7 +826,9 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         await client.exchange_code(
             _callback(),
-            pending_state=_pending_state(redirect_uri="https://app.example.com/other", code_verifier="verifier"),
+            pending_state=_pending_state(
+                redirect_uri="https://app.example.com/other", code_verifier=SecretStr("verifier")
+            ),
         )
         body = parse_qs(httpx_mock.get_request().content.decode())
         assert body["redirect_uri"] == ["https://app.example.com/other"]
@@ -850,7 +852,7 @@ class TestExchangeCode:
             json={"access_token": "access-abc", "token_type": "Bearer"},
         )
         store = AsyncMock()
-        store.consume = AsyncMock(return_value=_pending_state(code_verifier="stored-verifier"))
+        store.consume = AsyncMock(return_value=_pending_state(code_verifier=SecretStr("stored-verifier")))
         client = StoredStateClient(config=_make_oauth_config(), state_store=store)
         await client.exchange_code(_callback(), browser_token=_BROWSER_TOKEN)
         body = parse_qs(httpx_mock.get_request().content.decode())
@@ -861,7 +863,8 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state="forged-state"), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state="forged-state"),
+                pending_state=_pending_state(),
             )
         assert httpx_mock.get_requests() == []
 
@@ -870,7 +873,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state=state), pending_state=_pending_state()
             )
         assert httpx_mock.get_requests() == []
 
@@ -889,7 +892,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_config())
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state=state), pending_state=_pending_state()
             )  # type: ignore[arg-type]
         assert httpx_mock.get_requests() == []
 
@@ -902,7 +905,7 @@ class TestExchangeCode:
         client = StoredStateClient(config=_make_config(), state_store=store)
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=state), browser_token=_BROWSER_TOKEN
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state=state), browser_token=_BROWSER_TOKEN
             )  # type: ignore[arg-type]
         store.consume.assert_not_awaited()
         assert httpx_mock.get_requests() == []
@@ -1122,7 +1125,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = StoredStateClient(config=config, state_store=store)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
         )
         assert tokens.extras["user_id"] == "provider-U"
         assert tokens.context["user_id"] == "caller-U"
@@ -1134,7 +1137,7 @@ class TestExchangeCode:
         client = StoredStateClient(config=config, state_store=store)
         with pytest.raises(StateError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE), browser_token=_BROWSER_TOKEN
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE), browser_token=_BROWSER_TOKEN
             )
 
         # The state is the one the browser token mints, so the refusal is the store's own answer.
@@ -1150,7 +1153,7 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         with pytest.raises(TokenExchangeError):
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("bad-code"), state=_STATE), pending_state=_pending_state()
             )
 
     async def test_exchange_error_exposes_error_code(self, httpx_mock: HTTPXMock) -> None:
@@ -1162,7 +1165,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert exc_info.value.error_code == "invalid_grant"
 
@@ -1175,7 +1178,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert str(exc_info.value) == "HTTP 400"
 
@@ -1191,7 +1194,7 @@ class TestExchangeCode:
         client = OAuthClient(config=_make_oauth_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="bad-code", state=_STATE), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr("bad-code"), state=_STATE), pending_state=_pending_state()
             )
         assert exc_info.value.error_code == "invalid_grant"
         assert str(exc_info.value) == "HTTP 400"
@@ -1293,7 +1296,9 @@ class TestExchangeCode:
         )
         config = _make_oauth_config(client_secret=secret, token_endpoint_auth_method=auth_method)
         client = OAuthClient(config=config)
-        await client.exchange_code(AuthorizationCallback(code="code", state=_STATE), pending_state=_pending_state())
+        await client.exchange_code(
+            AuthorizationCallback(code=SecretStr("code"), state=_STATE), pending_state=_pending_state()
+        )
         request = httpx_mock.get_request()
         assert (b"client_secret=" in request.content) is expect_secret_sent
 
@@ -1322,7 +1327,7 @@ class TestExchangeCode:
         config = _make_oauth_config(issuer="https://provider.example.com")
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://provider.example.com"),
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE, iss="https://provider.example.com"),
             pending_state=_pending_state(),
         )
         assert tokens.access_token.get_secret_value() == "access-abc"
@@ -1332,7 +1337,9 @@ class TestExchangeCode:
         client = OAuthClient(config=config)
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://attacker.example.com"),
+                AuthorizationCallback(
+                    code=SecretStr("auth-code-123"), state=_STATE, iss="https://attacker.example.com"
+                ),
                 pending_state=_pending_state(),
             )
         assert httpx_mock.get_requests() == []
@@ -1362,7 +1369,7 @@ class TestExchangeCode:
         config = _make_oauth_config()
         client = OAuthClient(config=config)
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://anything.example.com"),
+            AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE, iss="https://anything.example.com"),
             pending_state=_pending_state(),
         )
         assert tokens.access_token.get_secret_value() == "access-abc"
@@ -1374,7 +1381,9 @@ class TestExchangeCode:
         client = StoredStateClient(config=config, state_store=store)
         with pytest.raises(IssuerValidationError):
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, iss="https://attacker.example.com"),
+                AuthorizationCallback(
+                    code=SecretStr("auth-code-123"), state=_STATE, iss="https://attacker.example.com"
+                ),
                 browser_token=_BROWSER_TOKEN,
             )
         store.consume.assert_not_awaited()
@@ -1553,7 +1562,7 @@ class TestExchangeCodeAuthorizationResponse:
 
         with pytest.raises(AuthorizationResponseError, match="both a code and an error") as refusal:
             await client.exchange_code(
-                AuthorizationCallback(code="auth-code-123", state=_STATE, error="access_denied"),
+                AuthorizationCallback(code=SecretStr("auth-code-123"), state=_STATE, error="access_denied"),
                 pending_state=_pending_state(),
             )
 
@@ -2484,7 +2493,7 @@ class TestRefreshToken:
         _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="dead-code", state=pending.state), pending_state=pending
+                AuthorizationCallback(code=SecretStr("dead-code"), state=pending.state), pending_state=pending
             )
         assert exc_info.value.kind is FailureKind.REJECTED
         assert exc_info.value.error_code == "invalid_grant"
@@ -2497,7 +2506,7 @@ class TestRefreshToken:
         _, pending = await client.get_authorization_url(redirect_uri="https://app.example.com/cb")
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code="some-code", state=pending.state), pending_state=pending
+                AuthorizationCallback(code=SecretStr("some-code"), state=pending.state), pending_state=pending
             )
         assert exc_info.value.kind is FailureKind.SERVER_ERROR
         # The code may have been consumed, so the same exchange is never repeated.

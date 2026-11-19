@@ -275,7 +275,9 @@ class TestToProviderConfig:
         )
 
         with pytest.raises(IssuerValidationError):
-            await client.exchange_code(AuthorizationCallback(code="auth-code", state="s-1"), pending_state=pending)
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretStr("auth-code"), state="s-1"), pending_state=pending
+            )
 
     def test_issuer_absent_leaves_config_unbound(self) -> None:
         config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret=SecretStr("s")))
@@ -2376,7 +2378,7 @@ class TestEndToEndFlow:
         assert authorize_url.startswith("https://auth.example.com/authorize")
 
         tokens = await client.exchange_code(
-            AuthorizationCallback(code="auth-code", state=pending.state), pending_state=pending
+            AuthorizationCallback(code=SecretStr("auth-code"), state=pending.state), pending_state=pending
         )
         assert tokens.access_token.get_secret_value() == "final-token"
 

@@ -62,7 +62,7 @@ def _pending_state(nonce: str | None = None, code_verifier: str = VERIFIER) -> O
     return OAuthPendingState(
         state="pending-state",
         redirect_uri="https://app.example.com/callback",
-        code_verifier=code_verifier,
+        code_verifier=SecretStr(code_verifier),
         nonce=nonce,
         openid_requested=bool(nonce),
         created_at=time.time(),
@@ -131,7 +131,7 @@ class TestTokenRequestErrors:
         client = OAuthClient(_config())
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code=CODE, state="pending-state"), pending_state=_pending_state()
+                AuthorizationCallback(code=SecretStr(CODE), state="pending-state"), pending_state=_pending_state()
             )
         return exc_info.value
 
@@ -376,7 +376,7 @@ class TestTokenRequestErrors:
 
         with pytest.raises(TokenExchangeError) as exc_info:
             await client.exchange_code(
-                AuthorizationCallback(code=code, state="pending-state"),
+                AuthorizationCallback(code=SecretStr(code), state="pending-state"),
                 pending_state=_pending_state(code_verifier=verifier),
             )
 
