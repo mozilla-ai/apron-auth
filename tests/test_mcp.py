@@ -204,6 +204,12 @@ class TestToProviderConfig:
         config = to_provider_config(meta, ClientRegistration(client_id="c", client_secret="s"))
         assert config.token_endpoint_auth_method == "client_secret_basic"
 
+    def test_an_empty_secret_builds_a_public_client(self) -> None:
+        """An empty secret states none, so a caller passing one builds a public client."""
+        config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret=""))
+        assert config.client_secret is None
+        assert config.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
+
     def test_accepts_plain_string_secret(self) -> None:
         config = to_provider_config(self._meta(), ClientRegistration(client_id="c", client_secret="raw-secret"))
         assert config.client_secret is not None
@@ -1917,12 +1923,11 @@ class TestRegisterClient:
             await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert exc_info.value.kind is FailureKind.REFUSED
 
-    @pytest.mark.parametrize("stated", ["", 7, ["s"], {"value": "s"}])
+    @pytest.mark.parametrize("stated", [7, ["s"], {"value": "s"}])
     async def test_stated_secret_this_library_cannot_use_raises(self, httpx_mock: HTTPXMock, stated: object) -> None:
         """The response states the secret, so it meets the test its client_id meets, where the response is read.
 
-        An empty secret authenticates nothing, so a response stating one states a credential that cannot be
-        used, as a response stating a secret that is not text does.
+        A secret stating something that is not text could not be presented at the token endpoint.
         """
         httpx_mock.add_response(
             url=_REGISTER_URL,
@@ -1957,6 +1962,34 @@ class TestRegisterClient:
         httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "pub", "client_secret": None})
         reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
         assert reg.client_secret is None
+
+    async def test_an_empty_secret_states_a_public_client(self, httpx_mock: HTTPXMock) -> None:
+        """An empty secret authenticates no client, so it states none, as an absent member does."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "pub", "client_secret": ""})
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_secret is None
+
+    async def test_an_empty_secret_agrees_with_a_registered_public_method(self, httpx_mock: HTTPXMock) -> None:
+        """The registered method and the secret agree, because an empty secret states no secret."""
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "pub", "client_secret": "", "token_endpoint_auth_method": "none"},
+        )
+        reg = await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert reg.client_secret is None
+        assert reg.token_endpoint_auth_method is TokenEndpointAuthMethod.NONE
+
+    async def test_an_empty_secret_contradicts_a_registered_confidential_method(self, httpx_mock: HTTPXMock) -> None:
+        """A method that requires a secret has none to send, so the registration is refused."""
+        httpx_mock.add_response(
+            url=_REGISTER_URL,
+            status_code=201,
+            json={"client_id": "x", "client_secret": "", "token_endpoint_auth_method": "client_secret_post"},
+        )
+        with pytest.raises(McpRegistrationError, match="contradicts the secret") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
     async def test_a_stated_method_is_the_enum_member(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(

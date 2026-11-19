@@ -30,6 +30,7 @@ from urllib.parse import ParseResult, unquote, urljoin, urlparse, urlsplit
 import httpx
 from pydantic import SecretStr
 
+from apron_auth._client_secrets import stated_client_secret
 from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
     IssuerNotDeclaredError,
@@ -577,16 +578,16 @@ def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
         The registration the response issued.
 
     Raises:
-        McpRegistrationError: If the response states no usable client identifier, states a client secret this
-            library cannot use, states a token-endpoint authentication method it cannot perform, or states a
-            method that contradicts the secret.
+        McpRegistrationError: If the response states no usable client identifier, states a client secret that
+            is no string, states a token-endpoint authentication method this library cannot perform, or states
+            a method that contradicts the secret.
     """
     client_id = document.get("client_id")
     if not isinstance(client_id, str) or not client_id:
         msg = "client registration states no usable client_id, so the issued credentials were discarded"
         raise McpRegistrationError(msg, kind=FailureKind.REFUSED)
     client_secret = document.get("client_secret")
-    if client_secret is not None and (not isinstance(client_secret, str) or not client_secret):
+    if client_secret is not None and not isinstance(client_secret, str):
         msg = (
             "client registration states a client secret this library cannot use, "
             "so the issued credentials were discarded"
@@ -621,8 +622,9 @@ def _secret_agrees(method: TokenEndpointAuthMethod, secret: SecretStr | None) ->
 
     A method that requires a secret has one to send, and a method that requires none is a public client,
     which carries none.
+    A secret is the string it holds, so one holding nothing is no secret and agrees with a public client.
     """
-    return method.requires_secret is (secret is not None)
+    return method.requires_secret is (stated_client_secret(secret) is not None)
 
 
 def _stated_auth_method(value: object) -> TokenEndpointAuthMethod | None:
