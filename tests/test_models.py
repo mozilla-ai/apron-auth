@@ -1916,6 +1916,18 @@ class TestTokenSet:
         assert "plain-text-token" not in str(caught.value)
         assert "wrapped" in str(caught.value)
 
+    @pytest.mark.parametrize("stated", [b"bytes-token", bytearray(b"bytes-token"), 7])
+    def test_a_token_that_is_no_wrapper_is_refused(self, stated: object) -> None:
+        """The field reads bytes as text, so handing them on would wrap a credential rather than refuse it.
+
+        A token field states a different wrapper from a client secret and reaches it by a rule of its
+        own, so the refusal is held here as well as there.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped") as caught:
+            TokenSet.model_validate({"access_token": stated})
+
+        assert "bytes-token" not in str(caught.value)
+
     def test_a_wrapped_token_reaches_the_token_set(self) -> None:
         token = TokenSet(access_token=SecretToken("access-abc"), refresh_token=SecretToken("refresh-xyz"))
 
