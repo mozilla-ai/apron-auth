@@ -90,6 +90,10 @@ _ID_TOKEN_MEMBER = "id_token"
 # The string fields a token-endpoint response states, beside the access token.
 _TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
 
+# The fields above that name a credential, which is what decides whether one is wrapped as it is read.
+# The access token is not here, because it has a read of its own that always wraps.
+_TOKEN_SET_CREDENTIALS = frozenset({"refresh_token"})
+
 # The string members of a nested user token, each mapped to the UserToken field that states it.
 # NOTE: It decides which member of a response becomes a named credential, so it is read-only.
 _USER_TOKEN_STRINGS = MappingProxyType(
@@ -502,6 +506,22 @@ def _sent_form(*fields: Mapping[str, str | SecretStr]) -> dict[str, str]:
     }
 
 
+def _stated_token_field(field: str, value: str) -> str | SecretToken:
+    """Return a string field of a token response, wrapped where that field names a credential.
+
+    Which fields name one is stated once, so a field added to the model and to the parse cannot
+    travel plain because one of the two reads of it was missed.
+
+    Args:
+        field: The model field the value was read onto.
+        value: The value the response stated.
+
+    Returns:
+        The value, wrapped where the field names a credential.
+    """
+    return SecretToken(value) if field in _TOKEN_SET_CREDENTIALS else value
+
+
 def _same_secret(given: str, expected: str) -> bool:
     """Return whether two secret strings are equal, in time that does not depend on where they differ.
 
@@ -599,7 +619,7 @@ def _user_token(nested: Mapping[str, Any]) -> UserToken | None:
         field = _USER_TOKEN_STRINGS.get(member)
         lifetime = finite_number(value) if member in {"expires_at", "expires_in"} else None
         if field is not None and isinstance(value, str):
-            named[field] = SecretToken(value) if field == "refresh_token" else value
+            named[field] = _stated_token_field(field, value)
         elif member == "expires_in" and lifetime is not None:
             named["expires_in"] = int(lifetime)
         elif member == "expires_at" and lifetime is not None:
@@ -1394,7 +1414,7 @@ class _OAuthClientBase:
             if value is None:
                 continue
             if isinstance(value, str):
-                named[field] = SecretToken(value) if field == "refresh_token" else value
+                named[field] = _stated_token_field(field, value)
             else:
                 extras[field] = value
         for field in _TOKEN_SET_NUMBERS:
