@@ -3122,6 +3122,22 @@ class TestAClientSecretStatesAString:
         with pytest.raises(ConfigurationError, match="client_secret is required"):
             self._config(client_secret=SecretStr("   "))
 
+    @pytest.mark.parametrize("secret", [b"", b"   ", SecretStr(b"   ")])  # ty: ignore[invalid-argument-type]
+    def test_a_secret_the_field_converts_to_a_blank_string_states_no_secret(self, secret: object) -> None:
+        """The field converts bytes to text, so presence is decided on what it settled on."""
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=secret)
+
+    def test_a_registration_reads_a_converted_blank_secret_as_a_public_client(self) -> None:
+        registration = ClientRegistration(client_id="c", client_secret=b"   ")  # ty: ignore[invalid-argument-type]
+        assert registration.client_secret is None
+
+    def test_a_secret_the_field_converts_to_text_is_kept(self) -> None:
+        """Converting bytes states a secret, so only a blank one reads as absent."""
+        config = self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
+        assert config.client_secret is not None
+        assert config.client_secret.get_secret_value() == "kept-secret"
+
     def test_a_wrapper_holding_a_value_that_is_no_string_is_refused(self) -> None:
         with pytest.raises(ConfigurationError):
             self._config(client_secret=SecretStr(1234))  # ty: ignore[invalid-argument-type]

@@ -17,6 +17,9 @@ def stated_client_secret(value: Any) -> Any:
     Whether a stated secret is a string it may be is left to the field's own type, so this decides
     presence alone.
 
+    Reading a value this has already read returns the same answer, so a field that converts its
+    input can be read again once it has settled on a value.
+
     NOTE: A stated secret is returned as it arrived, so a caller asking only whether one is present
     is handed no secret to bind. A wrapper holding no string is unwrapped, because a type that
     trusts the wrapper never sees the value it has to refuse.

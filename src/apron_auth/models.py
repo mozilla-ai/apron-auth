@@ -19,6 +19,7 @@ from typing import Annotated, Any, Literal, NamedTuple, NoReturn, Self, TypeVar,
 from urllib.parse import urlparse
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     Field,
@@ -47,8 +48,9 @@ logger = logging.getLogger(__name__)
 
 AccessType = Literal["read", "write", "admin"]
 
-# A client secret, read for the string it holds rather than trusted for the wrapper around it.
-ClientSecret = Annotated[SecretStr | None, BeforeValidator(stated_client_secret)]
+# A client secret, read for the string it holds rather than trusted for the wrapper around it. The rule
+# runs on the value as it arrives and again on the one the field settled on, because the field converts.
+ClientSecret = Annotated[SecretStr | None, BeforeValidator(stated_client_secret), AfterValidator(stated_client_secret)]
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
