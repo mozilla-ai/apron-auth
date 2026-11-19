@@ -1,4 +1,8 @@
-"""What a URL states: its authority, its host and its scheme."""
+"""What a URI states: its authority, its host, its scheme, and whether it can name a resource.
+
+Most rules here read a URL's authority, so they answer nothing for a URI that names none.
+A resource indicator is the exception, because RFC 8707 accepts any absolute URI, a URN among them.
+"""
 
 from __future__ import annotations
 

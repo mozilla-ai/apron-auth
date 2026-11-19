@@ -11,11 +11,13 @@ import ipaddress
 import pytest
 
 from apron_auth._urls import (
+    ResourceIndicatorFault,
     is_loopback_host,
     is_plain_http,
     matches_suffix,
     parse_ip,
     query_parameters,
+    resource_indicator_fault,
     url_host,
     uses_allowed_transport,
     uses_secure_transport,
@@ -318,3 +320,40 @@ class TestUsesAllowedTransport:
     def test_a_port_the_standard_parser_refuses_is_refused(self) -> None:
         """The client drops this port and dials the default, so the URL states a port it never sends."""
         assert uses_allowed_transport("https://app.example.com:+443/cb", plain_http_allowed=False) is False
+
+
+class TestResourceIndicatorFault:
+    """RFC 8707 asks a resource indicator for an absolute URI, which is a scheme and no fragment."""
+
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            pytest.param("https://mcp.example.com", id="an origin"),
+            pytest.param("https://mcp.example.com/server/mcp", id="a path under one"),
+            pytest.param("https://mcp.example.com/mcp?tenant=acme", id="a query, which RFC 8707 permits"),
+            pytest.param("urn:example:mcp-service", id="a URN, which names no authority"),
+            pytest.param("https://mcp.example.com:8443/mcp", id="an explicit port"),
+        ],
+    )
+    def test_an_absolute_uri_carries_no_fault(self, resource: str) -> None:
+        assert resource_indicator_fault(resource) is None
+
+    @pytest.mark.parametrize(
+        ("resource", "expected"),
+        [
+            pytest.param("https://mcp.example.com#tag", ResourceIndicatorFault.FRAGMENT, id="a fragment"),
+            pytest.param("https://mcp.example.com#", ResourceIndicatorFault.FRAGMENT, id="an empty fragment"),
+            pytest.param("/mcp", ResourceIndicatorFault.RELATIVE, id="an absolute path"),
+            pytest.param("mcp.example.com/mcp", ResourceIndicatorFault.RELATIVE, id="an authority with no scheme"),
+            pytest.param("", ResourceIndicatorFault.RELATIVE, id="nothing at all"),
+            pytest.param("https://[broken", ResourceIndicatorFault.MALFORMED, id="an authority that cannot be read"),
+        ],
+    )
+    def test_a_value_no_token_could_name_carries_its_fault(
+        self, resource: str, expected: ResourceIndicatorFault
+    ) -> None:
+        assert resource_indicator_fault(resource) is expected
+
+    def test_a_fragment_is_read_before_the_rest(self) -> None:
+        """A value with both faults reports the fragment, so one message names one condition."""
+        assert resource_indicator_fault("/mcp#tag") is ResourceIndicatorFault.FRAGMENT
