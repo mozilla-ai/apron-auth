@@ -368,6 +368,9 @@ class TestSelectAuthMethod:
             # nothing or explicitly lists "none".
             (None, [], TokenEndpointAuthMethod.NONE),
             (None, ["none", "client_secret_post"], TokenEndpointAuthMethod.NONE),
+            # A secret is the string it holds, so one holding nothing is a public client here too.
+            (SecretStr(""), ["none"], TokenEndpointAuthMethod.NONE),
+            (SecretStr("   "), ["none"], TokenEndpointAuthMethod.NONE),
             # A confidential client with nothing advertised defaults to basic (RFC 8414).
             (SecretStr("s"), [], TokenEndpointAuthMethod.CLIENT_SECRET_BASIC),
             # A confidential client honors the advertised method.

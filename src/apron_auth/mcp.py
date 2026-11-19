@@ -647,6 +647,7 @@ def _select_auth_method(
     Otherwise the method is derived.
     A secretless client is public and uses ``none``, unless the server publishes an explicit method list that
     omits ``none``, which accepts no public client and raises.
+    A secret is the string it holds, so one holding nothing leaves the client secretless.
     A confidential client uses the first method in :data:`CONFIDENTIAL_AUTH_METHODS` the server advertises.
     A server advertising only methods this library cannot perform is unusable, so this raises rather than
     yielding a config doomed to fail at token exchange.
@@ -670,7 +671,7 @@ def _select_auth_method(
     """
     if registered is not None:
         return _honor_registered_auth_method(registered, secret)
-    if secret is None:
+    if stated_client_secret(secret) is None:
         # A public client authenticates with no credentials ("none"). An empty
         # advertised list means the server published nothing, which we do not
         # treat as a rejection. But an explicit list that omits "none" means the
