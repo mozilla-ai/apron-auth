@@ -274,10 +274,13 @@ supplied as a plain string is refused, as is a field the model does not
 define, and a `UserToken` nested in the record is held to both rules.
 A dump states each of those named fields as a mask rather than as its
 value, so the record you persist holds the values you read off the model
-yourself. The `id_token` in `extras` is masked too, because this library
-names and reads that member even though it has no field of its own. Every
-other entry in `extras` is whatever the provider sent under a name no
-attribute claims, and is stated as it arrived, so credential material a
+yourself. An `id_token` a token response carried is masked too, because
+this library wraps that member as it parses the response, even though it
+has no field of its own. A token set you build by hand carries whatever
+you put in its `extras`, so an `id_token` you place there as a string is
+stated as given. Every other entry in `extras` is whatever the provider
+sent under a name no attribute claims, and is stated as it arrived, so
+credential material a
 provider sent in the wrong shape is in a dump in clear. If your
 store adds keys of its own, select the model's fields out of the record
 first. A model you persist must hold a `TokenSet`, not a
@@ -290,10 +293,11 @@ names is a `SecretToken`, on a `TokenSet`, on a `UserToken`, on an
 `IdentityMaterial`, and as the argument `revoke_token`, `refresh_token`
 and a `RevocationHandler` take, so you read one with `get_secret_value()`
 into the request you send and bind the unwrapped value to no variable of
-your own. The `id_token` in `extras` is one too,
-because this library names and reads it. A credential a provider sent
-under some other name is in `extras` as it arrived, which no type can
-reach, so the extras stay as sensitive as the fields above. A `SecretToken` states nothing as text,
+your own. An `id_token` a token response carried is one too, because this
+library wraps that member as it parses the response. A credential a
+provider sent under some other name, and anything you put in `extras`
+yourself, is there as it arrived, which no type can reach, so the extras
+stay as sensitive as the fields above. A `SecretToken` states nothing as text,
 so formatting one or sending one without that call raises `TypeError`
 rather than sending a masked value a provider would accept. See [what an error reporter can
 capture](#what-an-error-reporter-can-capture).
@@ -1001,7 +1005,8 @@ What you wrap, and in what:
 | Where | What you pass |
 | --- | --- |
 | Every `preset(...)`, `ProviderConfig` and `ClientRegistration` | `client_secret=SecretStr(...)` |
-| `TokenSet`, `UserToken`, `IdentityMaterial` | `access_token=SecretToken(...)`, `refresh_token=SecretToken(...)`, `id_token=SecretToken(...)` |
+| `TokenSet`, `UserToken` | `access_token=SecretToken(...)`, `refresh_token=SecretToken(...)`. Neither names an `id_token`, so one you restore goes in `extras` |
+| `IdentityMaterial` | `access_token=SecretToken(...)`, `id_token=SecretToken(...)` |
 | `OAuthClient.refresh_token`, `revoke_token` | a `SecretToken` |
 | `WorkloadTokenVerifier.verify`, `check` | a `SecretToken` |
 | `AuthorizationCallback` | `code=SecretToken(...)`, which `from_query` does for you |
@@ -1010,7 +1015,7 @@ What you wrap, and in what:
 
 A token or secret this library hands back is already wrapped, so passing one straight back needs no wrapping of its own. Every plain string is refused, a blank one included, so there is one answer to remember rather than an exception to look up. An empty client secret still yields a public client, because the rule that decides what a secret states runs first and reads it as absence rather than as a string.
 
-Inside, every credential this library passes between its own frames stays in a wrapper whose `repr` states a row of asterisks, and a token handed to handler code is a `SecretToken`, which also refuses to state itself as text. The one value that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each path raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. `make test` holds the rule by walking a failed call's traceback and asserting both halves: the credential reached the request or the configuration, and no frame local states it. The configuration, exchange, refresh, revocation, identity and workload paths each have a case.
+Inside, every credential this library passes between its own frames stays in a wrapper whose `repr` states a row of asterisks, and a token handed to handler code is a `SecretToken`, which also refuses to state itself as text. The one value that cannot be wrapped, a built revocation request whose provider may state the token anywhere in it including the request line, names only its method, its provider label and the host it would reach. Each path raises errors that attach nothing they caught, so a traceback holds no frame of the HTTP client, its transport or the token parser. The exception is a decoded response body, which is a plain mapping of what the other side sent: a refused token response and a refused client registration each stay bound in the frame that raises, carrying whatever tokens or secret that response issued. `make test` holds the rule by walking a failed call's traceback and asserting both halves: the credential reached the request or the configuration, and no frame local states it. The configuration, exchange, refresh, revocation, identity and workload paths each have a case.
 
 Three limits are worth knowing, and the third is the one to act on.
 
