@@ -2129,6 +2129,20 @@ class TestIdentityMaterial:
         with pytest.raises(ConfigurationError, match="wrapped"):
             IdentityMaterial(access_token=stated)  # ty: ignore[invalid-argument-type]
 
+    def test_a_refused_narrowing_states_the_id_token_in_no_local_of_its_own(self) -> None:
+        """The narrowing can refuse what it builds, so it wraps the ID token before it can.
+
+        The token set the caller passed is the caller's own object, and a parameter holding it holds
+        what any function holds. The rule here is that the narrowing binds nothing out of it plain.
+        """
+        stated = "s3cr3t-id-token"  # pragma: allowlist secret
+        tokens = FreshTokenSet(access_token=SecretToken(""), extras={"id_token": stated})
+
+        with pytest.raises(ConfigurationError) as caught:
+            IdentityMaterial.from_token_set(tokens)
+
+        assert _frame_locals_stating(caught.value, stated) == ["from_token_set.tokens"]
+
     def test_neither_token_is_stated_in_a_repr(self) -> None:
         """An error reporter records the repr of each frame local, so this material must state neither."""
         tokens = FreshTokenSet(access_token=SecretToken("s3cr3t-access"), extras={"id_token": "s3cr3t-jwt"})

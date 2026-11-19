@@ -214,6 +214,23 @@ def _check_claims(claims: Mapping[str, Any], *, client_id: str, issuer: str | No
         raise IdTokenValidationError(msg)
 
 
+def _stated_id_token(response: Mapping[str, Any]) -> Any:
+    """Return the ID token a token-endpoint response states, wrapped as it is read.
+
+    The wrapping happens here rather than where the token is checked, because a frame that can
+    refuse the response must hold no credential as a plain string. This frame refuses nothing, so it
+    reaches no traceback.
+
+    Args:
+        response: The token-endpoint response to read.
+
+    Returns:
+        The ID token wrapped, or what the response stated where that is no string.
+    """
+    stated = response.get("id_token")
+    return SecretToken(stated) if isinstance(stated, str) else stated
+
+
 def _check_id_token(id_token: object, nonce: str | None, *, client_id: str, issuer: str | None) -> None:
     """Refuse a token response whose ID token was not issued to this client for the request it answers.
 
@@ -224,7 +241,7 @@ def _check_id_token(id_token: object, nonce: str | None, *, client_id: str, issu
     only for a token received from the token endpoint over TLS, so the configured token endpoint must use it.
 
     Args:
-        id_token: The ``id_token`` value from the token response, or ``None`` when it has none.
+        id_token: The token response's ID token, wrapped, or ``None`` when it states none.
         nonce: The nonce the authorization request sent, or ``None`` when it sent none.
         client_id: This client's identifier.
         issuer: The issuer the token must name, or ``None`` when no issuer is known.
@@ -363,19 +380,19 @@ def _id_token_claims(id_token: object) -> dict[str, Any]:
     """Return the claims of an ID token from a token response, without checking its signature.
 
     Args:
-        id_token: The ``id_token`` value from a token-endpoint response.
+        id_token: The token response's ID token, wrapped so this frame states it to no error reporter.
 
     Returns:
         The token's claims.
 
     Raises:
-        IdTokenValidationError: If the ID token is not a string, or cannot be read.
+        IdTokenValidationError: If the ID token is not a wrapped string, or cannot be read.
     """
     msg = "ID token could not be read"
-    if not isinstance(id_token, str):
+    if not isinstance(id_token, SecretStr):
         raise IdTokenValidationError(msg)
     try:
-        return unverified_claims(SecretToken(id_token))
+        return unverified_claims(id_token)
     except ValueError:
         pass
     # NOTE: This raise stays outside the except block, so the error does not chain the decoder's error.
@@ -830,7 +847,7 @@ class _OAuthClientBase:
             raise TokenExchangeError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
-                response.get("id_token"), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
+                _stated_id_token(response), pending.nonce, client_id=self._config.client_id, issuer=self._config.issuer
             )
         except IdTokenValidationError:
             # NOTE: A response whose ID token fails a check may answer a request the client never made.
@@ -997,7 +1014,7 @@ class _OAuthClientBase:
             raise TokenRefreshError(message, kind=kind, error_code=error_code)
         try:
             _check_id_token(
-                response.get("id_token"), None, client_id=self._config.client_id, issuer=self._config.issuer
+                _stated_id_token(response), None, client_id=self._config.client_id, issuer=self._config.issuer
             )
         except IdTokenValidationError as exc:
             refusal = str(exc)

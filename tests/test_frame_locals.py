@@ -23,7 +23,13 @@ from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
 from apron_auth.client import OAuthClient, StoredStateClient
-from apron_auth.errors import ConfigurationError, StateError, TokenExchangeError, TokenRefreshError
+from apron_auth.errors import (
+    ConfigurationError,
+    IdTokenValidationError,
+    StateError,
+    TokenExchangeError,
+    TokenRefreshError,
+)
 from apron_auth.models import (
     AuthorizationCallback,
     IdentityMaterial,
@@ -220,6 +226,29 @@ def _locals_stating(exc: BaseException, value: str) -> list[str]:
     return stated
 
 
+def _answering_transport(sent: list[httpx.Request], id_token: str) -> Callable[[str], httpx.AsyncBaseTransport]:
+    """Answer every request with a token response whose ID token no check can read."""
+
+    def factory(_url: str) -> httpx.AsyncBaseTransport:
+        async def handle(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            return httpx.Response(200, json={"access_token": "an-access-token", "id_token": id_token})
+
+        return httpx.MockTransport(handle)
+
+    return factory
+
+
+def _pending_state(verifier: str) -> OAuthPendingState:
+    return OAuthPendingState(
+        state="pending-state",
+        redirect_uri="https://app.example.com/cb",
+        code_verifier=SecretToken(verifier),
+        openid_requested=False,
+        created_at=time.time(),
+    )
+
+
 class TestAConfigurationRefusal:
     """Test that a configuration a caller supplied a credential to states it in no frame local.
 
@@ -314,6 +343,39 @@ class TestACodeExchangeFailure:
         assert TOKEN in _request_text(sent[0])
         _assert_chains_nothing(caught.value)
         assert _locals_stating_anywhere(caught.value, TOKEN) == []
+
+
+class TestARefusedIdToken:
+    """Test that an ID token a token response carries states itself in no frame local of the check.
+
+    The response is read before it is parsed, so the check runs on a value no model has wrapped yet.
+
+    NOTE: The decoded response mapping is the one local that still states it. That mapping is read off
+    the wire rather than supplied by a caller, and it carries every token the response issued rather
+    than the ID token alone, so it is a defect of its own and not this one. It is named here so that
+    it cannot grow quietly.
+    """
+
+    async def test_a_refused_exchange_states_no_id_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_answering_transport(sent, ID_TOKEN))
+
+        with pytest.raises(IdTokenValidationError) as caught:
+            await client.exchange_code(
+                AuthorizationCallback(code=SecretToken("the-code"), state="pending-state"),
+                pending_state=_pending_state("a-verifier"),
+            )
+
+        assert _locals_stating_anywhere(caught.value, ID_TOKEN) == ["_redeem_against.response"]
+
+    async def test_a_refused_refresh_states_no_id_token(self) -> None:
+        sent: list[httpx.Request] = []
+        client = OAuthClient(_standard_config(), transport_factory=_answering_transport(sent, ID_TOKEN))
+
+        with pytest.raises(Exception) as caught:  # noqa: B017, PT011
+            await client.refresh_token(SecretToken("a-refresh-token"))
+
+        assert _locals_stating_anywhere(caught.value, ID_TOKEN) == ["refresh_token.response"]
 
 
 class TestABrowserBindingRefusal:

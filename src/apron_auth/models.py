@@ -727,6 +727,27 @@ def _stated_callback_values(query: Mapping[str, Any], name: str) -> list[Any]:
     return [SecretToken(value) if isinstance(value, str) else value for value in values]
 
 
+def _stated_extra_token(extras: Mapping[str, Any], name: str) -> SecretToken | None:
+    """Return a token an extras mapping states under one name, wrapped as it is read.
+
+    The wrapping happens here rather than where the token is used, because a frame that can refuse
+    what it was given must hold no credential as a plain string. This frame refuses nothing, so it
+    reaches no traceback.
+
+    Args:
+        extras: The extras to read.
+        name: The member to read.
+
+    Returns:
+        The token wrapped, or ``None`` where the mapping states none under that name or states one
+        that is no string.
+    """
+    stated = extras.get(name)
+    if isinstance(stated, SecretToken):
+        return stated
+    return SecretToken(stated) if isinstance(stated, str) else None
+
+
 class _RefusesWithoutRepeating(BaseModel):
     """A model that refuses without repeating the value it was given, at each entry point of its own.
 
@@ -1892,12 +1913,11 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             and, when the response carried one, the OIDC ID token.
         """
         # A token set this library built carries the ID token wrapped. One a caller built by hand
-        # carries whatever they put in the extras, which is read as it arrives.
-        stated = tokens.extras.get("id_token")
-        id_token = SecretToken(stated) if isinstance(stated, str) else stated
+        # carries whatever they put in the extras, which the reader below wraps as it arrives.
+        id_token = _stated_extra_token(tokens.extras, "id_token")
         return cls(
             access_token=tokens.access_token,
-            id_token=id_token if isinstance(id_token, SecretStr) and id_token.get_secret_value() else None,
+            id_token=id_token if id_token is not None and id_token.get_secret_value() else None,
             scope=tokens.scope,
         )
 
