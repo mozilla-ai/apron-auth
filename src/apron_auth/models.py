@@ -1891,10 +1891,13 @@ class IdentityMaterial(_RefusesWithoutRepeating, frozen=True):
             The identity material: the access token, the granted scopes,
             and, when the response carried one, the OIDC ID token.
         """
-        id_token = tokens.extras.get("id_token")
+        # A token set this library built carries the ID token wrapped. One a caller built by hand
+        # carries whatever they put in the extras, which is read as it arrives.
+        stated = tokens.extras.get("id_token")
+        id_token = SecretToken(stated) if isinstance(stated, str) else stated
         return cls(
             access_token=tokens.access_token,
-            id_token=SecretToken(id_token) if isinstance(id_token, str) and id_token else None,
+            id_token=id_token if isinstance(id_token, SecretStr) and id_token.get_secret_value() else None,
             scope=tokens.scope,
         )
 

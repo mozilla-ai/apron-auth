@@ -2329,6 +2329,44 @@ class TestExchangeCodeNonceRevocation:
         assert [record for record in caplog.records if record.name == "apron_auth.client"] == []
 
 
+class TestTheIdTokenAResponseCarries:
+    """The ID token is a credential this library names, so it is wrapped like the ones it has fields for."""
+
+    async def _exchanged(self, httpx_mock: HTTPXMock, id_token: str) -> TokenSet:
+        httpx_mock.add_response(
+            url="https://provider.example.com/token",
+            json={"access_token": "access-abc", "token_type": "Bearer", "id_token": id_token},
+        )
+        client = OAuthClient(config=_make_config())
+        return await client.exchange_code(_callback(), pending_state=_pending_state(nonce="sent-nonce"))
+
+    async def test_it_reaches_the_extras_wrapped(self, httpx_mock: HTTPXMock) -> None:
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+
+        assert tokens.extras["id_token"].get_secret_value() == stated
+
+    async def test_a_dump_states_it_as_a_mask(self, httpx_mock: HTTPXMock) -> None:
+        """A caller logging a dumped token set would otherwise write an identity assertion in clear."""
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+
+        assert stated not in tokens.model_dump_json()
+        assert stated not in repr(tokens)
+
+    async def test_identity_material_still_reads_it(self, httpx_mock: HTTPXMock) -> None:
+        """The narrowing reads the ID token out of the extras, so wrapping it must not lose it."""
+        stated = _id_token(_openid_claims(nonce="sent-nonce"))
+
+        tokens = await self._exchanged(httpx_mock, stated)
+        material = IdentityMaterial.from_token_set(tokens)
+
+        assert material.id_token is not None
+        assert material.id_token.get_secret_value() == stated
+
+
 class TestRefreshToken:
     async def test_a_refresh_token_supplied_as_plain_text_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A plain string is a frame local for the whole call, so it is refused before any request."""

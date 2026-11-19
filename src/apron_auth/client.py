@@ -84,6 +84,9 @@ _TOKEN_REQUEST_HEADERS = MappingProxyType({"Accept": "application/json"})
 # The number fields a token-endpoint response states: a Unix timestamp and a lifetime in seconds.
 _TOKEN_SET_NUMBERS = ("expires_at", "expires_in")
 
+# The member a token-endpoint response states its ID token in, which has no field of its own.
+_ID_TOKEN_MEMBER = "id_token"
+
 # The string fields a token-endpoint response states, beside the access token.
 _TOKEN_SET_STRINGS = ("refresh_token", "scope", "token_type")
 
@@ -1358,7 +1361,13 @@ class _OAuthClientBase:
             the extras. A response nesting more than one states no single person, so it states none.
         """
         known_fields = {"access_token", *_TOKEN_SET_NUMBERS, *_TOKEN_SET_STRINGS}
-        extras = {k: v for k, v in data.items() if k not in known_fields}
+        # The ID token has no field of its own but is a credential this library names and reads, so it
+        # is wrapped where the response is parsed rather than left for whoever dumps the extras.
+        extras = {
+            name: SecretToken(value) if name == _ID_TOKEN_MEMBER and isinstance(value, str) else value
+            for name, value in data.items()
+            if name not in known_fields
+        }
 
         # A field is read onto its attribute only where it holds what that attribute states. One of any
         # other type is carried into the extras, because the access token is usable either way and a

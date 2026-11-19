@@ -274,10 +274,11 @@ supplied as a plain string is refused, as is a field the model does not
 define, and a `UserToken` nested in the record is held to both rules.
 A dump states each of those named fields as a mask rather than as its
 value, so the record you persist holds the values you read off the model
-yourself. It does not mask `extras`, which is a plain mapping of whatever
-the provider sent under a name no attribute claims: an `id_token` lands
-there as a string, and so does credential material a provider sent in the
-wrong shape. Treat a dump of a token set as carrying those in clear. If your
+yourself. The `id_token` in `extras` is masked too, because this library
+names and reads that member even though it has no field of its own. Every
+other entry in `extras` is whatever the provider sent under a name no
+attribute claims, and is stated as it arrived, so credential material a
+provider sent in the wrong shape is in a dump in clear. If your
 store adds keys of its own, select the model's fields out of the record
 first. A model you persist must hold a `TokenSet`, not a
 `FreshTokenSet`: reloading a `FreshTokenSet` field from storage raises
@@ -289,10 +290,10 @@ names is a `SecretToken`, on a `TokenSet`, on a `UserToken`, on an
 `IdentityMaterial`, and as the argument `revoke_token`, `refresh_token`
 and a `RevocationHandler` take, so you read one with `get_secret_value()`
 into the request you send and bind the unwrapped value to no variable of
-your own. A token a provider sent under a name no attribute claims is in
-`extras` as a plain string, which no type can reach, so the extras are as
-sensitive as the fields above and this library says so rather than
-wrapping one key and leaving the next. A `SecretToken` states nothing as text,
+your own. The `id_token` in `extras` is one too,
+because this library names and reads it. A credential a provider sent
+under some other name is in `extras` as it arrived, which no type can
+reach, so the extras stay as sensitive as the fields above. A `SecretToken` states nothing as text,
 so formatting one or sending one without that call raises `TypeError`
 rather than sending a masked value a provider would accept. See [what an error reporter can
 capture](#what-an-error-reporter-can-capture).
