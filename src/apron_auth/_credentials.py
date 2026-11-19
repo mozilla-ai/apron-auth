@@ -31,14 +31,20 @@ def _states_a_credential_as_plain_text(value: Any) -> bool:
 def refuse_plain_text(value: Any, field: str) -> None:
     """Refuse a credential supplied as plain text to a parameter no model validates.
 
+    Every string is refused here, including one holding no non-blank character. A field reads what a
+    value states, because a blank one converts to a wrapper holding nothing, and a client secret
+    stating nothing is a public client. A parameter converts nothing, so a blank string is a value of
+    the wrong type rather than a credential stating nothing, and the code that reads it would fail
+    where the value is used instead of where it was passed.
+
     Args:
         value: The value a caller passed.
         field: The parameter's name, for the refusal to name.
 
     Raises:
-        ConfigurationError: If the value states a credential as a plain string.
+        ConfigurationError: If the value is a plain string.
     """
-    if _states_a_credential_as_plain_text(value):
+    if isinstance(value, str):
         msg = f"{field} {_SUPPLIED_AS_PLAIN_TEXT}"
         raise ConfigurationError(msg)
 

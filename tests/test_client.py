@@ -310,13 +310,22 @@ class TestTheStoredStateFlowIsBoundToItsBrowser:
 
         assert str(presented_none.value) == str(presented_another.value)
 
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_token_supplied_as_plain_text_is_refused(self, stated: str) -> None:
+        """A parameter converts nothing, so a blank string is a type error rather than an empty token."""
+        client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
+        authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
+
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            await client.exchange_code(_callback(state=authorization.state), browser_token=stated)  # ty: ignore[invalid-argument-type]
+
     async def test_an_empty_token_redeems_nothing(self, httpx_mock: HTTPXMock):
         """A cookie cleared rather than dropped reaches the exchange as an empty string, not as None."""
         client = StoredStateClient(_make_oauth_config(), MemoryStateStore())
         authorization = await client.get_authorization_url(redirect_uri="https://app.example.com/callback")
 
         with pytest.raises(StateError):
-            await client.exchange_code(_callback(state=authorization.state), browser_token="")
+            await client.exchange_code(_callback(state=authorization.state), browser_token=SecretStr(""))
 
         assert httpx_mock.get_requests() == []
         httpx_mock.add_response(

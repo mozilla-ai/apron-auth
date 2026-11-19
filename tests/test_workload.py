@@ -131,6 +131,28 @@ class TestATokenSuppliedAsPlainText:
 
         assert "plain-text-token" not in str(caught.value)
 
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_plain_string_is_refused_as_plain_text(
+        self, verifier: WorkloadTokenVerifier, stated: str
+    ) -> None:
+        """A parameter states no credential to read, so a blank one is a type error and not an empty token.
+
+        A caller stripping a prefix off a header that is absent reaches this, and the refusal has to
+        name what is wrong rather than fail where the value is read.
+        """
+        with pytest.raises(ConfigurationError, match="wrapped"):
+            await verifier.check(stated)  # ty: ignore[invalid-argument-type]
+
+    @pytest.mark.parametrize("stated", ["", "   "])
+    async def test_a_blank_wrapped_token_is_refused_as_malformed(
+        self, verifier: WorkloadTokenVerifier, stated: str
+    ) -> None:
+        """Wrapped, a blank token is a token this verifier cannot read, which is the caller's 401."""
+        with pytest.raises(TokenValidationError) as caught:
+            await verifier.check(SecretToken(stated))
+
+        assert caught.value.reason is TokenValidationReason.MALFORMED
+
     async def test_a_refused_token_states_itself_in_no_frame_local(self, verifier: WorkloadTokenVerifier) -> None:
         """A malformed token is refused from this library's own frames, which must state nothing."""
         token = "s3cr3t-workload-token"  # pragma: allowlist secret
