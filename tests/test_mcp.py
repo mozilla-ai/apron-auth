@@ -2240,6 +2240,43 @@ class TestRegisterClient:
         assert request is not None
         assert json.loads(request.content)["application_type"] == "web"
 
+    @pytest.mark.parametrize(
+        ("redirect_uri", "application_type", "expected"),
+        [
+            pytest.param("http://127.0.0.1:8080/callback", None, "none", id="inferred-native"),
+            pytest.param(_REDIRECT_URI, None, "client_secret_post", id="inferred-nothing"),
+            pytest.param(_REDIRECT_URI, ApplicationType.WEB, "client_secret_post", id="explicit-web"),
+            pytest.param(_REDIRECT_URI, ApplicationType.NATIVE, "none", id="explicit-native"),
+            pytest.param("http://127.0.0.1:8080/callback", ApplicationType.WEB, "client_secret_post", id="web-wins"),
+        ],
+    )
+    async def test_the_requested_auth_method_follows_the_application_type(
+        self, httpx_mock: HTTPXMock, redirect_uri: str, application_type: ApplicationType | None, expected: str
+    ) -> None:
+        """A native client cannot keep a secret, so it asks to be registered as a public client."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, redirect_uri, application_type=application_type)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["token_endpoint_auth_method"] == expected
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+            TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            TokenEndpointAuthMethod.NONE,
+        ],
+    )
+    async def test_an_explicit_auth_method_wins_over_the_application_type(
+        self, httpx_mock: HTTPXMock, method: TokenEndpointAuthMethod
+    ) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, "http://127.0.0.1:8080/callback", token_endpoint_auth_method=method)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["token_endpoint_auth_method"] == method
+
 
 class TestCimdClientId:
     def test_valid_url_returned_unchanged(self) -> None:

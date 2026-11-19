@@ -193,10 +193,11 @@ async def discover(
             metadata document can be fetched, a required field is absent, the
             protected-resource metadata declares a resource identifier that is no
             absolute URI without a fragment, or the authorization server metadata
-            does not declare the server it was fetched from as its issuer. The first document fetched is
-            authoritative, so a mismatched issuer ends discovery rather than
-            trying the next candidate URL. A ``transport_factory`` that fails is
-            reported here too, as a fault that is never retried.
+            does not declare the server it was fetched from as its issuer.
+            The first document fetched is authoritative, so a mismatched issuer
+            ends discovery rather than trying the next candidate URL.
+            A ``transport_factory`` that fails is reported here too, as a fault
+            that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
             NOTE: None of these refusals ends discovery for the ``resource_metadata_url``
             hint, which loses its turn however it proves unusable. A hint that lost
@@ -404,6 +405,7 @@ async def register_client(
     *,
     client_name: str = "apron-auth",
     application_type: ApplicationType | None = None,
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
     limits: RequestLimits | None = None,
@@ -412,6 +414,8 @@ async def register_client(
 
     POSTs a registration request to ``registration_url`` (an authorization server's registration endpoint) and
     returns the issued ``client_id`` plus, for a confidential client, a ``client_secret``.
+    The request asks to be registered as a public client where the application type is ``native``, because a
+    native client has nowhere to keep a secret, and as a confidential one otherwise.
     A ``token_endpoint_auth_method`` the response states is captured too when this library can perform it,
     and refused otherwise.
     It is authoritative for this client and may differ from the requested method.
@@ -427,6 +431,10 @@ async def register_client(
             ``native`` is inferred from a loopback ``redirect_uri`` and
             otherwise left unset. Registering ``native`` lets servers that gate
             ``localhost`` redirects on it accept the registration.
+        token_endpoint_auth_method: The client authentication method to ask for.
+            When omitted, a ``native`` application type asks for ``none`` and
+            every other type asks for ``client_secret_post``. The method the
+            response states is authoritative either way.
         url_validator: Optional policy invoked on the URL before the request.
         limits: The limits on the registration request. Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
         transport_factory: Optional factory controlling the outbound connection.
@@ -458,12 +466,14 @@ async def register_client(
     _require_secure_transport(redirect_uri, subject="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
+    if token_endpoint_auth_method is None:
+        token_endpoint_auth_method = _requested_auth_method(application_type)
     payload = {
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+        "token_endpoint_auth_method": token_endpoint_auth_method,
     }
     if application_type is not None:
         payload["application_type"] = application_type
@@ -863,6 +873,24 @@ def _malformed_url_message(subject: str) -> str:
         The refusal text.
     """
     return f"MCP OAuth received a malformed URL ({subject})"
+
+
+def _requested_auth_method(application_type: ApplicationType | None) -> TokenEndpointAuthMethod:
+    """Return the token-endpoint authentication method to ask a registration for.
+
+    A native client cannot keep a client secret (RFC 8252 section 8.4), so it asks to be registered
+    as a public client.
+    Every other type asks for ``client_secret_post``, the confidential method this library prefers.
+
+    Args:
+        application_type: The application type the registration declares, or None when it declares none.
+
+    Returns:
+        The method to request.
+    """
+    if application_type is ApplicationType.NATIVE:
+        return TokenEndpointAuthMethod.NONE
+    return TokenEndpointAuthMethod.CLIENT_SECRET_POST
 
 
 def _require_no_authority_credential(url: str, *, subject: str, caller_supplied: bool) -> None:

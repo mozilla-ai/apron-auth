@@ -220,8 +220,7 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """Report why a value cannot serve as an RFC 8707 resource indicator, if it cannot.
 
     RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it states a scheme and
-    carries no fragment. A value that states neither fault binds a token's audience to the service
-    it names.
+    carries no fragment. A value carrying no fault binds a token's audience to the service it names.
 
     Args:
         resource: The value to read.
