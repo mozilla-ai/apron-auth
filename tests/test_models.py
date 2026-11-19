@@ -3069,3 +3069,95 @@ class TestScopeSeparator:
 
     def test_every_provider_member_states_a_usable_separator(self) -> None:
         assert [member.name for member in Provider if not member.scope_separator] == []
+
+
+class TestAClientSecretStatesAString:
+    """Test the rule that decides what counts as no client secret.
+
+    A client secret is the string it holds, so a wrapper holding nothing states no secret, and the
+    presence rule that follows reads an absence rather than a credential it cannot send.
+    """
+
+    @staticmethod
+    def _config(**values: object) -> ProviderConfig:
+        return ProviderConfig(
+            client_id="c",
+            authorize_url="https://provider.example.com/authorize",
+            token_url="https://provider.example.com/token",
+            **values,  # ty: ignore[invalid-argument-type]
+        )
+
+    def test_a_wrapper_holding_nothing_states_no_secret_on_a_hand_built_config(self) -> None:
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=SecretStr(None))  # ty: ignore[invalid-argument-type]
+
+    def test_a_wrapper_holding_nothing_states_no_secret_through_a_preset(self) -> None:
+        """A preset wraps whatever it is passed, so the rule has to hold for the wrapper it builds."""
+        from apron_auth.providers.github import preset
+
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            preset(client_id="c", client_secret=None, scopes=["read:user"])  # ty: ignore[invalid-argument-type]
+
+    def test_a_wrapper_holding_nothing_builds_a_public_client(self) -> None:
+        config = self._config(
+            client_secret=SecretStr(None),  # ty: ignore[invalid-argument-type]
+            token_endpoint_auth_method="none",
+        )
+        assert config.client_secret is None
+
+    def test_an_empty_secret_states_no_secret_on_a_hand_built_config(self) -> None:
+        config = self._config(client_secret=SecretStr(""), token_endpoint_auth_method="none")
+        assert config.client_secret is None
+
+    def test_an_empty_secret_cannot_authenticate_a_confidential_client(self) -> None:
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=SecretStr(""))
+
+    def test_a_blank_secret_states_no_secret(self) -> None:
+        """A string with no non-blank character authenticates no client, as an empty one does."""
+        config = self._config(client_secret=SecretStr("   "), token_endpoint_auth_method="none")
+        assert config.client_secret is None
+
+    def test_a_blank_secret_cannot_authenticate_a_confidential_client(self) -> None:
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=SecretStr("   "))
+
+    @pytest.mark.parametrize("secret", [b"", b"   ", SecretStr(b"   ")])  # ty: ignore[invalid-argument-type]
+    def test_a_secret_the_field_converts_to_a_blank_string_states_no_secret(self, secret: object) -> None:
+        """The field converts bytes to text, so presence is decided on what it settled on."""
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=secret)
+
+    def test_a_registration_reads_a_converted_blank_secret_as_a_public_client(self) -> None:
+        registration = ClientRegistration(client_id="c", client_secret=b"   ")  # ty: ignore[invalid-argument-type]
+        assert registration.client_secret is None
+
+    def test_a_secret_the_field_converts_to_text_is_kept(self) -> None:
+        """Converting bytes states a secret, so only a blank one reads as absent."""
+        config = self._config(client_secret=b"kept-secret")  # ty: ignore[invalid-argument-type]
+        assert config.client_secret is not None
+        assert config.client_secret.get_secret_value() == "kept-secret"
+
+    def test_a_wrapper_holding_a_value_that_is_no_string_is_refused(self) -> None:
+        with pytest.raises(ConfigurationError):
+            self._config(client_secret=SecretStr(1234))  # ty: ignore[invalid-argument-type]
+
+    def test_a_refusal_states_no_secret(self) -> None:
+        """The refusal reaches a caller's error reporter, so it must not carry what it refused."""
+        with pytest.raises(ConfigurationError) as refusal:
+            self._config(client_secret=SecretStr(["s3cr3t-rejected-value"]))  # ty: ignore[invalid-argument-type]
+
+        assert "s3cr3t-rejected-value" not in str(refusal.value)
+
+    def test_a_registration_reads_an_empty_secret_as_a_public_client(self) -> None:
+        registration = ClientRegistration.model_validate({"client_id": "c", "client_secret": ""})
+        assert registration.client_secret is None
+
+    def test_a_registration_reads_a_wrapper_holding_nothing_as_a_public_client(self) -> None:
+        registration = ClientRegistration(client_id="c", client_secret=SecretStr(None))  # ty: ignore[invalid-argument-type]
+        assert registration.client_secret is None
+
+    def test_a_secret_that_states_a_string_is_kept(self) -> None:
+        config = self._config(client_secret=SecretStr("kept-secret"))  # pragma: allowlist secret
+        assert config.client_secret is not None
+        assert config.client_secret.get_secret_value() == "kept-secret"
