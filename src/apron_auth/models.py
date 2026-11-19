@@ -928,8 +928,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
 
     Attributes:
         client_secret: The client secret for a confidential client, and ``None`` for a public one.
-            A secret is the string it holds, so a wrapper holding nothing and an empty string both
-            state no secret and read as ``None``.
+            A secret is the string it holds, so a wrapper holding nothing and a string with no
+            non-blank character both state no secret and read as ``None``.
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
             and the one a granted scope string is split on.
             An empty value is refused.
@@ -1571,8 +1571,8 @@ class ClientRegistration(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         client_id: The client identifier, issued by a registration endpoint, registered out of band, or a
             CIMD client identifier URL.
         client_secret: The client secret for a confidential client, and ``None`` for a public one.
-            A secret is the string it holds, so a wrapper holding nothing and an empty string both
-            state no secret and read as ``None``.
+            A secret is the string it holds, so a wrapper holding nothing and a string with no
+            non-blank character both state no secret and read as ``None``.
         token_endpoint_auth_method: The token-endpoint authentication method the server registered for this
             client. It is authoritative for this client and may differ from the server's advertised set,
             and is ``None`` when no method was registered.

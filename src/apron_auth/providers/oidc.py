@@ -46,6 +46,7 @@ from joserfc.errors import ClaimError, ExpiredTokenError, JoseError
 from pydantic import SecretStr
 
 from apron_auth._claims import stated_boolean, stated_string
+from apron_auth._client_secrets import stated_client_secret
 from apron_auth._clock import CLOCK_SKEW_SECONDS
 from apron_auth._discovery import (
     CONFIDENTIAL_AUTH_METHODS,
@@ -309,13 +310,13 @@ def preset(
         advertises one, and the client revokes through RFC 7009 revocation.
 
     Raises:
-        ConfigurationError: If ``client_secret`` is empty,
+        ConfigurationError: If ``client_secret`` states no secret,
             or the metadata names no issuer or no signing key set, or holds a URL that :func:`discover` would refuse.
             It is also raised if the provider advertises only token-endpoint auth methods this library cannot perform,
             or code-challenge methods that exclude ``S256``.
             These are configuration faults, not discovery failures, so they do not raise :class:`OidcDiscoveryError`.
     """
-    if not client_secret.strip():
+    if stated_client_secret(client_secret) is None:
         msg = "OpenID provider preset needs a client secret, because it configures a confidential client"
         raise ConfigurationError(msg)
     if metadata.issuer is None:

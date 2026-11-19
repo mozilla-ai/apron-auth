@@ -3113,6 +3113,15 @@ class TestAClientSecretStatesAString:
         with pytest.raises(ConfigurationError, match="client_secret is required"):
             self._config(client_secret=SecretStr(""))
 
+    def test_a_blank_secret_states_no_secret(self) -> None:
+        """A string with no non-blank character authenticates no client, as an empty one does."""
+        config = self._config(client_secret=SecretStr("   "), token_endpoint_auth_method="none")
+        assert config.client_secret is None
+
+    def test_a_blank_secret_cannot_authenticate_a_confidential_client(self) -> None:
+        with pytest.raises(ConfigurationError, match="client_secret is required"):
+            self._config(client_secret=SecretStr("   "))
+
     def test_a_wrapper_holding_a_value_that_is_no_string_is_refused(self) -> None:
         with pytest.raises(ConfigurationError):
             self._config(client_secret=SecretStr(1234))  # ty: ignore[invalid-argument-type]

@@ -1,4 +1,4 @@
-"""The rule that decides what a client secret a caller or an authorization server stated."""
+"""The rule that decides what counts as no client secret."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ def stated_client_secret(value: Any) -> Any:
     for its presence.
     A wrapper holding nothing renders as an empty secret, which reads as a secret that is present
     and blank rather than one that was never supplied.
-    An empty string states no secret either, because it authenticates no client.
+    A string holding no non-blank character states no secret either, because it authenticates no client.
 
     Whether a value that states something is a string it can state is left to the field's own type,
     so this decides presence alone.
@@ -26,6 +26,6 @@ def stated_client_secret(value: Any) -> Any:
         The value a present secret states, or ``None`` where it states none.
     """
     held = value.get_secret_value() if isinstance(value, SecretStr) else value
-    if held is None or (isinstance(held, str) and not held):
+    if held is None or (isinstance(held, str) and not held.strip()):
         return None
     return held
