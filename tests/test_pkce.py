@@ -3,8 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 
-from pydantic import SecretStr
-
+from apron_auth.models import SecretToken
 from apron_auth.pkce import generate_code_challenge, generate_code_verifier
 
 
@@ -26,7 +25,7 @@ def test_verifier_uniqueness():
 
 def test_challenge_is_s256():
     verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"  # pragma: allowlist secret
-    challenge = generate_code_challenge(SecretStr(verifier))
+    challenge = generate_code_challenge(SecretToken(verifier))
     expected_digest = hashlib.sha256(verifier.encode("utf-8")).digest()
     expected = base64.urlsafe_b64encode(expected_digest).decode("utf-8").rstrip("=")
     assert challenge == expected

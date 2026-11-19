@@ -389,7 +389,7 @@ def _id_token_claims(id_token: object) -> dict[str, Any]:
         IdTokenValidationError: If the ID token is not a wrapped string, or cannot be read.
     """
     msg = "ID token could not be read"
-    if not isinstance(id_token, SecretStr):
+    if not isinstance(id_token, SecretToken):
         raise IdTokenValidationError(msg)
     try:
         return unverified_claims(id_token)
@@ -740,7 +740,7 @@ class _OAuthClientBase:
 
         return url, pending_state
 
-    def _code_to_redeem(self, callback: AuthorizationCallback) -> SecretStr:
+    def _code_to_redeem(self, callback: AuthorizationCallback) -> SecretToken:
         """Return the authorization code to redeem, refusing a response that states none.
 
         Args:
@@ -757,8 +757,7 @@ class _OAuthClientBase:
                 response. Whoever reaches the redirect URI chooses the kind and the error code, and
                 neither is evidence that the condition it names happened.
         """
-        # A wrapper holding nothing is still a wrapper, so presence is read off the value it holds.
-        code = callback.code if callback.code is not None and callback.code.get_secret_value() else None
+        code = callback.code if callback.code else None
         if code is not None and callback.error:
             # NOTE: RFC 6749 section 4.1.2 states one or the other, so a response stating both says
             # two things at once and nothing here may choose between them.
@@ -801,7 +800,7 @@ class _OAuthClientBase:
         pending = await pending_state_for(_usable_state(callback.state))
         return await self._redeem_against(code, pending)
 
-    async def _redeem_against(self, code: SecretStr, pending: OAuthPendingState) -> FreshTokenSet:
+    async def _redeem_against(self, code: SecretToken, pending: OAuthPendingState) -> FreshTokenSet:
         """Redeem an authorization code against the pending state of the request it answers.
 
         Args:

@@ -6,8 +6,6 @@ import base64
 import hashlib
 import secrets
 
-from pydantic import SecretStr
-
 from apron_auth.models import SecretToken
 
 
@@ -20,7 +18,7 @@ def generate_code_verifier() -> SecretToken:
     return SecretToken(secrets.token_urlsafe(32))
 
 
-def generate_code_challenge(code_verifier: SecretStr) -> str:
+def generate_code_challenge(code_verifier: SecretToken) -> str:
     """Generate an S256 code challenge from a code verifier.
 
     Args:
