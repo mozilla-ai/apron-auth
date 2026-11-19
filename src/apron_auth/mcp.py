@@ -360,11 +360,12 @@ def to_provider_config(
 
     Raises:
         ConfigurationError: If a URL the metadata states carries a credential in its
-            authority, or the effective ``resource`` — supplied or discovered — is
-            not a valid absolute URI without a fragment. Metadata reaching here is
-            treated as the caller's, whatever produced it.
-        McpDiscoveryError: If the registration's method disagrees with its
-            secret, or the server advertises no method the client can satisfy.
+            authority, the effective ``resource`` — supplied or discovered — is
+            not a valid absolute URI without a fragment, the registration's method
+            disagrees with its secret, or the metadata advertises no method the
+            registration can satisfy. No discovery runs here, so every fault is a
+            disagreement between the arguments. Metadata reaching here is treated
+            as the caller's, whatever produced it.
     """
     secret = registration.client_secret
     methods = metadata.code_challenge_methods
@@ -706,10 +707,10 @@ def _select_auth_method(
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the registered method disagrees with the secret's
-            presence, or the server advertises an explicit method list the client
-            cannot satisfy — omitting ``none`` for a public client, or offering
-            only methods this library cannot perform for a confidential client.
+        ConfigurationError: If the registered method disagrees with the secret's
+            presence, or the advertised list cannot be satisfied — omitting
+            ``none`` for a public client, or offering only methods this library
+            cannot perform for a confidential client.
     """
     if registered is not None:
         return _honor_registered_auth_method(registered, secret)
@@ -722,7 +723,7 @@ def _select_auth_method(
         # rejected at token exchange.
         if advertised and TokenEndpointAuthMethod.NONE not in advertised:
             msg = "MCP server does not accept a public client at its token endpoint"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         return TokenEndpointAuthMethod.NONE
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
@@ -730,7 +731,7 @@ def _select_auth_method(
         if method in advertised:
             return method
     msg = "MCP server requires an unsupported client authentication method"
-    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _honor_registered_auth_method(
@@ -753,7 +754,7 @@ def _honor_registered_auth_method(
         The registered token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the method disagrees with the secret's presence.
+        ConfigurationError: If the method disagrees with the secret's presence.
     """
     if _secret_agrees(registered, secret):
         return registered
@@ -764,7 +765,7 @@ def _honor_registered_auth_method(
             msg = "MCP server registered a confidential auth method but issued no client secret"
         case _:
             assert_never(registered)
-    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _parse_url(url: str) -> ParseResult:

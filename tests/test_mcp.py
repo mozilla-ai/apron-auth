@@ -172,12 +172,12 @@ class TestToProviderConfig:
 
     def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="c", client_secret=SecretStr("s")))
 
     def test_public_client_rejected_when_none_not_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="c"))
 
     def test_registered_method_overrides_advertised_derivation(self) -> None:
@@ -197,7 +197,7 @@ class TestToProviderConfig:
         assert config.client_secret is None
 
     def test_registered_confidential_method_without_secret_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(
                 self._meta(),
                 ClientRegistration(client_id="c", token_endpoint_auth_method="client_secret_basic"),
@@ -206,7 +206,7 @@ class TestToProviderConfig:
     def test_registered_none_with_secret_raises(self) -> None:
         # A public-client registration paired with a secret is contradictory;
         # emitting it would attach the secret to public-client requests.
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(
                 self._meta(),
                 ClientRegistration(client_id="c", client_secret=SecretStr("s"), token_endpoint_auth_method="none"),
@@ -322,7 +322,7 @@ class TestToProviderConfig:
     def test_cimd_public_client_without_none_method_fails_fast(self) -> None:
         """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="https://app.example.com/c.json"))
 
 
@@ -439,7 +439,7 @@ class TestSelectAuthMethod:
         ],
     )
     def test_raises_when_confidential_methods_unavailable(self, advertised: list[str]) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _select_auth_method(SecretStr("s"), advertised)
 
     @pytest.mark.parametrize(
@@ -451,7 +451,7 @@ class TestSelectAuthMethod:
         ],
     )
     def test_public_client_raises_when_none_not_advertised(self, advertised: list[str]) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _select_auth_method(None, advertised)
 
     def test_registered_method_wins_over_advertised(self) -> None:
@@ -505,7 +505,7 @@ class TestHonorRegisteredAuthMethod:
     def test_raises_when_the_secret_disagrees(
         self, registered: TokenEndpointAuthMethod, secret: SecretStr | None
     ) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _honor_registered_auth_method(registered, secret)
 
 
