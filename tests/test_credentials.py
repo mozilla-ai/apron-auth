@@ -23,7 +23,7 @@ class TestWrappedCredential:
     def test_a_wrapped_credential_is_handed_back_as_the_wrapper(self, wrapper: type[SecretStr]) -> None:
         """The wrapper states nothing as text, so handing it back states nothing to its caller."""
         credential = wrapper(CREDENTIAL)
-        assert arrives_wrapped(SecretToken)(credential) is credential
+        assert arrives_wrapped(wrapper)(credential) is credential
 
     @pytest.mark.parametrize("wrapper", [SecretStr, SecretToken])
     def test_a_credential_supplied_as_plain_text_is_refused(self, wrapper: type[SecretStr]) -> None:
@@ -52,6 +52,19 @@ class TestWrappedCredential:
 
     def test_absence_is_handed_back(self) -> None:
         assert arrives_wrapped(SecretToken)(None) is None
+
+    def test_the_wider_wrapper_is_refused_where_the_narrower_one_is_stated(self) -> None:
+        """A caller reaching for the wrong wrapper is told so in the same words, not by the framework."""
+        with pytest.raises(ValueError, match="SecretToken") as caught:
+            arrives_wrapped(SecretToken)(SecretStr(CREDENTIAL))
+
+        assert CREDENTIAL not in str(caught.value)
+
+    def test_the_narrower_wrapper_satisfies_the_wider_one(self) -> None:
+        """A token is a secret, so a field stating the wider type takes either."""
+        credential = SecretToken(CREDENTIAL)
+
+        assert arrives_wrapped(SecretStr)(credential) is credential
 
     @pytest.mark.parametrize("value", [7, ["s"], {"value": "s"}, b"s"])
     def test_a_value_that_is_no_string_is_handed_on_for_its_type_to_refuse(self, value: object) -> None:

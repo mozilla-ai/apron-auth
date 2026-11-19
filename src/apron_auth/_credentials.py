@@ -25,8 +25,8 @@ def _supplied_as_plain_text(wrapper: type[SecretStr]) -> str:
         The refusal text, without the name of what is being refused.
     """
     return (
-        f"must be wrapped in {wrapper.__name__}, because a plain string stays in a frame local "
-        "that an error reporter records"
+        f"must be wrapped in {wrapper.__name__}, because a credential outside it stays in a frame "
+        "local that an error reporter records"
     )
 
 
@@ -44,16 +44,22 @@ def arrives_wrapped(wrapper: type[SecretStr]) -> Callable[[Any], Any]:
     may be absent reads what a value states before this rule runs, so a client secret stating nothing
     arrives here as absence rather than as a blank string.
 
+    A secret wrapper the field does not state is refused in the same words, because a caller who
+    reads the refusal and reaches for the other of the two wrappers would otherwise be answered by
+    the validation framework in terms of its own.
+
+    Anything else is handed on, because what a stated credential may be is the field's own type to
+    decide.
+
     Args:
         wrapper: The type the field's credential has to arrive in.
 
     Returns:
-        A validator that hands back the value it was given, and refuses a plain string stating a
-        credential.
+        A validator that hands back the value it was given, and refuses one the field cannot hold.
     """
 
     def rule(value: Any) -> Any:
-        if isinstance(value, str):
+        if isinstance(value, str) or (isinstance(value, SecretStr) and not isinstance(value, wrapper)):
             raise ValueError(_supplied_as_plain_text(wrapper))
         return value
 
