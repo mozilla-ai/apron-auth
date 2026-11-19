@@ -15,11 +15,12 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum, StrEnum, auto, unique
-from typing import Any, Literal, NamedTuple, NoReturn, Self, TypeVar, assert_never
+from typing import Annotated, Any, Literal, NamedTuple, NoReturn, Self, TypeVar, assert_never
 from urllib.parse import urlparse
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     Field,
     ModelWrapValidatorHandler,
     SecretStr,
@@ -28,6 +29,7 @@ from pydantic import (
     model_validator,
 )
 
+from apron_auth._client_secrets import stated_client_secret
 from apron_auth._clock import DEFAULT_MAX_AGE_SECONDS
 from apron_auth._urls import (
     AuthorityCredential,
@@ -44,6 +46,9 @@ from apron_auth.scopes import resolve_implicit_scopes as _resolve_implicit_scope
 logger = logging.getLogger(__name__)
 
 AccessType = Literal["read", "write", "admin"]
+
+# A client secret, read for the string it holds rather than trusted for the wrapper around it.
+ClientSecret = Annotated[SecretStr | None, BeforeValidator(stated_client_secret)]
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -922,6 +927,9 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     or recorded wherever the config is.
 
     Attributes:
+        client_secret: The client secret for a confidential client, and ``None`` for a public one.
+            A secret is the string it holds, so a wrapper holding nothing and an empty string both
+            state no secret and read as ``None``.
         scope_separator: The delimiter the ``scope`` request parameter is joined with,
             and the one a granted scope string is split on.
             An empty value is refused.
@@ -1048,7 +1056,7 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     """
 
     client_id: str
-    client_secret: SecretStr | None = None
+    client_secret: ClientSecret = None
     authorize_url: str
     token_url: str
     revocation_url: str | None = None
@@ -1108,6 +1116,8 @@ class ProviderConfig(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
         A method that requires no secret is a public client, and presenting one would attach client
         credentials to requests a public client must send unauthenticated.
         Every other method requires the secret it sends.
+        A secret that states nothing has already read as absent by the time this runs, so a config
+        carrying one is refused here rather than failing at the token endpoint.
 
         Returns:
             The validated config, unchanged.
@@ -1560,14 +1570,16 @@ class ClientRegistration(_RefusesWithoutRepeating, frozen=True, extra="forbid"):
     Attributes:
         client_id: The client identifier, issued by a registration endpoint, registered out of band, or a
             CIMD client identifier URL.
-        client_secret: The client secret for a confidential client; ``None`` for a public client.
+        client_secret: The client secret for a confidential client, and ``None`` for a public one.
+            A secret is the string it holds, so a wrapper holding nothing and an empty string both
+            state no secret and read as ``None``.
         token_endpoint_auth_method: The token-endpoint authentication method the server registered for this
             client. It is authoritative for this client and may differ from the server's advertised set,
             and is ``None`` when no method was registered.
     """
 
     client_id: str
-    client_secret: SecretStr | None = None
+    client_secret: ClientSecret = None
     token_endpoint_auth_method: TokenEndpointAuthMethod | None = None
 
     # Attached last, so it wraps every validator above it.
