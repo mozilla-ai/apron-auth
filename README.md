@@ -272,8 +272,12 @@ refresh token, run authorization again. Restore it with
 pass it, and pass the model's own fields and nothing else: a token
 supplied as a plain string is refused, as is a field the model does not
 define, and a `UserToken` nested in the record is held to both rules.
-A dump states each token as a mask rather than as its value, so the
-record you persist holds the values you read off the model yourself. If your
+A dump states each of those named fields as a mask rather than as its
+value, so the record you persist holds the values you read off the model
+yourself. It does not mask `extras`, which is a plain mapping of whatever
+the provider sent under a name no attribute claims: an `id_token` lands
+there as a string, and so does credential material a provider sent in the
+wrong shape. Treat a dump of a token set as carrying those in clear. If your
 store adds keys of its own, select the model's fields out of the record
 first. A model you persist must hold a `TokenSet`, not a
 `FreshTokenSet`: reloading a `FreshTokenSet` field from storage raises
@@ -281,11 +285,14 @@ first. A model you persist must hold a `TokenSet`, not a
 — exposing only the access token and, for OIDC providers, the ID token —
 before being handed to the provider's identity handler, so handlers
 never receive the refresh token or caller context. Every token this library
-holds or hands back is a `SecretToken`, on a `TokenSet`, on a
-`UserToken`, on an `IdentityMaterial`, and as the argument `revoke_token`,
-`refresh_token` and a `RevocationHandler` take, so you read one with
-`get_secret_value()` into the request you send and bind the unwrapped
-value to no variable of your own. A `SecretToken` states nothing as text,
+names is a `SecretToken`, on a `TokenSet`, on a `UserToken`, on an
+`IdentityMaterial`, and as the argument `revoke_token`, `refresh_token`
+and a `RevocationHandler` take, so you read one with `get_secret_value()`
+into the request you send and bind the unwrapped value to no variable of
+your own. A token a provider sent under a name no attribute claims is in
+`extras` as a plain string, which no type can reach, so the extras are as
+sensitive as the fields above and this library says so rather than
+wrapping one key and leaving the next. A `SecretToken` states nothing as text,
 so formatting one or sending one without that call raises `TypeError`
 rather than sending a masked value a provider would accept. See [what an error reporter can
 capture](#what-an-error-reporter-can-capture).
