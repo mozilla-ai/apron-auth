@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,7 +36,7 @@ class TestAtlassianRefresh:
     async def test_refresh_returns_access_token(self, atlassian_env: dict[str, str]):
         config = atlassian.preset(
             client_id=atlassian_env["client_id"],
-            client_secret=atlassian_env["client_secret"],
+            client_secret=SecretStr(atlassian_env["client_secret"]),
             scopes=["read:jira-work"],
         )
         client = OAuthClient(config)
@@ -48,7 +49,7 @@ class TestAtlassianRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = atlassian.preset(
             client_id=atlassian_env["client_id"],
-            client_secret=atlassian_env["client_secret"],
+            client_secret=SecretStr(atlassian_env["client_secret"]),
             scopes=["read:jira-work"],
         )
         client = OAuthClient(config)

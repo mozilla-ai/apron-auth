@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,7 +36,7 @@ class TestSalesforceRefresh:
     async def test_refresh_returns_access_token(self, salesforce_env: dict[str, str]):
         config = salesforce.preset(
             client_id=salesforce_env["client_id"],
-            client_secret=salesforce_env["client_secret"],
+            client_secret=SecretStr(salesforce_env["client_secret"]),
             scopes=["api"],
         )
         client = OAuthClient(config)
@@ -48,7 +49,7 @@ class TestSalesforceRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = salesforce.preset(
             client_id=salesforce_env["client_id"],
-            client_secret=salesforce_env["client_secret"],
+            client_secret=SecretStr(salesforce_env["client_secret"]),
             scopes=["api"],
         )
         client = OAuthClient(config)

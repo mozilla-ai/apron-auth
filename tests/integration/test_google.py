@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,7 +36,7 @@ class TestGoogleRefresh:
     async def test_refresh_returns_access_token(self, google_env: dict[str, str]):
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
@@ -46,7 +47,7 @@ class TestGoogleRefresh:
     async def test_refresh_returns_expiry(self, google_env: dict[str, str]):
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)
@@ -60,7 +61,7 @@ class TestGoogleRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = google.preset(
             client_id=google_env["client_id"],
-            client_secret=google_env["client_secret"],
+            client_secret=SecretStr(google_env["client_secret"]),
             scopes=["openid", "email"],
         )
         client = OAuthClient(config)

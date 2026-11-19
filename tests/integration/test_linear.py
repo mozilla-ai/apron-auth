@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,7 +36,7 @@ class TestLinearRefresh:
     async def test_refresh_returns_access_token(self, linear_env: dict[str, str]):
         config = linear.preset(
             client_id=linear_env["client_id"],
-            client_secret=linear_env["client_secret"],
+            client_secret=SecretStr(linear_env["client_secret"]),
             scopes=["read"],
         )
         client = OAuthClient(config)
@@ -48,7 +49,7 @@ class TestLinearRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = linear.preset(
             client_id=linear_env["client_id"],
-            client_secret=linear_env["client_secret"],
+            client_secret=SecretStr(linear_env["client_secret"]),
             scopes=["read"],
         )
         client = OAuthClient(config)

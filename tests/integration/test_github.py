@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import SecretStr
 
 from apron_auth.client import OAuthClient
 from apron_auth.models import SecretToken
@@ -35,7 +36,7 @@ class TestGitHubRefresh:
     async def test_refresh_returns_access_token(self, github_env: dict[str, str]):
         config = github.preset(
             client_id=github_env["client_id"],
-            client_secret=github_env["client_secret"],
+            client_secret=SecretStr(github_env["client_secret"]),
             scopes=["repo"],
         )
         client = OAuthClient(config)
@@ -48,7 +49,7 @@ class TestGitHubRevocation:
         """Refresh to get a fresh access token, then revoke it."""
         config = github.preset(
             client_id=github_env["client_id"],
-            client_secret=github_env["client_secret"],
+            client_secret=SecretStr(github_env["client_secret"]),
             scopes=["repo"],
         )
         client = OAuthClient(config)
