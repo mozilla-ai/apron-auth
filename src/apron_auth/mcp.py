@@ -168,7 +168,8 @@ async def discover(
     well-known locations), reads its resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback).
     A protected-resource document must declare the resource identifier RFC 9728 requires of it, so a token
-    issued through the returned metadata names the audience it is for.
+    issued through the returned metadata names the audience it is for, and must declare the identifier the
+    location that served it stands for, so it cannot name another service.
     A server that states it publishes no protected-resource metadata, and for which the caller named no
     such document, is read as its own authorization server: its RFC 8414 metadata is fetched at its
     origin, and is accepted only where the document declares that origin as its issuer, however it spells
