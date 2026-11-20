@@ -359,6 +359,12 @@ class TestResourceIndicatorFault:
             pytest.param(
                 "https://mcp.example.com/mcp?q=[1]", ResourceIndicatorFault.MALFORMED, id="raw brackets in a query"
             ),
+            pytest.param(
+                "urn:example:a[b]", ResourceIndicatorFault.MALFORMED, id="raw brackets where no authority holds them"
+            ),
+            pytest.param(
+                "https://mcp.example.com:abc/mcp", ResourceIndicatorFault.MALFORMED, id="a port that is no number"
+            ),
             pytest.param("https://mcp.example.com/a\tb", ResourceIndicatorFault.MALFORMED, id="a tab"),
             pytest.param("https://mcp.example.com/a\nb", ResourceIndicatorFault.MALFORMED, id="a line break"),
             pytest.param(
