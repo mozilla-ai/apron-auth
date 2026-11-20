@@ -47,11 +47,13 @@ from apron_auth._json_body import decode_json_body
 from apron_auth._limits import streamed, within_request_limit
 from apron_auth._urls import (
     AuthorityCredential,
+    ResourceIndicatorFault,
     authority_credential,
     host_name,
     is_localhost_name,
     is_loopback_host,
     parse_ip,
+    resource_indicator_fault,
     url_host,
     uses_secure_transport,
 )
@@ -150,6 +152,8 @@ async def discover(
     Fetches the RFC 9728 protected-resource metadata (trying the ``resource_metadata_url`` hint, then
     well-known locations), reads its resource identifier and first authorization server, and fetches that
     server's RFC 8414 metadata (with an OIDC fallback).
+    A protected-resource document must declare the resource identifier RFC 9728 requires of it, so a token
+    issued through the returned metadata names the audience it is for.
     A server that states it publishes no protected-resource metadata, and for which the caller named no
     such document, is read as its own authorization server: its RFC 8414 metadata is fetched at its
     origin, and is accepted only where the document declares that origin as its issuer, however it spells
@@ -186,12 +190,14 @@ async def discover(
             read as the authorization server, that origin and the metadata URLs
             derived from it.
         McpDiscoveryError: If a URL a fetched document declares is rejected, no
-            metadata document can be fetched, a required field is absent, or the
-            authorization server metadata does not declare the server it was
-            fetched from as its issuer. The first document fetched is
-            authoritative, so a mismatched issuer ends discovery rather than
-            trying the next candidate URL. A ``transport_factory`` that fails is
-            reported here too, as a fault that is never retried.
+            metadata document can be fetched, a required field is absent, the
+            protected-resource metadata declares a resource identifier that is no
+            absolute URI without a fragment, or the authorization server metadata
+            does not declare the server it was fetched from as its issuer.
+            The first document fetched is authoritative, so a mismatched issuer
+            ends discovery rather than trying the next candidate URL.
+            A ``transport_factory`` that fails is reported here too, as a fault
+            that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
             NOTE: None of these refusals ends discovery for the ``resource_metadata_url``
             hint, which loses its turn however it proves unusable. A hint that lost
@@ -209,8 +215,10 @@ async def discover(
         limits,
         prm_document,
     )
-    # No protected-resource metadata means the server's own origin was read as its authorization server.
+    # No protected-resource metadata means the server's own origin was read as its authorization server,
+    # which declares no resource identifier and leaves none to invent.
     resource_meta: dict[str, Any] | None = None
+    resource: str | None = None
     if isinstance(fetched, _MetadataOutcome):
         if not _falls_back_to_origin(fetched, hinted=bool(resource_metadata_url)):
             raise _no_document_error(prm_document, fetched)
@@ -231,6 +239,7 @@ async def discover(
         if "?" in auth_server or "#" in auth_server:
             msg = "protected resource metadata declares an authorization server with a query or a fragment"
             raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+        resource = _declared_resource(resource_meta)
 
     asm_document = "authorization server metadata"
     server_meta = await _fetch_first_metadata(
@@ -276,9 +285,6 @@ async def discover(
         if url is not None:
             _validate_url(url, url_validator, subject=subject, caller_supplied=False)
 
-    resource = resource_meta.get("resource") if resource_meta is not None else None
-    if isinstance(resource, str):
-        _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
     try:
         code_challenge_methods = strict_str_list(server_meta, "code_challenge_methods_supported")
         auth_methods = strict_str_list(server_meta, "token_endpoint_auth_methods_supported")
@@ -297,7 +303,7 @@ async def discover(
         issuer=auth_server,
         iss_parameter_supported=server_meta.get("authorization_response_iss_parameter_supported") is True,
         supports_cimd=server_meta.get("client_id_metadata_document_supported") is True,
-        resource=resource if isinstance(resource, str) else None,
+        resource=resource,
     )
 
 
@@ -355,11 +361,12 @@ def to_provider_config(
 
     Raises:
         ConfigurationError: If a URL the metadata states carries a credential in its
-            authority, or the effective ``resource`` — supplied or discovered — is
-            not a valid absolute URI without a fragment. Metadata reaching here is
-            treated as the caller's, whatever produced it.
-        McpDiscoveryError: If the registration's method disagrees with its
-            secret, or the server advertises no method the client can satisfy.
+            authority, the effective ``resource`` — supplied or discovered — is
+            not a valid absolute URI without a fragment, the registration's method
+            disagrees with its secret, or the metadata advertises no method the
+            registration can satisfy. No discovery runs here, so every fault is a
+            disagreement between the arguments. Metadata reaching here is treated
+            as the caller's, whatever produced it.
     """
     secret = registration.client_secret
     methods = metadata.code_challenge_methods
@@ -398,6 +405,7 @@ async def register_client(
     *,
     client_name: str = "apron-auth",
     application_type: ApplicationType | None = None,
+    token_endpoint_auth_method: TokenEndpointAuthMethod | None = None,
     url_validator: UrlValidator | None = None,
     transport_factory: TransportFactory | None = None,
     limits: RequestLimits | None = None,
@@ -406,6 +414,8 @@ async def register_client(
 
     POSTs a registration request to ``registration_url`` (an authorization server's registration endpoint) and
     returns the issued ``client_id`` plus, for a confidential client, a ``client_secret``.
+    The request asks to be registered as a public client where the application type is ``native``, because a
+    native client has nowhere to keep a secret, and as a confidential one otherwise.
     A ``token_endpoint_auth_method`` the response states is captured too when this library can perform it,
     and refused otherwise.
     It is authoritative for this client and may differ from the requested method.
@@ -421,6 +431,13 @@ async def register_client(
             ``native`` is inferred from a loopback ``redirect_uri`` and
             otherwise left unset. Registering ``native`` lets servers that gate
             ``localhost`` redirects on it accept the registration.
+        token_endpoint_auth_method: The client authentication method to ask for.
+            When omitted, a ``native`` application type asks for ``none`` and
+            every other type asks for ``client_secret_post``. The method the
+            response states is authoritative either way.
+            NOTE: A stated method pre-empts the application type and is asked
+            for as stated, so a caller pairing ``native`` with a method that
+            requires a secret asks for a native client that keeps one.
         url_validator: Optional policy invoked on the URL before the request.
         limits: The limits on the registration request. Defaults to :class:`~apron_auth.models.RequestLimits`'s own.
         transport_factory: Optional factory controlling the outbound connection.
@@ -432,8 +449,9 @@ async def register_client(
         persistence obligation.
 
     Raises:
-        ConfigurationError: If ``registration_url`` is rejected, or ``redirect_uri`` carries
-            a credential in its authority.
+        ConfigurationError: If ``registration_url`` is rejected, ``redirect_uri`` carries
+            a credential in its authority, or ``token_endpoint_auth_method`` names a method
+            this library cannot perform.
             It is also raised when ``redirect_uri`` states no ``https`` and names no loopback host,
             because a configuration built from the issued registration would refuse that URI.
         McpRegistrationError: If the request fails in transit, the endpoint returns
@@ -452,12 +470,13 @@ async def register_client(
     _require_secure_transport(redirect_uri, subject="redirect_uri", caller_supplied=True)
     if application_type is None:
         application_type = _infer_application_type(redirect_uri)
+    requested_method = _requested_auth_method(token_endpoint_auth_method, application_type)
     payload = {
         "client_name": client_name,
         "redirect_uris": [redirect_uri],
         "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
-        "token_endpoint_auth_method": TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+        "token_endpoint_auth_method": requested_method,
     }
     if application_type is not None:
         payload["application_type"] = application_type
@@ -565,6 +584,44 @@ def cimd_client_id(url: str) -> str:
     return url
 
 
+def _declared_resource(document: dict[str, Any]) -> str:
+    """Return the resource identifier a protected-resource document declares.
+
+    RFC 9728 section 2 makes ``resource`` required, and RFC 8707 section 2 makes it an absolute URI
+    without a fragment, because it is what a token's audience is bound to.
+    A document stating none, or stating one no audience could name, is refused rather than carried
+    onward as an absent indicator, which would silently drop the binding.
+
+    Args:
+        document: The decoded protected-resource metadata.
+
+    Returns:
+        The resource identifier the document declares.
+
+    Raises:
+        McpDiscoveryError: If the document declares no resource identifier, declares one that is no
+            absolute URI without a fragment, or declares one carrying a credential in its authority.
+    """
+    resource = document.get("resource")
+    if not isinstance(resource, str) or not resource:
+        msg = "protected resource metadata declares no resource identifier"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    fault = resource_indicator_fault(resource)
+    if fault is not None:
+        match fault:
+            case ResourceIndicatorFault.FRAGMENT:
+                msg = "protected resource metadata declares a resource identifier with a fragment"
+            case ResourceIndicatorFault.MALFORMED:
+                msg = "protected resource metadata declares a malformed resource identifier"
+            case ResourceIndicatorFault.RELATIVE:
+                msg = "protected resource metadata declares a resource identifier that is no absolute URI"
+            case _:
+                assert_never(fault)
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
+    return resource
+
+
 def _issued_registration(document: dict[str, Any]) -> ClientRegistration:
     """Return the client registration a decoded registration response issued.
 
@@ -663,10 +720,10 @@ def _select_auth_method(
         A token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the registered method disagrees with the secret's
-            presence, or the server advertises an explicit method list the client
-            cannot satisfy — omitting ``none`` for a public client, or offering
-            only methods this library cannot perform for a confidential client.
+        ConfigurationError: If the registered method disagrees with the secret's
+            presence, or the advertised list cannot be satisfied — omitting
+            ``none`` for a public client, or offering only methods this library
+            cannot perform for a confidential client.
     """
     if registered is not None:
         return _honor_registered_auth_method(registered, secret)
@@ -679,7 +736,7 @@ def _select_auth_method(
         # rejected at token exchange.
         if advertised and TokenEndpointAuthMethod.NONE not in advertised:
             msg = "MCP server does not accept a public client at its token endpoint"
-            raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+            raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
         return TokenEndpointAuthMethod.NONE
     if not advertised:
         return TokenEndpointAuthMethod.CLIENT_SECRET_BASIC
@@ -687,7 +744,7 @@ def _select_auth_method(
         if method in advertised:
             return method
     msg = "MCP server requires an unsupported client authentication method"
-    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _honor_registered_auth_method(
@@ -710,7 +767,7 @@ def _honor_registered_auth_method(
         The registered token-endpoint authentication method.
 
     Raises:
-        McpDiscoveryError: If the method disagrees with the secret's presence.
+        ConfigurationError: If the method disagrees with the secret's presence.
     """
     if _secret_agrees(registered, secret):
         return registered
@@ -721,7 +778,7 @@ def _honor_registered_auth_method(
             msg = "MCP server registered a confidential auth method but issued no client secret"
         case _:
             assert_never(registered)
-    raise McpDiscoveryError(msg, kind=FailureKind.CONFIGURATION)
+    raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
 
 
 def _parse_url(url: str) -> ParseResult:
@@ -819,6 +876,41 @@ def _malformed_url_message(subject: str) -> str:
         The refusal text.
     """
     return f"MCP OAuth received a malformed URL ({subject})"
+
+
+def _requested_auth_method(
+    stated: TokenEndpointAuthMethod | None, application_type: ApplicationType | None
+) -> TokenEndpointAuthMethod:
+    """Return the token-endpoint authentication method to ask a registration for.
+
+    A method the caller stated is asked for as stated, so a caller who knows what their server
+    registers is not held to the derivation.
+    Absent one, a native client cannot keep a client secret (RFC 8252 section 8.4), so it asks to be
+    registered as a public client, and every other application type asks for ``client_secret_post``,
+    the confidential method this library prefers.
+
+    A stated method is refused here rather than sent, because a server that honored an unperformable
+    one would issue credentials this library would then discard, leaving a registration standing.
+
+    Args:
+        stated: The method the caller asked for, or None to derive one.
+        application_type: The application type the registration declares, or None when it declares none.
+
+    Returns:
+        The method to request.
+
+    Raises:
+        ConfigurationError: If the caller stated a method this library cannot perform.
+    """
+    if stated is None:
+        if application_type == ApplicationType.NATIVE:
+            return TokenEndpointAuthMethod.NONE
+        return TokenEndpointAuthMethod.CLIENT_SECRET_POST
+    performable = _stated_auth_method(stated)
+    if performable is None:
+        msg = "token_endpoint_auth_method names a client authentication method this library cannot perform"
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+    return performable
 
 
 def _require_no_authority_credential(url: str, *, subject: str, caller_supplied: bool) -> None:

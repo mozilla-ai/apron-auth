@@ -1,13 +1,37 @@
-"""What a URL states: its authority, its host and its scheme."""
+"""What a URI states: its authority, its host, its scheme, and whether it can name a resource.
+
+Most rules here read a URL's authority, so they answer nothing for a URI that names none.
+A resource indicator is the exception, because RFC 8707 accepts any absolute URI, a URN among them.
+"""
 
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from enum import Enum, auto
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import httpx
+
+# RFC 3986 section 3.2: an authority is an optional userinfo, a host and an optional port. A bracket is
+# written only around an address literal, which is the one place section 3 puts one. A literal carries
+# percent escapes too, because RFC 6874 writes a zone identifier after an escaped delimiter.
+_URI_AUTHORITY = re.compile(
+    r"\A(?:(?:[A-Za-z0-9\-._~!$&'()*+,;=:]|%[0-9A-Fa-f]{2})*@)?"
+    r"(?:\[(?:[A-Za-z0-9\-._~!$&'()*+,;=:]|%[0-9A-Fa-f]{2})+\]"
+    r"|(?:[A-Za-z0-9\-._~!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)"
+    r"(?::[0-9]*)?\Z"
+)
+# RFC 3986 sections 3.3 and 3.4: the characters a path or a query carries, a percent escape written whole.
+# A bracket is no part of either, so one outside an authority is not a URI however the parser reads it.
+_URI_PATH_OR_QUERY = re.compile(r"\A(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})*\Z")
+# RFC 3986 section 3.1: a scheme opens with a letter and carries letters, digits and three marks.
+_URI_SCHEME = re.compile(r"\A[A-Za-z][A-Za-z0-9+\-.]*\Z")
+# Every character RFC 3986 puts anywhere in a URI, read against the value as it arrived. The standard
+# parser deletes some characters and strips others off both ends before it reports a component, so a rule
+# reading components alone cannot see them, whichever set that parser decides to normalize.
+_URI_REPERTOIRE = re.compile(r"\A[A-Za-z0-9\-._~!$&'()*+,;=:/?#\[\]@%]*\Z")
 
 
 class AuthorityCredential(Enum):
@@ -19,6 +43,17 @@ class AuthorityCredential(Enum):
     MALFORMED = auto()
     # The authority carries userinfo.
     PRESENT = auto()
+
+
+class ResourceIndicatorFault(Enum):
+    """Each member is one reason a value cannot serve as an RFC 8707 resource indicator."""
+
+    # The value carries a fragment.
+    FRAGMENT = auto()
+    # The value cannot be read as a URI at all.
+    MALFORMED = auto()
+    # The value states no scheme, so it is relative rather than absolute.
+    RELATIVE = auto()
 
 
 def _scheme_and_host(url: str) -> tuple[str, str] | None:
@@ -203,6 +238,42 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
         name: values[0] if len(values) == 1 else values
         for name, values in parse_qs(query, keep_blank_values=True).items()
     }
+
+
+def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
+    """Report why a value cannot serve as an RFC 8707 resource indicator, if it cannot.
+
+    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it states a scheme, it carries no
+    fragment, and its authority, path and query are each written in the characters RFC 3986 allows them.
+    A value carrying no fault binds a token's audience to the service it names.
+
+    NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so each
+    component is read here rather than left to it. The components are checked separately because a
+    bracket is a URI character in an authority and no part of a path or a query. The value's own
+    characters are read before it is parsed at all, because that parser deletes some and strips others
+    off both ends, and a component it reports no longer carries what it removed.
+
+    Args:
+        resource: The value to read.
+
+    Returns:
+        The fault that disqualifies the value, or None when it qualifies.
+    """
+    if "#" in resource:
+        return ResourceIndicatorFault.FRAGMENT
+    if not _URI_REPERTOIRE.match(resource):
+        return ResourceIndicatorFault.MALFORMED
+    try:
+        parts = urlsplit(resource)
+    except ValueError:
+        return ResourceIndicatorFault.MALFORMED
+    if not parts.scheme:
+        return ResourceIndicatorFault.RELATIVE
+    if not _URI_SCHEME.match(parts.scheme) or not _URI_AUTHORITY.match(parts.netloc):
+        return ResourceIndicatorFault.MALFORMED
+    if not _URI_PATH_OR_QUERY.match(parts.path) or not _URI_PATH_OR_QUERY.match(parts.query):
+        return ResourceIndicatorFault.MALFORMED
+    return None
 
 
 def url_host(url: str) -> str:

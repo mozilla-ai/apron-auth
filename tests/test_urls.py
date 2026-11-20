@@ -7,15 +7,18 @@ held to its answer here rather than only through a model that happens to call it
 from __future__ import annotations
 
 import ipaddress
+import string
 
 import pytest
 
 from apron_auth._urls import (
+    ResourceIndicatorFault,
     is_loopback_host,
     is_plain_http,
     matches_suffix,
     parse_ip,
     query_parameters,
+    resource_indicator_fault,
     url_host,
     uses_allowed_transport,
     uses_secure_transport,
@@ -318,3 +321,99 @@ class TestUsesAllowedTransport:
     def test_a_port_the_standard_parser_refuses_is_refused(self) -> None:
         """The client drops this port and dials the default, so the URL states a port it never sends."""
         assert uses_allowed_transport("https://app.example.com:+443/cb", plain_http_allowed=False) is False
+
+
+class TestResourceIndicatorFault:
+    """RFC 8707 asks a resource indicator for an absolute URI, which is a scheme and no fragment."""
+
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            pytest.param("https://mcp.example.com", id="an origin"),
+            pytest.param("https://mcp.example.com/server/mcp", id="a path under one"),
+            pytest.param("https://mcp.example.com/mcp?tenant=acme", id="a query, which RFC 8707 permits"),
+            pytest.param("urn:example:mcp-service", id="a URN, which names no authority"),
+            pytest.param("https://mcp.example.com:8443/mcp", id="an explicit port"),
+            pytest.param("https://mcp.example.com/ok%2Fpath", id="a percent escape"),
+            pytest.param("https://mcp.example.com/p(1)!$&'*+,;=:@", id="the sub-delimiters RFC 3986 allows"),
+            pytest.param("https://[::1]/mcp", id="an address literal in brackets"),
+            pytest.param("https://[::1]:8443/mcp", id="an address literal with a port"),
+            pytest.param("https://[fe80::1%25eth0]/mcp", id="a zone identifier, which RFC 6874 escapes"),
+            pytest.param("https://mcp.example.com/a%5Bb%5D", id="a bracket percent-encoded in a path"),
+            pytest.param("https://user@mcp.example.com/mcp", id="userinfo, which this rule does not police"),
+        ],
+    )
+    def test_an_absolute_uri_carries_no_fault(self, resource: str) -> None:
+        assert resource_indicator_fault(resource) is None
+
+    @pytest.mark.parametrize(
+        ("resource", "expected"),
+        [
+            pytest.param("https://mcp.example.com#tag", ResourceIndicatorFault.FRAGMENT, id="a fragment"),
+            pytest.param("https://mcp.example.com#", ResourceIndicatorFault.FRAGMENT, id="an empty fragment"),
+            pytest.param("/mcp", ResourceIndicatorFault.RELATIVE, id="an absolute path"),
+            pytest.param("mcp.example.com/mcp", ResourceIndicatorFault.RELATIVE, id="an authority with no scheme"),
+            pytest.param("", ResourceIndicatorFault.RELATIVE, id="nothing at all"),
+            pytest.param("https://[broken", ResourceIndicatorFault.MALFORMED, id="an authority that cannot be read"),
+            pytest.param("https://mcp.example.com/a b", ResourceIndicatorFault.MALFORMED, id="a raw space"),
+            pytest.param("https://mcp.example.com/a[b]", ResourceIndicatorFault.MALFORMED, id="raw brackets in a path"),
+            pytest.param(
+                "https://mcp.example.com/mcp?q=[1]", ResourceIndicatorFault.MALFORMED, id="raw brackets in a query"
+            ),
+            pytest.param(
+                "urn:example:a[b]", ResourceIndicatorFault.MALFORMED, id="raw brackets where no authority holds them"
+            ),
+            pytest.param(
+                "https://mcp.example.com:abc/mcp", ResourceIndicatorFault.MALFORMED, id="a port that is no number"
+            ),
+            pytest.param(" https://mcp.example.com/mcp", ResourceIndicatorFault.MALFORMED, id="a leading space"),
+            pytest.param("https://mcp.example.com/mcp ", ResourceIndicatorFault.MALFORMED, id="a trailing space"),
+            pytest.param("\x00https://mcp.example.com/mcp", ResourceIndicatorFault.MALFORMED, id="a leading null"),
+            pytest.param("\x1fhttps://mcp.example.com/mcp", ResourceIndicatorFault.MALFORMED, id="a leading control"),
+            pytest.param("https://mcp.example.com/mcp\x7f", ResourceIndicatorFault.MALFORMED, id="a delete character"),
+            pytest.param("https://mcp.example.com/a\tb", ResourceIndicatorFault.MALFORMED, id="a tab"),
+            pytest.param("https://mcp.example.com/a\nb", ResourceIndicatorFault.MALFORMED, id="a line break"),
+            pytest.param(
+                "https://mcp.example.com/%zz", ResourceIndicatorFault.MALFORMED, id="a percent escape of no digits"
+            ),
+            pytest.param(
+                "https://mcp.example.com/%2", ResourceIndicatorFault.MALFORMED, id="a percent escape cut short"
+            ),
+            pytest.param(
+                "https://mcp.example.com/caf\u00e9", ResourceIndicatorFault.MALFORMED, id="a character outside ASCII"
+            ),
+        ],
+    )
+    def test_a_value_no_token_could_name_carries_its_fault(
+        self, resource: str, expected: ResourceIndicatorFault
+    ) -> None:
+        assert resource_indicator_fault(resource) is expected
+
+    def test_no_character_outside_the_uri_repertoire_is_accepted_anywhere(self) -> None:
+        """The parser deletes some characters and strips others off both ends, so the value is read first.
+
+        A rule reading only the parser's components cannot see what it removed, and the set it removes is
+        the parser's to change. Sweeping the value itself holds the rule to RFC 3986 rather than to that set.
+        """
+        repertoire = set(string.ascii_letters + string.digits + "-._~!$&'()*+,;=:/?#[]@%")
+        positions = (
+            "{c}https://mcp.example.com/a",
+            "https://mcp.example.com/a{c}",
+            "https://mcp.example.com/a{c}b",
+            "https://mcp.example.com/a?x={c}",
+            "https://mcp{c}.example.com/a",
+        )
+        accepted = [
+            template.format(c=character)
+            for code_point in range(0x300)
+            for character in (chr(code_point),)
+            # The fragment check owns this one and reports a fault of its own.
+            if character != "#" and character not in repertoire
+            for template in positions
+            if resource_indicator_fault(template.format(c=character)) is None
+        ]
+        assert accepted == []
+
+    def test_a_fragment_is_read_before_the_rest(self) -> None:
+        """A value with both faults reports the fragment, so one message names one condition."""
+        assert resource_indicator_fault("/mcp#tag") is ResourceIndicatorFault.FRAGMENT

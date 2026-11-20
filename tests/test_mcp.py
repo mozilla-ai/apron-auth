@@ -78,6 +78,16 @@ def _origin_asm_payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
+def _prm_payload(**overrides: object) -> dict[str, object]:
+    """Return a protected-resource document, which RFC 9728 requires to declare its resource identifier."""
+    payload: dict[str, object] = {
+        "resource": _ORIGIN,
+        "authorization_servers": ["https://auth.example.com"],
+    }
+    payload.update(overrides)
+    return payload
+
+
 def _asm_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "issuer": "https://auth.example.com",
@@ -162,12 +172,12 @@ class TestToProviderConfig:
 
     def test_raises_when_server_requires_unsupported_auth_method(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="c", client_secret=SecretStr("s")))
 
     def test_public_client_rejected_when_none_not_advertised(self) -> None:
         meta = self._meta(token_endpoint_auth_methods=["client_secret_basic"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="c"))
 
     def test_registered_method_overrides_advertised_derivation(self) -> None:
@@ -187,7 +197,7 @@ class TestToProviderConfig:
         assert config.client_secret is None
 
     def test_registered_confidential_method_without_secret_raises(self) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(
                 self._meta(),
                 ClientRegistration(client_id="c", token_endpoint_auth_method="client_secret_basic"),
@@ -196,7 +206,7 @@ class TestToProviderConfig:
     def test_registered_none_with_secret_raises(self) -> None:
         # A public-client registration paired with a secret is contradictory;
         # emitting it would attach the secret to public-client requests.
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(
                 self._meta(),
                 ClientRegistration(client_id="c", client_secret=SecretStr("s"), token_endpoint_auth_method="none"),
@@ -312,7 +322,7 @@ class TestToProviderConfig:
     def test_cimd_public_client_without_none_method_fails_fast(self) -> None:
         """A CIMD server offering only private_key_jwt (no 'none') must not yield a public config."""
         meta = self._meta(token_endpoint_auth_methods=["private_key_jwt"])
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             to_provider_config(meta, ClientRegistration(client_id="https://app.example.com/c.json"))
 
 
@@ -429,7 +439,7 @@ class TestSelectAuthMethod:
         ],
     )
     def test_raises_when_confidential_methods_unavailable(self, advertised: list[str]) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _select_auth_method(SecretStr("s"), advertised)
 
     @pytest.mark.parametrize(
@@ -441,7 +451,7 @@ class TestSelectAuthMethod:
         ],
     )
     def test_public_client_raises_when_none_not_advertised(self, advertised: list[str]) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _select_auth_method(None, advertised)
 
     def test_registered_method_wins_over_advertised(self) -> None:
@@ -495,13 +505,13 @@ class TestHonorRegisteredAuthMethod:
     def test_raises_when_the_secret_disagrees(
         self, registered: TokenEndpointAuthMethod, secret: SecretStr | None
     ) -> None:
-        with pytest.raises(McpDiscoveryError):
+        with pytest.raises(ConfigurationError):
             _honor_registered_auth_method(registered, secret)
 
 
 class TestDiscover:
     async def test_happy_path_root_wellknown(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
         assert meta.authorize_url == "https://auth.example.com/authorize"
@@ -510,14 +520,14 @@ class TestDiscover:
         assert meta.scopes_supported == ["read", "write"]
 
     async def test_path_scoped_prm_preferred(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_PATH, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com/mcp")
         assert meta.token_url == "https://auth.example.com/token"
 
     async def test_prm_falls_back_to_root_after_404(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_PATH, status_code=404)
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com/mcp")
         assert meta.authorize_url == "https://auth.example.com/authorize"
@@ -527,7 +537,7 @@ class TestDiscover:
     ) -> None:
         """A body that nests too deeply to decode is skipped like any other body that cannot be read."""
         httpx_mock.add_response(url=_PRM_PATH, content=b"[" * 100_000 + b"]" * 100_000)
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
             meta = await discover("https://mcp.example.com/mcp")
@@ -540,7 +550,7 @@ class TestDiscover:
     async def test_resource_metadata_hint_tried_first(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             url="https://mcp.example.com/custom-prm",
-            json={"authorization_servers": ["https://auth.example.com"]},
+            json=_prm_payload(),
         )
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover(
@@ -550,7 +560,7 @@ class TestDiscover:
         assert meta.token_url == "https://auth.example.com/token"
 
     async def test_asm_oidc_fallback(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, status_code=404)
         httpx_mock.add_response(url=_ASM_OIDC, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
@@ -558,7 +568,7 @@ class TestDiscover:
 
     async def test_an_outage_on_one_candidate_makes_discovery_retryable(self, httpx_mock: HTTPXMock) -> None:
         """A server error on the primary metadata URL is not hidden by the fallback's usual 404."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, status_code=503)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
         with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
@@ -581,7 +591,7 @@ class TestDiscover:
     async def test_a_status_on_every_candidate_names_what_it_showed(
         self, httpx_mock: HTTPXMock, status: int, kind: FailureKind, fault: str
     ) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, status_code=status)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=status)
         with pytest.raises(McpDiscoveryError, match=fault) as exc_info:
@@ -591,7 +601,7 @@ class TestDiscover:
 
     async def test_an_unreadable_body_on_every_candidate_is_a_refusal(self, httpx_mock: HTTPXMock) -> None:
         """A document that answers but does not decode is told apart from one the server does not publish."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
         httpx_mock.add_response(url=_ASM_OIDC, json=["not", "an", "object"])
         with pytest.raises(McpDiscoveryError, match="is not a JSON object") as exc_info:
@@ -601,7 +611,7 @@ class TestDiscover:
 
     async def test_an_outage_decides_over_a_candidate_that_answered(self, httpx_mock: HTTPXMock) -> None:
         """A corrupt document does not settle a fetch whose other candidate may still serve one."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
         httpx_mock.add_response(url=_ASM_OIDC, status_code=503)
         with pytest.raises(McpDiscoveryError, match="could not be fetched") as exc_info:
@@ -611,7 +621,7 @@ class TestDiscover:
 
     async def test_a_not_found_naming_a_time_to_come_back_decides(self, httpx_mock: HTTPXMock) -> None:
         """It is read as temporary, so it decides over a corrupt document although it says least."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, content=b"not json")
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404, headers={"Retry-After": "30"})
         with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
@@ -634,7 +644,7 @@ class TestDiscover:
         self, httpx_mock: HTTPXMock, status: int, content: bytes, kind: FailureKind, fault: str
     ) -> None:
         """A not-found says least about the document, so a candidate that showed more decides over it."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, status_code=status, content=content)
         httpx_mock.add_response(url=_ASM_OIDC, status_code=404)
         with pytest.raises(McpDiscoveryError, match=fault) as exc_info:
@@ -643,7 +653,7 @@ class TestDiscover:
         assert exc_info.value.retryable is False
 
     async def test_registration_and_revocation_surfaced(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(
             url=_ASM_ROOT,
             json=_asm_payload(
@@ -664,7 +674,7 @@ class TestDiscover:
         """An empty first entry must not mask a valid later authorization server."""
         httpx_mock.add_response(
             url=_PRM_ROOT,
-            json={"authorization_servers": ["", "https://auth.example.com"]},
+            json=_prm_payload(authorization_servers=["", "https://auth.example.com"]),
         )
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
@@ -675,14 +685,14 @@ class TestDiscover:
     ) -> None:
         """A skipped discovery candidate is logged at debug with a non-sensitive reason."""
         httpx_mock.add_response(url=_PRM_PATH, status_code=404)
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
             await discover("https://mcp.example.com/mcp")
         assert any("protected resource metadata returned HTTP 404" in message for message in caplog.messages)
 
     async def test_issuer_and_iss_support_captured(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(
             url=_ASM_ROOT,
             json=_asm_payload(
@@ -695,7 +705,7 @@ class TestDiscover:
         assert meta.iss_parameter_supported is True
 
     async def test_iss_support_default_when_absent(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
         assert meta.iss_parameter_supported is False
@@ -704,7 +714,7 @@ class TestDiscover:
         """Metadata that declares no issuer cannot be bound to the authorization server it came from."""
         payload = _asm_payload()
         del payload["issuer"]
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
         with pytest.raises(McpDiscoveryError, match="declares no issuer") as exc_info:
             await discover("https://mcp.example.com")
@@ -712,7 +722,7 @@ class TestDiscover:
 
     @pytest.mark.parametrize("issuer", [None, 42, ""], ids=["null", "not a string", "empty"])
     async def test_issuer_that_is_not_a_name_is_refused_as_absent(self, httpx_mock: HTTPXMock, issuer: object) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
         with pytest.raises(McpDiscoveryError, match="declares no issuer"):
             await discover("https://mcp.example.com")
@@ -732,7 +742,7 @@ class TestDiscover:
         self, httpx_mock: HTTPXMock, issuer: str
     ) -> None:
         """The issuer must be identical to the identifier the metadata URL was built from, with no normalization."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer=issuer))
         with pytest.raises(McpDiscoveryError, match="declares a different issuer") as exc_info:
             await discover("https://mcp.example.com")
@@ -743,7 +753,7 @@ class TestDiscover:
         self, httpx_mock: HTTPXMock
     ) -> None:
         """A declared identifier with a terminating slash is compared as declared, not as the URL was built."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://auth.example.com/"]))
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(issuer="https://auth.example.com/"))
         meta = await discover("https://mcp.example.com")
         assert meta.issuer == "https://auth.example.com/"
@@ -762,13 +772,13 @@ class TestDiscover:
         self, httpx_mock: HTTPXMock, declared: str
     ) -> None:
         """The metadata URL drops a query and a fragment, so an identifier that carries one cannot be checked."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=[declared]))
         with pytest.raises(McpDiscoveryError, match="a query or a fragment"):
             await discover("https://mcp.example.com")
 
     async def test_malformed_authorization_server_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
         """An identifier that cannot be parsed is reported as a discovery error, not as the parser's own error."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://[broken"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://[broken"]))
         with pytest.raises(McpDiscoveryError, match="malformed URL"):
             await discover("https://mcp.example.com")
 
@@ -776,7 +786,7 @@ class TestDiscover:
         """Userinfo in the identifier would be sent as credentials with the metadata request."""
         declared = "https://user:pw@auth.example.com"  # pragma: allowlist secret
         seen: list[str] = []
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": [declared]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=[declared]))
         with pytest.raises(McpDiscoveryError, match=r"userinfo \(authorization server\)"):
             await discover("https://mcp.example.com", url_validator=seen.append)
         assert len(httpx_mock.get_requests()) == 1
@@ -788,7 +798,7 @@ class TestDiscover:
         """A hint from a challenge header is refused before any request and before the caller's policy sees it."""
         hint = "https://user:pw@mcp.example.com/prm"  # pragma: allowlist secret
         seen: list[str] = []
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
 
         await discover("https://mcp.example.com", resource_metadata_url=hint, url_validator=seen.append)
@@ -799,10 +809,7 @@ class TestDiscover:
     async def test_declared_resource_with_userinfo_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """The declared resource is a document's value, so it is refused as the provider's fault."""
         resource = "https://user:pw@mcp.example.com/api"  # pragma: allowlist secret
-        httpx_mock.add_response(
-            url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"], "resource": resource}
-        )
-        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=resource))
 
         with pytest.raises(McpDiscoveryError, match=r"userinfo \(resource\)") as exc_info:
             await discover("https://mcp.example.com")
@@ -816,7 +823,7 @@ class TestDiscover:
     async def test_discovered_endpoint_with_userinfo_is_refused(self, httpx_mock: HTTPXMock, member: str) -> None:
         """The refusal names the member the document states, which is the name an operator reads there."""
         endpoint = "https://user:pw@auth.example.com/endpoint"  # pragma: allowlist secret
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(**{member: endpoint}))
 
         with pytest.raises(McpDiscoveryError, match=rf"userinfo \({member}\)") as exc_info:
@@ -827,7 +834,7 @@ class TestDiscover:
     async def test_issuer_is_checked_before_any_other_member_is_read(self, httpx_mock: HTTPXMock) -> None:
         """A document with the wrong issuer is untrusted as a whole, so its endpoints never reach the URL policy."""
         seen: list[str] = []
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(
             url=_ASM_ROOT,
             json=_asm_payload(issuer="https://evil.example.com", authorization_endpoint="https://evil.example.com/a"),
@@ -837,7 +844,9 @@ class TestDiscover:
         assert "https://evil.example.com/a" not in seen
 
     async def test_issuer_of_a_path_scoped_authorization_server_includes_the_path(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant"]})
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://auth.example.com/tenant"])
+        )
         httpx_mock.add_response(
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com/tenant"),
@@ -848,7 +857,9 @@ class TestDiscover:
     async def test_issuer_of_a_path_scoped_authorization_server_without_the_path_is_refused(
         self, httpx_mock: HTTPXMock
     ) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant"]})
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://auth.example.com/tenant"])
+        )
         httpx_mock.add_response(
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com"),
@@ -858,7 +869,9 @@ class TestDiscover:
 
     async def test_identifier_with_a_terminating_slash_is_fetched_without_it(self, httpx_mock: HTTPXMock) -> None:
         """The slash is removed only to build the metadata URL; the declared identifier still has to match."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant/"]})
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://auth.example.com/tenant/"])
+        )
         httpx_mock.add_response(
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com/tenant/"),
@@ -867,7 +880,9 @@ class TestDiscover:
         assert meta.issuer == "https://auth.example.com/tenant/"
 
     async def test_identifier_with_a_terminating_slash_is_not_matched_without_it(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com/tenant/"]})
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://auth.example.com/tenant/"])
+        )
         httpx_mock.add_response(
             url="https://auth.example.com/.well-known/oauth-authorization-server/tenant",
             json=_asm_payload(issuer="https://auth.example.com/tenant"),
@@ -876,7 +891,7 @@ class TestDiscover:
             await discover("https://mcp.example.com")
 
     async def test_supports_cimd_captured(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(
             url=_ASM_ROOT,
             json=_asm_payload(client_id_metadata_document_supported=True),
@@ -885,47 +900,70 @@ class TestDiscover:
         assert meta.supports_cimd is True
 
     async def test_supports_cimd_defaults_false_when_absent(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
         assert meta.supports_cimd is False
 
     async def test_supports_cimd_false_when_not_true(self, httpx_mock: HTTPXMock) -> None:
         """A non-boolean flag value must not be read as support."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(client_id_metadata_document_supported="yes"))
         meta = await discover("https://mcp.example.com")
         assert meta.supports_cimd is False
 
     async def test_resource_identifier_captured(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url=_PRM_ROOT,
-            json={
-                "resource": "https://mcp.example.com",
-                "authorization_servers": ["https://auth.example.com"],
-            },
-        )
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="https://mcp.example.com/mcp"))
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
-        assert meta.resource == "https://mcp.example.com"
+        assert meta.resource == "https://mcp.example.com/mcp"
 
-    async def test_resource_none_when_prm_omits_it(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
-        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
-        meta = await discover("https://mcp.example.com")
-        assert meta.resource is None
+    @pytest.mark.parametrize(
+        ("resource", "expected"),
+        [
+            pytest.param(None, "declares no resource identifier", id="absent"),
+            pytest.param(123, "declares no resource identifier", id="not-a-string"),
+            pytest.param("", "declares no resource identifier", id="empty"),
+            pytest.param("https://mcp.example.com#tag", "with a fragment", id="fragment"),
+            pytest.param("/mcp", "is no absolute URI", id="relative"),
+            pytest.param("https://[broken", "malformed resource identifier", id="malformed"),
+            pytest.param("https://mcp.example.com/a b", "malformed resource identifier", id="a raw space"),
+            pytest.param("https://mcp.example.com/%zz", "malformed resource identifier", id="a bad percent escape"),
+        ],
+    )
+    async def test_a_resource_identifier_no_token_could_be_bound_to_is_refused(
+        self, httpx_mock: HTTPXMock, resource: object, expected: str
+    ) -> None:
+        """RFC 9728 requires the field, and RFC 8707 requires a value a token's audience can state."""
+        document: dict[str, object] = {"authorization_servers": ["https://auth.example.com"]}
+        if resource is not None:
+            document["resource"] = resource
+        httpx_mock.add_response(url=_PRM_ROOT, json=document)
+        with pytest.raises(McpDiscoveryError, match=expected) as exc_info:
+            await discover("https://mcp.example.com")
+        assert exc_info.value.kind is FailureKind.REFUSED
+        # The document is refused where it is read, so the authorization server is never fetched.
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_ROOT]
 
-    async def test_resource_ignored_when_not_a_string(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url=_PRM_ROOT,
-            json={"resource": 123, "authorization_servers": ["https://auth.example.com"]},
-        )
+    @pytest.mark.parametrize(
+        "resource",
+        [
+            pytest.param("urn:example:mcp-service", id="urn"),
+            pytest.param("https://mcp.example.com", id="https"),
+        ],
+    )
+    async def test_a_resource_identifier_naming_no_host_is_still_an_absolute_uri(
+        self, httpx_mock: HTTPXMock, resource: str
+    ) -> None:
+        """RFC 8707 asks for an absolute URI, which a URN is, so one is carried rather than refused."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=resource))
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com")
-        assert meta.resource is None
+        assert meta.resource == resource
+        assert to_provider_config(meta, ClientRegistration(client_id="c")).resource == resource
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         payload = _asm_payload()
         del payload["token_endpoint"]
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
@@ -934,7 +972,7 @@ class TestDiscover:
 
     async def test_endpoint_with_an_unusable_port_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
         """A server-supplied endpoint with a bad port is refused at discovery, not at the first request to it."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(token_endpoint="https://auth.example.com:99999/token"))
         with pytest.raises(McpDiscoveryError, match="malformed URL"):
             await discover("https://mcp.example.com")
@@ -952,7 +990,7 @@ class TestDiscover:
 
     async def test_non_https_authorization_server_rejected(self, httpx_mock: HTTPXMock) -> None:
         """The authorization server comes from a fetched document, so refusing it is a refusal."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["http://auth.internal"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=["http://auth.internal"]))
         with pytest.raises(McpDiscoveryError) as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
@@ -970,7 +1008,7 @@ class TestDiscover:
             await discover("https://169.254.169.254")
 
     async def test_private_ip_authorization_server_rejected(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://10.0.0.5"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://10.0.0.5"]))
         with pytest.raises(McpDiscoveryError):
             await discover("https://mcp.example.com")
 
@@ -1001,7 +1039,7 @@ class TestDiscover:
 
     async def test_url_validator_rejection_of_a_declared_endpoint_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A document's endpoint the caller's policy rejects is a refusal, not a configuration fault."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
 
         def validator(url: str) -> None:
@@ -1031,7 +1069,7 @@ class TestDiscover:
 
         def handler(request: httpx.Request) -> httpx.Response:
             if "oauth-protected-resource" in request.url.path:
-                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
+                return httpx.Response(200, json=_prm_payload())
             return httpx.Response(200, json=_asm_payload())
 
         def factory(url: str) -> httpx.MockTransport:
@@ -1055,7 +1093,9 @@ class TestDiscover:
 
     async def test_declared_url_the_client_refuses_is_a_discovery_error(self, httpx_mock: HTTPXMock) -> None:
         """A host only the HTTP client rejects is refused when a document named it, not blamed on the caller."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://\x80\x80.example.com"]})
+        httpx_mock.add_response(
+            url=_PRM_ROOT, json=_prm_payload(authorization_servers=["https://\x80\x80.example.com"])
+        )
         with pytest.raises(McpDiscoveryError, match="malformed URL") as exc_info:
             await discover("https://mcp.example.com")
         assert exc_info.value.kind is FailureKind.REFUSED
@@ -1334,7 +1374,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
         self, httpx_mock: HTTPXMock, hint: str
     ) -> None:
         """RFC 9728 makes the hint a hint, so one this library will not fetch loses its turn, not the discovery."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
 
         meta = await discover("https://mcp.example.com", resource_metadata_url=hint)
@@ -1344,7 +1384,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
     async def test_a_refused_hint_is_logged_as_a_skipped_candidate(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
 
         with caplog.at_level(logging.DEBUG, logger="apron_auth.mcp"):
@@ -1365,7 +1405,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
 
     async def test_a_hint_the_callers_own_policy_refuses_loses_its_turn(self, httpx_mock: HTTPXMock) -> None:
         """A hook refusing one URL says nothing about the rest, and the hint is the one URL with a fallback."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         refused: list[str] = []
 
@@ -1386,7 +1426,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
 
         def serve(request: httpx.Request) -> httpx.Response:
             if str(request.url) == _PRM_ROOT:
-                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
+                return httpx.Response(200, json=_prm_payload())
             return httpx.Response(200, json=_asm_payload())
 
         def pinning_factory(url: str) -> httpx.MockTransport:
@@ -1432,7 +1472,7 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
         self, httpx_mock: HTTPXMock
     ) -> None:
         """That check is why a registration URL reaching the caller has already been validated once."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(
             url=_ASM_ROOT, json=_asm_payload(registration_endpoint="http://auth.example.com/register")
         )
@@ -1499,7 +1539,7 @@ class TestTheGatingMetadataListsAreParsedStrictly:
     )
     async def test_a_malformed_value_is_refused(self, httpx_mock: HTTPXMock, key: str, value: object) -> None:
         """Read leniently, a malformed value becomes an empty list, which takes the permissive branch."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(**{key: value}))
 
         with pytest.raises(McpDiscoveryError, match=f"malformed {key}") as exc_info:
@@ -1512,7 +1552,7 @@ class TestTheGatingMetadataListsAreParsedStrictly:
         """An absent member is not advertised, which the permissive branch is for."""
         payload = _asm_payload()
         del payload[key]
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=payload)
 
         meta = await discover("https://mcp.example.com")
@@ -1522,7 +1562,7 @@ class TestTheGatingMetadataListsAreParsedStrictly:
     @pytest.mark.parametrize("value", [pytest.param("read", id="a string"), pytest.param(["read", 42], id="a list")])
     async def test_an_advisory_list_is_still_read_leniently(self, httpx_mock: HTTPXMock, value: object) -> None:
         """``scopes_supported`` gates nothing, so a provider malforming it must not fail discovery."""
-        httpx_mock.add_response(url=_PRM_ROOT, json={"authorization_servers": ["https://auth.example.com"]})
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload(scopes_supported=value))
 
         meta = await discover("https://mcp.example.com")
@@ -2219,6 +2259,60 @@ class TestRegisterClient:
         assert request is not None
         assert json.loads(request.content)["application_type"] == "web"
 
+    @pytest.mark.parametrize(
+        ("redirect_uri", "application_type", "expected"),
+        [
+            pytest.param("http://127.0.0.1:8080/callback", None, "none", id="inferred-native"),
+            pytest.param(_REDIRECT_URI, None, "client_secret_post", id="inferred-nothing"),
+            pytest.param(_REDIRECT_URI, ApplicationType.WEB, "client_secret_post", id="explicit-web"),
+            pytest.param(_REDIRECT_URI, ApplicationType.NATIVE, "none", id="explicit-native"),
+            pytest.param("http://127.0.0.1:8080/callback", ApplicationType.WEB, "client_secret_post", id="web-wins"),
+        ],
+    )
+    async def test_the_requested_auth_method_follows_the_application_type(
+        self, httpx_mock: HTTPXMock, redirect_uri: str, application_type: ApplicationType | None, expected: str
+    ) -> None:
+        """A native client cannot keep a secret, so it asks to be registered as a public client."""
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, redirect_uri, application_type=application_type)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["token_endpoint_auth_method"] == expected
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            pytest.param("private_key_jwt", id="a method this library cannot perform"),
+            pytest.param("", id="a name no method carries"),
+            pytest.param("CLIENT_SECRET_POST", id="a member name rather than its wire name"),
+        ],
+    )
+    async def test_an_auth_method_this_library_cannot_perform_is_refused_before_any_request(
+        self, httpx_mock: HTTPXMock, method: str
+    ) -> None:
+        """The argument is the caller's own, so it is refused rather than asked for and then discarded."""
+        with pytest.raises(ConfigurationError, match="cannot perform") as exc_info:
+            await register_client(_REGISTER_URL, _REDIRECT_URI, token_endpoint_auth_method=method)  # ty: ignore
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+        assert httpx_mock.get_requests() == []
+
+    @pytest.mark.parametrize(
+        "method",
+        [
+            TokenEndpointAuthMethod.CLIENT_SECRET_BASIC,
+            TokenEndpointAuthMethod.CLIENT_SECRET_POST,
+            TokenEndpointAuthMethod.NONE,
+        ],
+    )
+    async def test_an_explicit_auth_method_wins_over_the_application_type(
+        self, httpx_mock: HTTPXMock, method: TokenEndpointAuthMethod
+    ) -> None:
+        httpx_mock.add_response(url=_REGISTER_URL, status_code=201, json={"client_id": "x"})
+        await register_client(_REGISTER_URL, "http://127.0.0.1:8080/callback", token_endpoint_auth_method=method)
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert json.loads(request.content)["token_endpoint_auth_method"] == method
+
 
 class TestCimdClientId:
     def test_valid_url_returned_unchanged(self) -> None:
@@ -2333,7 +2427,7 @@ class TestEndToEndFlow:
         def handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
             if "oauth-protected-resource" in url:
-                return httpx.Response(200, json={"authorization_servers": ["https://auth.example.com"]})
+                return httpx.Response(200, json=_prm_payload())
             if "oauth-authorization-server" in url:
                 return httpx.Response(
                     200,
