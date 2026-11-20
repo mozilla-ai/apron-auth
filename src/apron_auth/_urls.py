@@ -28,9 +28,10 @@ _URI_AUTHORITY = re.compile(
 _URI_PATH_OR_QUERY = re.compile(r"\A(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})*\Z")
 # RFC 3986 section 3.1: a scheme opens with a letter and carries letters, digits and three marks.
 _URI_SCHEME = re.compile(r"\A[A-Za-z][A-Za-z0-9+\-.]*\Z")
-# The characters the standard parser deletes before it reads a URL. RFC 3986 puts none of them in a URI,
-# and a rule reading the parser's components alone would never see one.
-_URI_STRIPPED_CHARACTERS = ("\t", "\n", "\r")
+# Every character RFC 3986 puts anywhere in a URI, read against the value as it arrived. The standard
+# parser deletes some characters and strips others off both ends before it reports a component, so a rule
+# reading components alone cannot see them, whichever set that parser decides to normalize.
+_URI_REPERTOIRE = re.compile(r"\A[A-Za-z0-9\-._~!$&'()*+,;=:/?#\[\]@%]*\Z")
 
 
 class AuthorityCredential(Enum):
@@ -248,8 +249,9 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
 
     NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so each
     component is read here rather than left to it. The components are checked separately because a
-    bracket is a URI character in an authority and no part of a path or a query, and the characters
-    that parser deletes are read off the value itself, because no component would still carry one.
+    bracket is a URI character in an authority and no part of a path or a query. The value's own
+    characters are read before it is parsed at all, because that parser deletes some and strips others
+    off both ends, and a component it reports no longer carries what it removed.
 
     Args:
         resource: The value to read.
@@ -259,7 +261,7 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """
     if "#" in resource:
         return ResourceIndicatorFault.FRAGMENT
-    if any(stripped in resource for stripped in _URI_STRIPPED_CHARACTERS):
+    if not _URI_REPERTOIRE.match(resource):
         return ResourceIndicatorFault.MALFORMED
     try:
         parts = urlsplit(resource)
