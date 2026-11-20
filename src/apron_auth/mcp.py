@@ -132,11 +132,26 @@ class _Candidate(NamedTuple):
             a refusal of it is a fault in the caller's own configuration.
         is_hint: The URL is a hint, so a refusal of it leaves the remaining candidates to try. A hint is
             what the well-known locations are the fallback for.
+        must_declare: The resource identifier a document served at this URL must declare, or None where
+            this fetch holds a document to no identifier of its own.
     """
 
     url: str
     caller_supplied: bool
     is_hint: bool
+    must_declare: str | None
+
+
+class _FetchedMetadata(NamedTuple):
+    """A metadata document and the candidate that served it.
+
+    Attributes:
+        document: The decoded document.
+        candidate: The candidate whose URL served it, which decides what the document must declare.
+    """
+
+    document: dict[str, Any]
+    candidate: _Candidate
 
 
 async def discover(
@@ -225,7 +240,7 @@ async def discover(
         auth_server = _origin(server_url)
         _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=True)
     else:
-        resource_meta = fetched
+        resource_meta = fetched.document
         auth_servers = resource_meta.get("authorization_servers")
         auth_server = ""
         if isinstance(auth_servers, list):
@@ -239,18 +254,19 @@ async def discover(
         if "?" in auth_server or "#" in auth_server:
             msg = "protected resource metadata declares an authorization server with a query or a fragment"
             raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-        resource = _declared_resource(resource_meta)
+        resource = _declared_resource(resource_meta, fetched.candidate.must_declare)
 
     asm_document = "authorization server metadata"
-    server_meta = await _fetch_first_metadata(
+    fetched_server_meta = await _fetch_first_metadata(
         _asm_candidates(auth_server, caller_supplied=resource_meta is None),
         url_validator,
         transport_factory,
         limits,
         asm_document,
     )
-    if isinstance(server_meta, _MetadataOutcome):
-        raise _no_document_error(asm_document, server_meta)
+    if isinstance(fetched_server_meta, _MetadataOutcome):
+        raise _no_document_error(asm_document, fetched_server_meta)
+    server_meta = fetched_server_meta.document
     if resource_meta is None:
         auth_server = _origin_issuer(server_meta, auth_server)
     try:
@@ -584,7 +600,7 @@ def cimd_client_id(url: str) -> str:
     return url
 
 
-def _declared_resource(document: dict[str, Any]) -> str:
+def _declared_resource(document: dict[str, Any], must_declare: str | None) -> str:
     """Return the resource identifier a protected-resource document declares.
 
     RFC 9728 section 2 makes ``resource`` required, and RFC 8707 section 2 makes it an absolute URI
@@ -592,15 +608,22 @@ def _declared_resource(document: dict[str, Any]) -> str:
     A document stating none, or stating one no audience could name, is refused rather than carried
     onward as an absent indicator, which would silently drop the binding.
 
+    A document naming a service other than the one it came from is refused, which is the impersonation
+    defense of RFC 9728 section 7.3: an identifier naming another service would otherwise bind a token
+    to that service and leave it replayable there. The comparison is exact, as RFC 9728 section 6
+    requires and as the issuer rule beside it already performs it.
+
     Args:
         document: The decoded protected-resource metadata.
+        must_declare: The identifier the document must declare, or None to hold it to none.
 
     Returns:
         The resource identifier the document declares.
 
     Raises:
         McpDiscoveryError: If the document declares no resource identifier, declares one that is no
-            absolute URI without a fragment, or declares one carrying a credential in its authority.
+            absolute URI without a fragment, declares one carrying a credential in its authority, or
+            declares one naming a service other than the one that served the document.
     """
     resource = document.get("resource")
     if not isinstance(resource, str) or not resource:
@@ -619,6 +642,9 @@ def _declared_resource(document: dict[str, Any]) -> str:
                 assert_never(fault)
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
     _require_no_authority_credential(resource, subject="resource", caller_supplied=False)
+    if must_declare is not None and resource != must_declare:
+        msg = "protected resource metadata declares a resource identifier that names another resource"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
     return resource
 
 
@@ -1035,17 +1061,35 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
 
     The hint's value is the server's: the caller reads it out of a ``WWW-Authenticate`` challenge and only
     passes it on. RFC 9728 makes it a hint, and the well-known locations below it are its fallback.
+
+    Each candidate carries the one resource identifier a document served there must declare, which is what
+    refuses a document naming another service. A well-known location stands for the identifier the
+    well-known segment was inserted into, and RFC 9728 section 3.3 holds a document to it. A hint stands
+    for ``server_url``, which the same section names as the URL the client requested the server at.
+
+    A terminating slash on the path is removed before the well-known segment is inserted, as RFC 9728
+    section 3.1 requires, so the location and the identifier it stands for both drop it.
     """
     candidates: list[_Candidate] = []
     if resource_metadata_url:
-        candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True))
+        candidates.append(
+            _Candidate(resource_metadata_url, caller_supplied=False, is_hint=True, must_declare=server_url)
+        )
     parsed = urlsplit(server_url)
     base = f"{parsed.scheme}://{parsed.netloc}"
-    if parsed.path and parsed.path != "/":
+    path = parsed.path.rstrip("/")
+    if path:
         candidates.append(
-            _Candidate(urljoin(base, f"{_WELL_KNOWN_PRM}{parsed.path}"), caller_supplied=True, is_hint=False)
+            _Candidate(
+                urljoin(base, f"{_WELL_KNOWN_PRM}{path}"),
+                caller_supplied=True,
+                is_hint=False,
+                must_declare=f"{base}{path}",
+            )
         )
-    candidates.append(_Candidate(urljoin(base, _WELL_KNOWN_PRM), caller_supplied=True, is_hint=False))
+    candidates.append(
+        _Candidate(urljoin(base, _WELL_KNOWN_PRM), caller_supplied=True, is_hint=False, must_declare=base)
+    )
     return candidates
 
 
@@ -1075,7 +1119,9 @@ def _asm_candidates(auth_server: str, *, caller_supplied: bool) -> list[_Candida
         if path
         else [urljoin(base, _WELL_KNOWN_ASM), urljoin(base, _WELL_KNOWN_OIDC)]
     )
-    return [_Candidate(url, caller_supplied=caller_supplied, is_hint=False) for url in urls]
+    # RFC 8414 section 3.3 holds an authorization server document to its issuer through a separate rule,
+    # so no candidate here states an identifier of its own.
+    return [_Candidate(url, caller_supplied=caller_supplied, is_hint=False, must_declare=None) for url in urls]
 
 
 def _reported_outcome(observed: Sequence[_MetadataOutcome]) -> _MetadataOutcome:
@@ -1206,7 +1252,7 @@ async def _fetch_first_metadata(
     transport_factory: TransportFactory | None,
     limits: RequestLimits,
     what: str,
-) -> dict[str, Any] | _MetadataOutcome:
+) -> _FetchedMetadata | _MetadataOutcome:
     """Fetch the first candidate URL that yields a JSON object, or state why none did.
 
     Tries each URL in order through a per-URL client from ``transport_factory``,
@@ -1223,8 +1269,8 @@ async def _fetch_first_metadata(
         what: The document this fetches, for the error and the debug lines.
 
     Returns:
-        The first candidate's body that is a JSON object, or, where no candidate yielded one, the fault
-        that says most about the document and what it says about a retry.
+        The first candidate's body that is a JSON object, with the candidate that served it, or, where no
+        candidate yielded one, the fault that says most about the document and what it says about a retry.
 
     Raises:
         ConfigurationError: If a candidate the caller chose, and that is no hint, cannot be used.
@@ -1277,7 +1323,7 @@ async def _fetch_first_metadata(
                 observed.append(unreadable)
                 continue
             if isinstance(payload, dict):
-                return payload
+                return _FetchedMetadata(payload, candidate)
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
             observed.append(unreadable)
     return _reported_outcome(observed)
