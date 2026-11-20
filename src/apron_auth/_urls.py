@@ -7,11 +7,16 @@ A resource indicator is the exception, because RFC 8707 accepts any absolute URI
 from __future__ import annotations
 
 import ipaddress
+import re
 import socket
 from enum import Enum, auto
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+
+# Every character RFC 3986 section 2 allows in a URI outside its fragment, a percent escape written whole.
+# A fragment's own delimiter is left out, because a rule that refuses one reads it before reaching this.
+_URI_CHARACTERS = re.compile(r"\A(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?\[\]]|%[0-9A-Fa-f]{2})*\Z")
 
 
 class AuthorityCredential(Enum):
@@ -223,8 +228,12 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
 def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """Report why a value cannot serve as an RFC 8707 resource indicator, if it cannot.
 
-    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it states a scheme and
-    carries no fragment. A value carrying no fault binds a token's audience to the service it names.
+    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it is written in the characters
+    section 2 allows, it states a scheme, and it carries no fragment.
+    A value carrying no fault binds a token's audience to the service it names.
+
+    NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so the
+    characters are read here rather than left to it.
 
     Args:
         resource: The value to read.
@@ -234,6 +243,8 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """
     if "#" in resource:
         return ResourceIndicatorFault.FRAGMENT
+    if not _URI_CHARACTERS.match(resource):
+        return ResourceIndicatorFault.MALFORMED
     try:
         scheme = urlparse(resource).scheme
     except ValueError:

@@ -927,6 +927,8 @@ class TestDiscover:
             pytest.param("https://mcp.example.com#tag", "with a fragment", id="fragment"),
             pytest.param("/mcp", "is no absolute URI", id="relative"),
             pytest.param("https://[broken", "malformed resource identifier", id="malformed"),
+            pytest.param("https://mcp.example.com/a b", "malformed resource identifier", id="a raw space"),
+            pytest.param("https://mcp.example.com/%zz", "malformed resource identifier", id="a bad percent escape"),
         ],
     )
     async def test_a_resource_identifier_no_token_could_be_bound_to_is_refused(
