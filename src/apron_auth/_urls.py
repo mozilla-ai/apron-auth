@@ -10,13 +10,27 @@ import ipaddress
 import re
 import socket
 from enum import Enum, auto
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 import httpx
 
-# Every character RFC 3986 section 2 allows in a URI outside its fragment, a percent escape written whole.
-# A fragment's own delimiter is left out, because a rule that refuses one reads it before reaching this.
-_URI_CHARACTERS = re.compile(r"\A(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?\[\]]|%[0-9A-Fa-f]{2})*\Z")
+# RFC 3986 section 3.2: an authority is an optional userinfo, a host and an optional port. A bracket is
+# written only around an address literal, which is the one place section 3 puts one. A literal carries
+# percent escapes too, because RFC 6874 writes a zone identifier after an escaped delimiter.
+_URI_AUTHORITY = re.compile(
+    r"\A(?:(?:[A-Za-z0-9\-._~!$&'()*+,;=:]|%[0-9A-Fa-f]{2})*@)?"
+    r"(?:\[(?:[A-Za-z0-9\-._~!$&'()*+,;=:]|%[0-9A-Fa-f]{2})+\]"
+    r"|(?:[A-Za-z0-9\-._~!$&'()*+,;=]|%[0-9A-Fa-f]{2})*)"
+    r"(?::[0-9]*)?\Z"
+)
+# RFC 3986 sections 3.3 and 3.4: the characters a path or a query carries, a percent escape written whole.
+# A bracket is no part of either, so one outside an authority is not a URI however the parser reads it.
+_URI_PATH_OR_QUERY = re.compile(r"\A(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/?]|%[0-9A-Fa-f]{2})*\Z")
+# RFC 3986 section 3.1: a scheme opens with a letter and carries letters, digits and three marks.
+_URI_SCHEME = re.compile(r"\A[A-Za-z][A-Za-z0-9+\-.]*\Z")
+# The characters the standard parser deletes before it reads a URL. RFC 3986 puts none of them in a URI,
+# and a rule reading the parser's components alone would never see one.
+_URI_STRIPPED_CHARACTERS = ("\t", "\n", "\r")
 
 
 class AuthorityCredential(Enum):
@@ -228,12 +242,14 @@ def query_parameters(url: str) -> dict[str, str | list[str]]:
 def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """Report why a value cannot serve as an RFC 8707 resource indicator, if it cannot.
 
-    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it is written in the characters
-    section 2 allows, it states a scheme, and it carries no fragment.
+    RFC 8707 section 2 requires an absolute URI (RFC 3986 section 4.3): it states a scheme, it carries no
+    fragment, and its authority, path and query are each written in the characters RFC 3986 allows them.
     A value carrying no fault binds a token's audience to the service it names.
 
-    NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so the
-    characters are read here rather than left to it.
+    NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so each
+    component is read here rather than left to it. The components are checked separately because a
+    bracket is a URI character in an authority and no part of a path or a query, and the characters
+    that parser deletes are read off the value itself, because no component would still carry one.
 
     Args:
         resource: The value to read.
@@ -243,14 +259,18 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     """
     if "#" in resource:
         return ResourceIndicatorFault.FRAGMENT
-    if not _URI_CHARACTERS.match(resource):
+    if any(stripped in resource for stripped in _URI_STRIPPED_CHARACTERS):
         return ResourceIndicatorFault.MALFORMED
     try:
-        scheme = urlparse(resource).scheme
+        parts = urlsplit(resource)
     except ValueError:
         return ResourceIndicatorFault.MALFORMED
-    if not scheme:
+    if not parts.scheme:
         return ResourceIndicatorFault.RELATIVE
+    if not _URI_SCHEME.match(parts.scheme) or not _URI_AUTHORITY.match(parts.netloc):
+        return ResourceIndicatorFault.MALFORMED
+    if not _URI_PATH_OR_QUERY.match(parts.path) or not _URI_PATH_OR_QUERY.match(parts.query):
+        return ResourceIndicatorFault.MALFORMED
     return None
 
 

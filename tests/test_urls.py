@@ -336,6 +336,10 @@ class TestResourceIndicatorFault:
             pytest.param("https://mcp.example.com/ok%2Fpath", id="a percent escape"),
             pytest.param("https://mcp.example.com/p(1)!$&'*+,;=:@", id="the sub-delimiters RFC 3986 allows"),
             pytest.param("https://[::1]/mcp", id="an address literal in brackets"),
+            pytest.param("https://[::1]:8443/mcp", id="an address literal with a port"),
+            pytest.param("https://[fe80::1%25eth0]/mcp", id="a zone identifier, which RFC 6874 escapes"),
+            pytest.param("https://mcp.example.com/a%5Bb%5D", id="a bracket percent-encoded in a path"),
+            pytest.param("https://user@mcp.example.com/mcp", id="userinfo, which this rule does not police"),
         ],
     )
     def test_an_absolute_uri_carries_no_fault(self, resource: str) -> None:
@@ -351,6 +355,10 @@ class TestResourceIndicatorFault:
             pytest.param("", ResourceIndicatorFault.RELATIVE, id="nothing at all"),
             pytest.param("https://[broken", ResourceIndicatorFault.MALFORMED, id="an authority that cannot be read"),
             pytest.param("https://mcp.example.com/a b", ResourceIndicatorFault.MALFORMED, id="a raw space"),
+            pytest.param("https://mcp.example.com/a[b]", ResourceIndicatorFault.MALFORMED, id="raw brackets in a path"),
+            pytest.param(
+                "https://mcp.example.com/mcp?q=[1]", ResourceIndicatorFault.MALFORMED, id="raw brackets in a query"
+            ),
             pytest.param("https://mcp.example.com/a\tb", ResourceIndicatorFault.MALFORMED, id="a tab"),
             pytest.param("https://mcp.example.com/a\nb", ResourceIndicatorFault.MALFORMED, id="a line break"),
             pytest.param(
