@@ -209,7 +209,8 @@ async def discover(
         ConfigurationError: If a URL the caller chose is rejected: ``server_url``, a
             protected-resource metadata URL derived from it, or, where the origin is
             read as the authorization server, that origin and the metadata URLs
-            derived from it.
+            derived from it. ``server_url`` is rejected where it names no resource
+            identifier a token's audience could name.
         McpDiscoveryError: If a URL a fetched document declares is rejected, no
             metadata document can be fetched, a required field is absent, the
             protected-resource metadata declares a resource identifier that is no
@@ -1064,6 +1065,37 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
         raise error_cls(msg, kind=kind) from exc
 
 
+def _resource_identifier(server_url: str) -> str:
+    """Return the RFC 9728 resource identifier a server URL names, in the one form that identifies it.
+
+    The authority is the origin's, so neither the case of the host nor a port the scheme makes default
+    decides which resource is named. The path has its dot segments resolved and any terminating slash
+    removed, which RFC 3986 section 5.2.4 and RFC 9728 section 3.1 require. The query is part of the
+    identifier, because RFC 9728 section 3 inserts the well-known segment ahead of it.
+
+    Args:
+        server_url: A URL whose authority the HTTP client can read, and whose port this library has
+            accepted.
+
+    Returns:
+        The resource identifier, which a token's audience can name.
+
+    Raises:
+        ConfigurationError: If the identifier states a character RFC 3986 does not allow in it. The
+            identifier derives from an argument the caller holds, so the fault is the caller's.
+    """
+    parsed = urlsplit(server_url)
+    origin = _origin(server_url)
+    # The leading dot keeps the reference relative, so a path opening with a second slash reads as a path
+    # rather than an authority and cannot name another host.
+    path = urlsplit(urljoin(f"{origin}/", f".{parsed.path}")).path.rstrip("/")
+    identifier = f"{origin}{path}?{parsed.query}" if parsed.query else f"{origin}{path}"
+    if resource_indicator_fault(identifier) is not None:
+        msg = "MCP OAuth requires a server URL that names a resource identifier (server_url)"
+        raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
+    return identifier
+
+
 def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[_Candidate[str]]:
     """Return the ordered RFC 9728 protected-resource-metadata URLs to try, each with its source.
 
@@ -1074,18 +1106,16 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     refuses a document naming another service. RFC 9728 section 3.3 holds a well-known location to the
     identifier the well-known segment was inserted into, and a hint to the identifier ``server_url`` names.
 
-    The identifier is settled first and the location is built from it, so a location and the identifier it
-    stands for cannot disagree about the resource. The identifier states the authority in the one form
-    that identifies it, resolves the dot segments in the path and drops a terminating slash, as RFC 3986
-    section 5.2.4 and RFC 9728 section 3.1 require, and keeps the query, which RFC 9728 section 3 inserts
-    the well-known segment ahead of. A location is dialed with the authority its own source wrote.
+    NOTE: A location is dialed with the authority its own source wrote, so a caller's policy and the
+    transport read the string they were given rather than a rewriting of it.
+
+    Raises:
+        ConfigurationError: If ``server_url`` names no usable resource identifier.
     """
     parsed = urlsplit(server_url)
+    scoped = _resource_identifier(server_url)
     origin = _origin(server_url)
-    # The leading dot keeps the reference relative, so a path opening with a second slash cannot read as
-    # an authority and name another host.
-    path = urlsplit(urljoin(f"{origin}/", f".{parsed.path}")).path.rstrip("/")
-    scoped = f"{origin}{path}?{parsed.query}" if parsed.query else f"{origin}{path}"
+    path = urlsplit(scoped).path
 
     candidates: list[_Candidate[str]] = []
     if resource_metadata_url:

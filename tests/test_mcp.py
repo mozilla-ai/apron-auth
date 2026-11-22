@@ -1201,6 +1201,12 @@ class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
         meta = await discover("https://MCP.Example.com/mcp")
         assert meta.resource == "https://mcp.example.com/mcp"
 
+    async def test_a_server_url_no_audience_could_name_is_refused_before_any_request(self) -> None:
+        """A document declaring that identifier would be correct, so the fault is not the server's."""
+        with pytest.raises(ConfigurationError, match="resource identifier") as exc_info:
+            await discover("https://mcp.example.com/mcp?tenant=[blue]")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
     async def test_a_document_declaring_a_urn_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A document located by a URL states the identifier that URL was built from, which no URN is."""
         httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="urn:example:mcp-service"))
@@ -1843,6 +1849,12 @@ class TestPrmCandidateUrls:
         declared = urlsplit(scoped.must_declare)
         assert located.path == f"/.well-known/oauth-protected-resource{declared.path}"
         assert located.query == declared.query
+
+    def test_a_server_url_naming_an_identifier_no_audience_could_name_is_the_callers_fault(self) -> None:
+        """The identifier derives from an argument the caller holds, so a fault in it is theirs."""
+        with pytest.raises(ConfigurationError, match="resource identifier") as exc_info:
+            _prm_candidates(None, "https://mcp.example.com/mcp?tenant=[blue]")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     def test_only_the_hint_is_the_servers_value_and_the_only_hint(self) -> None:
         """The caller reads the hint out of a challenge, so its value is the server's choice."""
