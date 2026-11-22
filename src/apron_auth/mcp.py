@@ -25,7 +25,7 @@ import logging
 from collections.abc import Callable, Sequence
 from enum import Enum, unique
 from typing import Any, NamedTuple, assert_never
-from urllib.parse import ParseResult, unquote, urljoin, urlparse, urlsplit
+from urllib.parse import ParseResult, unquote, urljoin, urlparse, urlsplit, urlunsplit
 
 import httpx
 from pydantic import SecretStr
@@ -1064,32 +1064,41 @@ def _prm_candidates(resource_metadata_url: str | None, server_url: str) -> list[
     passes it on. RFC 9728 makes it a hint, and the well-known locations below it are its fallback.
 
     Each candidate carries the one resource identifier a document served there must declare, which is what
-    refuses a document naming another service. A well-known location stands for the identifier the
-    well-known segment was inserted into, and RFC 9728 section 3.3 holds a document to it. A hint stands
-    for ``server_url``, which the same section names as the URL the client requested the server at.
+    refuses a document naming another service. RFC 9728 section 3.3 holds a well-known location to the
+    identifier the well-known segment was inserted into, and a hint to the identifier ``server_url`` names.
 
-    A terminating slash on the path is removed before the well-known segment is inserted, as RFC 9728
-    section 3.1 requires, so the location and the identifier it stands for both drop it.
+    The identifier is settled first and the location is built from it, so a location and the identifier it
+    stands for cannot disagree about the resource. The identifier states the authority in the one form
+    that identifies it, resolves the dot segments in the path and drops a terminating slash, as RFC 3986
+    section 5.2.4 and RFC 9728 section 3.1 require, and keeps the query, which RFC 9728 section 3 inserts
+    the well-known segment ahead of. A location is dialed with the authority its own source wrote.
     """
+    parsed = urlsplit(server_url)
+    origin = _origin(server_url)
+    # The leading dot keeps the reference relative, so a path opening with a second slash cannot read as
+    # an authority and name another host.
+    path = urlsplit(urljoin(f"{origin}/", f".{parsed.path}")).path.rstrip("/")
+    scoped = f"{origin}{path}?{parsed.query}" if parsed.query else f"{origin}{path}"
+
     candidates: list[_Candidate] = []
     if resource_metadata_url:
-        candidates.append(
-            _Candidate(resource_metadata_url, caller_supplied=False, is_hint=True, must_declare=server_url)
-        )
-    parsed = urlsplit(server_url)
-    base = f"{parsed.scheme}://{parsed.netloc}"
-    path = parsed.path.rstrip("/")
-    if path:
+        candidates.append(_Candidate(resource_metadata_url, caller_supplied=False, is_hint=True, must_declare=scoped))
+    if path or parsed.query:
         candidates.append(
             _Candidate(
-                urljoin(base, f"{_WELL_KNOWN_PRM}{path}"),
+                urlunsplit((parsed.scheme, parsed.netloc, f"{_WELL_KNOWN_PRM}{path}", parsed.query, "")),
                 caller_supplied=True,
                 is_hint=False,
-                must_declare=f"{base}{path}",
+                must_declare=scoped,
             )
         )
     candidates.append(
-        _Candidate(urljoin(base, _WELL_KNOWN_PRM), caller_supplied=True, is_hint=False, must_declare=base)
+        _Candidate(
+            urlunsplit((parsed.scheme, parsed.netloc, _WELL_KNOWN_PRM, "", "")),
+            caller_supplied=True,
+            is_hint=False,
+            must_declare=origin,
+        )
     )
     return candidates
 

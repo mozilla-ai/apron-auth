@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import traceback
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -1180,6 +1181,26 @@ class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
         assert meta.resource == "https://mcp.example.com/mcp"
         assert self._PRM_PATH_SLASHED not in [str(request.url) for request in httpx_mock.get_requests()]
 
+    async def test_a_default_port_on_the_server_url_names_the_same_resource(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 3986 section 6.2.3 makes a default port no part of which server a URL names."""
+        httpx_mock.add_response(
+            url="https://mcp.example.com:443/.well-known/oauth-protected-resource/mcp",
+            json=_prm_payload(resource="https://mcp.example.com/mcp"),
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com:443/mcp")
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_the_case_of_the_server_url_host_names_the_same_resource(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 3986 section 3.2.2 makes the host case no part of which server a URL names."""
+        httpx_mock.add_response(
+            url="https://MCP.Example.com/.well-known/oauth-protected-resource/mcp",
+            json=_prm_payload(resource="https://mcp.example.com/mcp"),
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://MCP.Example.com/mcp")
+        assert meta.resource == "https://mcp.example.com/mcp"
+
     async def test_a_document_declaring_a_urn_is_refused(self, httpx_mock: HTTPXMock) -> None:
         """A document located by a URL states the identifier that URL was built from, which no URN is."""
         httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="urn:example:mcp-service"))
@@ -1726,6 +1747,24 @@ class TestPrmCandidateUrls:
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
                 ],
             ),
+            # RFC 9728 section 3 inserts the segment before the path and the query, so the query stays.
+            (
+                None,
+                "https://mcp.example.com/mcp?tenant=blue",
+                [
+                    "https://mcp.example.com/.well-known/oauth-protected-resource/mcp?tenant=blue",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                ],
+            ),
+            # A location is dialed with the authority its source wrote, so neither case nor port changes.
+            (
+                None,
+                "https://MCP.Example.com:443/mcp",
+                [
+                    "https://MCP.Example.com:443/.well-known/oauth-protected-resource/mcp",
+                    "https://MCP.Example.com:443/.well-known/oauth-protected-resource",
+                ],
+            ),
         ],
     )
     def test_candidate_order(self, hint: str | None, server_url: str, expected: list[str]) -> None:
@@ -1753,6 +1792,30 @@ class TestPrmCandidateUrls:
                 ["https://mcp.example.com/mcp", "https://mcp.example.com/mcp", "https://mcp.example.com"],
                 id="the hint stands for the server URL",
             ),
+            pytest.param(
+                None,
+                "https://mcp.example.com:443/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="a port the scheme makes default names no other resource",
+            ),
+            pytest.param(
+                None,
+                "https://MCP.Example.com/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="host case names no other resource",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/../mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="dot segments resolve as they do in the location",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/mcp?tenant=blue",
+                ["https://mcp.example.com/mcp?tenant=blue", "https://mcp.example.com"],
+                id="the query is part of the identifier",
+            ),
         ],
     )
     def test_each_candidate_states_the_identifier_a_document_served_there_must_declare(
@@ -1760,6 +1823,26 @@ class TestPrmCandidateUrls:
     ) -> None:
         """RFC 9728 section 3.3 holds a document to the identifier its location stands for."""
         assert [candidate.must_declare for candidate in _prm_candidates(hint, server_url)] == expected
+
+    @pytest.mark.parametrize(
+        "server_url",
+        [
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com/mcp/",
+            "https://MCP.Example.com:443/mcp",
+            "https://mcp.example.com/tenant/../mcp",
+            "https://mcp.example.com/mcp?tenant=blue",
+            "https://mcp.example.com/mcp;tenant=blue",
+        ],
+    )
+    def test_a_location_states_the_identifier_the_well_known_segment_was_inserted_into(self, server_url: str) -> None:
+        """RFC 9728 section 3 builds the location from the identifier, so the two cannot disagree."""
+        scoped = _prm_candidates(None, server_url)[0]
+        assert scoped.must_declare is not None
+        located = urlsplit(scoped.url)
+        declared = urlsplit(scoped.must_declare)
+        assert located.path == f"/.well-known/oauth-protected-resource{declared.path}"
+        assert located.query == declared.query
 
     def test_only_the_hint_is_the_servers_value_and_the_only_hint(self) -> None:
         """The caller reads the hint out of a challenge, so its value is the server's choice."""
