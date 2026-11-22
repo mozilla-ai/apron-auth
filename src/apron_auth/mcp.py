@@ -1065,6 +1065,36 @@ def _validate_url(url: str, url_validator: UrlValidator | None, *, subject: str,
         raise error_cls(msg, kind=kind) from exc
 
 
+def _without_dot_segments(path: str) -> str:
+    """Return a path with its complete ``.`` and ``..`` segments removed, per RFC 3986 section 5.2.4.
+
+    Only a segment that is exactly ``.`` or ``..`` is removed, so ``..;realm=blue`` is an ordinary
+    segment. An empty segment is part of the path and is kept, because ``/a//b`` and ``/a/b`` name
+    different resources. A path ending in a dot segment keeps its terminating slash.
+
+    Args:
+        path: The path component of a URL, which is empty or begins with ``/``.
+
+    Returns:
+        The path the segments resolve to.
+    """
+    segments = path.split("/")
+    resolved = [segments[0]]
+    for index, segment in enumerate(segments[1:], start=1):
+        last = index == len(segments) - 1
+        if segment == ".":
+            if last:
+                resolved.append("")
+        elif segment == "..":
+            if len(resolved) > 1:
+                resolved.pop()
+            if last:
+                resolved.append("")
+        else:
+            resolved.append(segment)
+    return "/".join(resolved)
+
+
 def _resource_identifier(server_url: str) -> str:
     """Return the RFC 9728 resource identifier a server URL names, in the one form that identifies it.
 
@@ -1086,9 +1116,7 @@ def _resource_identifier(server_url: str) -> str:
     """
     parsed = urlsplit(server_url)
     origin = _origin(server_url)
-    # The leading dot keeps the reference relative, so a path opening with a second slash reads as a path
-    # rather than an authority and cannot name another host.
-    path = urlsplit(urljoin(f"{origin}/", f".{parsed.path}")).path.rstrip("/")
+    path = _without_dot_segments(parsed.path).rstrip("/")
     identifier = f"{origin}{path}?{parsed.query}" if parsed.query else f"{origin}{path}"
     if resource_indicator_fault(identifier) is not None:
         msg = "MCP OAuth requires a server URL that names a resource identifier (server_url)"

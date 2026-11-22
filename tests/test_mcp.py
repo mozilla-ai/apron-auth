@@ -1818,6 +1818,24 @@ class TestPrmCandidateUrls:
             ),
             pytest.param(
                 None,
+                "https://mcp.example.com/tenant//mcp",
+                ["https://mcp.example.com/tenant//mcp", "https://mcp.example.com"],
+                id="an empty segment is part of the path and is kept",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/..;realm=blue",
+                ["https://mcp.example.com/tenant/..;realm=blue", "https://mcp.example.com"],
+                id="only a complete dot segment is removed",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/mcp/..",
+                ["https://mcp.example.com/tenant", "https://mcp.example.com"],
+                id="a trailing dot segment leaves the path it resolves to",
+            ),
+            pytest.param(
+                None,
                 "https://mcp.example.com/mcp?tenant=blue",
                 ["https://mcp.example.com/mcp?tenant=blue", "https://mcp.example.com"],
                 id="the query is part of the identifier",
@@ -1837,6 +1855,8 @@ class TestPrmCandidateUrls:
             "https://mcp.example.com/mcp/",
             "https://MCP.Example.com:443/mcp",
             "https://mcp.example.com/tenant/../mcp",
+            "https://mcp.example.com/tenant//mcp",
+            "https://mcp.example.com/tenant/..;realm=blue",
             "https://mcp.example.com/mcp?tenant=blue",
             "https://mcp.example.com/mcp;tenant=blue",
         ],
