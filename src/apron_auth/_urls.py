@@ -247,6 +247,9 @@ def resource_indicator_fault(resource: str) -> ResourceIndicatorFault | None:
     fragment, and its authority, path and query are each written in the characters RFC 3986 allows them.
     A value carrying no fault binds a token's audience to the service it names.
 
+    Each component is read for the characters RFC 3986 allows it, not for the full ABNF. A host is held
+    to its characters rather than to being a well-formed address or registered name.
+
     NOTE: The standard parser reads a scheme off a string it never checked for URI syntax, so each
     component is read here rather than left to it. The components are checked separately because a
     bracket is a URI character in an authority and no part of a path or a query. The value's own

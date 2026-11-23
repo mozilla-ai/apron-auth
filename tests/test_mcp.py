@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import traceback
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -520,7 +521,7 @@ class TestDiscover:
         assert meta.scopes_supported == ["read", "write"]
 
     async def test_path_scoped_prm_preferred(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload())
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
         meta = await discover("https://mcp.example.com/mcp")
         assert meta.token_url == "https://auth.example.com/token"
@@ -912,12 +913,6 @@ class TestDiscover:
         meta = await discover("https://mcp.example.com")
         assert meta.supports_cimd is False
 
-    async def test_resource_identifier_captured(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="https://mcp.example.com/mcp"))
-        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
-        meta = await discover("https://mcp.example.com")
-        assert meta.resource == "https://mcp.example.com/mcp"
-
     @pytest.mark.parametrize(
         ("resource", "expected"),
         [
@@ -944,23 +939,6 @@ class TestDiscover:
         assert exc_info.value.kind is FailureKind.REFUSED
         # The document is refused where it is read, so the authorization server is never fetched.
         assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_ROOT]
-
-    @pytest.mark.parametrize(
-        "resource",
-        [
-            pytest.param("urn:example:mcp-service", id="urn"),
-            pytest.param("https://mcp.example.com", id="https"),
-        ],
-    )
-    async def test_a_resource_identifier_naming_no_host_is_still_an_absolute_uri(
-        self, httpx_mock: HTTPXMock, resource: str
-    ) -> None:
-        """RFC 8707 asks for an absolute URI, which a URN is, so one is carried rather than refused."""
-        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=resource))
-        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
-        meta = await discover("https://mcp.example.com")
-        assert meta.resource == resource
-        assert to_provider_config(meta, ClientRegistration(client_id="c")).resource == resource
 
     async def test_missing_token_endpoint_raises(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
@@ -1129,6 +1107,141 @@ class TestDiscover:
             await discover("https://[v1.fe80]")
         assert exc_info.value.kind is FailureKind.CONFIGURATION
         assert not httpx_mock.get_requests()
+
+
+class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
+    """Test the RFC 9728 section 3.3 comparison, which section 7.3 names the impersonation defense.
+
+    Each candidate location stands for one resource identifier, and a document served there is held to
+    that identifier alone.
+    """
+
+    _HINT = "https://mcp.example.com/custom-prm"
+    _PRM_PATH_SLASHED = "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/"
+    _VICTIM = "https://victim.example.com/api"
+
+    async def test_a_document_naming_another_service_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A hostile server declaring a victim's identifier would have that identifier bind the token."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=self._VICTIM))
+        with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
+            await discover(_ORIGIN)
+        assert exc_info.value.kind is FailureKind.REFUSED
+        # The document is refused where it is read, so the authorization server is never fetched.
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_ROOT]
+
+    async def test_a_root_document_is_held_to_the_origin(self, httpx_mock: HTTPXMock) -> None:
+        """The root location stands for the origin, so a path-bearing identifier served there is refused."""
+        httpx_mock.add_response(url=_PRM_PATH, status_code=404)
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
+            await discover("https://mcp.example.com/mcp")
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_path_scoped_document_is_held_to_the_path_identifier(self, httpx_mock: HTTPXMock) -> None:
+        """The path-scoped location stands for the origin and the path, so the origin alone is refused."""
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource=_ORIGIN))
+        with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
+            await discover("https://mcp.example.com/mcp")
+        assert exc_info.value.kind is FailureKind.REFUSED
+
+    async def test_a_hinted_document_is_held_to_the_server_url(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 9728 section 3.3 holds a hinted document to the URL the client requested the server at."""
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_a_hinted_document_naming_another_service_leaves_the_well_known_locations_to_try(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A hint loses its turn however it proves unusable, and naming another resource is one way."""
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [self._HINT, _PRM_PATH, _ASM_ROOT]
+
+    async def test_a_hinted_document_naming_another_service_states_no_document_where_none_follows(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A hint that lost its turn still names a document, so no well-known document is a refusal."""
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, status_code=404)
+        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
+            await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert exc_info.value.kind is FailureKind.REJECTED
+
+    async def test_a_well_known_document_naming_another_service_ends_discovery(self, httpx_mock: HTTPXMock) -> None:
+        """A well-known location is no hint, so its document decides the fetch and the root is never tried."""
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource=self._VICTIM))
+        with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
+            await discover("https://mcp.example.com/mcp")
+        assert exc_info.value.kind is FailureKind.REFUSED
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_PATH]
+
+    async def test_a_root_document_declaring_the_origin_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=_ORIGIN))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        assert (await discover(_ORIGIN)).resource == _ORIGIN
+
+    async def test_a_path_scoped_document_declaring_the_path_identifier_is_accepted(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com/mcp")
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_a_hinted_document_declaring_the_server_url_is_accepted(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_a_terminating_slash_on_the_server_url_is_removed_before_the_url_is_built(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """RFC 9728 section 3.1 removes it, so the location and the identifier it stands for both drop it."""
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com/mcp/")
+        assert meta.resource == "https://mcp.example.com/mcp"
+        assert self._PRM_PATH_SLASHED not in [str(request.url) for request in httpx_mock.get_requests()]
+
+    async def test_a_default_port_on_the_server_url_names_the_same_resource(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 3986 section 6.2.3 makes a default port no part of which server a URL names."""
+        httpx_mock.add_response(
+            url="https://mcp.example.com:443/.well-known/oauth-protected-resource/mcp",
+            json=_prm_payload(resource="https://mcp.example.com/mcp"),
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com:443/mcp")
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_the_case_of_the_server_url_host_names_the_same_resource(self, httpx_mock: HTTPXMock) -> None:
+        """RFC 3986 section 3.2.2 makes the host case no part of which server a URL names."""
+        httpx_mock.add_response(
+            url="https://MCP.Example.com/.well-known/oauth-protected-resource/mcp",
+            json=_prm_payload(resource="https://mcp.example.com/mcp"),
+        )
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://MCP.Example.com/mcp")
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_a_server_url_no_audience_could_name_is_refused_before_any_request(self) -> None:
+        """A document declaring that identifier would be correct, so the fault is not the server's."""
+        with pytest.raises(ConfigurationError, match="resource identifier") as exc_info:
+            await discover("https://mcp.example.com/mcp?tenant=[blue]")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
+
+    async def test_a_document_declaring_a_urn_is_refused(self, httpx_mock: HTTPXMock) -> None:
+        """A document located by a URL states the identifier that URL was built from, which no URN is."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource="urn:example:mcp-service"))
+        with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
+            await discover(_ORIGIN)
+        assert exc_info.value.kind is FailureKind.REFUSED
 
 
 class TestAServerThatPublishesNoProtectedResourceMetadata:
@@ -1380,6 +1493,53 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
         meta = await discover("https://mcp.example.com", resource_metadata_url=hint)
 
         assert meta.token_url == "https://auth.example.com/token"
+
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"resource": _ORIGIN}, id="no authorization server list"),
+            pytest.param(_prm_payload(authorization_servers=[]), id="an empty authorization server list"),
+            pytest.param(_prm_payload(authorization_servers=[""]), id="an empty authorization server"),
+            pytest.param(_prm_payload(authorization_servers="https://auth.example.com"), id="no list at all"),
+            pytest.param(_prm_payload(authorization_servers=["https://auth.example.com/?q"]), id="a query"),
+            pytest.param(_prm_payload(authorization_servers=["https://auth.example.com/#f"]), id="a fragment"),
+            pytest.param(_prm_payload(resource="https://victim.example.com"), id="another resource"),
+            pytest.param(_prm_payload(resource=42), id="a resource that is no string"),
+        ],
+    )
+    async def test_a_hint_serving_an_unusable_document_leaves_the_well_known_locations_to_try(
+        self, httpx_mock: HTTPXMock, document: dict[str, object]
+    ) -> None:
+        """A hint loses its turn whatever makes it unusable, and its document is one of the ways."""
+        hint = "https://mcp.example.com/custom-prm"
+        httpx_mock.add_response(url=hint, json=document)
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+
+        meta = await discover("https://mcp.example.com", resource_metadata_url=hint)
+
+        assert meta.token_url == "https://auth.example.com/token"
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [hint, _PRM_ROOT, _ASM_ROOT]
+
+    @pytest.mark.parametrize(
+        ("document", "message"),
+        [
+            pytest.param({"resource": _ORIGIN}, "declares no authorization server", id="no authorization server"),
+            pytest.param(
+                _prm_payload(authorization_servers=["https://auth.example.com/?q"]),
+                "a query or a fragment",
+                id="a query",
+            ),
+            pytest.param(_prm_payload(resource="https://victim.example.com"), "names another resource", id="resource"),
+        ],
+    )
+    async def test_a_well_known_location_serving_the_same_document_ends_discovery(
+        self, httpx_mock: HTTPXMock, document: dict[str, object], message: str
+    ) -> None:
+        """A well-known location is no hint, so what its document states decides the whole fetch."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=document)
+        with pytest.raises(McpDiscoveryError, match=message):
+            await discover("https://mcp.example.com")
 
     async def test_a_refused_hint_is_logged_as_a_skipped_candidate(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
@@ -1660,10 +1820,137 @@ class TestPrmCandidateUrls:
                     "https://mcp.example.com/.well-known/oauth-protected-resource",
                 ],
             ),
+            # RFC 9728 section 3.1 removes a terminating slash before inserting the well-known segment.
+            (
+                None,
+                "https://mcp.example.com/mcp/",
+                [
+                    "https://mcp.example.com/.well-known/oauth-protected-resource/mcp",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                ],
+            ),
+            # RFC 9728 section 3 inserts the segment before the path and the query, so the query stays.
+            (
+                None,
+                "https://mcp.example.com/mcp?tenant=blue",
+                [
+                    "https://mcp.example.com/.well-known/oauth-protected-resource/mcp?tenant=blue",
+                    "https://mcp.example.com/.well-known/oauth-protected-resource",
+                ],
+            ),
+            # A location is dialed with the authority its source wrote, so neither case nor port changes.
+            (
+                None,
+                "https://MCP.Example.com:443/mcp",
+                [
+                    "https://MCP.Example.com:443/.well-known/oauth-protected-resource/mcp",
+                    "https://MCP.Example.com:443/.well-known/oauth-protected-resource",
+                ],
+            ),
         ],
     )
     def test_candidate_order(self, hint: str | None, server_url: str, expected: list[str]) -> None:
         assert [candidate.url for candidate in _prm_candidates(hint, server_url)] == expected
+
+    @pytest.mark.parametrize(
+        ("hint", "server_url", "expected"),
+        [
+            pytest.param(None, "https://mcp.example.com", ["https://mcp.example.com"], id="root only"),
+            pytest.param(
+                None,
+                "https://mcp.example.com/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="scoped then root",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/mcp/",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="a terminating slash is dropped from the identifier too",
+            ),
+            pytest.param(
+                "https://mcp.example.com/custom-prm",
+                "https://mcp.example.com/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="the hint stands for the server URL",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com:443/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="a port the scheme makes default names no other resource",
+            ),
+            pytest.param(
+                None,
+                "https://MCP.Example.com/mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="host case names no other resource",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/../mcp",
+                ["https://mcp.example.com/mcp", "https://mcp.example.com"],
+                id="dot segments resolve as they do in the location",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant//mcp",
+                ["https://mcp.example.com/tenant//mcp", "https://mcp.example.com"],
+                id="an empty segment is part of the path and is kept",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/..;realm=blue",
+                ["https://mcp.example.com/tenant/..;realm=blue", "https://mcp.example.com"],
+                id="only a complete dot segment is removed",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/tenant/mcp/..",
+                ["https://mcp.example.com/tenant", "https://mcp.example.com"],
+                id="a trailing dot segment leaves the path it resolves to",
+            ),
+            pytest.param(
+                None,
+                "https://mcp.example.com/mcp?tenant=blue",
+                ["https://mcp.example.com/mcp?tenant=blue", "https://mcp.example.com"],
+                id="the query is part of the identifier",
+            ),
+        ],
+    )
+    def test_each_candidate_states_the_identifier_a_document_served_there_must_declare(
+        self, hint: str | None, server_url: str, expected: list[str]
+    ) -> None:
+        """RFC 9728 section 3.3 holds a document to the identifier its location stands for."""
+        assert [candidate.must_declare for candidate in _prm_candidates(hint, server_url)] == expected
+
+    @pytest.mark.parametrize(
+        "server_url",
+        [
+            "https://mcp.example.com/mcp",
+            "https://mcp.example.com/mcp/",
+            "https://MCP.Example.com:443/mcp",
+            "https://mcp.example.com/tenant/../mcp",
+            "https://mcp.example.com/tenant//mcp",
+            "https://mcp.example.com/tenant/..;realm=blue",
+            "https://mcp.example.com/mcp?tenant=blue",
+            "https://mcp.example.com/mcp;tenant=blue",
+        ],
+    )
+    def test_a_location_states_the_identifier_the_well_known_segment_was_inserted_into(self, server_url: str) -> None:
+        """RFC 9728 section 3 builds the location from the identifier, so the two cannot disagree."""
+        scoped = _prm_candidates(None, server_url)[0]
+        assert scoped.must_declare is not None
+        located = urlsplit(scoped.url)
+        declared = urlsplit(scoped.must_declare)
+        assert located.path == f"/.well-known/oauth-protected-resource{declared.path}"
+        assert located.query == declared.query
+
+    def test_a_server_url_naming_an_identifier_no_audience_could_name_is_the_callers_fault(self) -> None:
+        """The identifier derives from an argument the caller holds, so a fault in it is theirs."""
+        with pytest.raises(ConfigurationError, match="resource identifier") as exc_info:
+            _prm_candidates(None, "https://mcp.example.com/mcp?tenant=[blue]")
+        assert exc_info.value.kind is FailureKind.CONFIGURATION
 
     def test_only_the_hint_is_the_servers_value_and_the_only_hint(self) -> None:
         """The caller reads the hint out of a challenge, so its value is the server's choice."""
