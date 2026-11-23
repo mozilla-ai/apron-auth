@@ -147,6 +147,18 @@ class _Candidate(NamedTuple, Generic[_Declares]):
     must_declare: _Declares
 
 
+class _DeclaredService(NamedTuple):
+    """What a protected-resource document states about the service it describes.
+
+    Attributes:
+        authorization_server: The first authorization server the document declares.
+        resource: The resource identifier the document declares.
+    """
+
+    authorization_server: str
+    resource: str
+
+
 class _FetchedMetadata(NamedTuple, Generic[_Declares]):
     """A metadata document and what the URL that served it holds it to.
 
@@ -189,8 +201,8 @@ async def discover(
         resource_metadata_url: Optional hint from a ``WWW-Authenticate``
             challenge, tried before the well-known locations. Its value is the
             server's, so one that cannot be used loses its turn and the
-            well-known locations are still tried. A document naming another
-            resource is one way it cannot be used. Passing one names a
+            well-known locations are still tried. A document that states no
+            usable service is one way it cannot be used. Passing one names a
             protected-resource document, so the server's origin is not read as
             its own authorization server.
         url_validator: Optional policy invoked on each URL before it is
@@ -220,8 +232,8 @@ async def discover(
             authorization server metadata does not declare the server it was fetched
             from as its issuer.
             The first document fetched is authoritative, so a mismatched issuer, and a
-            mismatched resource identifier at a well-known location, end discovery rather
-            than trying the next candidate URL.
+            document at a well-known location that states no usable service, end discovery
+            rather than trying the next candidate URL.
             A ``transport_factory`` that fails is reported here too, as a fault
             that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
@@ -240,7 +252,7 @@ async def discover(
         transport_factory,
         limits,
         prm_document,
-        hint_accepts=_declares_its_own_server,
+        hint_accepts=_declares_a_usable_service,
     )
     # No protected-resource metadata means the server's own origin was read as its authorization server,
     # which declares no resource identifier and leaves none to invent.
@@ -253,20 +265,10 @@ async def discover(
         _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=True)
     else:
         resource_meta = fetched.document
-        auth_servers = resource_meta.get("authorization_servers")
-        auth_server = ""
-        if isinstance(auth_servers, list):
-            auth_server = next((item for item in auth_servers if isinstance(item, str) and item), "")
-        if not auth_server:
-            msg = "protected resource metadata declares no authorization server"
-            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+        declared = _declared_service(resource_meta, fetched.must_declare)
+        auth_server = declared.authorization_server
+        resource = declared.resource
         _validate_url(auth_server, url_validator, subject="authorization server", caller_supplied=False)
-        # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would
-        # drop them. The delimiters are checked, so an empty query or fragment counts.
-        if "?" in auth_server or "#" in auth_server:
-            msg = "protected resource metadata declares an authorization server with a query or a fragment"
-            raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
-        resource = _declared_resource(resource_meta, fetched.must_declare)
 
     asm_document = "authorization server metadata"
     fetched_server_meta = await _fetch_first_metadata(
@@ -612,24 +614,37 @@ def cimd_client_id(url: str) -> str:
     return url
 
 
-def _declares_its_own_server(document: dict[str, Any], must_declare: str) -> bool:
-    """Return whether a protected-resource document declares the identifier it is held to.
+def _declared_service(document: dict[str, Any], must_declare: str) -> _DeclaredService:
+    """Return what a protected-resource document states about the service it describes.
 
-    This answers the question :func:`_declared_resource` answers by refusing, so the two cannot
-    disagree about which documents are acceptable.
+    RFC 9728 section 2 makes both statements required, so a document missing either describes no
+    service a client could reach. The authorization server is read for what it states of itself, not
+    for whether a policy permits the URL, which is a separate question about reaching it.
 
     Args:
         document: The decoded protected-resource metadata.
         must_declare: The identifier the document must declare.
 
     Returns:
-        Whether the document would yield a resource identifier.
+        The statements the document makes about the service it describes.
+
+    Raises:
+        McpDiscoveryError: If the document declares no authorization server, declares one carrying a
+            query or a fragment, or declares no resource identifier it is entitled to.
     """
-    try:
-        _declared_resource(document, must_declare)
-    except McpDiscoveryError:
-        return False
-    return True
+    auth_servers = document.get("authorization_servers")
+    auth_server = ""
+    if isinstance(auth_servers, list):
+        auth_server = next((item for item in auth_servers if isinstance(item, str) and item), "")
+    if not auth_server:
+        msg = "protected resource metadata declares no authorization server"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    # RFC 8414 section 2: an issuer identifier has no query or fragment, and the metadata URL would
+    # drop them. The delimiters are checked, so an empty query or fragment counts.
+    if "?" in auth_server or "#" in auth_server:
+        msg = "protected resource metadata declares an authorization server with a query or a fragment"
+        raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
+    return _DeclaredService(auth_server, _declared_resource(document, must_declare))
 
 
 def _declared_resource(document: dict[str, Any], must_declare: str) -> str:
@@ -678,6 +693,26 @@ def _declared_resource(document: dict[str, Any], must_declare: str) -> str:
         msg = "protected resource metadata declares a resource identifier that names another resource"
         raise McpDiscoveryError(msg, kind=FailureKind.REFUSED)
     return resource
+
+
+def _declares_a_usable_service(document: dict[str, Any], must_declare: str) -> bool:
+    """Return whether a protected-resource document states what reaching its service needs.
+
+    This answers the question :func:`_declared_service` answers by refusing, so the two cannot disagree
+    about which documents describe a usable service.
+
+    Args:
+        document: The decoded protected-resource metadata.
+        must_declare: The identifier the document must declare.
+
+    Returns:
+        Whether the document states a usable service.
+    """
+    try:
+        _declared_service(document, must_declare)
+    except McpDiscoveryError:
+        return False
+    return True
 
 
 def _issued_registration(document: dict[str, Any]) -> ClientRegistration:

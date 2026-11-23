@@ -1494,6 +1494,53 @@ class TestARelayedHintBelongsToTheServerThatChoseIt:
 
         assert meta.token_url == "https://auth.example.com/token"
 
+    @pytest.mark.parametrize(
+        "document",
+        [
+            pytest.param({"resource": _ORIGIN}, id="no authorization server list"),
+            pytest.param(_prm_payload(authorization_servers=[]), id="an empty authorization server list"),
+            pytest.param(_prm_payload(authorization_servers=[""]), id="an empty authorization server"),
+            pytest.param(_prm_payload(authorization_servers="https://auth.example.com"), id="no list at all"),
+            pytest.param(_prm_payload(authorization_servers=["https://auth.example.com/?q"]), id="a query"),
+            pytest.param(_prm_payload(authorization_servers=["https://auth.example.com/#f"]), id="a fragment"),
+            pytest.param(_prm_payload(resource="https://victim.example.com"), id="another resource"),
+            pytest.param(_prm_payload(resource=42), id="a resource that is no string"),
+        ],
+    )
+    async def test_a_hint_serving_an_unusable_document_leaves_the_well_known_locations_to_try(
+        self, httpx_mock: HTTPXMock, document: dict[str, object]
+    ) -> None:
+        """A hint loses its turn whatever makes it unusable, and its document is one of the ways."""
+        hint = "https://mcp.example.com/custom-prm"
+        httpx_mock.add_response(url=hint, json=document)
+        httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload())
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+
+        meta = await discover("https://mcp.example.com", resource_metadata_url=hint)
+
+        assert meta.token_url == "https://auth.example.com/token"
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [hint, _PRM_ROOT, _ASM_ROOT]
+
+    @pytest.mark.parametrize(
+        ("document", "message"),
+        [
+            pytest.param({"resource": _ORIGIN}, "declares no authorization server", id="no authorization server"),
+            pytest.param(
+                _prm_payload(authorization_servers=["https://auth.example.com/?q"]),
+                "a query or a fragment",
+                id="a query",
+            ),
+            pytest.param(_prm_payload(resource="https://victim.example.com"), "names another resource", id="resource"),
+        ],
+    )
+    async def test_a_well_known_location_serving_the_same_document_ends_discovery(
+        self, httpx_mock: HTTPXMock, document: dict[str, object], message: str
+    ) -> None:
+        """A well-known location is no hint, so what its document states decides the whole fetch."""
+        httpx_mock.add_response(url=_PRM_ROOT, json=document)
+        with pytest.raises(McpDiscoveryError, match=message):
+            await discover("https://mcp.example.com")
+
     async def test_a_refused_hint_is_logged_as_a_skipped_candidate(
         self, httpx_mock: HTTPXMock, caplog: pytest.LogCaptureFixture
     ) -> None:
