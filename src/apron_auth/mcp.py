@@ -189,7 +189,8 @@ async def discover(
         resource_metadata_url: Optional hint from a ``WWW-Authenticate``
             challenge, tried before the well-known locations. Its value is the
             server's, so one that cannot be used loses its turn and the
-            well-known locations are still tried. Passing one names a
+            well-known locations are still tried. A document naming another
+            resource is one way it cannot be used. Passing one names a
             protected-resource document, so the server's origin is not read as
             its own authorization server.
         url_validator: Optional policy invoked on each URL before it is
@@ -218,8 +219,9 @@ async def discover(
             an identifier naming a service other than the one that served it, or the
             authorization server metadata does not declare the server it was fetched
             from as its issuer.
-            The first document fetched is authoritative, so a mismatched issuer
-            ends discovery rather than trying the next candidate URL.
+            The first document fetched is authoritative, so a mismatched issuer, and a
+            mismatched resource identifier at a well-known location, end discovery rather
+            than trying the next candidate URL.
             A ``transport_factory`` that fails is reported here too, as a fault
             that is never retried.
         OAuthError: As raised by ``url_validator`` or ``transport_factory``, unchanged.
@@ -238,6 +240,7 @@ async def discover(
         transport_factory,
         limits,
         prm_document,
+        hint_accepts=_declares_its_own_server,
     )
     # No protected-resource metadata means the server's own origin was read as its authorization server,
     # which declares no resource identifier and leaves none to invent.
@@ -607,6 +610,26 @@ def cimd_client_id(url: str) -> str:
         msg = "CIMD client_id must not contain a . or .. path segment"
         raise ConfigurationError(msg, kind=FailureKind.CONFIGURATION)
     return url
+
+
+def _declares_its_own_server(document: dict[str, Any], must_declare: str) -> bool:
+    """Return whether a protected-resource document declares the identifier it is held to.
+
+    This answers the question :func:`_declared_resource` answers by refusing, so the two cannot
+    disagree about which documents are acceptable.
+
+    Args:
+        document: The decoded protected-resource metadata.
+        must_declare: The identifier the document must declare.
+
+    Returns:
+        Whether the document would yield a resource identifier.
+    """
+    try:
+        _declared_resource(document, must_declare)
+    except McpDiscoveryError:
+        return False
+    return True
 
 
 def _declared_resource(document: dict[str, Any], must_declare: str) -> str:
@@ -1327,6 +1350,8 @@ async def _fetch_first_metadata(
     transport_factory: TransportFactory | None,
     limits: RequestLimits,
     what: str,
+    *,
+    hint_accepts: Callable[[dict[str, Any], _Declares], bool] | None = None,
 ) -> _FetchedMetadata[_Declares] | _MetadataOutcome:
     """Fetch the first candidate URL that yields a JSON object, or state why none did.
 
@@ -1342,6 +1367,9 @@ async def _fetch_first_metadata(
         transport_factory: Optional factory controlling the outbound connection.
         limits: The limits in force for each candidate's fetch.
         what: The document this fetches, for the error and the debug lines.
+        hint_accepts: Whether a document a hint served can be used. A hint whose document is not
+            accepted loses its turn. A candidate that is no hint is never asked, because its document
+            decides the fetch.
 
     Returns:
         The first candidate's body that is a JSON object, with what the candidate that served it holds
@@ -1399,6 +1427,9 @@ async def _fetch_first_metadata(
                 observed.append(unreadable)
                 continue
             if isinstance(payload, dict):
+                if candidate.is_hint and hint_accepts is not None and not hint_accepts(payload, candidate.must_declare):
+                    logger.debug("MCP discovery: %s hint cannot be used, so the remaining candidates are tried", what)
+                    continue
                 return _FetchedMetadata(payload, candidate.must_declare)
             logger.debug("MCP discovery: %s returned a non-object JSON body", what)
             observed.append(unreadable)

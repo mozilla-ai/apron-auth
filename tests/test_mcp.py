@@ -1116,6 +1116,7 @@ class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
     that identifier alone.
     """
 
+    _HINT = "https://mcp.example.com/custom-prm"
     _PRM_PATH_SLASHED = "https://mcp.example.com/.well-known/oauth-protected-resource/mcp/"
     _VICTIM = "https://victim.example.com/api"
 
@@ -1145,10 +1146,40 @@ class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
 
     async def test_a_hinted_document_is_held_to_the_server_url(self, httpx_mock: HTTPXMock) -> None:
         """RFC 9728 section 3.3 holds a hinted document to the URL the client requested the server at."""
-        httpx_mock.add_response(url="https://mcp.example.com/custom-prm", json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        meta = await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert meta.resource == "https://mcp.example.com/mcp"
+
+    async def test_a_hinted_document_naming_another_service_leaves_the_well_known_locations_to_try(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A hint loses its turn however it proves unusable, and naming another resource is one way."""
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource="https://mcp.example.com/mcp"))
+        httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
+        await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [self._HINT, _PRM_PATH, _ASM_ROOT]
+
+    async def test_a_hinted_document_naming_another_service_states_no_document_where_none_follows(
+        self, httpx_mock: HTTPXMock
+    ) -> None:
+        """A hint that lost its turn still names a document, so no well-known document is a refusal."""
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource=self._VICTIM))
+        httpx_mock.add_response(url=_PRM_PATH, status_code=404)
+        httpx_mock.add_response(url=_PRM_ROOT, status_code=404)
+        with pytest.raises(McpDiscoveryError, match="is not published") as exc_info:
+            await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
+        assert exc_info.value.kind is FailureKind.REJECTED
+
+    async def test_a_well_known_document_naming_another_service_ends_discovery(self, httpx_mock: HTTPXMock) -> None:
+        """A well-known location is no hint, so its document decides the fetch and the root is never tried."""
+        httpx_mock.add_response(url=_PRM_PATH, json=_prm_payload(resource=self._VICTIM))
         with pytest.raises(McpDiscoveryError, match="names another resource") as exc_info:
-            await discover("https://mcp.example.com/mcp", resource_metadata_url="https://mcp.example.com/custom-prm")
+            await discover("https://mcp.example.com/mcp")
         assert exc_info.value.kind is FailureKind.REFUSED
+        assert [str(request.url) for request in httpx_mock.get_requests()] == [_PRM_PATH]
 
     async def test_a_root_document_declaring_the_origin_is_accepted(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(url=_PRM_ROOT, json=_prm_payload(resource=_ORIGIN))
@@ -1164,11 +1195,9 @@ class TestAProtectedResourceDocumentMustNameTheServerItCameFrom:
         assert meta.resource == "https://mcp.example.com/mcp"
 
     async def test_a_hinted_document_declaring_the_server_url_is_accepted(self, httpx_mock: HTTPXMock) -> None:
-        httpx_mock.add_response(
-            url="https://mcp.example.com/custom-prm", json=_prm_payload(resource="https://mcp.example.com/mcp")
-        )
+        httpx_mock.add_response(url=self._HINT, json=_prm_payload(resource="https://mcp.example.com/mcp"))
         httpx_mock.add_response(url=_ASM_ROOT, json=_asm_payload())
-        meta = await discover("https://mcp.example.com/mcp", resource_metadata_url="https://mcp.example.com/custom-prm")
+        meta = await discover("https://mcp.example.com/mcp", resource_metadata_url=self._HINT)
         assert meta.resource == "https://mcp.example.com/mcp"
 
     async def test_a_terminating_slash_on_the_server_url_is_removed_before_the_url_is_built(
